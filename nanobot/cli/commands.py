@@ -321,6 +321,7 @@ def gateway(
     from nanobot.cron.types import CronJob
     from nanobot.heartbeat.service import HeartbeatService
     from nanobot.session.manager import SessionManager
+    from loguru import logger
 
     if verbose:
         import logging
@@ -401,6 +402,31 @@ def gateway(
 
     # Create channel manager
     channels = ChannelManager(config, bus)
+
+    # Wire group chat engine to Telegram channel if configured
+    if config.groupchat.enabled:
+        from nanobot.groupchat.engine import GroupChatEngine
+        gc_engine = GroupChatEngine(
+            config=config.groupchat,
+            provider=provider,
+            workspace=config.workspace_path,
+            brave_api_key=config.tools.web.search.api_key or "",
+        )
+        # Register the base model as an agent too
+        base_model = config.agents.defaults.model or "anthropic/claude-opus-4.5"
+        base_workspace = Path(config.agents.defaults.workspace or "~/.nanobot/workspace").expanduser()
+        base_soul = base_workspace / "SOUL.md"
+        base_prompt = base_soul.read_text() if base_soul.exists() else "I am nanobot, a personal AI assistant."
+        gc_engine.registry["Nanobot"] = {"model": base_model, "prompt": base_prompt, "_default": True}
+        gc_engine._active_agents.append("Nanobot")
+        logger.info("Registered base model '{}' as Nanobot agent (auto-active)", base_model)
+
+        tg_channel = channels.get_channel("telegram")
+        if tg_channel:
+            from nanobot.channels.telegram import TelegramChannel
+            if isinstance(tg_channel, TelegramChannel):
+                tg_channel.set_groupchat_engine(gc_engine)
+                logger.info("Group chat engine wired to Telegram channel")
 
     def _pick_heartbeat_target() -> tuple[str, str]:
         """Pick a routable channel/chat target for heartbeat-triggered messages."""

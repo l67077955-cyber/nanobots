@@ -8,8 +8,8 @@ import time
 import unicodedata
 
 from loguru import logger
-from telegram import BotCommand, ReplyParameters, Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters, Update
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
 from nanobot.bus.events import OutboundMessage
@@ -17,6 +17,7 @@ from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import TelegramConfig
+from nanobot.groupchat.engine import GroupChatEngine
 from nanobot.utils.helpers import split_message
 
 TELEGRAM_MAX_MESSAGE_LEN = 4000  # Telegram message character limit
@@ -158,10 +159,22 @@ class TelegramChannel(BaseChannel):
 
     # Commands registered with Telegram's command menu
     BOT_COMMANDS = [
-        BotCommand("start", "Start the bot"),
         BotCommand("new", "Start a new conversation"),
         BotCommand("stop", "Stop the current task"),
-        BotCommand("help", "Show available commands"),
+        BotCommand("agents", "List available agents"),
+        BotCommand("addagent", "Add agent to chat"),
+        BotCommand("removeagent", "Remove agent"),
+        BotCommand("newagent", "Create new agent"),
+        BotCommand("editagent", "Edit agent config"),
+        BotCommand("hyperparams", "View/edit sampling params"),
+        BotCommand("endchat", "Clear all agents"),
+        BotCommand("restart", "Hard reset system"),
+        BotCommand("log", "View session log"),
+        BotCommand("savegroup", "Save current members as group"),
+        BotCommand("loadgroup", "Load saved group"),
+        BotCommand("delgroup", "Delete saved group"),
+        BotCommand("groups", "List saved groups"),
+        BotCommand("help", "Show commands"),
     ]
 
     def __init__(
@@ -181,6 +194,15 @@ class TelegramChannel(BaseChannel):
         self._message_threads: dict[tuple[str, int], int] = {}
         self._bot_user_id: int | None = None
         self._bot_username: str | None = None
+        # Group chat engine (initialized in set_groupchat_engine)
+        self._groupchat_engine: GroupChatEngine | None = None
+        # Edit state for interactive /editagent flow
+        self._edit_state: dict[str, dict] = {}  # chat_id -> {agent, field}
+
+    def set_groupchat_engine(self, engine: GroupChatEngine) -> None:
+        """Set the group chat engine for multi-agent discussions."""
+        self._groupchat_engine = engine
+        logger.info("Telegram: group chat engine set with {} agents", len(engine.registry))
 
     def is_allowed(self, sender_id: str) -> bool:
         """Preserve Telegram's legacy id|username allowlist matching."""
@@ -226,6 +248,21 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(CommandHandler("new", self._forward_command))
         self._app.add_handler(CommandHandler("stop", self._forward_command))
         self._app.add_handler(CommandHandler("help", self._on_help))
+        # Agent management commands
+        self._app.add_handler(CommandHandler("agents", self._on_agents))
+        self._app.add_handler(CommandHandler("addagent", self._on_addagent))
+        self._app.add_handler(CommandHandler("removeagent", self._on_removeagent))
+        self._app.add_handler(CommandHandler("newagent", self._on_newagent))
+        self._app.add_handler(CommandHandler("editagent", self._on_editagent))
+        self._app.add_handler(CommandHandler("hyperparams", self._on_hyperparams))
+        self._app.add_handler(CommandHandler("endchat", self._on_endchat))
+        self._app.add_handler(CommandHandler("restart", self._on_restart))
+        self._app.add_handler(CommandHandler("log", self._on_log))
+        self._app.add_handler(CommandHandler("savegroup", self._on_savegroup))
+        self._app.add_handler(CommandHandler("loadgroup", self._on_loadgroup))
+        self._app.add_handler(CommandHandler("delgroup", self._on_delgroup))
+        self._app.add_handler(CommandHandler("groups", self._on_groups))
+        self._app.add_handler(CallbackQueryHandler(self._on_callback))
 
         # Add message handler for text, photos, voice, documents
         self._app.add_handler(
@@ -256,7 +293,7 @@ class TelegramChannel(BaseChannel):
 
         # Start polling (this runs until stopped)
         await self._app.updater.start_polling(
-            allowed_updates=["message"],
+            allowed_updates=["message", "callback_query"],
             drop_pending_updates=True  # Ignore old messages on startup
         )
 
@@ -434,10 +471,611 @@ class TelegramChannel(BaseChannel):
             return
         await update.message.reply_text(
             "🐈 nanobot commands:\n"
-            "/new — Start a new conversation\n"
-            "/stop — Stop the current task\n"
-            "/help — Show available commands"
+            "/new — 新对话\n"
+            "/stop — 停止当前任务\n\n"
+            "🎭 Agent 管理:\n"
+            "/agents — 查看所有 agent\n"
+            "/addagent <name> — 加入 agent\n"
+            "/removeagent <name> — 移除 agent\n"
+            "/newagent <name> — 创建新 agent\n"
+            "/editagent <name> — 编辑 agent\n"
+            "/hyperparams — 查看/修改超参数\n"
+            "/endchat — 清空所有 agent\n"
+            "/restart — 硬重置（卡死时用）\n"
+            "/log — 查看会话日志\n\n"
+            "📁 分组管理：\n"
+            "/savegroup <名称> — 保存当前成员\n"
+            "/loadgroup <名称> — 载入分组\n"
+            "/delgroup <名称> — 删除分组\n"
+            "/groups — 查看所有分组\n\n"
+            "💡 加入 agent 后直接发消息即可对话\n"
+            "2+ agent 自动进入群聊模式"
         )
+
+    # ── Agent Management Commands ────────────────────────────
+
+    def _ensure_gc_send(self, chat_id: str) -> None:
+        """Ensure the group chat engine has a send callback for this chat."""
+        if self._groupchat_engine and not self._groupchat_engine._send_fn:
+            async def send_fn(text: str) -> None:
+                await self._gc_send(chat_id, text)
+            self._groupchat_engine.set_send_fn(send_fn)
+
+    async def _gc_send(self, chat_id: str, text: str) -> None:
+        if not self._app:
+            return
+        for chunk in split_message(text, TELEGRAM_MAX_MESSAGE_LEN):
+            await self._send_text(int(chat_id), chunk)
+
+    async def _on_agents(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        if not self._groupchat_engine:
+            await update.message.reply_text("⚠️ 未配置 agent")
+            return
+        registry = self._groupchat_engine.registry
+        active = self._groupchat_engine.active_agents
+        lines = ["📋 Agent 注册表:\n"]
+        for name, info in registry.items():
+            status = "🟢" if name in active else "⚪"
+            model = info.get("model", "?")
+            lines.append(f"{status} {name} ({model})")
+        if active:
+            lines.append(f"\n👥 活跃: {', '.join(active)}")
+        else:
+            lines.append("\n💤 无活跃 agent")
+        await update.message.reply_text("\n".join(lines))
+
+    async def _on_addagent(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        if not self._groupchat_engine:
+            await update.message.reply_text("⚠️ 未配置 agent")
+            return
+        name = " ".join(context.args) if context.args else ""
+        if name:
+            self._ensure_gc_send(str(update.message.chat_id))
+            result = self._groupchat_engine.add_agent(name)
+            await update.message.reply_text(result)
+            return
+        # No args: show inline keyboard of available (inactive) agents
+        active = set(self._groupchat_engine.active_agents)
+        available = [(n, i) for n, i in self._groupchat_engine.registry.items() if n not in active]
+        if not available:
+            await update.message.reply_text("所有 agent 都已在对话中")
+            return
+        buttons = [[InlineKeyboardButton(f"{n} ({i.get('model','?')})", callback_data=f"add:{n}")] for n, i in available]
+        await update.message.reply_text("➕ 选择要加入的 Agent:", reply_markup=InlineKeyboardMarkup(buttons))
+
+    async def _on_removeagent(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        if not self._groupchat_engine:
+            await update.message.reply_text("⚠️ 未配置 agent")
+            return
+        name = " ".join(context.args) if context.args else ""
+        if name:
+            result = self._groupchat_engine.remove_agent(name)
+            await update.message.reply_text(result)
+            return
+        # No args: show inline keyboard of active agents
+        active = self._groupchat_engine.active_agents
+        if not active:
+            await update.message.reply_text("没有活跃 agent")
+            return
+        buttons = []
+        for n in active:
+            model = self._groupchat_engine.registry.get(n, {}).get("model", "?")
+            buttons.append([InlineKeyboardButton(f"{n} ({model})", callback_data=f"rm:{n}")])
+        await update.message.reply_text("➖ 选择要移除的 Agent:", reply_markup=InlineKeyboardMarkup(buttons))
+
+    async def _on_newagent(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Interactive new agent creation: name → model → persona."""
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        if not self._groupchat_engine:
+            await update.message.reply_text("⚠️ 未配置 agent")
+            return
+        name = " ".join(context.args) if context.args else ""
+        if name and self._groupchat_engine._resolve_agent_name(name):
+            await update.message.reply_text(f"⚠️ Agent '{name}' 已存在，用 /editagent 修改")
+            return
+        chat_id = str(update.message.chat_id)
+        if name:
+            self._edit_state[chat_id] = {"agent": name, "field": "create_model", "mode": "create"}
+            await update.message.reply_text(
+                f"🆕 创建 Agent: {name}\n\n"
+                "请输入模型名:\n"
+                "(如 anthropic/claude-sonnet-4-5, x-ai/grok-4.1-fast)"
+            )
+        else:
+            self._edit_state[chat_id] = {"agent": "", "field": "create_name", "mode": "create"}
+            await update.message.reply_text("🆕 创建新 Agent\n\n请输入 Agent 名字:")
+
+    async def _on_editagent(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Interactive agent editing: name, persona, model."""
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        if not self._groupchat_engine:
+            await update.message.reply_text("⚠️ 未配置 agent")
+            return
+        name = " ".join(context.args) if context.args else ""
+        if not name:
+            # Show inline keyboard of all agents
+            agents = list(self._groupchat_engine.registry.keys())
+            if not agents:
+                await update.message.reply_text("没有可编辑的 agent")
+                return
+            buttons = []
+            for n in agents:
+                model = self._groupchat_engine.registry[n].get("model", "?")
+                buttons.append([InlineKeyboardButton(f"{n} ({model})", callback_data=f"edit:{n}")])
+            await update.message.reply_text("✏️ 选择要编辑的 Agent:", reply_markup=InlineKeyboardMarkup(buttons))
+            return
+        matched = self._groupchat_engine._resolve_agent_name(name)
+        if not matched:
+            await update.message.reply_text(f"❌ Agent '{name}' 不存在")
+            return
+        self._show_edit_menu(update, matched)
+
+    def _edit_menu_text(self, agent_name: str) -> str:
+        agent = self._groupchat_engine.registry[agent_name]
+        return (
+            f"✏️ 编辑 {agent_name}\n\n"
+            f"模型: {agent['model']}\n"
+            f"人设: {agent['prompt'][:100]}..."
+        )
+
+    def _edit_menu_buttons(self, agent_name: str) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("✏️ 修改名字", callback_data=f"ef:{agent_name}:name")],
+            [InlineKeyboardButton("📝 修改人设", callback_data=f"ef:{agent_name}:persona")],
+            [InlineKeyboardButton("🤖 修改模型", callback_data=f"ef:{agent_name}:model")],
+            [InlineKeyboardButton("❌ 取消", callback_data=f"ef:{agent_name}:cancel")],
+        ])
+
+    async def _show_edit_menu(self, update_or_query, agent_name: str) -> None:
+        """Show edit menu for an agent."""
+        if hasattr(update_or_query, 'message') and update_or_query.message:
+            chat_id = str(update_or_query.message.chat_id)
+            await update_or_query.message.reply_text(
+                self._edit_menu_text(agent_name),
+                reply_markup=self._edit_menu_buttons(agent_name),
+            )
+        else:
+            return
+
+    async def _on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle InlineKeyboard button presses."""
+        query = update.callback_query
+        if not query or not query.data:
+            return
+        await query.answer()
+
+        data = query.data
+        chat_id = str(query.message.chat_id)
+
+        if data.startswith("add:"):
+            name = data[4:]
+            self._ensure_gc_send(chat_id)
+            result = self._groupchat_engine.add_agent(name)
+            await query.edit_message_text(result)
+
+        elif data.startswith("rm:"):
+            name = data[3:]
+            result = self._groupchat_engine.remove_agent(name)
+            await query.edit_message_text(result)
+
+        elif data.startswith("edit:"):
+            name = data[5:]
+            agent = self._groupchat_engine.registry.get(name)
+            if not agent:
+                await query.edit_message_text(f"❌ Agent '{name}' 不存在")
+                return
+            await query.edit_message_text(
+                self._edit_menu_text(name),
+                reply_markup=self._edit_menu_buttons(name),
+            )
+
+        elif data.startswith("ef:"):
+            # ef:AgentName:field
+            parts = data.split(":", 2)
+            if len(parts) < 3:
+                return
+            name, field = parts[1], parts[2]
+            if field == "cancel":
+                self._edit_state.pop(chat_id, None)
+                await query.edit_message_text("❌ 已取消")
+                return
+            self._edit_state[chat_id] = {"agent": name, "field": field}
+            if field == "persona":
+                current = self._groupchat_engine.registry.get(name, {}).get("prompt", "")
+                await query.edit_message_text(f"📄 当前人设:\n\n{current[:3000]}")
+                await self._gc_send(chat_id, "请输入新人设内容:")
+            else:
+                prompts = {"name": "新名字", "model": "新模型名 (如 anthropic/claude-sonnet-4-5)"}
+                await query.edit_message_text(f"请输入{prompts.get(field, field)}:")
+
+        elif data.startswith("log:"):
+            mode = data[4:]
+            engine = self._groupchat_engine
+            if not engine or (not engine._history and not engine._request_log):
+                await query.edit_message_text("📭 无日志")
+                return
+            rlog = engine._request_log
+            history = engine._history
+            if mode == "brief":
+                # Brief: last 5 requests
+                entries = rlog[-5:] if rlog else []
+                lines = [f"📋 最近请求 ({len(entries)}/{len(rlog)}):\n"]
+                for r in entries:
+                    err = " ❌" if r.get("error") else ""
+                    lines.append(f"[{r['time']}] {r['agent']} → {r['model']} | msgs:{r['msgs']} reply:{r['reply_len']}字{err}")
+                if history:
+                    lines.append(f"\n💬 对话: {len(history)} 条")
+                await query.edit_message_text("\n".join(lines))
+            else:
+                # Full: all requests + chat
+                lines = [f"📜 完整日志 ({len(rlog)} 请求, {len(history)} 对话):\n"]
+                lines.append("── 请求记录 ──")
+                for i, r in enumerate(rlog, 1):
+                    err = f" | ❌ {r['error'][:50]}" if r.get("error") else ""
+                    lines.append(f"{i}. [{r['time']}] {r['mode']} | {r['agent']} → {r['model']} | msgs:{r['msgs']} max:{r['max_tokens']} reply:{r['reply_len']}字{err}")
+                lines.append("\n── 对话记录 ──")
+                for m in history[-10:]:
+                    text = m['content'][:100] + "..." if len(m['content']) > 100 else m['content']
+                    lines.append(f"[{m['sender']}]: {text}")
+                full = "\n".join(lines)
+                await query.edit_message_text(full[:4096])
+
+        elif data.startswith("lg:"):
+            name = data[3:]
+            self._ensure_gc_send(chat_id)
+            result = self._groupchat_engine.load_group(name)
+            await query.edit_message_text(result)
+
+        elif data.startswith("dg:"):
+            name = data[3:]
+            result = self._groupchat_engine.delete_group(name)
+            await query.edit_message_text(result)
+
+    async def _handle_edit_input(self, chat_id: str, content: str) -> None:
+        """Process interactive edit state input."""
+        state = self._edit_state[chat_id]
+        field = state["field"]
+
+        # Handle savegroup name input
+        if field == "sg_name":
+            del self._edit_state[chat_id]
+            if content.strip() in ("0", "取消"):
+                await self._gc_send(chat_id, "❌ 已取消")
+                return
+            result = self._groupchat_engine.save_group(content.strip())
+            await self._gc_send(chat_id, result)
+            return
+
+        agent_name = state["agent"]
+        engine = self._groupchat_engine
+        if not engine:
+            del self._edit_state[chat_id]
+            return
+
+
+
+        # Handle /newagent create flow
+        if state.get("mode") == "create":
+            if field == "create_name":
+                name = content.strip()
+                if name in ("0", "取消"):
+                    del self._edit_state[chat_id]
+                    await self._gc_send(chat_id, "❌ 已取消")
+                    return
+                if engine._resolve_agent_name(name):
+                    await self._gc_send(chat_id, f"⚠️ '{name}' 已存在，请换个名字:")
+                    return
+                state["agent"] = name
+                state["field"] = "create_model"
+                await self._gc_send(chat_id,
+                    f"Agent: {name}\n\n请输入模型名:\n"
+                    "(如 anthropic/claude-sonnet-4-5, x-ai/grok-4.1-fast)"
+                )
+                return
+            if field == "create_model":
+                model_name = content.strip()
+                if model_name in ("0", "取消"):
+                    del self._edit_state[chat_id]
+                    await self._gc_send(chat_id, "❌ 已取消")
+                    return
+                await self._gc_send(chat_id, f"🔍 测试模型 {model_name}...")
+                try:
+                    response = await engine.provider.chat(
+                        messages=[{"role": "user", "content": "Say 'hello' in one word."}],
+                        model=model_name,
+                        max_tokens=20,
+                    )
+                    reply = (response.content or "").strip()
+                    state["model"] = model_name
+                    state["field"] = "create_persona"
+                    await self._gc_send(chat_id,
+                        f"✅ 模型 {model_name} 可用!\n"
+                        f"测试回复: {reply}\n\n"
+                        f"请输入人设 (SOUL.md 内容):"
+                    )
+                except Exception as e:
+                    await self._gc_send(chat_id,
+                        f"❌ 模型 {model_name} 不可用: {e}\n\n"
+                        f"请重新输入模型名，或发 0 取消:"
+                    )
+                return
+            elif field == "create_persona":
+                name = agent_name
+                model = state["model"]
+                prompt = content
+                engine.registry[name] = {"model": model, "prompt": prompt}
+                # Save to disk
+                from pathlib import Path
+                soul_dir = Path.home() / ".nanobot" / "agents" / name.lower() / "workspace"
+                soul_dir.mkdir(parents=True, exist_ok=True)
+                (soul_dir / "SOUL.md").write_text(prompt)
+                config_path = soul_dir.parent / "config.json"
+                import json
+                config_path.write_text(json.dumps({"model": model}, indent=2))
+                preview = prompt[:80] + "..." if len(prompt) > 80 else prompt
+                await self._gc_send(chat_id, f"✅ Agent {name} 已创建!\n模型: {model}\n人设: {preview}")
+                del self._edit_state[chat_id]
+                return
+
+        if field is None:
+            c = content.strip()
+            if c in ("0", "取消"):
+                del self._edit_state[chat_id]
+                await self._gc_send(chat_id, "❌ 已取消")
+                return
+            field_map = {"1": "name", "2": "persona", "3": "model"}
+            if c in field_map:
+                state["field"] = field_map[c]
+                prompts = {"name": "新名字", "persona": "新人设内容", "model": "新模型名 (如 anthropic/claude-sonnet-4-5)"}
+                await self._gc_send(chat_id, f"请输入{prompts[field_map[c]]}:")
+            else:
+                await self._gc_send(chat_id, "请输入 1/2/3 或 0 取消")
+            return
+
+        if field == "name":
+            new_name = content.strip()
+            if new_name and new_name != agent_name:
+                data = engine.registry.pop(agent_name)
+                engine.registry[new_name] = data
+                if agent_name in engine._active_agents:
+                    idx = engine._active_agents.index(agent_name)
+                    engine._active_agents[idx] = new_name
+                # Rename directory
+                from pathlib import Path
+                agents_dir = Path.home() / ".nanobot" / "agents"
+                old = agents_dir / agent_name.lower()
+                new = agents_dir / new_name.lower()
+                if old.exists() and not new.exists():
+                    old.rename(new)
+                await self._gc_send(chat_id, f"✅ {agent_name} → {new_name}")
+            else:
+                await self._gc_send(chat_id, "⚠️ 名字未变")
+        elif field == "persona":
+            engine.registry[agent_name]["prompt"] = content
+            from pathlib import Path
+            soul_dir = Path.home() / ".nanobot" / "agents" / agent_name.lower() / "workspace"
+            soul_dir.mkdir(parents=True, exist_ok=True)
+            (soul_dir / "SOUL.md").write_text(content)
+            preview = content[:80] + "..." if len(content) > 80 else content
+            await self._gc_send(chat_id, f"✅ {agent_name} 人设已更新:\n{preview}")
+        elif field == "model":
+            engine.registry[agent_name]["model"] = content.strip()
+            await self._gc_send(chat_id, f"✅ {agent_name} 模型: {content.strip()}")
+
+        del self._edit_state[chat_id]
+
+    async def _on_hyperparams(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """View or edit sampling parameters."""
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        args = context.args or []
+        if not args:
+            await update.message.reply_text(
+                "⚙️ 当前超参数:\n\n"
+                "temperature: 0.95\n"
+                "top_p: 0.92\n"
+                "top_k: 40\n"
+                "min_p: 0.07\n"
+                "repetition_penalty: 1.15\n"
+                "frequency_penalty: 0.10\n"
+                "presence_penalty: 0.05\n"
+                "top_a: 0\n\n"
+                "修改: /hyperparams <参数> <值>\n"
+                "例如: /hyperparams temperature 0.8"
+            )
+            return
+        if len(args) < 2:
+            await update.message.reply_text("用法: /hyperparams <参数> <值>")
+            return
+        key = args[0].lower()
+        try:
+            value = float(args[1])
+        except ValueError:
+            await update.message.reply_text("⚠️ 值必须是数字")
+            return
+        valid = {"temperature", "top_p", "top_k", "min_p",
+                 "repetition_penalty", "frequency_penalty", "presence_penalty", "top_a"}
+        if key not in valid:
+            await update.message.reply_text(f"⚠️ 无效参数。可选: {', '.join(sorted(valid))}")
+            return
+        await update.message.reply_text(
+            f"✅ 已记录: {key} = {value}\n"
+            "⚠️ 运行时修改需重启生效\n"
+            "位置: litellm_provider.py"
+        )
+
+    async def _on_endchat(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        if not self._groupchat_engine:
+            return
+        if not self._groupchat_engine.active_agents:
+            await update.message.reply_text("没有活跃 agent")
+            return
+        self._groupchat_engine.stop()
+        await update.message.reply_text("⏹ 所有 agent 已移除")
+
+    async def _on_restart(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Hard reset: stop everything, clear all state."""
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        chat_id = str(update.message.chat_id)
+        # Clear edit state
+        self._edit_state.pop(chat_id, None)
+        if self._groupchat_engine:
+            # Force stop
+            self._groupchat_engine._running = False
+            if self._groupchat_engine._task and not self._groupchat_engine._task.done():
+                self._groupchat_engine._task.cancel()
+            self._groupchat_engine._task = None
+            self._groupchat_engine._active_agents.clear()
+            self._groupchat_engine._history.clear()
+            self._groupchat_engine._request_log.clear()
+            self._groupchat_engine._input_queue = __import__('asyncio').Queue()
+            self._groupchat_engine._send_fn = None
+            self._groupchat_engine._topic = ""
+        await update.message.reply_text("🔄 系统已重置\n所有状态已清空，可以重新开始")
+
+    # ── Group Config Commands ───────────────────────────────
+
+    async def _on_savegroup(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        if not self._groupchat_engine:
+            await update.message.reply_text("⚠️ 群聊引擎未初始化")
+            return
+        args = (context.args or [])
+        if not args:
+            if not self._groupchat_engine.active_agents:
+                await update.message.reply_text("⚠️ 没有活跃 agent，无法保存")
+                return
+            members = ', '.join(self._groupchat_engine.active_agents)
+            chat_id = str(update.message.chat_id)
+            self._edit_state[chat_id] = {"field": "sg_name"}
+            await update.message.reply_text(f"👥 当前成员: {members}\n\n请输入分组名称（或发送 0 取消）:")
+            return
+        name = " ".join(args)
+        result = self._groupchat_engine.save_group(name)
+        await update.message.reply_text(result)
+
+    async def _on_loadgroup(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        if not self._groupchat_engine:
+            await update.message.reply_text("⚠️ 群聊引擎未初始化")
+            return
+        chat_id = str(update.message.chat_id)
+        self._ensure_gc_send(chat_id)
+        args = (context.args or [])
+        if not args:
+            groups = self._groupchat_engine._load_groups()
+            if not groups:
+                await update.message.reply_text("📋 没有保存的分组\n用 /savegroup 保存当前成员")
+                return
+            buttons = []
+            for gname, members in groups.items():
+                buttons.append([InlineKeyboardButton(
+                    f"{gname} ({', '.join(members)})",
+                    callback_data=f"lg:{gname}"
+                )])
+            await update.message.reply_text("📂 选择要载入的分组:", reply_markup=InlineKeyboardMarkup(buttons))
+            return
+        name = " ".join(args)
+        result = self._groupchat_engine.load_group(name)
+        await update.message.reply_text(result)
+
+    async def _on_delgroup(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        if not self._groupchat_engine:
+            await update.message.reply_text("⚠️ 群聊引擎未初始化")
+            return
+        args = (context.args or [])
+        if not args:
+            groups = self._groupchat_engine._load_groups()
+            if not groups:
+                await update.message.reply_text("📋 没有保存的分组")
+                return
+            buttons = []
+            for gname, members in groups.items():
+                buttons.append([InlineKeyboardButton(
+                    f"🗑 {gname} ({', '.join(members)})",
+                    callback_data=f"dg:{gname}"
+                )])
+            await update.message.reply_text("🗑 选择要删除的分组:", reply_markup=InlineKeyboardMarkup(buttons))
+            return
+        name = " ".join(args)
+        result = self._groupchat_engine.delete_group(name)
+        await update.message.reply_text(result)
+
+    async def _on_groups(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        if not self._groupchat_engine:
+            await update.message.reply_text("⚠️ 群聊引擎未初始化")
+            return
+        result = self._groupchat_engine.list_groups()
+        await update.message.reply_text(result)
+
+    async def _on_log(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show session log options."""
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        if not self._groupchat_engine or not self._groupchat_engine._history:
+            await update.message.reply_text("📭 当前会话无日志")
+            return
+        count = len(self._groupchat_engine._history)
+        buttons = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"📋 简短版 (最近5条)", callback_data="log:brief")],
+            [InlineKeyboardButton(f"📜 完整版 (共{count}条)", callback_data="log:full")],
+        ])
+        await update.message.reply_text("📝 查看会话日志:", reply_markup=buttons)
+
+    async def _on_summary(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        if not self._groupchat_engine or not self._groupchat_engine.active_agents:
+            await update.message.reply_text("没有活跃 agent")
+            return
+        self._ensure_gc_send(str(update.message.chat_id))
+        self._groupchat_engine.request_summary()
+        await update.message.reply_text("📋 正在生成总结...")
 
     @staticmethod
     def _sender_id(user) -> str:
@@ -547,6 +1185,12 @@ class TelegramChannel(BaseChannel):
         message = update.message
         user = update.effective_user
         self._remember_thread_context(message)
+
+        # Clear group chat history on /new
+        if message.text and message.text.strip().startswith("/new") and self._groupchat_engine:
+            self._groupchat_engine._history.clear()
+            self._groupchat_engine._request_log.clear()
+
         await self._handle_message(
             sender_id=self._sender_id(user),
             chat_id=str(message.chat_id),
@@ -663,7 +1307,33 @@ class TelegramChannel(BaseChannel):
         # Start typing indicator before processing
         self._start_typing(str_chat_id)
 
-        # Forward to the message bus
+        # Check for interactive edit state
+        if str_chat_id in self._edit_state:
+            await self._handle_edit_input(str_chat_id, content)
+            self._stop_typing(str_chat_id)
+            return
+
+        # Route to active agents if any
+        if self._groupchat_engine and self._groupchat_engine.active_agents:
+            self._ensure_gc_send(str_chat_id)
+            if self._groupchat_engine.is_running:
+                # 2+ agents: inject message into group chat
+                self._groupchat_engine.inject(content)
+            else:
+                # 1 agent: direct chat
+                response = await self._groupchat_engine.direct_chat(content)
+                if response:
+                    await self._gc_send(str_chat_id, response)
+            self._stop_typing(str_chat_id)
+            return
+
+        # Engine exists but no active agents — don't fall through to main loop
+        if self._groupchat_engine and not self._groupchat_engine.active_agents:
+            await self._send_text(int(str_chat_id), "💤 没有活跃 agent，用 /addagent 加入一个")
+            self._stop_typing(str_chat_id)
+            return
+
+        # Default: forward to the message bus (main agent loop)
         await self._handle_message(
             sender_id=sender_id,
             chat_id=str_chat_id,

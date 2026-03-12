@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
+from nanobot.groupchat.config import GroupChatConfig
+
 
 class Base(BaseModel):
     """Base model that accepts both camelCase and snake_case keys."""
@@ -355,6 +357,7 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    groupchat: GroupChatConfig = Field(default_factory=GroupChatConfig)
 
     @property
     def workspace_path(self) -> Path:
