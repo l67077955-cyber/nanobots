@@ -757,11 +757,17 @@ class TelegramChannel(BaseChannel):
         # Handle savegroup name input
         if field == "sg_name":
             del self._edit_state[chat_id]
-            if content.strip() in ("0", "取消"):
+            if content.strip() in ("0", "取消", "/cancel"):
                 await self._gc_send(chat_id, "❌ 已取消")
                 return
             result = self._groupchat_engine.save_group(content.strip())
             await self._gc_send(chat_id, result)
+            return
+
+        # Universal cancel — works at any edit prompt
+        if content.strip() in ("0", "取消", "/cancel"):
+            del self._edit_state[chat_id]
+            await self._gc_send(chat_id, "❌ 已取消")
             return
 
         agent_name = state["agent"]
@@ -1186,10 +1192,14 @@ class TelegramChannel(BaseChannel):
         user = update.effective_user
         self._remember_thread_context(message)
 
-        # Clear group chat history on /new
-        if message.text and message.text.strip().startswith("/new") and self._groupchat_engine:
-            self._groupchat_engine._history.clear()
-            self._groupchat_engine._request_log.clear()
+        # Clear interactive state on /new or /stop
+        cmd = (message.text or "").strip().split()[0].lower() if message.text else ""
+        if cmd in ("/new", "/stop"):
+            str_chat_id = str(message.chat_id)
+            self._edit_state.pop(str_chat_id, None)
+            if cmd == "/new" and self._groupchat_engine:
+                self._groupchat_engine._history.clear()
+                self._groupchat_engine._request_log.clear()
 
         await self._handle_message(
             sender_id=self._sender_id(user),

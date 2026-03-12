@@ -47,6 +47,15 @@ class GroupChatEngine:
         self.workspace = workspace
         self.brave_api_key = brave_api_key
 
+        # Tool registry (same tools as core AgentLoop)
+        # Lazy import to avoid circular: engine → agent.tools → agent → config → groupchat
+        from nanobot.agent.tools.registry import ToolRegistry
+        from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
+        self.tools = ToolRegistry()
+        self.tools.register(WebSearchTool(api_key=brave_api_key or None))
+        self.tools.register(WebFetchTool())
+        logger.info("Groupchat: registered {} tools: {}", len(self.tools), self.tools.tool_names)
+
         # Registry: all known agents {name: {model, prompt}}
         self.registry: dict[str, dict[str, Any]] = load_agents(config, workspace)
 
@@ -204,11 +213,94 @@ class GroupChatEngine:
             lines.append(f"  • {gname}: {', '.join(members)}")
         return "\n".join(lines)
 
+    # ── Tool-augmented chat (matching AgentLoop._run_agent_loop) ───
+
+    async def _chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        agent_name: str,
+        max_iterations: int = 10,
+    ) -> tuple[str, list[str]]:
+        """Chat with tool calling loop, matching nanobot core agent logic.
+
+        Returns (content, tools_used).
+        """
+        tool_defs = self.tools.get_definitions()
+        tools_used: list[str] = []
+        iteration = 0
+
+        while iteration < max_iterations:
+            iteration += 1
+
+            response = await self.provider.chat(
+                messages=messages,
+                tools=tool_defs if tool_defs else None,
+                model=model,
+                max_tokens=self.config.max_tokens,
+            )
+
+            if response.has_tool_calls:
+                # Show tool usage hint
+                hints = ", ".join(tc.name for tc in response.tool_calls)
+                logger.info("Agent {} calling tools: {}", agent_name, hints)
+                if self._send_fn:
+                    await self._send(f"🔧 {agent_name} 正在使用: {hints}")
+
+                # Append assistant message with tool_calls
+                tool_call_dicts = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments, ensure_ascii=False)
+                        }
+                    }
+                    for tc in response.tool_calls
+                ]
+                messages.append({
+                    "role": "assistant",
+                    "content": response.content or "",
+                    "tool_calls": tool_call_dicts,
+                })
+
+                # Execute each tool and append results
+                for tc in response.tool_calls:
+                    tools_used.append(tc.name)
+                    logger.info("Executing tool: {}({})", tc.name,
+                                json.dumps(tc.arguments, ensure_ascii=False)[:200])
+                    result = await self.tools.execute(tc.name, tc.arguments)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result[:2000],  # Truncate large results
+                    })
+            else:
+                # Text response — done
+                content = response.content or ""
+                # Strip agent's own name prefix if model mimics history format
+                # e.g. "Benjamin: actual reply" → "actual reply"
+                for prefix in (f"{agent_name}: ", f"{agent_name}："):
+                    if content.startswith(prefix):
+                        content = content[len(prefix):]
+                        break
+                return content, tools_used
+
+        # Max iterations reached
+        logger.warning("Agent {} hit max tool iterations ({})", agent_name, max_iterations)
+        content = response.content or ""
+        for prefix in (f"{agent_name}: ", f"{agent_name}："):
+            if content.startswith(prefix):
+                content = content[len(prefix):]
+                break
+        return content, tools_used
+
     async def direct_chat(self, user_message: str) -> str | None:
         """Send message to single active agent (1-on-1 mode).
 
-        Uses proper multi-message format (like SillyTavern) instead of
-        packing history into a text block.
+        Uses proper multi-message format (like SillyTavern) with tool calling
+        matching nanobot core agent logic.
         """
         if len(self._active_agents) != 1:
             return None
@@ -233,23 +325,22 @@ class GroupChatEngine:
         # Current user message
         messages.append({"role": "user", "content": user_message})
 
-        # Post-history instructions only if explicitly defined (no default filler)
+        # Post-history instructions only if explicitly defined
         instructions = agent.get("instructions", "")
         if instructions:
             messages.append({"role": "system", "content": instructions})
 
         try:
-            response = await self.provider.chat(
+            content, tools_used = await self._chat_with_tools(
                 messages=messages,
                 model=agent["model"],
-                max_tokens=self.config.max_tokens,
+                agent_name=agent_name,
             )
-            content = response.content or ""
             self._request_log.append({
                 "agent": agent_name, "model": agent["model"],
                 "msgs": len(messages), "max_tokens": self.config.max_tokens,
                 "reply_len": len(content), "time": datetime.now().strftime("%H:%M:%S"),
-                "mode": "direct",
+                "mode": "direct", "tools": tools_used,
             })
             if content:
                 self._add_message("用户", user_message)
@@ -410,17 +501,16 @@ class GroupChatEngine:
         messages = self._build_agent_prompt(agent_name)
 
         try:
-            response = await self.provider.chat(
+            content, tools_used = await self._chat_with_tools(
                 messages=messages,
                 model=model,
-                max_tokens=self.config.max_tokens,
+                agent_name=agent_name,
             )
-            content = response.content or ""
             self._request_log.append({
                 "agent": agent_name, "model": model,
                 "msgs": len(messages), "max_tokens": self.config.max_tokens,
                 "reply_len": len(content), "time": datetime.now().strftime("%H:%M:%S"),
-                "mode": "group",
+                "mode": "group", "tools": tools_used,
             })
             if content:
                 self._add_message(agent_name, content)
