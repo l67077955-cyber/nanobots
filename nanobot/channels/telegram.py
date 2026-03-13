@@ -174,6 +174,7 @@ class TelegramChannel(BaseChannel):
         BotCommand("loadgroup", "Load saved group"),
         BotCommand("delgroup", "Delete saved group"),
         BotCommand("groups", "List saved groups"),
+        BotCommand("order", "Change agent speaking order"),
         BotCommand("help", "Show commands"),
     ]
 
@@ -262,6 +263,7 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(CommandHandler("loadgroup", self._on_loadgroup))
         self._app.add_handler(CommandHandler("delgroup", self._on_delgroup))
         self._app.add_handler(CommandHandler("groups", self._on_groups))
+        self._app.add_handler(CommandHandler("order", self._on_order))
         self._app.add_handler(CallbackQueryHandler(self._on_callback))
 
         # Add message handler for text, photos, voice, documents
@@ -487,7 +489,8 @@ class TelegramChannel(BaseChannel):
             "/savegroup <名称> — 保存当前成员\n"
             "/loadgroup <名称> — 载入分组\n"
             "/delgroup <名称> — 删除分组\n"
-            "/groups — 查看所有分组\n\n"
+            "/groups — 查看所有分组\n"
+            "/order — 调整发言顺序\n\n"
             "💡 加入 agent 后直接发消息即可对话\n"
             "2+ agent 自动进入群聊模式"
         )
@@ -749,6 +752,22 @@ class TelegramChannel(BaseChannel):
             result = self._groupchat_engine.delete_group(name)
             await query.edit_message_text(result)
 
+        elif data.startswith("ord:"):
+            val = data[4:]
+            if val == "done":
+                order_str = " → ".join(self._groupchat_engine.active_agents)
+                await query.edit_message_text(f"📢 发言顺序:\n{order_str}")
+            else:
+                idx = int(val)
+                agents = self._groupchat_engine.active_agents
+                if 0 < idx < len(agents):
+                    # Swap with previous
+                    agents[idx], agents[idx-1] = agents[idx-1], agents[idx]
+                    self._groupchat_engine._active_agents[:] = agents
+                # Refresh keyboard
+                await query.edit_message_text("📢 更新中...")
+                await self._send_order_keyboard(chat_id, self._groupchat_engine.active_agents)
+
     async def _handle_edit_input(self, chat_id: str, content: str) -> None:
         """Process interactive edit state input."""
         state = self._edit_state[chat_id]
@@ -894,21 +913,22 @@ class TelegramChannel(BaseChannel):
             return
         if not self.is_allowed(self._sender_id(update.effective_user)):
             return
+
+        # Get provider's sampling params
+        provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
+        params = getattr(provider, 'sampling_params', None) if provider else None
+        if not params:
+            await update.message.reply_text("⚠️ 无法获取超参数（provider 不可用）")
+            return
+
         args = context.args or []
         if not args:
-            await update.message.reply_text(
-                "⚙️ 当前超参数:\n\n"
-                "temperature: 0.95\n"
-                "top_p: 0.92\n"
-                "top_k: 40\n"
-                "min_p: 0.07\n"
-                "repetition_penalty: 1.15\n"
-                "frequency_penalty: 0.10\n"
-                "presence_penalty: 0.05\n"
-                "top_a: 0\n\n"
-                "修改: /hyperparams <参数> <值>\n"
-                "例如: /hyperparams temperature 0.8"
-            )
+            lines = ["⚙️ 当前超参数:\n"]
+            for k, v in params.items():
+                lines.append(f"  {k}: {v}")
+            lines.append(f"\n修改: /hyperparams <参数> <值>")
+            lines.append(f"例如: /hyperparams temperature 0.8")
+            await update.message.reply_text("\n".join(lines))
             return
         if len(args) < 2:
             await update.message.reply_text("用法: /hyperparams <参数> <值>")
@@ -919,16 +939,12 @@ class TelegramChannel(BaseChannel):
         except ValueError:
             await update.message.reply_text("⚠️ 值必须是数字")
             return
-        valid = {"temperature", "top_p", "top_k", "min_p",
-                 "repetition_penalty", "frequency_penalty", "presence_penalty", "top_a"}
-        if key not in valid:
-            await update.message.reply_text(f"⚠️ 无效参数。可选: {', '.join(sorted(valid))}")
+        if key not in params:
+            await update.message.reply_text(f"⚠️ 无效参数。可选: {', '.join(sorted(params.keys()))}")
             return
-        await update.message.reply_text(
-            f"✅ 已记录: {key} = {value}\n"
-            "⚠️ 运行时修改需重启生效\n"
-            "位置: litellm_provider.py"
-        )
+        old_val = params[key]
+        params[key] = value
+        await update.message.reply_text(f"✅ {key}: {old_val} → {value}\n即时生效，无需重启")
 
     async def _on_endchat(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message or not update.effective_user:
@@ -1054,6 +1070,45 @@ class TelegramChannel(BaseChannel):
             return
         result = self._groupchat_engine.list_groups()
         await update.message.reply_text(result)
+
+    async def _on_order(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Change agent speaking order."""
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        if not self._groupchat_engine:
+            await update.message.reply_text("⚠️ 群聊引擎未初始化")
+            return
+
+        agents = self._groupchat_engine.active_agents
+        if len(agents) < 2:
+            await update.message.reply_text("⚠️ 至少需要 2 个活跃 agent 才能调整顺序")
+            return
+
+        args = context.args
+        if args:
+            # Direct: /order Ben Lucas Harper Grok
+            result = self._groupchat_engine.reorder_agents(list(args))
+            await update.message.reply_text(result)
+            return
+
+        # Interactive: show current order with move buttons
+        await self._send_order_keyboard(str(update.message.chat_id), agents)
+
+    async def _send_order_keyboard(self, chat_id: str, agents: list[str]) -> None:
+        """Send inline keyboard to reorder agents."""
+        order_str = " → ".join(agents)
+        text = f"📢 当前发言顺序:\n{order_str}\n\n点击 ⬆ 上移:"
+        buttons = []
+        for i, name in enumerate(agents):
+            if i > 0:  # Can't move first one up
+                buttons.append([InlineKeyboardButton(f"⬆ {name}", callback_data=f"ord:{i}")])
+        buttons.append([InlineKeyboardButton("✅ 完成", callback_data="ord:done")])
+        await self._app.bot.send_message(
+            chat_id=int(chat_id), text=text,
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
 
     async def _on_log(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show session log options."""
@@ -1200,6 +1255,10 @@ class TelegramChannel(BaseChannel):
             if cmd == "/new" and self._groupchat_engine:
                 self._groupchat_engine._history.clear()
                 self._groupchat_engine._request_log.clear()
+                self._groupchat_engine._active_agents.clear()
+                # Auto-add default agent so user can chat immediately
+                if "Nanobot" in self._groupchat_engine.registry:
+                    self._groupchat_engine.add_agent("Nanobot")
 
         await self._handle_message(
             sender_id=self._sender_id(user),

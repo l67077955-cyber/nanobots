@@ -62,6 +62,24 @@ class LiteLLMProvider(LLMProvider):
         # Drop unsupported parameters for providers (e.g., gpt-5 rejects some params)
         litellm.drop_params = True
 
+        # Langfuse tracing via LiteLLM OTEL callback (langfuse v3+/v4 compatible)
+        if os.environ.get("LANGFUSE_PUBLIC_KEY"):
+            litellm.success_callback = ["langfuse"]
+            litellm.failure_callback = ["langfuse"]
+            logger.info("Langfuse tracing enabled (OTEL mode)")
+
+        # Sampling parameters — modifiable at runtime via /hyperparams
+        self.sampling_params: dict[str, float] = {
+            "temperature": 0.95,
+            "top_p": 0.92,
+            "top_k": 40,
+            "min_p": 0.07,
+            "repetition_penalty": 1.15,
+            "frequency_penalty": 0.10,
+            "presence_penalty": 0.05,
+            "top_a": 0,
+        }
+
     def _setup_env(self, api_key: str, api_base: str | None, model: str) -> None:
         """Set environment variables based on detected provider."""
         spec = self._gateway or find_by_model(model)
@@ -214,6 +232,7 @@ class LiteLLMProvider(LLMProvider):
         max_tokens: int = 4096,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request via LiteLLM.
@@ -243,15 +262,8 @@ class LiteLLMProvider(LLMProvider):
             "model": model,
             "messages": self._sanitize_messages(self._sanitize_empty_content(messages), extra_keys=extra_msg_keys),
             "max_tokens": max_tokens,
-            "temperature": temperature,
-            # Extra sampling parameters
-            "top_p": 0.92,
-            "top_k": 40,
-            "frequency_penalty": 0.10,
-            "presence_penalty": 0.05,
-            "repetition_penalty": 1.15,
-            "min_p": 0.07,
-            "top_a": 0,
+            # Sampling params from instance (modifiable via /hyperparams)
+            **self.sampling_params,
         }
 
         # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
@@ -276,6 +288,10 @@ class LiteLLMProvider(LLMProvider):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
+
+        # Langfuse metadata (agent name, session, mode etc.)
+        if metadata:
+            kwargs["metadata"] = metadata
 
         try:
             response = await acompletion(**kwargs)

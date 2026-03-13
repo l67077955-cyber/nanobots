@@ -141,10 +141,12 @@ def _scan_agents_dir(
         # Read model from agent's config.json
         model = "minimax/minimax-m2.5"  # default
         config_file = d / "config.json"
+        tools_enabled = False
         if config_file.exists():
             try:
                 acfg = json.loads(config_file.read_text())
                 model = acfg.get("agents", {}).get("defaults", {}).get("model", model)
+                tools_enabled = acfg.get("tools", {}).get("enabled", False)
             except Exception:
                 pass
 
@@ -152,7 +154,7 @@ def _scan_agents_dir(
         if d.name == "grok":
             name = "Grok"
 
-        agent_data: dict[str, Any] = {"model": model, "prompt": prompt}
+        agent_data: dict[str, Any] = {"model": model, "prompt": prompt, "tools_enabled": tools_enabled}
 
         # Load optional EXAMPLES.md (few-shot dialogue examples)
         ws = d / "workspace"

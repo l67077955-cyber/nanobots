@@ -51,10 +51,22 @@ class GroupChatEngine:
         # Lazy import to avoid circular: engine → agent.tools → agent → config → groupchat
         from nanobot.agent.tools.registry import ToolRegistry
         from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
+        from nanobot.agent.tools.shell import ExecTool
+        from nanobot.agent.tools.filesystem import ReadFileTool
+
+        # Web tools (available to all agents with tools_enabled + search intent)
         self.tools = ToolRegistry()
         self.tools.register(WebSearchTool(api_key=brave_api_key or None))
         self.tools.register(WebFetchTool())
-        logger.info("Groupchat: registered {} tools: {}", len(self.tools), self.tools.tool_names)
+
+        # Exec tools (only for default agent in direct chat)
+        self.direct_tools = ToolRegistry()
+        self.direct_tools.register(ExecTool(timeout=30, working_dir=str(Path.home())))
+        self.direct_tools.register(ReadFileTool())
+        self.direct_tools.register(WebSearchTool(api_key=brave_api_key or None))
+        self.direct_tools.register(WebFetchTool())
+        logger.info("Groupchat: registered {} web tools, {} direct tools",
+                    len(self.tools), len(self.direct_tools))
 
         # Registry: all known agents {name: {model, prompt}}
         self.registry: dict[str, dict[str, Any]] = load_agents(config, workspace)
@@ -141,6 +153,27 @@ class GroupChatEngine:
             return f"✅ {matched} 已离开，无活跃 agent"
 
         return f"✅ {matched} 已离开\n👥 当前成员: {', '.join(self._active_agents)}"
+    # ── Agent ordering ────────────────────────────────────
+
+    def reorder_agents(self, new_order: list[str]) -> str:
+        """Reorder active agents. new_order should contain all active agent names."""
+        # Validate all names exist in active list
+        resolved = []
+        for name in new_order:
+            matched = self._resolve_agent_name(name)
+            if not matched or matched not in self._active_agents:
+                return f"⚠️ {name} 不在活跃列表中"
+            if matched in resolved:
+                return f"⚠️ {matched} 重复了"
+            resolved.append(matched)
+
+        if set(resolved) != set(self._active_agents):
+            missing = set(self._active_agents) - set(resolved)
+            return f"⚠️ 缺少: {', '.join(missing)}"
+
+        self._active_agents[:] = resolved
+        order_str = " → ".join(resolved)
+        return f"✅ 发言顺序已调整\n📢 {order_str}"
 
     # ── Group Config Persistence ────────────────────────────
 
@@ -213,7 +246,66 @@ class GroupChatEngine:
             lines.append(f"  • {gname}: {', '.join(members)}")
         return "\n".join(lines)
 
+    # ── Response cleanup ───
+
+    def _clean_response(self, content: str, agent_name: str) -> str:
+        """Clean up model response: strip think blocks, name prefixes, etc."""
+        import re
+
+        # 1. Strip <think>...</think> blocks (deepseek, some models)
+        content = re.sub(r"<think>[\s\S]*?</think>", "", content).strip()
+
+        # 2. Strip Grok-style reasoning prefix (starts with "A: " or similar)
+        #    Detect: block of reasoning lines before actual content
+        if content.startswith("A: ") or content.startswith("A："):
+            # Find where reasoning ends and actual content starts
+            lines = content.split("\n")
+            # Find where the real content begins (after an empty line or marker)
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if stripped and not stripped.startswith("A:") and not stripped.startswith("A："):
+                    # Check if previous line was empty (paragraph break)
+                    if i > 0 and not lines[i-1].strip():
+                        content = "\n".join(lines[i:])
+                        break
+
+        # 3. Strip any agent name prefix from the start
+        #    Handles: "Benjamin: reply" or "Harper: reply"
+        all_names = list(self.registry.keys())
+        for name in all_names:
+            for sep in (": ", "：", ":\n"):
+                prefix = f"{name}{sep}"
+                if content.startswith(prefix):
+                    content = content[len(prefix):]
+                    break
+
+        return content.strip()
+
     # ── Tool-augmented chat (matching AgentLoop._run_agent_loop) ───
+
+    # Search intent keywords — only pass tools when user message matches
+    _SEARCH_KEYWORDS = {
+        # Chinese
+        "搜索", "搜一下", "查一下", "查找", "查询", "找一下",
+        "新闻", "最新", "今天", "今日", "实时", "热点",
+        "帮我查", "帮我搜", "帮我找", "上网",
+        # English
+        "search", "look up", "find", "google", "news",
+        "latest", "recent", "today", "current",
+    }
+
+    @staticmethod
+    def _has_search_intent(messages: list[dict[str, Any]]) -> bool:
+        """Check if the latest user message has search intent."""
+        # Find the last user message
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                text = msg.get("content", "").lower()
+                for kw in GroupChatEngine._SEARCH_KEYWORDS:
+                    if kw in text:
+                        return True
+                return False
+        return False
 
     async def _chat_with_tools(
         self,
@@ -221,24 +313,47 @@ class GroupChatEngine:
         model: str,
         agent_name: str,
         max_iterations: int = 10,
+        is_direct: bool = False,
     ) -> tuple[str, list[str]]:
         """Chat with tool calling loop, matching nanobot core agent logic.
 
         Returns (content, tools_used).
         """
-        tool_defs = self.tools.get_definitions()
+        # Tool selection:
+        # - Direct chat (1-on-1): always provide exec + web tools
+        # - Group chat: only web tools, only when user has search intent
+        agent_cfg = self.registry.get(agent_name, {})
+        tool_defs: list = []
+        if is_direct:
+            # Default agent gets full tools (exec, filesystem, web)
+            tool_defs = self.direct_tools.get_definitions()
+        elif agent_cfg.get("tools_enabled", False) and self._has_search_intent(messages):
+            tool_defs = self.tools.get_definitions()
         tools_used: list[str] = []
         iteration = 0
 
         while iteration < max_iterations:
             iteration += 1
+            # Langfuse trace metadata for this agent call
+            trace_metadata = {
+                "trace_name": f"{'direct' if is_direct else 'group'}_{agent_name}",
+                "trace_user_id": "groupchat",
+                "tags": [agent_name, "direct" if is_direct else "group"],
+                "generation_name": f"{agent_name}_iter{iteration}",
+            }
 
             response = await self.provider.chat(
                 messages=messages,
                 tools=tool_defs if tool_defs else None,
                 model=model,
                 max_tokens=self.config.max_tokens,
+                metadata=trace_metadata,
             )
+
+            raw_content = (response.content or "")[:100]
+            logger.info("Agent {} iter {}: finish={} tools={} content='{}'",
+                        agent_name, iteration, response.finish_reason,
+                        bool(response.has_tool_calls), raw_content)
 
             if response.has_tool_calls:
                 # Show tool usage hint
@@ -266,11 +381,12 @@ class GroupChatEngine:
                 })
 
                 # Execute each tool and append results
+                tool_registry = self.direct_tools if is_direct else self.tools
                 for tc in response.tool_calls:
                     tools_used.append(tc.name)
                     logger.info("Executing tool: {}({})", tc.name,
                                 json.dumps(tc.arguments, ensure_ascii=False)[:200])
-                    result = await self.tools.execute(tc.name, tc.arguments)
+                    result = await tool_registry.execute(tc.name, tc.arguments)
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -278,22 +394,12 @@ class GroupChatEngine:
                     })
             else:
                 # Text response — done
-                content = response.content or ""
-                # Strip agent's own name prefix if model mimics history format
-                # e.g. "Benjamin: actual reply" → "actual reply"
-                for prefix in (f"{agent_name}: ", f"{agent_name}："):
-                    if content.startswith(prefix):
-                        content = content[len(prefix):]
-                        break
+                content = self._clean_response(response.content or "", agent_name)
                 return content, tools_used
 
         # Max iterations reached
         logger.warning("Agent {} hit max tool iterations ({})", agent_name, max_iterations)
-        content = response.content or ""
-        for prefix in (f"{agent_name}: ", f"{agent_name}："):
-            if content.startswith(prefix):
-                content = content[len(prefix):]
-                break
+        content = self._clean_response(response.content or "", agent_name)
         return content, tools_used
 
     async def direct_chat(self, user_message: str) -> str | None:
@@ -335,6 +441,7 @@ class GroupChatEngine:
                 messages=messages,
                 model=agent["model"],
                 agent_name=agent_name,
+                is_direct=True,
             )
             self._request_log.append({
                 "agent": agent_name, "model": agent["model"],
@@ -424,14 +531,13 @@ class GroupChatEngine:
     def _format_history(self) -> str:
         return "\n\n".join(f"[{m['sender']}]: {m['content']}" for m in self._history)
 
-    def _history_to_messages(self, current_agent: str = "") -> list[dict[str, str]]:
-        """Convert history into proper API messages matching SillyTavern format.
+    def _history_to_messages(self, current_agent: str = "") -> list[dict[str, Any]]:
+        """Convert history into proper API messages (SillyTavern style).
 
-        SillyTavern group chat format:
-        - User messages → role:user
-        - ALL agent messages → role:assistant with "AgentName: " prefix
+        Uses `name` field + content prefix for attribution,
+        matching SillyTavern's DEFAULT character_names_behavior.
         """
-        msgs: list[dict[str, str]] = []
+        msgs: list[dict[str, Any]] = []
         for m in self._history:
             sender = m["sender"]
             content = m["content"]
@@ -440,8 +546,12 @@ class GroupChatEngine:
             elif sender == "系统":
                 msgs.append({"role": "system", "content": content})
             else:
-                # All agent messages as assistant with name prefix (SillyTavern style)
-                msgs.append({"role": "assistant", "content": f"{sender}: {content}"})
+                # SillyTavern DEFAULT: name field + content prefix
+                msgs.append({
+                    "role": "assistant",
+                    "content": f"{sender}: {content}",
+                    "name": sender.replace(" ", "_"),
+                })
         return msgs
 
     def _pick_next_speaker(self, last_content: str = "") -> str:
@@ -462,35 +572,57 @@ class GroupChatEngine:
             candidates = [n for n in candidates if n != last_speaker]
         return random.choice(candidates) if candidates else random.choice(names)
 
-    def _build_agent_prompt(self, agent_name: str) -> list[dict[str, str]]:
-        """Build prompt matching SillyTavern's group chat API format.
+    def _build_agent_prompt(self, agent_name: str) -> list[dict[str, Any]]:
+        """Build prompt matching SillyTavern's group chat prompt structure.
 
-        SillyTavern sends:
-        1. system: agent persona
-        2. user: original question
-        3. assistant: "PreviousAgent: response..." (previous replies)
-        Minimal system noise — let the model focus on reasoning.
+        SillyTavern Chat Completion order:
+        1. system: main_prompt — "Write {char}'s next reply..."
+        2. system: new_group_chat — "[Group members: ...]"
+        3. system: charDescription — persona/SOUL.md
+        4. system: examples (optional)
+        5. [chat history with name field]
+        6. system: instructions (optional, post-history)
+        7. system: group_nudge — ALWAYS last
         """
         agent = self.registry[agent_name]
+        group_members = ", ".join(self._active_agents)
 
-        messages: list[dict[str, str]] = []
+        messages: list[dict[str, Any]] = []
 
-        # 1. Persona (system)
+        # 1. Main prompt (SillyTavern: default_main_prompt)
+        main_prompt = (
+            f"Write {agent_name}'s next reply in a fictional group chat. "
+            f"Write 1 reply only in character as {agent_name}. "
+            f"Do not write as or for other characters."
+        )
+        messages.append({"role": "system", "content": main_prompt})
+
+        # 2. Group context (SillyTavern: new_group_chat_prompt)
+        messages.append({"role": "system", "content": f"[Start a new group chat. Group members: {group_members}]"})
+
+        # 3. Character description (SillyTavern: charDescription)
         messages.append({"role": "system", "content": agent["prompt"]})
 
-        # 2. Few-shot examples (only if EXAMPLES.md exists)
+        # 4. Few-shot examples (SillyTavern: mesExamples)
         examples = agent.get("examples", "")
         if examples:
-            messages.append({"role": "system", "content": f"以下是你的对话风格示例：\n{examples}"})
+            messages.append({"role": "system", "content": f"[Example Chat]\n{examples}"})
 
-        # 3. Chat history as proper multi-message (SillyTavern format)
+        # 5. Chat history with name field attribution
         messages.extend(self._history_to_messages(agent_name))
 
-        # 4. If no user message in history yet, that means we need a trigger
-        # Check if last message is from user or we need to add a nudge
-        if not self._history or self._history[-1]["sender"] != "用户":
-            # All messages so far are from agents — add a group nudge
-            messages.append({"role": "system", "content": f"[Write the next reply only as {agent_name}.]"})
+        # 6. Post-history instructions (SillyTavern: jailbreak position)
+        instructions = agent.get("instructions", "")
+        if instructions:
+            messages.append({"role": "system", "content": instructions})
+
+        # 7. Group nudge — ALWAYS last (SillyTavern: group_nudge_prompt)
+        nudge = (
+            f"[Write the next reply only as {agent_name}. "
+            f"Do NOT write dialogue for other characters. "
+            f"Stay in character and respond naturally.]"
+        )
+        messages.append({"role": "system", "content": nudge})
 
         return messages
 

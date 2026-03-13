@@ -48,12 +48,13 @@ class WebSearchTool(Tool):
     """Search the web using Brave Search API."""
 
     name = "web_search"
-    description = "Search the web. Returns titles, URLs, and snippets."
+    description = "Search the web. Returns titles, URLs, and snippets. Use freshness='pd' for today's news."
     parameters = {
         "type": "object",
         "properties": {
             "query": {"type": "string", "description": "Search query"},
-            "count": {"type": "integer", "description": "Results (1-10)", "minimum": 1, "maximum": 10}
+            "count": {"type": "integer", "description": "Results (1-10)", "minimum": 1, "maximum": 10},
+            "freshness": {"type": "string", "description": "Time filter: 'pd'=past day, 'pw'=past week, 'pm'=past month, or YYYY-MM-DDtoYYYY-MM-DD", "enum": ["pd", "pw", "pm"]}
         },
         "required": ["query"]
     }
@@ -68,7 +69,7 @@ class WebSearchTool(Tool):
         """Resolve API key at call time so env/config changes are picked up."""
         return self._init_api_key or os.environ.get("BRAVE_API_KEY", "")
 
-    async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
+    async def execute(self, query: str, count: int | None = None, freshness: str | None = None, **kwargs: Any) -> str:
         if not self.api_key:
             return (
                 "Error: Brave Search API key not configured. Set it in "
@@ -78,11 +79,15 @@ class WebSearchTool(Tool):
 
         try:
             n = min(max(count or self.max_results, 1), 10)
-            logger.debug("WebSearch: {}", "proxy enabled" if self.proxy else "direct connection")
+            params: dict[str, Any] = {"q": query, "count": n}
+            # Freshness filter for recent results
+            if freshness and freshness in ("pd", "pw", "pm"):
+                params["freshness"] = freshness
+            logger.debug("WebSearch: {} (freshness={})", "proxy" if self.proxy else "direct", freshness or "none")
             async with httpx.AsyncClient(proxy=self.proxy) as client:
                 r = await client.get(
                     "https://api.search.brave.com/res/v1/web/search",
-                    params={"q": query, "count": n},
+                    params=params,
                     headers={"Accept": "application/json", "X-Subscription-Token": self.api_key},
                     timeout=10.0
                 )
