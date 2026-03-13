@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 import unicodedata
+from pathlib import Path
 
 from loguru import logger
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters, Update
@@ -175,6 +177,12 @@ class TelegramChannel(BaseChannel):
         BotCommand("delgroup", "Delete saved group"),
         BotCommand("groups", "List saved groups"),
         BotCommand("order", "Change agent speaking order"),
+        BotCommand("providers", "查看提供商和模型"),
+        BotCommand("newprovider", "添加提供商"),
+        BotCommand("newmodel", "添加模型"),
+        BotCommand("editprovider", "编辑提供商"),
+        BotCommand("deleteprovider", "删除提供商"),
+        BotCommand("deletemodel", "删除模型"),
         BotCommand("help", "Show commands"),
     ]
 
@@ -264,6 +272,13 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(CommandHandler("delgroup", self._on_delgroup))
         self._app.add_handler(CommandHandler("groups", self._on_groups))
         self._app.add_handler(CommandHandler("order", self._on_order))
+        # Provider & model management
+        self._app.add_handler(CommandHandler("newprovider", self._on_newprovider))
+        self._app.add_handler(CommandHandler("newmodel", self._on_newmodel))
+        self._app.add_handler(CommandHandler("deleteprovider", self._on_deleteprovider))
+        self._app.add_handler(CommandHandler("deletemodel", self._on_deletemodel))
+        self._app.add_handler(CommandHandler("editprovider", self._on_editprovider))
+        self._app.add_handler(CommandHandler("providers", self._on_providers))
         self._app.add_handler(CallbackQueryHandler(self._on_callback))
 
         # Add message handler for text, photos, voice, documents
@@ -658,6 +673,109 @@ class TelegramChannel(BaseChannel):
         else:
             return
 
+    # ── Provider / Model management ─────────────────────────────────────
+
+    def _pm_path(self) -> Path:
+        return Path.home() / ".nanobot" / "providers_models.json"
+
+    def _load_pm(self) -> dict:
+        p = self._pm_path()
+        if p.exists():
+            return json.loads(p.read_text())
+        return {"providers": {}, "models": {}}
+
+    def _save_pm(self, data: dict) -> None:
+        self._pm_path().write_text(json.dumps(data, indent=2, ensure_ascii=False))
+
+    async def _on_newprovider(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Start flow: name → URL → apiKey."""
+        if not update.message or not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        chat_id = str(update.message.chat_id)
+        self._edit_state[chat_id] = {"field": "pm_prov_name", "mode": "pm"}
+        await update.message.reply_text("🆕 创建提供商\n\n请输入提供商名称 (如 openrouter, aihubmix):")
+
+    async def _on_newmodel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show provider keyboard, then ask for model ID."""
+        if not update.message or not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        pm = self._load_pm()
+        provs = list(pm.get("providers", {}).keys())
+        if not provs:
+            await update.message.reply_text("⚠️ 还没有提供商，请先 /newprovider")
+            return
+        buttons = [[InlineKeyboardButton(f"🏢 {p}", callback_data=f"pm_newm:{p}")] for p in provs]
+        await update.message.reply_text("🆕 添加模型\n\n选择提供商:", reply_markup=InlineKeyboardMarkup(buttons))
+
+    async def _on_deleteprovider(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.message or not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        pm = self._load_pm()
+        provs = list(pm.get("providers", {}).keys())
+        if not provs:
+            await update.message.reply_text("⚠️ 没有提供商")
+            return
+        buttons = [[InlineKeyboardButton(f"🗑 {p}", callback_data=f"pm_delp:{p}")] for p in provs]
+        buttons.append([InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")])
+        await update.message.reply_text("🗑 删除提供商\n\n选择要删除的:", reply_markup=InlineKeyboardMarkup(buttons))
+
+    async def _on_deletemodel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.message or not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        pm = self._load_pm()
+        provs = [p for p in pm.get("providers", {}) if pm.get("models", {}).get(p)]
+        if not provs:
+            await update.message.reply_text("⚠️ 没有可删除的模型")
+            return
+        buttons = [[InlineKeyboardButton(f"🏢 {p} ({len(pm['models'].get(p, []))} models)", callback_data=f"pm_delm_p:{p}")] for p in provs]
+        buttons.append([InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")])
+        await update.message.reply_text("🗑 删除模型\n\n先选择提供商:", reply_markup=InlineKeyboardMarkup(buttons))
+
+    async def _on_editprovider(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Edit an existing provider's URL or API key."""
+        if not update.message or not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        pm = self._load_pm()
+        provs = list(pm.get("providers", {}).keys())
+        if not provs:
+            await update.message.reply_text("⚠️ 没有提供商，请先 /newprovider")
+            return
+        buttons = []
+        for p in provs:
+            info = pm["providers"][p]
+            url = info.get("url", "?")
+            key_preview = info.get("apiKey", "")[:8] + "..." if info.get("apiKey") else "(none)"
+            buttons.append([InlineKeyboardButton(f"✏️ {p} ({url})", callback_data=f"ep_pick:{p}")])
+        buttons.append([InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")])
+        await update.message.reply_text("✏️ 编辑提供商\n\n选择要编辑的:", reply_markup=InlineKeyboardMarkup(buttons))
+
+    async def _on_providers(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """List all providers and their models."""
+        if not update.message or not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        pm = self._load_pm()
+        provs = pm.get("providers", {})
+        models = pm.get("models", {})
+        if not provs:
+            await update.message.reply_text("📭 暂无提供商\n\n用 /newprovider 添加")
+            return
+        lines = ["📋 **提供商 & 模型列表**\n"]
+        for name, info in provs.items():
+            url = info.get("url", "?")
+            key = info.get("apiKey", "")
+            key_preview = key[:8] + "..." if key else "(未设置)"
+            ms = models.get(name, [])
+            lines.append(f"🏢 **{name}**")
+            lines.append(f"   🔗 {url}")
+            lines.append(f"   🔑 {key_preview}")
+            if ms:
+                for m in ms:
+                    lines.append(f"   🤖 {m}")
+            else:
+                lines.append("   (无模型，用 /newmodel 添加)")
+            lines.append("")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
     async def _on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle InlineKeyboard button presses."""
         query = update.callback_query
@@ -705,8 +823,18 @@ class TelegramChannel(BaseChannel):
                 current = self._groupchat_engine.registry.get(name, {}).get("prompt", "")
                 await query.edit_message_text(f"📄 当前人设:\n\n{current[:3000]}")
                 await self._gc_send(chat_id, "请输入新人设内容:")
+            elif field == "model":
+                # Show provider selection keyboard
+                pm = self._load_pm()
+                provs = list(pm.get("providers", {}).keys())
+                if provs:
+                    buttons = [[InlineKeyboardButton(f"🏢 {p}", callback_data=f"em_prov:{name}:{p}")] for p in provs]
+                    buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=f"em_manual:{name}")])
+                    await query.edit_message_text("🤖 选择提供商:", reply_markup=InlineKeyboardMarkup(buttons))
+                else:
+                    await query.edit_message_text("请输入新模型名 (如 anthropic/claude-sonnet-4-5):")
             else:
-                prompts = {"name": "新名字", "model": "新模型名 (如 anthropic/claude-sonnet-4-5)"}
+                prompts = {"name": "新名字"}
                 await query.edit_message_text(f"请输入{prompts.get(field, field)}:")
 
         elif data.startswith("log:"):
@@ -768,6 +896,113 @@ class TelegramChannel(BaseChannel):
                 await query.edit_message_text("📢 更新中...")
                 await self._send_order_keyboard(chat_id, self._groupchat_engine.active_agents)
 
+        # ── Provider/Model management callbacks ──
+        elif data == "pm_cancel":
+            self._edit_state.pop(chat_id, None)
+            await query.edit_message_text("❌ 已取消")
+
+        elif data.startswith("pm_newm:"):
+            # User picked a provider for /newmodel
+            prov = data[8:]
+            self._edit_state[chat_id] = {"field": "pm_model_id", "mode": "pm", "provider": prov}
+            await query.edit_message_text(
+                f"🏢 提供商: {prov}\n\n"
+                "请输入模型ID (如 google/gemini-3-flash-preview):"
+            )
+
+        elif data.startswith("pm_delp:"):
+            prov = data[8:]
+            pm = self._load_pm()
+            pm["providers"].pop(prov, None)
+            pm["models"].pop(prov, None)
+            self._save_pm(pm)
+            await query.edit_message_text(f"✅ 提供商 {prov} 及其所有模型已删除")
+
+        elif data.startswith("pm_delm_p:"):
+            prov = data[10:]
+            pm = self._load_pm()
+            models = pm.get("models", {}).get(prov, [])
+            if not models:
+                await query.edit_message_text("⚠️ 该提供商没有模型")
+                return
+            buttons = [[InlineKeyboardButton(f"🗑 {m}", callback_data=f"pm_delm:{prov}:{m}")] for m in models]
+            buttons.append([InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")])
+            await query.edit_message_text(f"🗑 删除 {prov} 的模型:", reply_markup=InlineKeyboardMarkup(buttons))
+
+        elif data.startswith("pm_delm:"):
+            parts = data.split(":", 2)
+            prov, model = parts[1], parts[2]
+            pm = self._load_pm()
+            if prov in pm.get("models", {}):
+                pm["models"][prov] = [m for m in pm["models"][prov] if m != model]
+            self._save_pm(pm)
+            await query.edit_message_text(f"✅ 已删除 {prov} / {model}")
+
+        # ── Edit agent model: 2-step provider → model selection ──
+        elif data.startswith("em_prov:"):
+            parts = data.split(":", 2)
+            agent_name, prov = parts[1], parts[2]
+            pm = self._load_pm()
+            models = pm.get("models", {}).get(prov, [])
+            if not models:
+                self._edit_state[chat_id] = {"agent": agent_name, "field": "model", "provider": prov}
+                await query.edit_message_text(
+                    f"🏢 {prov} 暂无已注册模型\n\n"
+                    "请直接输入模型ID:"
+                )
+                return
+            buttons = [[InlineKeyboardButton(f"🤖 {m}", callback_data=f"em_model:{agent_name}:{prov}:{m}")] for m in models]
+            buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=f"em_manual:{agent_name}")])
+            await query.edit_message_text(f"🏢 {prov} — 选择模型:", reply_markup=InlineKeyboardMarkup(buttons))
+
+        elif data.startswith("em_model:"):
+            parts = data.split(":", 3)
+            agent_name, prov, model = parts[1], parts[2], parts[3]
+            if self._groupchat_engine and agent_name in self._groupchat_engine.registry:
+                self._groupchat_engine.registry[agent_name]["model"] = model
+                # Also update config on disk
+                from pathlib import Path as _P
+                cfg_path = _P.home() / ".nanobot" / "agents" / agent_name.lower() / "config.json"
+                if cfg_path.exists():
+                    cfg = json.loads(cfg_path.read_text())
+                    cfg["model"] = model
+                    cfg_path.write_text(json.dumps(cfg, indent=2))
+                await query.edit_message_text(f"✅ {agent_name} 模型已更新:\n🏢 {prov} / 🤖 {model}")
+            else:
+                await query.edit_message_text(f"❌ Agent '{agent_name}' 不存在")
+            self._edit_state.pop(chat_id, None)
+
+        elif data.startswith("em_manual:"):
+            agent_name = data[10:]
+            self._edit_state[chat_id] = {"agent": agent_name, "field": "model"}
+            await query.edit_message_text("请输入新模型名 (如 anthropic/claude-sonnet-4-5):")
+
+        # ── Edit provider callbacks ──
+        elif data.startswith("ep_pick:"):
+            prov = data[8:]
+            pm = self._load_pm()
+            info = pm.get("providers", {}).get(prov, {})
+            url = info.get("url", "?")
+            key_preview = info.get("apiKey", "")[:8] + "..." if info.get("apiKey") else "(none)"
+            buttons = [
+                [InlineKeyboardButton("🔗 修改 URL", callback_data=f"ep_field:{prov}:url")],
+                [InlineKeyboardButton("🔑 修改 API Key", callback_data=f"ep_field:{prov}:key")],
+                [InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")],
+            ]
+            await query.edit_message_text(
+                f"✏️ 编辑提供商: {prov}\n\n"
+                f"🔗 URL: {url}\n"
+                f"🔑 Key: {key_preview}",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+
+        elif data.startswith("ep_field:"):
+            parts = data.split(":", 2)
+            prov, fld = parts[1], parts[2]
+            self._edit_state[chat_id] = {"field": f"ep_{fld}", "mode": "pm", "prov_name": prov}
+            prompts = {"url": "请输入新的 API Base URL:", "key": "请输入新的 API Key:"}
+            await query.edit_message_text(f"✏️ {prov} — {prompts.get(fld, fld)}")
+
     async def _handle_edit_input(self, chat_id: str, content: str) -> None:
         """Process interactive edit state input."""
         state = self._edit_state[chat_id]
@@ -789,7 +1024,63 @@ class TelegramChannel(BaseChannel):
             await self._gc_send(chat_id, "❌ 已取消")
             return
 
-        agent_name = state["agent"]
+        # Handle provider/model management flows
+        if state.get("mode") == "pm":
+            field = state["field"]
+            if field == "pm_prov_name":
+                name = content.strip().lower()
+                state["prov_name"] = name
+                state["field"] = "pm_prov_url"
+                await self._gc_send(chat_id, f"提供商: {name}\n\n请输入 API Base URL\n(如 https://openrouter.ai/v1):")
+                return
+            elif field == "pm_prov_url":
+                url = content.strip().rstrip("/")
+                state["prov_url"] = url
+                state["field"] = "pm_prov_key"
+                await self._gc_send(chat_id, f"🔗 URL: {url}\n\n请输入 API Key:")
+                return
+            elif field == "pm_prov_key":
+                api_key = content.strip()
+                name = state["prov_name"]
+                url = state["prov_url"]
+                pm = self._load_pm()
+                pm.setdefault("providers", {})[name] = {"url": url, "apiKey": api_key}
+                pm.setdefault("models", {}).setdefault(name, [])
+                self._save_pm(pm)
+                del self._edit_state[chat_id]
+                await self._gc_send(chat_id, f"✅ 提供商 {name} 已创建!\n🔗 {url}\n🔑 {api_key[:8]}...")
+                return
+            elif field == "pm_model_id":
+                model_id = content.strip()
+                prov = state["provider"]
+                pm = self._load_pm()
+                pm.setdefault("models", {}).setdefault(prov, [])
+                if model_id not in pm["models"][prov]:
+                    pm["models"][prov].append(model_id)
+                self._save_pm(pm)
+                del self._edit_state[chat_id]
+                await self._gc_send(chat_id, f"✅ 模型已添加!\n🏢 {prov} / 🤖 {model_id}")
+                return
+            elif field == "ep_url":
+                prov = state["prov_name"]
+                pm = self._load_pm()
+                if prov in pm.get("providers", {}):
+                    pm["providers"][prov]["url"] = content.strip().rstrip("/")
+                    self._save_pm(pm)
+                del self._edit_state[chat_id]
+                await self._gc_send(chat_id, f"✅ {prov} URL 已更新: {content.strip()}")
+                return
+            elif field == "ep_key":
+                prov = state["prov_name"]
+                pm = self._load_pm()
+                if prov in pm.get("providers", {}):
+                    pm["providers"][prov]["apiKey"] = content.strip()
+                    self._save_pm(pm)
+                del self._edit_state[chat_id]
+                await self._gc_send(chat_id, f"✅ {prov} API Key 已更新: {content.strip()[:8]}...")
+                return
+
+        agent_name = state.get("agent", "")
         engine = self._groupchat_engine
         if not engine:
             del self._edit_state[chat_id]

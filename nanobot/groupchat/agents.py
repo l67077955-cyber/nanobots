@@ -145,7 +145,9 @@ def _scan_agents_dir(
         if config_file.exists():
             try:
                 acfg = json.loads(config_file.read_text())
-                model = acfg.get("agents", {}).get("defaults", {}).get("model", model)
+                # Top-level 'model' takes priority (written by /editagent)
+                # Fall back to agents.defaults.model for compat
+                model = acfg.get("model") or acfg.get("agents", {}).get("defaults", {}).get("model", model)
                 tools_enabled = acfg.get("tools", {}).get("enabled", False)
             except Exception:
                 pass

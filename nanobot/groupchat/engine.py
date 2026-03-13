@@ -46,7 +46,10 @@ class GroupChatEngine:
         self.provider = provider
         self.workspace = workspace
         self.brave_api_key = brave_api_key
+        self._pm_cache: dict | None = None
+        self._register_tools()
 
+    def _register_tools(self) -> None:
         # Tool registry (same tools as core AgentLoop)
         # Lazy import to avoid circular: engine → agent.tools → agent → config → groupchat
         from nanobot.agent.tools.registry import ToolRegistry
@@ -56,20 +59,20 @@ class GroupChatEngine:
 
         # Web tools (available to all agents with tools_enabled + search intent)
         self.tools = ToolRegistry()
-        self.tools.register(WebSearchTool(api_key=brave_api_key or None))
+        self.tools.register(WebSearchTool(api_key=self.brave_api_key or None))
         self.tools.register(WebFetchTool())
 
         # Exec tools (only for default agent in direct chat)
         self.direct_tools = ToolRegistry()
         self.direct_tools.register(ExecTool(timeout=30, working_dir=str(Path.home())))
         self.direct_tools.register(ReadFileTool())
-        self.direct_tools.register(WebSearchTool(api_key=brave_api_key or None))
+        self.direct_tools.register(WebSearchTool(api_key=self.brave_api_key or None))
         self.direct_tools.register(WebFetchTool())
         logger.info("Groupchat: registered {} web tools, {} direct tools",
                     len(self.tools), len(self.direct_tools))
 
         # Registry: all known agents {name: {model, prompt}}
-        self.registry: dict[str, dict[str, Any]] = load_agents(config, workspace)
+        self.registry: dict[str, dict[str, Any]] = load_agents(self.config, self.workspace)
 
         # Active participants in current conversation
         self._active_agents: list[str] = []
@@ -327,7 +330,9 @@ class GroupChatEngine:
         if is_direct:
             # Default agent gets full tools (exec, filesystem, web)
             tool_defs = self.direct_tools.get_definitions()
-        elif agent_cfg.get("tools_enabled", False) and self._has_search_intent(messages):
+        elif agent_cfg.get("tools_enabled", False):
+            # Agent with tools_enabled always gets web tools — let the model
+            # decide when to search, not keyword matching
             tool_defs = self.tools.get_definitions()
         tools_used: list[str] = []
         iteration = 0
@@ -341,6 +346,7 @@ class GroupChatEngine:
                 "tags": [agent_name, "direct" if is_direct else "group"],
                 "generation_name": f"{agent_name}_iter{iteration}",
             }
+
 
             response = await self.provider.chat(
                 messages=messages,
@@ -597,8 +603,13 @@ class GroupChatEngine:
         )
         messages.append({"role": "system", "content": main_prompt})
 
-        # 2. Group context (SillyTavern: new_group_chat_prompt)
-        messages.append({"role": "system", "content": f"[Start a new group chat. Group members: {group_members}]"})
+        # 2. Group context with current date (SillyTavern: new_group_chat_prompt)
+        from datetime import datetime
+        now = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+        messages.append({"role": "system", "content": (
+            f"[Start a new group chat. Group members: {group_members}]\n"
+            f"[Current date and time: {now}]"
+        )})
 
         # 3. Character description (SillyTavern: charDescription)
         messages.append({"role": "system", "content": agent["prompt"]})

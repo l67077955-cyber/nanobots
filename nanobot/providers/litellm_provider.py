@@ -61,6 +61,7 @@ class LiteLLMProvider(LLMProvider):
         litellm.suppress_debug_info = True
         # Drop unsupported parameters for providers (e.g., gpt-5 rejects some params)
         litellm.drop_params = True
+        litellm.modify_params = True
 
         # Langfuse tracing via LiteLLM OTEL callback (langfuse v3+/v4 compatible)
         if os.environ.get("LANGFUSE_PUBLIC_KEY"):
@@ -224,6 +225,56 @@ class LiteLLMProvider(LLMProvider):
                 clean["tool_call_id"] = map_id(clean["tool_call_id"])
         return sanitized
 
+    # Providers that LiteLLM knows natively — no model rewriting needed
+    _NATIVE_PROVIDERS = frozenset({
+        "openrouter", "anthropic", "openai", "deepseek", "groq",
+        "gemini", "dashscope", "zhipu", "minimax", "moonshot",
+        "siliconflow", "volcengine", "aihubmix",
+    })
+
+    def _resolve_pm_overrides(self, model: str) -> dict[str, str | None]:
+        """Resolve api_base/api_key/model from ~/.nanobot/providers_models.json."""
+        import json as _json
+        from pathlib import Path
+        pm_path = Path.home() / ".nanobot" / "providers_models.json"
+        if not pm_path.exists():
+            return {"api_base": None, "api_key": None, "model": None}
+        try:
+            pm = _json.loads(pm_path.read_text())
+        except Exception:
+            return {"api_base": None, "api_key": None, "model": None}
+
+        def _make(prov_name: str, info: dict, raw_model: str) -> dict:
+            if prov_name in self._NATIVE_PROVIDERS:
+                return {"api_base": None, "api_key": None, "model": None}
+            # Custom provider (API distributor):
+            # Strip trailing /v1 from URL — LiteLLM adds its own path
+            # e.g. Anthropic SDK adds /v1/messages, OpenAI adds /v1/chat/completions
+            url = (info.get("url") or "").rstrip("/")
+            if url.endswith("/v1"):
+                url = url[:-3]
+            return {
+                "api_base": url,
+                "api_key": info.get("apiKey"),
+                "model": raw_model,
+            }
+
+        # 1) Exact match in model lists
+        for prov_name, model_list in pm.get("models", {}).items():
+            if model in model_list:
+                info = pm.get("providers", {}).get(prov_name, {})
+                raw = model.split("/", 1)[1] if "/" in model else model
+                return _make(prov_name, info, raw)
+
+        # 2) Prefix match (e.g. "api123/" -> provider "api123")
+        prefix = model.split("/")[0] if "/" in model else ""
+        if prefix and prefix in pm.get("providers", {}):
+            info = pm["providers"][prefix]
+            raw = model.split("/", 1)[1] if "/" in model else model
+            return _make(prefix, info, raw)
+
+        return {"api_base": None, "api_key": None, "model": None}
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
@@ -233,6 +284,8 @@ class LiteLLMProvider(LLMProvider):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         metadata: dict[str, Any] | None = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request via LiteLLM.
@@ -248,7 +301,29 @@ class LiteLLMProvider(LLMProvider):
             LLMResponse with content and/or tool calls.
         """
         original_model = model or self.default_model
-        model = self._resolve_model(original_model)
+
+        # ── Auto-resolve provider from providers_models.json ──
+        # Must run BEFORE _resolve_model, because _resolve_model may
+        # match the model to a native provider (e.g. 'claude-opus-4-5' → anthropic)
+        pm_api_base = api_base
+        pm_api_key = api_key
+        pm_resolved = False
+        if not api_base and not api_key:
+            resolved = self._resolve_pm_overrides(original_model)
+            if resolved["api_base"]:
+                pm_api_base = resolved["api_base"]
+                pm_api_key = resolved["api_key"]
+                pm_resolved = True
+                if resolved["model"]:
+                    original_model = resolved["model"]
+                    logger.debug("PM override: {} → {} via {}", model, original_model, pm_api_base)
+
+        # Skip _resolve_model for custom providers — the raw model name
+        # should NOT be rewritten by LiteLLM's provider matching
+        if pm_resolved:
+            model = original_model
+        else:
+            model = self._resolve_model(original_model)
         extra_msg_keys = self._extra_msg_keys(original_model, model)
 
         if self._supports_cache_control(original_model):
@@ -269,13 +344,19 @@ class LiteLLMProvider(LLMProvider):
         # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
         self._apply_model_overrides(model, kwargs)
 
-        # Pass api_key directly — more reliable than env vars alone
-        if self.api_key:
-            kwargs["api_key"] = self.api_key
+        # Use PM-resolved values as the override base
+        api_base = pm_api_base
+        api_key = pm_api_key
 
-        # Pass api_base for custom endpoints
-        if self.api_base:
-            kwargs["api_base"] = self.api_base
+        # Pass api_key directly — per-call override takes priority
+        override_key = api_key or self.api_key
+        if override_key:
+            kwargs["api_key"] = override_key
+
+        # Pass api_base for custom endpoints — per-call override takes priority
+        override_base = api_base or self.api_base
+        if override_base:
+            kwargs["api_base"] = override_base
 
         # Pass extra headers (e.g. APP-Code for AiHubMix)
         if self.extra_headers:
