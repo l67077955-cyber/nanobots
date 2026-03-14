@@ -262,6 +262,9 @@ class AgentLoop:
                 msg = await asyncio.wait_for(self.bus.consume_inbound(), timeout=1.0)
             except asyncio.TimeoutError:
                 continue
+            except Exception as e:
+                logger.warning("Error consuming inbound message: {}, continuing...", e)
+                continue
 
             if msg.content.strip().lower() == "/stop":
                 await self._handle_stop(msg)
