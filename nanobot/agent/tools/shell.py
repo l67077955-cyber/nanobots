@@ -64,7 +64,7 @@ class ExecTool(Tool):
         }
     
     async def execute(self, command: str, working_dir: str | None = None, **kwargs: Any) -> str:
-        cwd = working_dir or self.working_dir or os.getcwd()
+        cwd = working_dir or self.working_dir or str(Path.home())
         guard_error = self._guard_command(command, cwd)
         if guard_error:
             return guard_error
@@ -74,8 +74,8 @@ class ExecTool(Tool):
             env["PATH"] = env.get("PATH", "") + os.pathsep + self.path_append
 
         try:
-            process = await asyncio.create_subprocess_shell(
-                command,
+            process = await asyncio.create_subprocess_exec(
+                "/bin/bash", "-c", command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,

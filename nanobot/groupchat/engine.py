@@ -55,20 +55,32 @@ class GroupChatEngine:
         from nanobot.agent.tools.registry import ToolRegistry
         from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
         from nanobot.agent.tools.shell import ExecTool
-        from nanobot.agent.tools.filesystem import ReadFileTool
+        from nanobot.agent.tools.filesystem import (
+            ReadFileTool, WriteFileTool, EditFileTool, ListDirTool,
+        )
 
-        # Web tools (available to all agents with tools_enabled + search intent)
+        home = str(Path.home())
+
+        # Web + file + exec tools (available to agents with tools_enabled)
         self.tools = ToolRegistry()
         self.tools.register(WebSearchTool(api_key=self.brave_api_key or None))
         self.tools.register(WebFetchTool())
+        self.tools.register(ExecTool(timeout=120, working_dir=home))
+        self.tools.register(ReadFileTool())
+        self.tools.register(WriteFileTool())
+        self.tools.register(EditFileTool())
+        self.tools.register(ListDirTool())
 
-        # Exec tools (only for default agent in direct chat)
+        # Direct chat tools (default agent gets same + full exec)
         self.direct_tools = ToolRegistry()
-        self.direct_tools.register(ExecTool(timeout=30, working_dir=str(Path.home())))
+        self.direct_tools.register(ExecTool(timeout=120, working_dir=home))
         self.direct_tools.register(ReadFileTool())
+        self.direct_tools.register(WriteFileTool())
+        self.direct_tools.register(EditFileTool())
+        self.direct_tools.register(ListDirTool())
         self.direct_tools.register(WebSearchTool(api_key=self.brave_api_key or None))
         self.direct_tools.register(WebFetchTool())
-        logger.info("Groupchat: registered {} web tools, {} direct tools",
+        logger.info("Groupchat: registered {} group tools, {} direct tools",
                     len(self.tools), len(self.direct_tools))
 
         # Registry: all known agents {name: {model, prompt}}
@@ -315,7 +327,7 @@ class GroupChatEngine:
         messages: list[dict[str, Any]],
         model: str,
         agent_name: str,
-        max_iterations: int = 10,
+        max_iterations: int = 30,
         is_direct: bool = False,
     ) -> tuple[str, list[str]]:
         """Chat with tool calling loop, matching nanobot core agent logic.
@@ -362,11 +374,18 @@ class GroupChatEngine:
                         bool(response.has_tool_calls), raw_content)
 
             if response.has_tool_calls:
-                # Show tool usage hint
-                hints = ", ".join(tc.name for tc in response.tool_calls)
-                logger.info("Agent {} calling tools: {}", agent_name, hints)
-                if self._send_fn:
-                    await self._send(f"🔧 {agent_name} 正在使用: {hints}")
+                # Show tool usage hint (simplified)
+                for tc in response.tool_calls:
+                    # Show just the key argument value
+                    args = tc.arguments or {}
+                    short = args.get("command") or args.get("query") or args.get("url") or args.get("path") or ""
+                    if not short and args:
+                        short = list(args.values())[0]
+                    if isinstance(short, str) and len(short) > 80:
+                        short = short[:80] + "…"
+                    logger.info("Agent {} calling tools: {}", agent_name, tc.name)
+                    if self._send_fn:
+                        await self._send(f"🔧 {agent_name} → `{tc.name}`: {short}")
 
                 # Append assistant message with tool_calls
                 tool_call_dicts = [
@@ -393,6 +412,12 @@ class GroupChatEngine:
                     logger.info("Executing tool: {}({})", tc.name,
                                 json.dumps(tc.arguments, ensure_ascii=False)[:200])
                     result = await tool_registry.execute(tc.name, tc.arguments)
+                    # Show brief result preview
+                    if self._send_fn and result:
+                        preview = result.strip().replace("\n", " ")[:100]
+                        if len(result) > 100:
+                            preview += "…"
+                        await self._send(f"   ↳ {preview}")
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,

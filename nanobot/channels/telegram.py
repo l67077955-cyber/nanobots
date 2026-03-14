@@ -960,13 +960,22 @@ class TelegramChannel(BaseChannel):
             agent_name, prov, model = parts[1], parts[2], parts[3]
             if self._groupchat_engine and agent_name in self._groupchat_engine.registry:
                 self._groupchat_engine.registry[agent_name]["model"] = model
-                # Also update config on disk
+                # Update config on disk
                 from pathlib import Path as _P
-                cfg_path = _P.home() / ".nanobot" / "agents" / agent_name.lower() / "config.json"
-                if cfg_path.exists():
-                    cfg = json.loads(cfg_path.read_text())
-                    cfg["model"] = model
-                    cfg_path.write_text(json.dumps(cfg, indent=2))
+                agent_entry = self._groupchat_engine.registry[agent_name]
+                if agent_entry.get("_default"):
+                    # Default agent (Nanobot): update config.json
+                    main_cfg_path = _P.home() / ".nanobot" / "config.json"
+                    if main_cfg_path.exists():
+                        cfg = json.loads(main_cfg_path.read_text())
+                        cfg.setdefault("agents", {}).setdefault("defaults", {})["model"] = model
+                        main_cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+                else:
+                    cfg_path = _P.home() / ".nanobot" / "agents" / agent_name.lower() / "config.json"
+                    if cfg_path.exists():
+                        cfg = json.loads(cfg_path.read_text())
+                        cfg["model"] = model
+                        cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
                 await query.edit_message_text(f"✅ {agent_name} 模型已更新:\n🏢 {prov} / 🤖 {model}")
             else:
                 await query.edit_message_text(f"❌ Agent '{agent_name}' 不存在")
@@ -1193,8 +1202,24 @@ class TelegramChannel(BaseChannel):
             preview = content[:80] + "..." if len(content) > 80 else content
             await self._gc_send(chat_id, f"✅ {agent_name} 人设已更新:\n{preview}")
         elif field == "model":
-            engine.registry[agent_name]["model"] = content.strip()
-            await self._gc_send(chat_id, f"✅ {agent_name} 模型: {content.strip()}")
+            new_model = content.strip()
+            engine.registry[agent_name]["model"] = new_model
+            # Persist to disk
+            from pathlib import Path as _P
+            agent_entry = engine.registry[agent_name]
+            if agent_entry.get("_default"):
+                main_cfg_path = _P.home() / ".nanobot" / "config.json"
+                if main_cfg_path.exists():
+                    cfg = json.loads(main_cfg_path.read_text())
+                    cfg.setdefault("agents", {}).setdefault("defaults", {})["model"] = new_model
+                    main_cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+            else:
+                cfg_path = _P.home() / ".nanobot" / "agents" / agent_name.lower() / "config.json"
+                if cfg_path.exists():
+                    cfg = json.loads(cfg_path.read_text())
+                    cfg["model"] = new_model
+                    cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+            await self._gc_send(chat_id, f"✅ {agent_name} 模型: {new_model}")
 
         del self._edit_state[chat_id]
 
