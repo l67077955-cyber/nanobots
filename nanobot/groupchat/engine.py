@@ -639,6 +639,25 @@ class GroupChatEngine:
         # 3. Character description (SillyTavern: charDescription)
         messages.append({"role": "system", "content": agent["prompt"]})
 
+        # 3.5 Agentic tool instructions (for tools_enabled agents)
+        agent_cfg = self.registry.get(agent_name, {})
+        if agent_cfg.get("tools_enabled", False) or agent_cfg.get("_default"):
+            tool_prompt = (
+                "[Tool Usage Instructions]\n"
+                "You have access to these tools: exec (bash commands), "
+                "read_file, write_file, edit_file, list_dir, web_search, web_fetch.\n\n"
+                "Guidelines:\n"
+                "- USE tools proactively. Don't say 'I can't' when you have tools.\n"
+                "- For complex tasks: briefly state your plan (1-2 lines), then execute step by step.\n"
+                "- After each tool call, check the result before proceeding.\n"
+                "- If a tool fails, try a different approach instead of repeating.\n"
+                "- Verify your work: re-read files you wrote, test scripts you created.\n"
+                "- For current events/news: use web_search immediately.\n"
+                "- For URLs the user provides: use web_fetch to read them.\n"
+                "- Don't ask 'should I do X?' — just do it if the intent is clear."
+            )
+            messages.append({"role": "system", "content": tool_prompt})
+
         # 4. Few-shot examples (SillyTavern: mesExamples)
         examples = agent.get("examples", "")
         if examples:
