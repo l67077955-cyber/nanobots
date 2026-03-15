@@ -44,6 +44,9 @@ class ToolRegistry:
             return f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
 
         try:
+            # Recover malformed params from weak models
+            params = self._recover_params(params)
+
             # Attempt to cast parameters to match schema types
             params = tool.cast_params(params)
             
@@ -68,3 +71,39 @@ class ToolRegistry:
 
     def __contains__(self, name: str) -> bool:
         return name in self._tools
+
+    @staticmethod
+    def _recover_params(params: dict[str, Any]) -> dict[str, Any]:
+        """Try to recover malformed parameters from weak models.
+
+        Common issues:
+        - Model wraps args in 'raw_arguments': '{"path": "...", "content": "..."}'
+        - Model sends stringified JSON as a single value
+        """
+        import json as _json
+
+        # Case 1: {"raw_arguments": '{"path": "...", "content": "..."}'}
+        if "raw_arguments" in params and len(params) == 1:
+            raw = params["raw_arguments"]
+            if isinstance(raw, str):
+                try:
+                    parsed = _json.loads(raw)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except (ValueError, TypeError):
+                    pass
+            elif isinstance(raw, dict):
+                return raw
+
+        # Case 2: A single key has a JSON string that contains the real params
+        if len(params) == 1:
+            key, val = next(iter(params.items()))
+            if isinstance(val, str) and val.startswith("{"):
+                try:
+                    parsed = _json.loads(val)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except (ValueError, TypeError):
+                    pass
+
+        return params
