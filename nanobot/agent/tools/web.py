@@ -79,12 +79,6 @@ class WebSearchTool(Tool):
 
         try:
             n = min(max(count or self.max_results, 1), 10)
-            # Auto-inject current year if query lacks any 4-digit year
-            import re
-            from datetime import datetime
-            year = str(datetime.now().year)
-            if not re.search(r'\b20[2-3]\d\b', query):
-                query = f"{query} {year}"
             params: dict[str, Any] = {"q": query, "count": n}
             # Freshness filter for recent results
             if freshness and freshness in ("pd", "pw", "pm"):
