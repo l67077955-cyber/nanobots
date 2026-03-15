@@ -408,10 +408,10 @@ class GroupChatEngine:
         agent_name: str,
         max_iterations: int = 30,
         is_direct: bool = False,
-    ) -> tuple[str, list[str]]:
+    ) -> tuple[str, list[str], dict[str, Any]]:
         """Chat with tool calling loop, matching nanobot core agent logic.
 
-        Returns (content, tools_used).
+        Returns (content, tools_used, stats).
         """
         # Tool selection:
         # - Direct chat (1-on-1): always provide exec + web tools
@@ -427,6 +427,10 @@ class GroupChatEngine:
             tool_defs = self.tools.get_definitions()
         tools_used: list[str] = []
         iteration = 0
+        import time as _time
+        total_tokens = {"prompt": 0, "completion": 0, "total": 0}
+        total_latency = 0.0
+        call_details: list[dict] = []  # Per-iteration records
 
         while iteration < max_iterations:
             iteration += 1
@@ -439,6 +443,7 @@ class GroupChatEngine:
             }
 
 
+            t0 = _time.time()
             response = await self.provider.chat(
                 messages=messages,
                 tools=tool_defs if tool_defs else None,
@@ -446,6 +451,22 @@ class GroupChatEngine:
                 max_tokens=self.config.max_tokens,
                 metadata=trace_metadata,
             )
+            latency = _time.time() - t0
+            total_latency += latency
+
+            # Accumulate token usage
+            usage = response.usage or {}
+            total_tokens["prompt"] += usage.get("prompt_tokens", 0)
+            total_tokens["completion"] += usage.get("completion_tokens", 0)
+            total_tokens["total"] += usage.get("total_tokens", 0)
+
+            call_details.append({
+                "iter": iteration,
+                "latency": round(latency, 2),
+                "tokens": dict(usage),
+                "finish": response.finish_reason,
+                "tools": [tc.name for tc in response.tool_calls] if response.has_tool_calls else [],
+            })
 
             raw_content = (response.content or "")[:100]
             logger.info("Agent {} iter {}: finish={} tools={} content='{}'",
@@ -505,12 +526,24 @@ class GroupChatEngine:
             else:
                 # Text response — done
                 content = self._clean_response(response.content or "", agent_name)
-                return content, tools_used
+                stats = {
+                    "iterations": iteration,
+                    "latency": round(total_latency, 2),
+                    "tokens": total_tokens,
+                    "calls": call_details,
+                }
+                return content, tools_used, stats
 
         # Max iterations reached
         logger.warning("Agent {} hit max tool iterations ({})", agent_name, max_iterations)
         content = self._clean_response(response.content or "", agent_name)
-        return content, tools_used
+        stats = {
+            "iterations": iteration,
+            "latency": round(total_latency, 2),
+            "tokens": total_tokens,
+            "calls": call_details,
+        }
+        return content, tools_used, stats
 
     async def direct_chat(self, user_message: str) -> str | None:
         """Send message to single active agent (1-on-1 mode).
@@ -548,7 +581,7 @@ class GroupChatEngine:
             messages.append({"role": "system", "content": instructions})
 
         try:
-            content, tools_used = await self._chat_with_tools(
+            content, tools_used, stats = await self._chat_with_tools(
                 messages=messages,
                 model=agent["model"],
                 agent_name=agent_name,
@@ -559,6 +592,7 @@ class GroupChatEngine:
                 "msgs": len(messages), "max_tokens": self.config.max_tokens,
                 "reply_len": len(content), "time": datetime.now().strftime("%H:%M:%S"),
                 "mode": "direct", "tools": tools_used,
+                **stats,
             })
             if content:
                 self._add_message("用户", user_message)
@@ -785,7 +819,7 @@ class GroupChatEngine:
         messages = self._build_agent_prompt(agent_name)
 
         try:
-            content, tools_used = await self._chat_with_tools(
+            content, tools_used, stats = await self._chat_with_tools(
                 messages=messages,
                 model=model,
                 agent_name=agent_name,
@@ -795,6 +829,7 @@ class GroupChatEngine:
                 "msgs": len(messages), "max_tokens": self.config.max_tokens,
                 "reply_len": len(content), "time": datetime.now().strftime("%H:%M:%S"),
                 "mode": "group", "tools": tools_used,
+                **stats,
             })
             if content:
                 self._add_message(agent_name, content)

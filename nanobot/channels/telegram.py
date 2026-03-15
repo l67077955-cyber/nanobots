@@ -904,6 +904,47 @@ class TelegramChannel(BaseChannel):
                 full = "\n".join(lines)
                 await query.edit_message_text(full[:4096])
 
+        elif data.startswith("logd:"):
+            idx = int(data[5:])
+            logs = self._groupchat_engine._request_log
+            if idx >= len(logs):
+                await query.edit_message_text("⚠️ 记录不存在")
+                return
+            r = logs[idx]
+            tokens = r.get("tokens", {})
+            calls = r.get("calls", [])
+            tools = r.get("tools", [])
+            lines = [
+                f"📊 LLM 调用 #{idx+1} 详情\n",
+                f"👤 Agent: {r.get('agent', '?')}",
+                f"🤖 Model: {r.get('model', '?')}",
+                f"📌 Mode: {r.get('mode', '?')}",
+                f"🕐 Time: {r.get('time', '?')}",
+                f"⏱ Latency: {r.get('latency', 0)}s",
+                f"🔄 Iterations: {r.get('iterations', 1)}",
+                f"\n📊 Tokens:",
+                f"  Prompt: {tokens.get('prompt', 0)}",
+                f"  Completion: {tokens.get('completion', 0)}",
+                f"  Total: {tokens.get('total', 0)}",
+            ]
+            if tools:
+                lines.append(f"\n🔧 Tools: {', '.join(tools)}")
+            if calls:
+                lines.append("\n📋 Per-iteration:")
+                for c in calls[:10]:
+                    t = c.get("tools", [])
+                    t_str = f" → {','.join(t)}" if t else ""
+                    lines.append(
+                        f"  i{c['iter']}: {c.get('latency',0)}s "
+                        f"{c.get('tokens',{}).get('total_tokens',0)}tok "
+                        f"[{c.get('finish','?')}]{t_str}"
+                    )
+            if r.get("error"):
+                lines.append(f"\n❌ Error: {r['error'][:200]}")
+            lines.append(f"\n📏 Reply: {r.get('reply_len', 0)} chars")
+            text = "\n".join(lines)
+            await query.edit_message_text(text[:4096])
+
         elif data.startswith("sl:"):
             name = data[3:]
             result = self._groupchat_engine.set_leader(name)
@@ -1476,20 +1517,53 @@ class TelegramChannel(BaseChannel):
         )
 
     async def _on_log(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Show session log options."""
+        """Show LLM call records (Langfuse-style)."""
         if not update.message or not update.effective_user:
             return
         if not self.is_allowed(self._sender_id(update.effective_user)):
             return
-        if not self._groupchat_engine or not self._groupchat_engine._history:
-            await update.message.reply_text("📭 当前会话无日志")
+        if not self._groupchat_engine:
+            await update.message.reply_text("📭 无日志")
             return
-        count = len(self._groupchat_engine._history)
-        buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"📋 简短版 (最近5条)", callback_data="log:brief")],
-            [InlineKeyboardButton(f"📜 完整版 (共{count}条)", callback_data="log:full")],
-        ])
-        await update.message.reply_text("📝 查看会话日志:", reply_markup=buttons)
+
+        logs = self._groupchat_engine._request_log
+        if not logs:
+            await update.message.reply_text("📭 当前会话无 LLM 调用记录")
+            return
+
+        # Show summary list + detail buttons for last 10
+        recent = logs[-10:]
+        lines = ["📊 LLM 调用记录:\n"]
+        buttons = []
+        for i, r in enumerate(recent):
+            idx = len(logs) - len(recent) + i
+            agent = r.get("agent", "?")
+            model = r.get("model", "?").split("/")[-1][:15]
+            tokens = r.get("tokens", {})
+            total_tok = tokens.get("total", 0)
+            latency = r.get("latency", 0)
+            iters = r.get("iterations", 1)
+            tools = r.get("tools", [])
+            error = r.get("error")
+            status = "❌" if error else "✅"
+            tool_str = f" 🔧×{len(tools)}" if tools else ""
+            lines.append(
+                f"{status} #{idx+1} {r.get('time','')} {agent} "
+                f"[{model}] {total_tok}tok {latency}s"
+                f" i{iters}{tool_str}"
+            )
+            buttons.append([InlineKeyboardButton(
+                f"#{idx+1} {agent} — 详情",
+                callback_data=f"logd:{idx}"
+            )])
+
+        text = "\n".join(lines)
+        if len(text) > 4000:
+            text = text[:4000] + "…"
+        await update.message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(buttons) if buttons else None
+        )
 
     async def _on_summary(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message or not update.effective_user:
