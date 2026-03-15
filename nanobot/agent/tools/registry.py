@@ -45,7 +45,12 @@ class ToolRegistry:
 
         try:
             # Recover malformed params from weak models
+            original = dict(params)
             params = self._recover_params(params)
+            if params != original:
+                from loguru import logger
+                logger.debug("Recovered params for {}: {} → {}", name,
+                            list(original.keys()), list(params.keys()))
 
             # Attempt to cast parameters to match schema types
             params = tool.cast_params(params)
@@ -53,6 +58,8 @@ class ToolRegistry:
             # Validate parameters
             errors = tool.validate_params(params)
             if errors:
+                from loguru import logger
+                logger.warning("Tool {} param error: {} | raw keys: {}", name, errors, list(original.keys()))
                 return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _HINT
             result = await tool.execute(**params)
             if isinstance(result, str) and result.startswith("Error"):
