@@ -1261,7 +1261,14 @@ class TelegramChannel(BaseChannel):
             return
         old_val = params[key]
         params[key] = value
-        await update.message.reply_text(f"✅ {key}: {old_val} → {value}\n即时生效，无需重启")
+        # Persist to disk
+        hp_path = Path.home() / ".nanobot" / "hyperparams.json"
+        try:
+            import json
+            hp_path.write_text(json.dumps(params, indent=2))
+        except Exception:
+            pass
+        await update.message.reply_text(f"✅ {key}: {old_val} → {value}\n即时生效，已持久化")
 
     async def _on_endchat(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message or not update.effective_user:

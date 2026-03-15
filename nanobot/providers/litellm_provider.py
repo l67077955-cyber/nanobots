@@ -70,7 +70,7 @@ class LiteLLMProvider(LLMProvider):
             logger.info("Langfuse tracing enabled (OTEL mode)")
 
         # Sampling parameters — modifiable at runtime via /hyperparams
-        self.sampling_params: dict[str, float] = {
+        defaults = {
             "temperature": 0.95,
             "top_p": 0.92,
             "top_k": 40,
@@ -80,6 +80,17 @@ class LiteLLMProvider(LLMProvider):
             "presence_penalty": 0.05,
             "top_a": 0,
         }
+        # Load saved hyperparams from disk
+        hp_path = Path.home() / ".nanobot" / "hyperparams.json"
+        if hp_path.exists():
+            try:
+                import json as _json
+                saved = _json.loads(hp_path.read_text())
+                defaults.update(saved)
+                logger.info("Loaded saved hyperparams from {}", hp_path)
+            except Exception:
+                pass
+        self.sampling_params: dict[str, float] = defaults
 
     def _setup_env(self, api_key: str, api_base: str | None, model: str) -> None:
         """Set environment variables based on detected provider."""
