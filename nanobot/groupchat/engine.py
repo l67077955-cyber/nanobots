@@ -448,8 +448,9 @@ class GroupChatEngine:
 
         # Build messages matching SillyTavern's minimal flow:
         # system(persona) → [history as user/assistant] → user(new)
+        now = datetime.now().strftime("%Y年%m月%d日 %H:%M")
         messages: list[dict[str, str]] = [
-            {"role": "system", "content": agent["prompt"]},
+            {"role": "system", "content": agent["prompt"] + f"\n\n[Current date and time: {now}]"},
         ]
 
         # Few-shot examples (only if EXAMPLES.md exists)
