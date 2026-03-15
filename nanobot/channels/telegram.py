@@ -1205,6 +1205,7 @@ class TelegramChannel(BaseChannel):
             new_model = content.strip()
             engine.registry[agent_name]["model"] = new_model
             # Persist to disk
+            import json
             from pathlib import Path as _P
             agent_entry = engine.registry[agent_name]
             if agent_entry.get("_default"):

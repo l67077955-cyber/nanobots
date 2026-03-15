@@ -248,15 +248,16 @@ class LiteLLMProvider(LLMProvider):
             if prov_name in self._NATIVE_PROVIDERS:
                 return {"api_base": None, "api_key": None, "model": None}
             # Custom provider (API distributor):
-            # Strip trailing /v1 from URL — LiteLLM adds its own path
-            # e.g. Anthropic SDK adds /v1/messages, OpenAI adds /v1/chat/completions
+            # - Add openai/ prefix so LiteLLM uses OpenAI SDK
+            #   (distributors expose /v1/chat/completions)
+            # - Strip trailing /v1 from URL since LiteLLM adds it
             url = (info.get("url") or "").rstrip("/")
             if url.endswith("/v1"):
                 url = url[:-3]
             return {
                 "api_base": url,
                 "api_key": info.get("apiKey"),
-                "model": raw_model,
+                "model": f"openai/{raw_model}",
             }
 
         # 1) Exact match in model lists
