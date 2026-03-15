@@ -249,11 +249,9 @@ class LiteLLMProvider(LLMProvider):
                 return {"api_base": None, "api_key": None, "model": None}
             # Custom provider (API distributor):
             # - Add openai/ prefix so LiteLLM uses OpenAI SDK
-            #   (distributors expose /v1/chat/completions)
-            # - Strip trailing /v1 from URL since LiteLLM adds it
+            # - Keep URL as-is (e.g. https://xxx/v1) because LiteLLM
+            #   sends to {api_base}/chat/completions (no extra /v1)
             url = (info.get("url") or "").rstrip("/")
-            if url.endswith("/v1"):
-                url = url[:-3]
             return {
                 "api_base": url,
                 "api_key": info.get("apiKey"),
