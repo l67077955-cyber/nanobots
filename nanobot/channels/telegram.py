@@ -1190,6 +1190,7 @@ class TelegramChannel(BaseChannel):
                 new = agents_dir / new_name.lower()
                 if old.exists() and not new.exists():
                     old.rename(new)
+                engine._save_active()
                 await self._gc_send(chat_id, f"✅ {agent_name} → {new_name}")
             else:
                 await self._gc_send(chat_id, "⚠️ 名字未变")

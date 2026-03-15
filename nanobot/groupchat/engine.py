@@ -88,7 +88,7 @@ class GroupChatEngine:
         self.registry: dict[str, dict[str, Any]] = load_agents(self.config, self.workspace)
 
         # Active participants in current conversation
-        self._active_agents: list[str] = []
+        self._active_agents: list[str] = self._load_active()
 
         # Runtime state
         self._task: asyncio.Task | None = None
@@ -133,6 +133,7 @@ class GroupChatEngine:
             return f"⚠️ {matched} 已在对话中"
 
         self._active_agents.append(matched)
+        self._save_active()
         logger.info("Groupchat: added agent {}, active={}", matched, self._active_agents)
 
         # If we just hit 2+ agents and no group loop running, start it
@@ -156,6 +157,7 @@ class GroupChatEngine:
             return f"⚠️ {name} 不在当前对话中。当前: {', '.join(self._active_agents) or '无'}"
 
         self._active_agents.remove(matched)
+        self._save_active()
         logger.info("Groupchat: removed agent {}, active={}", matched, self._active_agents)
 
         # If below 2 agents, stop group loop
@@ -188,10 +190,37 @@ class GroupChatEngine:
             return f"⚠️ 缺少: {', '.join(missing)}"
 
         self._active_agents[:] = resolved
+        self._save_active()
         order_str = " → ".join(resolved)
         return f"✅ 发言顺序已调整\n📢 {order_str}"
 
-    # ── Group Config Persistence ────────────────────────────
+    # ── Persistence ─────────────────────────────────────────
+
+    @property
+    def _active_file(self) -> Path:
+        return Path.home() / ".nanobot" / "active_agents.json"
+
+    def _save_active(self) -> None:
+        """Persist active agents list (and order) to disk."""
+        try:
+            self._active_file.parent.mkdir(parents=True, exist_ok=True)
+            self._active_file.write_text(json.dumps(self._active_agents, ensure_ascii=False))
+        except Exception:
+            pass
+
+    def _load_active(self) -> list[str]:
+        """Load active agents from disk, filtering out unregistered ones."""
+        if self._active_file.exists():
+            try:
+                saved = json.loads(self._active_file.read_text())
+                # Only keep agents that exist in registry
+                valid = [a for a in saved if a in self.registry]
+                if valid:
+                    logger.info("Restored active agents: {}", valid)
+                return valid
+            except Exception:
+                pass
+        return []
 
     @property
     def _groups_file(self) -> Path:
@@ -240,6 +269,7 @@ class GroupChatEngine:
 
         # Reorder to match saved order
         self._active_agents = [a for a in target if a in self._active_agents]
+        self._save_active()
 
         return (
             f"✅ 已载入分组 「{name}」\n"
@@ -513,6 +543,7 @@ class GroupChatEngine:
         """Stop everything and clear active agents."""
         self._stop_group_loop()
         self._active_agents.clear()
+        self._save_active()
 
     # ── Internal ─────────────────────────────────────────────
 
