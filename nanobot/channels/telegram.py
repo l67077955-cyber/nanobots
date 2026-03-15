@@ -1703,14 +1703,15 @@ class TelegramChannel(BaseChannel):
         if self._groupchat_engine and self._groupchat_engine.active_agents:
             self._ensure_gc_send(str_chat_id)
             if self._groupchat_engine.is_running:
-                # 2+ agents: inject message into group chat
+                # 2+ agents: inject message into group chat (async)
+                # Keep typing indicator alive — agents are still generating
                 self._groupchat_engine.inject(content)
             else:
-                # 1 agent: direct chat
+                # 1 agent: direct chat (synchronous)
                 response = await self._groupchat_engine.direct_chat(content)
                 if response:
                     await self._gc_send(str_chat_id, response)
-            self._stop_typing(str_chat_id)
+                self._stop_typing(str_chat_id)
             return
 
         # Engine exists but no active agents — don't fall through to main loop
