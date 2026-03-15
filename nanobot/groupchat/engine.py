@@ -90,6 +90,10 @@ class GroupChatEngine:
         # Active participants in current conversation
         self._active_agents: list[str] = self._load_active()
 
+        # Leader mode
+        self._leader: str | None = self._load_leader()
+        self._round: int = 0  # Current round number
+
         # Runtime state
         self._task: asyncio.Task | None = None
         self._running = False
@@ -193,6 +197,50 @@ class GroupChatEngine:
         self._save_active()
         order_str = " → ".join(resolved)
         return f"✅ 发言顺序已调整\n📢 {order_str}"
+
+    # ── Leader Mode ─────────────────────────────────────────
+
+    @property
+    def leader(self) -> str | None:
+        return self._leader
+
+    def set_leader(self, name: str | None) -> str:
+        """Set or clear the leader agent."""
+        if name is None:
+            old = self._leader
+            self._leader = None
+            self._save_leader()
+            return f"✅ 已取消 Leader 模式" + (f" ({old})" if old else "")
+
+        matched = self._resolve_agent_name(name)
+        if not matched:
+            return f"❌ Agent '{name}' 不存在。可用: {', '.join(self.registry.keys())}"
+
+        self._leader = matched
+        self._save_leader()
+        return f"👑 {matched} 已设为 Leader\n其他 agent 会先发言，{matched} 最后汇总"
+
+    def _save_leader(self) -> None:
+        try:
+            p = Path.home() / ".nanobot" / "leader.txt"
+            if self._leader:
+                p.write_text(self._leader)
+            elif p.exists():
+                p.unlink()
+        except Exception:
+            pass
+
+    def _load_leader(self) -> str | None:
+        p = Path.home() / ".nanobot" / "leader.txt"
+        if p.exists():
+            try:
+                name = p.read_text().strip()
+                if name and name in self.registry:
+                    logger.info("Restored leader: {}", name)
+                    return name
+            except Exception:
+                pass
+        return None
 
     # ── Persistence ─────────────────────────────────────────
 
@@ -704,7 +752,23 @@ class GroupChatEngine:
         if instructions:
             messages.append({"role": "system", "content": instructions})
 
-        # 7. Group nudge — ALWAYS last (SillyTavern: group_nudge_prompt)
+        # 7. Leader-specific instructions
+        if self._leader == agent_name:
+            tool_names = "web_search, web_fetch, exec, read_file, write_file, edit_file, list_dir"
+            members = [a for a in self._active_agents if a != agent_name]
+            leader_prompt = (
+                f"[你是 GROUP LEADER 👑。你的职责：\n"
+                f"- 分析用户请求，制定计划\n"
+                f"- 其他 agent 已先发言，请审阅他们的回复\n"
+                f"- 纠正错误信息，补充遗漏，去重整合\n"
+                f"- 给出最终汇总回复\n\n"
+                f"当前轮数: {self._round}\n"
+                f"可用工具: {tool_names}\n"
+                f"团队成员: {', '.join(members)}]"
+            )
+            messages.append({"role": "system", "content": leader_prompt})
+
+        # 8. Group nudge — ALWAYS last (SillyTavern: group_nudge_prompt)
         nudge = (
             f"[Write the next reply only as {agent_name}. "
             f"Do NOT write dialogue for other characters. "
@@ -734,7 +798,11 @@ class GroupChatEngine:
             })
             if content:
                 self._add_message(agent_name, content)
-                await self._send(f"💬 {agent_name}:\n\n{content}")
+                total = len(self._active_agents)
+                idx = self._active_agents.index(agent_name) + 1 if agent_name in self._active_agents else 0
+                badge = " 👑" if self._leader == agent_name else ""
+                round_tag = f" [{idx}/{total}]" if total > 1 else ""
+                await self._send(f"💬 {agent_name}{badge}{round_tag}:\n\n{content}")
         except Exception as e:
             logger.error("Groupchat: {} LLM call failed: {}", agent_name, e)
             self._request_log.append({
@@ -805,10 +873,18 @@ class GroupChatEngine:
 
                 # Record user message (no echo)
                 self._add_message("用户", user_input)
+                self._round = rounds
 
-                # All agents speak one round
+                # Determine speaking order
                 current_agents = list(self._active_agents)
-                for name in current_agents:
+                if self._leader and self._leader in current_agents:
+                    # Leader mode: others first, leader last
+                    others = [a for a in current_agents if a != self._leader]
+                    speak_order = others + [self._leader]
+                else:
+                    speak_order = current_agents
+
+                for name in speak_order:
                     if not self._running or name not in self._active_agents:
                         break
                     await asyncio.sleep(self.config.auto_reply_delay)

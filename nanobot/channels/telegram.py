@@ -177,6 +177,7 @@ class TelegramChannel(BaseChannel):
         BotCommand("delgroup", "Delete saved group"),
         BotCommand("groups", "List saved groups"),
         BotCommand("order", "Change agent speaking order"),
+        BotCommand("setleader", "Set/clear leader agent"),
         BotCommand("providers", "查看提供商和模型"),
         BotCommand("newprovider", "添加提供商"),
         BotCommand("newmodel", "添加模型"),
@@ -272,6 +273,7 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(CommandHandler("delgroup", self._on_delgroup))
         self._app.add_handler(CommandHandler("groups", self._on_groups))
         self._app.add_handler(CommandHandler("order", self._on_order))
+        self._app.add_handler(CommandHandler("setleader", self._on_setleader))
         # Provider & model management
         self._app.add_handler(CommandHandler("newprovider", self._on_newprovider))
         self._app.add_handler(CommandHandler("newmodel", self._on_newmodel))
@@ -538,13 +540,46 @@ class TelegramChannel(BaseChannel):
         lines = ["📋 Agent 注册表:\n"]
         for name, info in registry.items():
             status = "🟢" if name in active else "⚪"
+            leader = " 👑" if self._groupchat_engine.leader == name else ""
             model = info.get("model", "?")
-            lines.append(f"{status} {name} ({model})")
+            lines.append(f"{status} {name}{leader} ({model})")
         if active:
             lines.append(f"\n👥 活跃: {', '.join(active)}")
         else:
             lines.append("\n💤 无活跃 agent")
         await update.message.reply_text("\n".join(lines))
+
+    async def _on_setleader(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Set or clear the leader agent."""
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        if not self._groupchat_engine:
+            await update.message.reply_text("⚠️ 群聊引擎未初始化")
+            return
+
+        args = context.args or []
+        if not args:
+            # Clear leader or show current
+            if self._groupchat_engine.leader:
+                result = self._groupchat_engine.set_leader(None)
+            else:
+                # Show selection buttons
+                buttons = []
+                for name in self._groupchat_engine.registry:
+                    buttons.append([InlineKeyboardButton(
+                        f"👑 {name}",
+                        callback_data=f"sl:{name}"
+                    )])
+                await update.message.reply_text(
+                    "👑 选择 Leader:",
+                    reply_markup=InlineKeyboardMarkup(buttons)
+                )
+                return
+        else:
+            result = self._groupchat_engine.set_leader(args[0])
+        await update.message.reply_text(result)
 
     async def _on_addagent(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message or not update.effective_user:
@@ -868,6 +903,11 @@ class TelegramChannel(BaseChannel):
                     lines.append(f"[{m['sender']}]: {text}")
                 full = "\n".join(lines)
                 await query.edit_message_text(full[:4096])
+
+        elif data.startswith("sl:"):
+            name = data[3:]
+            result = self._groupchat_engine.set_leader(name)
+            await query.edit_message_text(result)
 
         elif data.startswith("lg:"):
             name = data[3:]
