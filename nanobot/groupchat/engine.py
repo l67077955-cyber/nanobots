@@ -248,28 +248,25 @@ class GroupChatEngine:
         return f"✅ 已保存分组 「{name}」\n👥 成员: {', '.join(self._active_agents)}"
 
     def load_group(self, name: str) -> str:
-        """Load a saved group config, adding/removing agents as needed."""
+        """Load a saved group config, setting agents directly."""
         groups = self._load_groups()
         if name not in groups:
             available = ', '.join(groups.keys()) if groups else '无'
             return f"⚠️ 分组 「{name}」 不存在\n📋 可用分组: {available}"
 
         target = groups[name]
-        # Remove agents not in target
-        to_remove = [a for a in self._active_agents if a not in target]
-        for a in to_remove:
-            self.remove_agent(a)
-        # Add agents in target
-        added = []
-        for a in target:
-            if a not in self._active_agents:
-                result = self.add_agent(a)
-                if "加入" in result:
-                    added.append(a)
 
-        # Reorder to match saved order
-        self._active_agents = [a for a in target if a in self._active_agents]
+        # Stop any running loop first
+        self._stop_group_loop()
+
+        # Set agents directly (no add/remove to avoid loop race)
+        valid = [a for a in target if self._resolve_agent_name(a)]
+        self._active_agents = valid
         self._save_active()
+
+        # Start group loop if 2+ agents
+        if len(self._active_agents) >= 2:
+            self._start_group_loop()
 
         return (
             f"✅ 已载入分组 「{name}」\n"
