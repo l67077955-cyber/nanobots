@@ -238,6 +238,9 @@ class GroupChatEngine:
                 if "加入" in result:
                     added.append(a)
 
+        # Reorder to match saved order
+        self._active_agents = [a for a in target if a in self._active_agents]
+
         return (
             f"✅ 已载入分组 「{name}」\n"
             f"👥 当前成员: {', '.join(self._active_agents)}"
