@@ -4,6 +4,7 @@ import hashlib
 import os
 import secrets
 import string
+from pathlib import Path
 from typing import Any
 
 import json_repair
