@@ -1364,7 +1364,17 @@ class TelegramChannel(BaseChannel):
         elif data.startswith("ord:"):
             val = data[4:]
             if val == "done":
-                order_str = " → ".join(self._groupchat_engine.active_agents)
+                agents = self._groupchat_engine.active_agents
+                # Persist final order
+                self._groupchat_engine._save_active()
+                # Auto-update saved group
+                gname = getattr(self._groupchat_engine, '_current_group_name', None)
+                if gname:
+                    groups = self._groupchat_engine._load_groups()
+                    if gname in groups:
+                        groups[gname] = list(agents)
+                        self._groupchat_engine._save_groups(groups)
+                order_str = " → ".join(agents)
                 await query.edit_message_text(f"📢 发言顺序:\n{order_str}")
             else:
                 idx = int(val)
