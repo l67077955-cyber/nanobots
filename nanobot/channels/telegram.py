@@ -1017,6 +1017,12 @@ class TelegramChannel(BaseChannel):
                 reply_markup=InlineKeyboardMarkup(buttons)
             )
 
+        elif data.startswith("log_pg:"):
+            page = int(data[7:])
+            logs = self._groupchat_engine._request_log
+            text, markup = self._build_log_page(logs, page)
+            await query.edit_message_text(text, reply_markup=markup)
+
         elif data.startswith("logd:"):
             idx = int(data[5:])
             logs = self._groupchat_engine._request_log
@@ -1032,7 +1038,7 @@ class TelegramChannel(BaseChannel):
                 f"👤 Agent: {r.get('agent', '?')}",
                 f"🤖 Model: {r.get('model', '?')}",
                 f"📌 Mode: {r.get('mode', '?')}",
-                f"🕐 Time: {r.get('time', '?')}",
+                f"🕐 Time: {r.get('time', '?')} (CST)",
                 f"⏱ Latency: {r.get('latency', 0)}s",
                 f"🔄 Iterations: {r.get('iterations', 1)}",
                 f"\n📊 Tokens:",
@@ -1052,11 +1058,24 @@ class TelegramChannel(BaseChannel):
                         f"{c.get('tokens',{}).get('total_tokens',0)}tok "
                         f"[{c.get('finish','?')}]{t_str}"
                     )
+            # Input/Output preview
+            inp = r.get("input_preview", "")
+            out = r.get("output", "")
+            if inp:
+                lines.append(f"\n📥 Input: {inp[:300]}")
+            if out:
+                lines.append(f"\n📤 Output: {out[:500]}")
             if r.get("error"):
-                lines.append(f"\n❌ Error: {r['error'][:200]}")
+                lines.append(f"\n❌ Error: {r['error'][:300]}")
             lines.append(f"\n📏 Reply: {r.get('reply_len', 0)} chars")
             text = "\n".join(lines)
-            await query.edit_message_text(text[:4096])
+            page = idx // 10
+            await query.edit_message_text(
+                text[:4096],
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅️ 返回列表", callback_data=f"log_pg:{page}")]
+                ])
+            )
 
         elif data.startswith("sl:"):
             name = data[3:]
@@ -1785,7 +1804,7 @@ class TelegramChannel(BaseChannel):
         )
 
     async def _on_log(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Show LLM call records (Langfuse-style)."""
+        """Show LLM call records (Langfuse-style) with pagination."""
         if not update.message or not update.effective_user:
             return
         if not self.is_allowed(self._sender_id(update.effective_user)):
@@ -1793,18 +1812,29 @@ class TelegramChannel(BaseChannel):
         if not self._groupchat_engine:
             await update.message.reply_text("📭 无日志")
             return
-
         logs = self._groupchat_engine._request_log
         if not logs:
             await update.message.reply_text("📭 当前会话无 LLM 调用记录")
             return
+        # Show last page
+        page = max(0, (len(logs) - 1) // 10)
+        text, markup = self._build_log_page(logs, page)
+        await update.message.reply_text(text, reply_markup=markup)
 
-        # Show summary list + detail buttons for last 10
-        recent = logs[-10:]
-        lines = ["📊 LLM 调用记录:\n"]
+    def _build_log_page(self, logs: list, page: int):
+        """Build a log page (10 items per page)."""
+        per_page = 10
+        total = len(logs)
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        page = max(0, min(page, total_pages - 1))
+        start = page * per_page
+        end = min(start + per_page, total)
+        page_logs = logs[start:end]
+
+        lines = [f"📊 LLM 调用记录 (第{page+1}/{total_pages}页, 共{total}条):\n"]
         buttons = []
-        for i, r in enumerate(recent):
-            idx = len(logs) - len(recent) + i
+        for i, r in enumerate(page_logs):
+            idx = start + i
             agent = r.get("agent", "?")
             model = r.get("model", "?").split("/")[-1][:15]
             tokens = r.get("tokens", {})
@@ -1825,13 +1855,19 @@ class TelegramChannel(BaseChannel):
                 callback_data=f"logd:{idx}"
             )])
 
+        # Pagination buttons
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"log_pg:{page-1}"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"log_pg:{page+1}"))
+        if nav:
+            buttons.append(nav)
+
         text = "\n".join(lines)
         if len(text) > 4000:
             text = text[:4000] + "…"
-        await update.message.reply_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(buttons) if buttons else None
-        )
+        return text, InlineKeyboardMarkup(buttons) if buttons else None
 
     async def _on_summary(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message or not update.effective_user:

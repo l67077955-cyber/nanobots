@@ -11,7 +11,13 @@ from __future__ import annotations
 import asyncio
 import json
 import random
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+_CST = timezone(timedelta(hours=8))
+
+def _cn_now() -> datetime:
+    """Return current time in China Standard Time (UTC+8)."""
+    return datetime.now(_CST)
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -588,7 +594,7 @@ class GroupChatEngine:
 
         # Build messages matching SillyTavern's minimal flow:
         # system(persona) → [history as user/assistant] → user(new)
-        now = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+        now = _cn_now().strftime("%Y年%m月%d日 %H:%M")
         messages: list[dict[str, str]] = [
             {"role": "system", "content": agent["prompt"] + f"\n\n[Current date and time: {now}]"},
         ]
@@ -619,8 +625,10 @@ class GroupChatEngine:
             self._request_log.append({
                 "agent": agent_name, "model": agent["model"],
                 "msgs": len(messages), "max_tokens": self.config.max_tokens,
-                "reply_len": len(content), "time": datetime.now().strftime("%H:%M:%S"),
+                "reply_len": len(content), "time": _cn_now().strftime("%H:%M:%S"),
                 "mode": "direct", "tools": tools_used,
+                "input_preview": user_message[:200],
+                "output": content[:500],
                 **stats,
             })
             if content:
@@ -632,7 +640,7 @@ class GroupChatEngine:
             self._request_log.append({
                 "agent": agent_name, "model": agent["model"],
                 "msgs": len(messages), "max_tokens": self.config.max_tokens,
-                "reply_len": 0, "time": datetime.now().strftime("%H:%M:%S"),
+                "reply_len": 0, "time": _cn_now().strftime("%H:%M:%S"),
                 "mode": "direct", "error": str(e),
             })
             return f"⚠️ {agent_name} 回复失败: {e}"
@@ -675,7 +683,7 @@ class GroupChatEngine:
             self._topic = "自由讨论"
 
         # Session directory
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        timestamp = _cn_now().strftime("%Y%m%d-%H%M%S")
         sessions_dir = Path.home() / ".nanobot" / "collab-sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
         self._session_dir = sessions_dir / f"gc-{timestamp}"
@@ -777,7 +785,7 @@ class GroupChatEngine:
 
         # 2. Group context with current date (SillyTavern: new_group_chat_prompt)
         from datetime import datetime
-        now = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+        now = _cn_now().strftime("%Y年%m月%d日 %H:%M")
         messages.append({"role": "system", "content": (
             f"[Start a new group chat. Group members: {group_members}]\n"
             f"[Current date and time: {now}]"
@@ -859,8 +867,10 @@ class GroupChatEngine:
             self._request_log.append({
                 "agent": agent_name, "model": model,
                 "msgs": len(messages), "max_tokens": self.config.max_tokens,
-                "reply_len": len(content), "time": datetime.now().strftime("%H:%M:%S"),
+                "reply_len": len(content), "time": _cn_now().strftime("%H:%M:%S"),
                 "mode": "group", "tools": tools_used,
+                "input_preview": (self._history[-2]["content"][:200] if len(self._history) >= 2 else ""),
+                "output": content[:500],
                 **stats,
             })
             if content:
@@ -875,7 +885,7 @@ class GroupChatEngine:
             self._request_log.append({
                 "agent": agent_name, "model": model,
                 "msgs": len(messages), "max_tokens": self.config.max_tokens,
-                "reply_len": 0, "time": datetime.now().strftime("%H:%M:%S"),
+                "reply_len": 0, "time": _cn_now().strftime("%H:%M:%S"),
                 "mode": "group", "error": str(e),
             })
             await self._send(f"⚠️ {agent_name} 回复失败: {e}")
