@@ -1712,9 +1712,9 @@ class TelegramChannel(BaseChannel):
                 lines.append("  无匹配结果")
             buttons.append([InlineKeyboardButton("🔍 重新搜索", callback_data=f"ml_srch:{prov}")])
             buttons.append([InlineKeyboardButton("⬅️ 返回厂商列表", callback_data=f"ep_models:{prov}")])
-            await self._gc_send(
-                chat_id,
-                "\n".join(lines)[:4000],
+            await self._app.bot.send_message(
+                chat_id=int(chat_id),
+                text="\n".join(lines)[:4000],
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
             return
