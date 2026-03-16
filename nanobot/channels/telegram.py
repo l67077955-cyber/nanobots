@@ -1183,6 +1183,13 @@ class TelegramChannel(BaseChannel):
             tokens = r.get("tokens", {})
             calls = r.get("calls", [])
             tools = r.get("tools", [])
+
+            def _trunc(s: str, limit: int) -> str:
+                """Truncate with remaining char count."""
+                if len(s) <= limit:
+                    return s
+                return s[:limit] + f"…(还有{len(s)-limit}字)"
+
             lines = [
                 f"📊 LLM 调用 #{idx+1} 详情\n",
                 f"👤 Agent: {r.get('agent', '?')}",
@@ -1198,7 +1205,19 @@ class TelegramChannel(BaseChannel):
             ]
             if tools:
                 lines.append(f"\n🔧 Tools: {', '.join(tools)}")
-            if calls:
+            # Tool call details
+            tcd = r.get("tool_calls_detail", [])
+            if tcd:
+                lines.append(f"\n📋 工具调用 ({len(tcd)}):")
+                for i, tc in enumerate(tcd[:8]):
+                    lines.append(f"  {i+1}. {tc['name']}({_trunc(tc.get('args',''), 100)})")
+                    rlen = tc.get('result_len', 0)
+                    rp = tc.get('result_preview', '')
+                    if rp:
+                        lines.append(f"     → {_trunc(rp.replace(chr(10), ' '), 120)} ({rlen}字)")
+                if len(tcd) > 8:
+                    lines.append(f"  ...还有{len(tcd)-8}个调用")
+            elif calls:
                 lines.append("\n📋 Per-iteration:")
                 for c in calls[:10]:
                     t = c.get("tools", [])
@@ -1212,11 +1231,12 @@ class TelegramChannel(BaseChannel):
             inp = r.get("input_preview", "")
             out = r.get("output", "")
             if inp:
-                lines.append(f"\n📥 Input: {inp[:300]}")
+                lines.append(f"\n📥 Input: {_trunc(inp, 200)}")
             if out:
-                lines.append(f"\n📤 Output: {out[:500]}")
+                full_len = r.get("reply_len", len(out))
+                lines.append(f"\n📤 Output: {_trunc(out, 300)}")
             if r.get("error"):
-                lines.append(f"\n❌ Error: {r['error'][:300]}")
+                lines.append(f"\n❌ Error: {_trunc(r['error'], 300)}")
             lines.append(f"\n📏 Reply: {r.get('reply_len', 0)} chars")
             text = "\n".join(lines)
             page = idx // 10

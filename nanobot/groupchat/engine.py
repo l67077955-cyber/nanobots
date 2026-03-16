@@ -461,6 +461,7 @@ class GroupChatEngine:
         else:
             tool_defs = self._get_agent_tools(agent_cfg, self.tools)
         tools_used: list[str] = []
+        tool_calls_detail: list[dict] = []  # name, args, result_preview
         iteration = 0
         import time as _time
         total_tokens = {"prompt": 0, "completion": 0, "total": 0}
@@ -547,6 +548,13 @@ class GroupChatEngine:
                     logger.info("Executing tool: {}({})", tc.name,
                                 json.dumps(tc.arguments, ensure_ascii=False)[:200])
                     result = await tool_registry.execute(tc.name, tc.arguments)
+                    # Record tool call detail
+                    tool_calls_detail.append({
+                        "name": tc.name,
+                        "args": json.dumps(tc.arguments, ensure_ascii=False)[:200],
+                        "result_len": len(result) if result else 0,
+                        "result_preview": (result or "")[:150],
+                    })
                     # Show brief result preview
                     if self._send_fn and result:
                         preview = result.strip().replace("\n", " ")[:100]
@@ -566,6 +574,7 @@ class GroupChatEngine:
                     "latency": round(total_latency, 2),
                     "tokens": total_tokens,
                     "calls": call_details,
+                    "tool_calls_detail": tool_calls_detail,
                 }
                 return content, tools_used, stats
 
@@ -577,6 +586,7 @@ class GroupChatEngine:
             "latency": round(total_latency, 2),
             "tokens": total_tokens,
             "calls": call_details,
+            "tool_calls_detail": tool_calls_detail,
         }
         return content, tools_used, stats
 
