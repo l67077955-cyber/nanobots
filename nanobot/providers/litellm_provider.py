@@ -250,15 +250,15 @@ class LiteLLMProvider(LLMProvider):
         from pathlib import Path
         pm_path = Path.home() / ".nanobot" / "providers_models.json"
         if not pm_path.exists():
-            return {"api_base": None, "api_key": None, "model": None}
+            return {"api_base": None, "api_key": None, "model": None, "provider_name": None}
         try:
             pm = _json.loads(pm_path.read_text())
         except Exception:
-            return {"api_base": None, "api_key": None, "model": None}
+            return {"api_base": None, "api_key": None, "model": None, "provider_name": None}
 
         def _make(prov_name: str, info: dict, raw_model: str) -> dict:
             if prov_name in self._NATIVE_PROVIDERS:
-                return {"api_base": None, "api_key": None, "model": None}
+                return {"api_base": None, "api_key": None, "model": None, "provider_name": prov_name}
             # Custom provider (API distributor):
             # - Add openai/ prefix so LiteLLM uses OpenAI SDK
             # - Keep URL as-is (e.g. https://xxx/v1) because LiteLLM
@@ -268,6 +268,7 @@ class LiteLLMProvider(LLMProvider):
                 "api_base": url,
                 "api_key": info.get("apiKey"),
                 "model": f"openai/{raw_model}",
+                "provider_name": prov_name,
             }
 
         # 1) Exact match in model lists
@@ -284,7 +285,7 @@ class LiteLLMProvider(LLMProvider):
             raw = model.split("/", 1)[1] if "/" in model else model
             return _make(prefix, info, raw)
 
-        return {"api_base": None, "api_key": None, "model": None}
+        return {"api_base": None, "api_key": None, "model": None, "provider_name": None}
 
     async def chat(
         self,
@@ -319,6 +320,7 @@ class LiteLLMProvider(LLMProvider):
         pm_api_base = api_base
         pm_api_key = api_key
         pm_resolved = False
+        pm_provider_name = None
         if not api_base and not api_key:
             resolved = self._resolve_pm_overrides(original_model)
             if resolved["api_base"]:
@@ -328,6 +330,7 @@ class LiteLLMProvider(LLMProvider):
                 if resolved["model"]:
                     original_model = resolved["model"]
                     logger.debug("PM override: {} → {} via {}", model, original_model, pm_api_base)
+            pm_provider_name = resolved.get("provider_name")
 
         # Skip _resolve_model for custom providers — the raw model name
         # should NOT be rewritten by LiteLLM's provider matching
@@ -384,6 +387,17 @@ class LiteLLMProvider(LLMProvider):
         # Langfuse metadata (agent name, session, mode etc.)
         if metadata:
             kwargs["metadata"] = metadata
+
+        # OpenRouter provider routing — prioritize low-latency EU backends
+        if pm_provider_name == "openrouter" or (not pm_provider_name and "openrouter" in (model or "")):
+            kwargs["extra_body"] = {
+                "provider": {
+                    "sort": "latency",
+                    "order": ["nebius", "mistral", "groq", "fireworks"],
+                    "allow_fallbacks": True,
+                }
+            }
+            logger.debug("OpenRouter: using latency sort + EU-first order")
 
         try:
             response = await acompletion(**kwargs)
