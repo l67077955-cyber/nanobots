@@ -1455,13 +1455,30 @@ class TelegramChannel(BaseChannel):
                     "请直接输入模型ID:"
                 )
                 return
-            buttons = [[InlineKeyboardButton(f"🤖 {m}", callback_data=f"em_model:{agent_name}:{prov}:{m}")] for m in models]
+            # Cache models for index-based lookup (avoids 64-byte callback limit)
+            if not hasattr(self, "_em_model_cache"):
+                self._em_model_cache = {}
+            self._em_model_cache[f"{agent_name}:{prov}"] = models
+            buttons = []
+            for i, m in enumerate(models):
+                buttons.append([InlineKeyboardButton(f"🤖 {m}", callback_data=f"em_mi:{agent_name}:{prov}:{i}")])
             buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=f"em_manual:{agent_name}")])
             await query.edit_message_text(f"🏢 {prov} — 选择模型:", reply_markup=InlineKeyboardMarkup(buttons))
 
-        elif data.startswith("em_model:"):
-            parts = data.split(":", 3)
-            agent_name, prov, model = parts[1], parts[2], parts[3]
+        elif data.startswith("em_mi:") or data.startswith("em_model:"):
+            # em_mi:agent:prov:index — resolve model from index cache
+            if data.startswith("em_mi:"):
+                parts = data.split(":")
+                agent_name, prov, idx = parts[1], parts[2], int(parts[3])
+                cache = getattr(self, "_em_model_cache", {})
+                models = cache.get(f"{agent_name}:{prov}", [])
+                if idx >= len(models):
+                    await query.edit_message_text("⚠️ 模型索引无效，请重新操作")
+                    return
+                model = models[idx]
+            else:
+                parts = data.split(":", 3)
+                agent_name, prov, model = parts[1], parts[2], parts[3]
             if self._groupchat_engine and agent_name in self._groupchat_engine.registry:
                 self._groupchat_engine.registry[agent_name]["model"] = model
                 # Update config on disk
