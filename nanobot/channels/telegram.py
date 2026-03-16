@@ -566,9 +566,6 @@ class TelegramChannel(BaseChannel):
                 tools_str = "全部"
             else:
                 tools_str = "无"
-            # Persona preview
-            prompt = info.get("prompt", "")
-            persona = prompt[:60].replace("\n", " ") + "…" if len(prompt) > 60 else prompt.replace("\n", " ")
             # Find provider for this model
             prov_name = "默认"
             for pn, model_list in pm.get("models", {}).items():
@@ -576,10 +573,7 @@ class TelegramChannel(BaseChannel):
                     prov_name = pn
                     break
             lines.append(f"{status} {name}{leader}")
-            lines.append(f"   🤖 {model}")
-            lines.append(f"   🏢 {prov_name}")
-            lines.append(f"   🔧 {tools_str}")
-            lines.append(f"   📝 {persona}")
+            lines.append(f"   🤖 {model} | 🏢 {prov_name} | 🔧 {tools_str}")
             lines.append("")
         if active:
             order = " → ".join(active)

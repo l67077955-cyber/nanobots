@@ -335,10 +335,19 @@ class GroupChatEngine:
             self._start_group_loop()
 
         self._current_group_name = name
-        return (
-            f"✅ 已载入分组 「{name}」\n"
-            f"👥 当前成员: {', '.join(self._active_agents)}"
-        )
+        # Build rich output
+        lines = [f"✅ 已载入分组 「{name}」"]
+        leader = self._leader
+        if leader:
+            lines.append(f"👑 领导者: {leader}")
+        lines.append(f"📢 发言顺序: {' → '.join(self._active_agents)}")
+        lines.append("")
+        for a in self._active_agents:
+            info = self.registry.get(a, {})
+            model = info.get('model', '?')
+            badge = " 👑" if leader == a else ""
+            lines.append(f"  {a}{badge}: 🤖 {model}")
+        return "\n".join(lines)
 
     def delete_group(self, name: str) -> str:
         """Delete a saved group config."""
@@ -353,10 +362,17 @@ class GroupChatEngine:
         """List all saved group configs."""
         groups = self._load_groups()
         if not groups:
-            return "📋 没有保存的分组\n用 /savegroup <名称> 保存当前成员"
-        lines = ["📋 已保存的分组："]
+            return "📋 没有保存的分组\n用 /savegroup 保存当前成员"
+        lines = ["📋 已保存的分组：\n"]
         for gname, members in groups.items():
-            lines.append(f"  • {gname}: {', '.join(members)}")
+            order = " → ".join(members)
+            member_info = []
+            for m in members:
+                info = self.registry.get(m, {})
+                model = info.get('model', '?').split('/')[-1]
+                member_info.append(f"{m}({model})")
+            lines.append(f"  📁 {gname}")
+            lines.append(f"     {' → '.join(member_info)}")
         return "\n".join(lines)
 
     # ── Response cleanup ───
