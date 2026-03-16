@@ -1220,14 +1220,27 @@ class TelegramChannel(BaseChannel):
                 tools_cfg[tool] = not tools_cfg[tool]
 
             # Persist to config.json
-            cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
-            if cfg_path.exists():
-                try:
-                    cfg = json.loads(cfg_path.read_text())
-                    cfg["tools"] = tools_cfg
-                    cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
-                except Exception:
-                    pass
+            agent_entry = self._groupchat_engine.registry.get(name, {})
+            if agent_entry.get("_default"):
+                # Default agent (Nanobot): save tool toggles to main config
+                main_cfg_path = Path.home() / ".nanobot" / "config.json"
+                if main_cfg_path.exists():
+                    try:
+                        cfg = json.loads(main_cfg_path.read_text())
+                        cfg["agent_tools"] = tools_cfg
+                        main_cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+                    except Exception:
+                        pass
+            else:
+                cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
+                cfg_path.parent.mkdir(parents=True, exist_ok=True)
+                if cfg_path.exists():
+                    try:
+                        cfg = json.loads(cfg_path.read_text())
+                        cfg["tools"] = tools_cfg
+                        cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+                    except Exception:
+                        pass
 
             # Refresh buttons by re-triggering tools menu
             labels = {

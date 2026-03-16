@@ -417,7 +417,17 @@ def gateway(
         base_workspace = Path(config.agents.defaults.workspace or "~/.nanobot/workspace").expanduser()
         base_soul = base_workspace / "SOUL.md"
         base_prompt = base_soul.read_text() if base_soul.exists() else "I am nanobot, a personal AI assistant."
-        gc_engine.registry["Nanobot"] = {"model": base_model, "prompt": base_prompt, "_default": True}
+        nanobot_entry = {"model": base_model, "prompt": base_prompt, "_default": True}
+        # Load saved tool toggles from config.json
+        try:
+            import json as _json
+            main_cfg = _json.loads((Path.home() / ".nanobot" / "config.json").read_text())
+            if "agent_tools" in main_cfg:
+                nanobot_entry["tools"] = main_cfg["agent_tools"]
+                logger.info("Loaded Nanobot tools from config: {}", main_cfg["agent_tools"])
+        except Exception:
+            pass
+        gc_engine.registry["Nanobot"] = nanobot_entry
         gc_engine._active_agents.append("Nanobot")
         logger.info("Registered base model '{}' as Nanobot agent (auto-active)", base_model)
 
