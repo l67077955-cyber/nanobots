@@ -275,6 +275,7 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(CommandHandler("groups", self._on_groups))
         self._app.add_handler(CommandHandler("order", self._on_order))
         self._app.add_handler(CommandHandler("setleader", self._on_setleader))
+        self._app.add_handler(CommandHandler("debug", self._on_debug))
         # Provider & model management
         self._app.add_handler(CommandHandler("newprovider", self._on_newprovider))
         self._app.add_handler(CommandHandler("newmodel", self._on_newmodel))
@@ -2034,6 +2035,96 @@ class TelegramChannel(BaseChannel):
             self._groupchat_engine._topic = ""
             self._groupchat_engine._running = False
         await update.message.reply_text("🔄 系统已重置\n所有状态已清空，可以重新开始")
+
+    async def _on_debug(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show comprehensive internal state for debugging."""
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        lines = ["🐛 Debug 状态\n"]
+        engine = self._groupchat_engine
+        if not engine:
+            lines.append("⚠️ 群聊引擎未初始化")
+            await update.message.reply_text("\n".join(lines))
+            return
+
+        # Engine state
+        lines.append("⚙️ 引擎状态:")
+        lines.append(f"  running: {engine._running}")
+        lines.append(f"  task: {'✅ 活跃' if engine._task and not engine._task.done() else '❌ 无'}")
+        lines.append(f"  send_fn: {'✅' if engine._send_fn else '❌ None'}")
+        lines.append(f"  topic: {engine._topic[:50] or '(空)'}")
+        lines.append("")
+
+        # Current group
+        group_name = getattr(engine, '_current_group_name', None)
+        lines.append(f"📂 当前分组: {group_name or '(无)'}")
+
+        # Leader
+        lines.append(f"👑 领导者: {engine._leader or '(无)'}")
+
+        # Speaking order
+        if engine._active_agents:
+            lines.append(f"📢 发言顺序: {' → '.join(engine._active_agents)}")
+        else:
+            lines.append("📢 发言顺序: (无活跃agent)")
+        lines.append("")
+
+        # Agents detail
+        pm = self._load_pm()
+        from nanobot.groupchat.engine import GroupChatEngine
+        lines.append("👥 Agent 详情:")
+        for name, info in engine.registry.items():
+            active = "🟢" if name in engine._active_agents else "⚪"
+            model = info.get("model", "?")
+            # Resolve provider
+            prov = "默认"
+            for pn, ml in pm.get("models", {}).items():
+                if model in ml:
+                    prov = pn
+                    break
+            # Tools
+            tools_cfg = info.get("tools", {})
+            if isinstance(tools_cfg, dict) and any(k in GroupChatEngine.TOOL_NAMES for k in tools_cfg):
+                on = [k for k, v in tools_cfg.items() if v and k in GroupChatEngine.TOOL_NAMES]
+                tools_str = ",".join(on) if on else "无"
+            elif info.get("tools_enabled"):
+                tools_str = "全部"
+            else:
+                tools_str = "无"
+            badge = " 👑" if engine._leader == name else ""
+            lines.append(f"  {active} {name}{badge}")
+            lines.append(f"    🤖 {model} | 🏢 {prov}")
+            lines.append(f"    🔧 {tools_str}")
+        lines.append("")
+
+        # Stats
+        lines.append("📊 统计:")
+        lines.append(f"  历史消息: {len(engine._history)} 条")
+        lines.append(f"  请求日志: {len(engine._request_log)} 条")
+        lines.append(f"  输入队列: {engine._input_queue.qsize()} 条待处理")
+        lines.append("")
+
+        # Edit state
+        chat_id = str(update.message.chat_id)
+        es = self._edit_state.get(chat_id)
+        if es:
+            lines.append(f"📝 编辑状态: {es}")
+        else:
+            lines.append("📝 编辑状态: (无)")
+
+        # Provider summary
+        lines.append("\n🔗 Provider:")
+        for pn, info in pm.get("providers", {}).items():
+            url = (info.get("url") or "").rstrip("/")
+            key = info.get("apiKey", "")
+            key_preview = key[:8] + "..." if len(key) > 8 else key
+            model_count = len(pm.get("models", {}).get(pn, []))
+            lines.append(f"  {pn}: {url or '(native)'} ({model_count}模型) key={key_preview}")
+
+        text = "\n".join(lines)
+        await update.message.reply_text(text[:4096])
 
     # ── Group Config Commands ───────────────────────────────
 
