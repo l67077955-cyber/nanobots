@@ -683,17 +683,23 @@ class TelegramChannel(BaseChannel):
 
     def _edit_menu_text(self, agent_name: str) -> str:
         agent = self._groupchat_engine.registry[agent_name]
+        tools_on = agent.get("tools_enabled", False)
+        tools_str = "✅ 开启" if tools_on else "❌ 关闭"
         return (
             f"✏️ 编辑 {agent_name}\n\n"
             f"模型: {agent['model']}\n"
+            f"工具: {tools_str}\n"
             f"人设: {agent['prompt'][:100]}..."
         )
 
     def _edit_menu_buttons(self, agent_name: str) -> InlineKeyboardMarkup:
+        tools_on = self._groupchat_engine.registry.get(agent_name, {}).get("tools_enabled", False)
+        tools_label = "🔧 工具: ✅ → 关闭" if tools_on else "🔧 工具: ❌ → 开启"
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("✏️ 修改名字", callback_data=f"ef:{agent_name}:name")],
             [InlineKeyboardButton("📝 修改人设", callback_data=f"ef:{agent_name}:persona")],
             [InlineKeyboardButton("🤖 修改模型", callback_data=f"ef:{agent_name}:model")],
+            [InlineKeyboardButton(tools_label, callback_data=f"ef:{agent_name}:tools")],
             [InlineKeyboardButton("❌ 取消", callback_data=f"ef:{agent_name}:cancel")],
         ])
 
@@ -852,6 +858,28 @@ class TelegramChannel(BaseChannel):
             if field == "cancel":
                 self._edit_state.pop(chat_id, None)
                 await query.edit_message_text("❌ 已取消")
+                return
+            if field == "tools":
+                # Immediate toggle — no text input needed
+                agent = self._groupchat_engine.registry.get(name)
+                if not agent:
+                    return
+                current = agent.get("tools_enabled", False)
+                agent["tools_enabled"] = not current
+                # Persist to config.json
+                cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
+                if cfg_path.exists():
+                    try:
+                        cfg = json.loads(cfg_path.read_text())
+                        cfg["tools_enabled"] = not current
+                        cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+                    except Exception:
+                        pass
+                status = "✅ 开启" if not current else "❌ 关闭"
+                await query.edit_message_text(
+                    f"🔧 {name} 工具: {status}",
+                    reply_markup=self._edit_menu_buttons(name),
+                )
                 return
             self._edit_state[chat_id] = {"agent": name, "field": field}
             if field == "persona":
