@@ -2011,17 +2011,15 @@ class TelegramChannel(BaseChannel):
         # Clear edit state
         self._edit_state.pop(chat_id, None)
         if self._groupchat_engine:
-            # Force stop
-            self._groupchat_engine._running = False
-            if self._groupchat_engine._task and not self._groupchat_engine._task.done():
-                self._groupchat_engine._task.cancel()
-            self._groupchat_engine._task = None
+            # Stop group loop
+            await self._groupchat_engine._stop_group_loop()
+            # Clear runtime state but keep send_fn and registry
             self._groupchat_engine._active_agents.clear()
             self._groupchat_engine._history.clear()
             self._groupchat_engine._request_log.clear()
             self._groupchat_engine._input_queue = __import__('asyncio').Queue()
-            self._groupchat_engine._send_fn = None
             self._groupchat_engine._topic = ""
+            self._groupchat_engine._running = False
         await update.message.reply_text("🔄 系统已重置\n所有状态已清空，可以重新开始")
 
     # ── Group Config Commands ───────────────────────────────
