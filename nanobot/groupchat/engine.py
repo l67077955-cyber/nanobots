@@ -547,6 +547,12 @@ class GroupChatEngine:
                     tools_used.append(tc.name)
                     logger.info("Executing tool: {}({})", tc.name,
                                 json.dumps(tc.arguments, ensure_ascii=False)[:200])
+                    # Show tool call progress
+                    if self._send_fn:
+                        tool_icons = {"web_search": "🔍", "web_fetch": "🌐", "exec": "⚡", "read_file": "📖", "write_file": "✏️", "edit_file": "✏️", "list_dir": "📁"}
+                        icon = tool_icons.get(tc.name, "🔧")
+                        args_preview = json.dumps(tc.arguments, ensure_ascii=False)[:80]
+                        await self._send(f"   {icon} {agent_name}: {tc.name}({args_preview})")
                     result = await tool_registry.execute(tc.name, tc.arguments)
                     # Record tool call detail
                     tool_calls_detail.append({
@@ -555,12 +561,11 @@ class GroupChatEngine:
                         "result_len": len(result) if result else 0,
                         "result_preview": (result or "")[:150],
                     })
-                    # Show brief result preview
+                    # Show brief result
                     if self._send_fn and result:
-                        preview = result.strip().replace("\n", " ")[:100]
-                        if len(result) > 100:
-                            preview += "…"
-                        await self._send(f"   ↳ {preview}")
+                        rlen = len(result)
+                        preview = result.strip().replace("\n", " ")[:80]
+                        await self._send(f"   ↳ {preview}{'…' if rlen > 80 else ''} ({rlen}字)")
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -879,6 +884,12 @@ class GroupChatEngine:
                 model=model,
                 agent_name=agent_name,
             )
+            iters = stats.get("iterations", 1)
+            latency = stats.get("latency", 0)
+            if tools_used:
+                await self._send(f"✅ {agent_name} 完成 ({latency}s, {iters}次迭代, 工具: {', '.join(tools_used)})")
+            elif latency > 0:
+                await self._send(f"✅ {agent_name} 完成 ({latency}s)")
             self._request_log.append({
                 "agent": agent_name, "model": model,
                 "msgs": len(messages), "max_tokens": self.config.max_tokens,
@@ -976,9 +987,12 @@ class GroupChatEngine:
                 else:
                     speak_order = current_agents
 
-                for name in speak_order:
+                for si, name in enumerate(speak_order):
                     if not self._running or name not in self._active_agents:
                         break
+                    badge = " 👑" if self._leader == name else ""
+                    model_short = self.registry.get(name, {}).get("model", "?").split("/")[-1]
+                    await self._send(f"⏳ {name}{badge} 思考中... ({model_short}) [{si+1}/{len(speak_order)}]")
                     await asyncio.sleep(self.config.auto_reply_delay)
                     await self._agent_speak(name)
 
