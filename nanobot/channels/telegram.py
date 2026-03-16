@@ -1112,7 +1112,7 @@ class TelegramChannel(BaseChannel):
                 agent = self._groupchat_engine.registry.get(name, {})
                 tools_cfg = agent.get("tools")
                 # Migrate legacy tools_enabled to granular dict
-                if not isinstance(tools_cfg, dict):
+                if not isinstance(tools_cfg, dict) or not any(k in GroupChatEngine.TOOL_NAMES for k in tools_cfg):
                     all_on = agent.get("tools_enabled", False)
                     tools_cfg = {t: all_on for t in GroupChatEngine.TOOL_NAMES}
                     agent["tools"] = tools_cfg
@@ -1203,7 +1203,8 @@ class TelegramChannel(BaseChannel):
             from nanobot.groupchat.engine import GroupChatEngine
             agent = self._groupchat_engine.registry.get(name, {})
             tools_cfg = agent.get("tools")
-            if not isinstance(tools_cfg, dict):
+            if not isinstance(tools_cfg, dict) or not any(k in GroupChatEngine.TOOL_NAMES for k in tools_cfg):
+                # Legacy or missing config — rebuild from tools_enabled flag
                 all_on = agent.get("tools_enabled", False)
                 tools_cfg = {t: all_on for t in GroupChatEngine.TOOL_NAMES}
                 agent["tools"] = tools_cfg
