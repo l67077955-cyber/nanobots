@@ -644,7 +644,9 @@ class GroupChatEngine:
             if content:
                 self._add_message("用户", user_message)
                 self._add_message(agent_name, content)
-            return f"💬 {agent_name}:\n\n{content}" if content else None
+                return f"💬 {agent_name}:\n\n{content}"
+            else:
+                return f"⚠️ {agent_name} 返回空回复 (模型可能暂时异常，请重试)"
         except Exception as e:
             logger.error("Direct chat with {} failed: {}", agent_name, e)
             self._request_log.append({
