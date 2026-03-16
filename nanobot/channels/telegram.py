@@ -1074,6 +1074,7 @@ class TelegramChannel(BaseChannel):
         query = update.callback_query
         if not query or not query.data:
             return
+        logger.debug("Callback received: data={} from={}", query.data, query.from_user.id if query.from_user else "?")
         await query.answer()
 
         data = query.data
