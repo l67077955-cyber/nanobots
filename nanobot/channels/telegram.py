@@ -1660,27 +1660,25 @@ class TelegramChannel(BaseChannel):
                     ])
                 )
                 return
-            # Rebuild from cache
-            from nanobot.groupchat.engine import GroupChatEngine
-            labels_map = {
-                "web_search": "🔍", "web_fetch": "🌐", "exec": "⚡",
-            }
-            lines = [f"📋 {prov} 可用模型 ({len(all_models)}):\n"]
+            # Rebuild from cache — stay in same prefix filter
+            prefix = model_id.split("/")[0] if "/" in model_id else "other"
+            filtered = [m for m in all_models if m.startswith(f"{prefix}/") or (prefix == "other" and "/" not in m)]
+            lines = [f"📋 {prov} / {prefix} ({len(filtered)}):\n"]
             buttons = []
-            for mid in all_models[:30]:
+            for mid in filtered[:30]:
                 if mid in existing:
                     lines.append(f"  ✅ {mid}")
                 else:
-                    lines.append(f"  ⚪ {mid}")
+                    lines.append(f"  ⚪️ {mid}")
                     cb = f"ep_addm:{prov}:{mid}"
                     if len(cb.encode()) <= 64:
                         buttons.append([InlineKeyboardButton(f"+ {mid}", callback_data=cb)])
-            if len(all_models) > 30:
-                lines.append(f"  ... 和 {len(all_models) - 30} 个更多")
-            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")])
+            if len(filtered) > 30:
+                lines.append(f"  ... 和 {len(filtered) - 30} 个更多")
+            buttons.append([InlineKeyboardButton("⬅️ 返回厂商列表", callback_data=f"ep_models:{prov}")])
             await query.edit_message_text(
                 "\n".join(lines)[:4000],
-                reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
+                reply_markup=InlineKeyboardMarkup(buttons),
             )
 
     async def _handle_edit_input(self, chat_id: str, content: str) -> None:
