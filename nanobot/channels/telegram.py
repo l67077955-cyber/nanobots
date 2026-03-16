@@ -1120,7 +1120,18 @@ class TelegramChannel(BaseChannel):
             if prov in pm.get("models", {}):
                 pm["models"][prov] = [m for m in pm["models"][prov] if m != model]
             self._save_pm(pm)
-            await query.edit_message_text(f"✅ 已删除 {prov} / {model}")
+            try:
+                await query.answer(f"🗑 已删除 {model}", show_alert=False)
+            except Exception:
+                pass
+            # Refresh model list
+            remaining = pm.get("models", {}).get(prov, [])
+            if remaining:
+                buttons = [[InlineKeyboardButton(f"🗑 {m}", callback_data=f"pm_delm:{prov}:{m}")] for m in remaining]
+                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="pm_cancel")])
+                await query.edit_message_text(f"🗑 删除 {prov} 的模型 ({len(remaining)}):", reply_markup=InlineKeyboardMarkup(buttons))
+            else:
+                await query.edit_message_text(f"✅ {prov} 的模型已全部删除")
 
         # ── Edit agent model: 2-step provider → model selection ──
         elif data.startswith("em_prov:"):
