@@ -1616,7 +1616,7 @@ class TelegramChannel(BaseChannel):
         elif data.startswith("ml_srch:"):
             # ml_srch:provider — prompt user to type search keyword
             prov = data[8:]
-            chat_id = query.message.chat_id
+            chat_id = str(query.message.chat_id)
             self._edit_state[chat_id] = {"action": "model_search", "provider": prov}
             await query.edit_message_text(f"🔍 搜索 {prov} 模型\n\n请输入关键词 (如 claude, llama, qwen):")
 
