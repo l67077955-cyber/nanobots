@@ -1361,6 +1361,18 @@ class TelegramChannel(BaseChannel):
             result = self._groupchat_engine.delete_group(name)
             await query.edit_message_text(result)
 
+        elif data.startswith("hp:"):
+            key = data[3:]
+            provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
+            params = getattr(provider, 'sampling_params', None) if provider else None
+            if params and key in params:
+                self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key}
+                await query.edit_message_text(
+                    f"✏️ 修改 {key}\n"
+                    f"当前值: {params[key]}\n\n"
+                    f"请输入新值 (数字):"
+                )
+
         elif data.startswith("ord:"):
             val = data[4:]
             if val == "done":
@@ -1771,6 +1783,34 @@ class TelegramChannel(BaseChannel):
 
         field = state["field"]
 
+        # Handle hyperparams value input
+        if field == "hp_value":
+            del self._edit_state[chat_id]
+            if content.strip() in ("0", "取消", "/cancel"):
+                await self._gc_send(chat_id, "❌ 已取消")
+                return
+            hp_key = state.get("hp_key", "")
+            try:
+                value = float(content.strip())
+            except ValueError:
+                await self._gc_send(chat_id, "⚠️ 值必须是数字")
+                return
+            provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
+            params = getattr(provider, 'sampling_params', None) if provider else None
+            if params and hp_key in params:
+                old_val = params[hp_key]
+                params[hp_key] = value
+                # Persist to disk
+                hp_path = Path.home() / ".nanobot" / "hyperparams.json"
+                try:
+                    hp_path.write_text(json.dumps(params, indent=2))
+                except Exception:
+                    pass
+                await self._gc_send(chat_id, f"✅ {hp_key}: {old_val} → {value}\n即时生效，已持久化")
+                # Refresh keyboard
+                await self._send_hyperparams_keyboard(chat_id, params)
+            return
+
         # Handle savegroup name input
         if field == "sg_name":
             del self._edit_state[chat_id]
@@ -1980,7 +2020,7 @@ class TelegramChannel(BaseChannel):
         del self._edit_state[chat_id]
 
     async def _on_hyperparams(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """View or edit sampling parameters."""
+        """View or edit sampling parameters with interactive buttons."""
         if not update.message or not update.effective_user:
             return
         if not self.is_allowed(self._sender_id(update.effective_user)):
@@ -1993,37 +2033,20 @@ class TelegramChannel(BaseChannel):
             await update.message.reply_text("⚠️ 无法获取超参数（provider 不可用）")
             return
 
-        args = context.args or []
-        if not args:
-            lines = ["⚙️ 当前超参数:\n"]
-            for k, v in params.items():
-                lines.append(f"  {k}: {v}")
-            lines.append(f"\n修改: /hyperparams <参数> <值>")
-            lines.append(f"例如: /hyperparams temperature 0.8")
-            await update.message.reply_text("\n".join(lines))
-            return
-        if len(args) < 2:
-            await update.message.reply_text("用法: /hyperparams <参数> <值>")
-            return
-        key = args[0].lower()
-        try:
-            value = float(args[1])
-        except ValueError:
-            await update.message.reply_text("⚠️ 值必须是数字")
-            return
-        if key not in params:
-            await update.message.reply_text(f"⚠️ 无效参数。可选: {', '.join(sorted(params.keys()))}")
-            return
-        old_val = params[key]
-        params[key] = value
-        # Persist to disk
-        hp_path = Path.home() / ".nanobot" / "hyperparams.json"
-        try:
-            import json
-            hp_path.write_text(json.dumps(params, indent=2))
-        except Exception:
-            pass
-        await update.message.reply_text(f"✅ {key}: {old_val} → {value}\n即时生效，已持久化")
+        await self._send_hyperparams_keyboard(str(update.message.chat_id), params)
+
+    async def _send_hyperparams_keyboard(self, chat_id: str, params: dict) -> None:
+        """Send hyperparams display with edit buttons."""
+        lines = ["⚙️ 当前超参数:\n"]
+        buttons = []
+        for k, v in params.items():
+            lines.append(f"  {k}: {v}")
+            buttons.append([InlineKeyboardButton(f"✏️ {k} = {v}", callback_data=f"hp:{k}")])
+        text = "\n".join(lines)
+        await self._app.bot.send_message(
+            chat_id=int(chat_id), text=text,
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
 
     async def _on_endchat(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message or not update.effective_user:
@@ -2251,13 +2274,6 @@ class TelegramChannel(BaseChannel):
         agents = self._groupchat_engine.active_agents
         if len(agents) < 2:
             await update.message.reply_text("⚠️ 至少需要 2 个活跃 agent 才能调整顺序")
-            return
-
-        args = context.args
-        if args:
-            # Direct: /order Ben Lucas Harper Grok
-            result = self._groupchat_engine.reorder_agents(list(args))
-            await update.message.reply_text(result)
             return
 
         # Interactive: show current order with move buttons
