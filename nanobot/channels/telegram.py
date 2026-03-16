@@ -1584,20 +1584,27 @@ class TelegramChannel(BaseChannel):
             )
 
         elif data.startswith("ml_pfx:"):
-            # ml_pfx:provider:prefix — show models with this prefix
-            parts = data.split(":", 2)
+            # ml_pfx:provider:prefix or ml_pfx:provider:prefix:page
+            parts = data.split(":")
             if len(parts) < 3:
                 return
             prov, prefix = parts[1], parts[2]
+            page = int(parts[3]) if len(parts) > 3 else 0
+            per_page = 15
             cache = getattr(self, "_model_cache", {})
             model_ids = cache.get(prov, [])
             filtered = [m for m in model_ids if m.startswith(f"{prefix}/") or (prefix == "other" and "/" not in m)]
             pm = self._load_pm()
             existing = set(pm.get("models", {}).get(prov, []))
 
-            lines = [f"📋 {prov} / {prefix} ({len(filtered)}):\n"]
+            total_pages = max(1, (len(filtered) + per_page - 1) // per_page)
+            page = min(page, total_pages - 1)
+            start = page * per_page
+            page_items = filtered[start:start + per_page]
+
+            lines = [f"📋 {prov} / {prefix} ({len(filtered)}) [第{page+1}/{total_pages}页]:\n"]
             buttons = []
-            for mid in filtered[:30]:
+            for mid in page_items:
                 if mid in existing:
                     lines.append(f"  ✅ {mid}")
                 else:
@@ -1605,8 +1612,14 @@ class TelegramChannel(BaseChannel):
                     cb = f"ep_addm:{prov}:{mid}"
                     if len(cb.encode()) <= 64:
                         buttons.append([InlineKeyboardButton(f"+ {mid}", callback_data=cb)])
-            if len(filtered) > 30:
-                lines.append(f"  ... 和 {len(filtered) - 30} 个更多")
+            # Navigation
+            nav = []
+            if page > 0:
+                nav.append(InlineKeyboardButton("⬅️ 上一页", callback_data=f"ml_pfx:{prov}:{prefix}:{page-1}"))
+            if page < total_pages - 1:
+                nav.append(InlineKeyboardButton("➡️ 下一页", callback_data=f"ml_pfx:{prov}:{prefix}:{page+1}"))
+            if nav:
+                buttons.append(nav)
             buttons.append([InlineKeyboardButton("⬅️ 返回厂商列表", callback_data=f"ep_models:{prov}")])
             await query.edit_message_text(
                 "\n".join(lines)[:4000],
