@@ -152,13 +152,13 @@ class GroupChatEngine:
         self._save_active()
         logger.info("Groupchat: added agent {}, active={}", matched, self._active_agents)
 
-        # If we just hit 2+ agents and no group loop running, start it
-        if len(self._active_agents) >= 2 and not self._running:
-            self._start_group_loop()
+        # Don't auto-start loop here — inject() will lazy-start
+        # when user sends the first message with 2+ agents.
+        if len(self._active_agents) >= 2:
             return (
                 f"✅ {matched} 加入对话！\n"
                 f"👥 当前成员: {', '.join(self._active_agents)}\n"
-                f"🎭 群聊模式已启动"
+                f"📌 直接发消息开始群聊"
             )
 
         return f"✅ {matched} 加入对话\n👥 当前成员: {', '.join(self._active_agents)}"
@@ -647,6 +647,9 @@ class GroupChatEngine:
 
     def inject(self, message: str) -> None:
         """Inject a user message into the group chat."""
+        # Lazy start: if 2+ agents and loop not running, start it now
+        if not self._running and len(self._active_agents) >= 2:
+            self._start_group_loop()
         if self._running:
             self._input_queue.put_nowait(message)
 
