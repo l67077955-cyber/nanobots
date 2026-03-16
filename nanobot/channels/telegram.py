@@ -2025,7 +2025,7 @@ class TelegramChannel(BaseChannel):
         self._edit_state.pop(chat_id, None)
         if self._groupchat_engine:
             # Stop group loop
-            await self._groupchat_engine._stop_group_loop()
+            self._groupchat_engine._stop_group_loop()
             # Clear runtime state but keep send_fn and registry
             self._groupchat_engine._active_agents.clear()
             self._groupchat_engine._history.clear()
