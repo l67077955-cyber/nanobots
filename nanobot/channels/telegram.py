@@ -900,8 +900,12 @@ class TelegramChannel(BaseChannel):
             except Exception:
                 pass
 
-            # Strip provider prefix for raw model name
-            raw_model = test_model.split("/", 1)[-1] if "/" in test_model else test_model
+            # OpenRouter needs full model path (e.g. anthropic/claude-opus-4.5)
+            # Other custom providers need just the model name
+            if "openrouter" in url.lower():
+                raw_model = test_model
+            else:
+                raw_model = test_model.split("/", 1)[-1] if "/" in test_model else test_model
             chat_url = f"{url}/chat/completions" if "/v1" in url else f"{url}/v1/chat/completions"
 
             payload = {
@@ -922,12 +926,20 @@ class TelegramChannel(BaseChannel):
                         timeout=aiohttp.ClientTimeout(total=30)
                     ) as resp:
                         elapsed = round(_time.monotonic() - start, 2)
+                        body = await resp.text()
                         if resp.status != 200:
-                            body = await resp.text()
+                            # Extract short error
+                            err_msg = body[:80].replace("\n", " ").strip()
                             status_lines[prov_name] = f"❌ {prov_name} — HTTP {resp.status}"
-                            results.append({"name": prov_name, "model": raw_model, "error": f"HTTP {resp.status}", "time": elapsed})
+                            results.append({"name": prov_name, "model": raw_model, "error": f"HTTP {resp.status}: {err_msg}", "time": elapsed})
                             continue
-                        data = await resp.json()
+                        try:
+                            import json as _json
+                            data = _json.loads(body)
+                        except Exception:
+                            status_lines[prov_name] = f"❌ {prov_name} — 非JSON响应"
+                            results.append({"name": prov_name, "model": raw_model, "error": "非JSON响应", "time": elapsed})
+                            continue
 
                 elapsed = round(_time.monotonic() - start, 2)
                 # Extract token info
