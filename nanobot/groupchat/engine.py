@@ -378,35 +378,36 @@ class GroupChatEngine:
     # ── Response cleanup ───
 
     def _clean_response(self, content: str, agent_name: str) -> str:
-        """Clean up model response: strip think blocks, name prefixes, etc."""
+        """Clean up model response: strip think blocks, name prefixes, fake tool calls, etc."""
         import re
 
         # 1. Strip <think>...</think> blocks (deepseek, some models)
         content = re.sub(r"<think>[\s\S]*?</think>", "", content).strip()
 
         # 2. Strip Grok-style reasoning prefix (starts with "A: " or similar)
-        #    Detect: block of reasoning lines before actual content
         if content.startswith("A: ") or content.startswith("A："):
-            # Find where reasoning ends and actual content starts
             lines = content.split("\n")
-            # Find where the real content begins (after an empty line or marker)
             for i, line in enumerate(lines):
                 stripped = line.strip()
                 if stripped and not stripped.startswith("A:") and not stripped.startswith("A："):
-                    # Check if previous line was empty (paragraph break)
                     if i > 0 and not lines[i-1].strip():
                         content = "\n".join(lines[i:])
                         break
 
-        # 3. Strip any agent name prefix from the start
-        #    Handles: "Benjamin: reply" or "Harper: reply"
+        # 3. Strip fake/hallucinated tool calls: [Start search for ...], [Check ...], etc.
+        content = re.sub(r"\[(?:Start |Check |Search |Look up |Fetch |查|搜)[^\]]*\]", "", content)
+
+        # 4. Strip ALL agent name prefixes (handles repeated "Benjamin: ..." throughout)
         all_names = list(self.registry.keys())
         for name in all_names:
             for sep in (": ", "：", ":\n"):
                 prefix = f"{name}{sep}"
-                if content.startswith(prefix):
-                    content = content[len(prefix):]
-                    break
+                content = content.replace(prefix, "")
+            # Also strip markdown headers like "# Benjamin" or "## Benjamin"
+            content = re.sub(rf"^#+\s*{re.escape(name)}\s*$", "", content, flags=re.MULTILINE)
+
+        # 5. Clean up excessive blank lines left after stripping
+        content = re.sub(r"\n{3,}", "\n\n", content)
 
         return content.strip()
 
@@ -889,6 +890,8 @@ class GroupChatEngine:
         nudge = (
             f"[Write the next reply only as {agent_name}. "
             f"Do NOT write dialogue for other characters. "
+            f"Do NOT prefix your reply with your name (e.g. '{agent_name}:'). "
+            f"Do NOT simulate tool calls in text (e.g. [Search ...], [Check ...]). "
             f"Stay in character and respond naturally.]"
         )
         messages.append({"role": "system", "content": nudge})
