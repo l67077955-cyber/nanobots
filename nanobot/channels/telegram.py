@@ -1519,78 +1519,106 @@ class TelegramChannel(BaseChannel):
         elif data.startswith("ep_models:"):
             prov = data[10:]
             pm = self._load_pm()
-            info = pm.get("providers", {}).get(prov, {})
-            url = info.get("url", "").rstrip("/")
-            api_key = info.get("apiKey", "")
-            if not url or not api_key:
-                await query.edit_message_text(f"⚠️ {prov} 缺少 URL 或 API Key")
-                return
-            # Fetch /v1/models (or /models)
-            import aiohttp
-            import json as _json
-            if "openrouter" in url.lower():
-                # OpenRouter API: use /api/v1/models
-                models_url = "https://openrouter.ai/api/v1/models"
-            elif "/v1" in url:
-                models_url = f"{url}/models"
+
+            # Use cache if available (for back navigation)
+            cache = getattr(self, "_model_cache", {})
+            if prov in cache:
+                model_ids = cache[prov]
             else:
-                models_url = f"{url}/v1/models"
-            try:
-                async with aiohttp.ClientSession() as session:
-                    headers = {"Authorization": f"Bearer {api_key}"}
-                    async with session.get(models_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                        body = await resp.text()
-                        if resp.status != 200:
-                            await query.edit_message_text(f"❌ 拉取失败 (HTTP {resp.status})\n{body[:200]}")
-                            return
-                        try:
-                            result = _json.loads(body)
-                        except Exception:
-                            await query.edit_message_text(f"❌ 拉取失败: 返回非JSON格式")
-                            return
-            except Exception as e:
-                await query.edit_message_text(f"❌ 拉取失败: {str(e)[:100]}")
+                info = pm.get("providers", {}).get(prov, {})
+                url = info.get("url", "").rstrip("/")
+                api_key = info.get("apiKey", "")
+                if not url or not api_key:
+                    await query.edit_message_text(f"⚠️ {prov} 缺少 URL 或 API Key")
+                    return
+                # Fetch /v1/models
+                import aiohttp
+                import json as _json
+                if "openrouter" in url.lower():
+                    models_url = "https://openrouter.ai/api/v1/models"
+                elif "/v1" in url:
+                    models_url = f"{url}/models"
+                else:
+                    models_url = f"{url}/v1/models"
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        headers = {"Authorization": f"Bearer {api_key}"}
+                        async with session.get(models_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                            body = await resp.text()
+                            if resp.status != 200:
+                                await query.edit_message_text(f"❌ 拉取失败 (HTTP {resp.status})\n{body[:200]}")
+                                return
+                            try:
+                                result = _json.loads(body)
+                            except Exception:
+                                await query.edit_message_text("❌ 拉取失败: 返回非JSON格式")
+                                return
+                except Exception as e:
+                    await query.edit_message_text(f"❌ 拉取失败: {str(e)[:100]}")
+                    return
+
+                model_list = result.get("data", []) if isinstance(result, dict) else []
+                if not model_list:
+                    await query.edit_message_text(f"⚠️ {prov} 无可用模型")
+                    return
+                model_ids = sorted(set(m.get("id", "") for m in model_list if m.get("id")))
+                if not hasattr(self, "_model_cache"):
+                    self._model_cache = {}
+                self._model_cache[prov] = model_ids
+
+            # Show prefix filters
+            prefixes: dict[str, int] = {}
+            for mid in model_ids:
+                pfx = mid.split("/")[0] if "/" in mid else "other"
+                prefixes[pfx] = prefixes.get(pfx, 0) + 1
+            sorted_pfx = sorted(prefixes.items(), key=lambda x: -x[1])
+            lines = [f"📋 {prov} 可用模型 ({len(model_ids)}):\n", "选择厂商前缀筛选:"]
+            buttons = []
+            for pfx, cnt in sorted_pfx[:20]:
+                buttons.append([InlineKeyboardButton(f"📂 {pfx} ({cnt})", callback_data=f"ml_pfx:{prov}:{pfx}")])
+            buttons.append([InlineKeyboardButton("🔍 搜索模型", callback_data=f"ml_srch:{prov}")])
+            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")])
+            await query.edit_message_text(
+                "\n".join(lines)[:4000],
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+
+        elif data.startswith("ml_pfx:"):
+            # ml_pfx:provider:prefix — show models with this prefix
+            parts = data.split(":", 2)
+            if len(parts) < 3:
                 return
-
-            model_list = result.get("data", []) if isinstance(result, dict) else []
-            if not model_list:
-                await query.edit_message_text(f"⚠️ {prov} 无可用模型")
-                return
-
-            # Extract model IDs and sort
-            model_ids = sorted(set(
-                m.get("id", "") for m in model_list if m.get("id")
-            ))
-
-            # Already-added models
+            prov, prefix = parts[1], parts[2]
+            cache = getattr(self, "_model_cache", {})
+            model_ids = cache.get(prov, [])
+            filtered = [m for m in model_ids if m.startswith(f"{prefix}/") or (prefix == "other" and "/" not in m)]
+            pm = self._load_pm()
             existing = set(pm.get("models", {}).get(prov, []))
 
-            # Cache for local rebuild after add
-            if not hasattr(self, "_model_cache"):
-                self._model_cache = {}
-            self._model_cache[prov] = model_ids
-
-            # Show first 30 models with add buttons
-            lines = [f"📋 {prov} 可用模型 ({len(model_ids)}):\n"]
+            lines = [f"📋 {prov} / {prefix} ({len(filtered)}):\n"]
             buttons = []
-            for mid in model_ids[:30]:
+            for mid in filtered[:30]:
                 if mid in existing:
                     lines.append(f"  ✅ {mid}")
                 else:
-                    lines.append(f"  ⚪ {mid}")
-                    # Truncate callback_data to 64 bytes max
+                    lines.append(f"  ⚪️ {mid}")
                     cb = f"ep_addm:{prov}:{mid}"
                     if len(cb.encode()) <= 64:
                         buttons.append([InlineKeyboardButton(f"+ {mid}", callback_data=cb)])
-            if len(model_ids) > 30:
-                lines.append(f"  ... 和 {len(model_ids) - 30} 个更多")
-            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")])
-
-            text = "\n".join(lines)
+            if len(filtered) > 30:
+                lines.append(f"  ... 和 {len(filtered) - 30} 个更多")
+            buttons.append([InlineKeyboardButton("⬅️ 返回厂商列表", callback_data=f"ep_models:{prov}")])
             await query.edit_message_text(
-                text[:4000],
-                reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
+                "\n".join(lines)[:4000],
+                reply_markup=InlineKeyboardMarkup(buttons),
             )
+
+        elif data.startswith("ml_srch:"):
+            # ml_srch:provider — prompt user to type search keyword
+            prov = data[8:]
+            chat_id = query.message.chat_id
+            self._edit_state[chat_id] = {"action": "model_search", "provider": prov}
+            await query.edit_message_text(f"🔍 搜索 {prov} 模型\n\n请输入关键词 (如 claude, llama, qwen):")
 
         elif data.startswith("ep_addm:"):
             # ep_addm:provider:model_id — add model to provider
@@ -1658,6 +1686,41 @@ class TelegramChannel(BaseChannel):
     async def _handle_edit_input(self, chat_id: str, content: str) -> None:
         """Process interactive edit state input."""
         state = self._edit_state[chat_id]
+
+        # Model search handler
+        if state.get("action") == "model_search":
+            del self._edit_state[chat_id]
+            prov = state["provider"]
+            keyword = content.strip().lower()
+            cache = getattr(self, "_model_cache", {})
+            model_ids = cache.get(prov, [])
+            filtered = [m for m in model_ids if keyword in m.lower()]
+
+            pm = self._load_pm()
+            existing = set(pm.get("models", {}).get(prov, []))
+            lines = [f"🔍 搜索 \"{content.strip()}\" ({len(filtered)} 结果):\n"]
+            buttons = []
+            for mid in filtered[:25]:
+                if mid in existing:
+                    lines.append(f"  ✅ {mid}")
+                else:
+                    lines.append(f"  ⚪️ {mid}")
+                    cb = f"ep_addm:{prov}:{mid}"
+                    if len(cb.encode()) <= 64:
+                        buttons.append([InlineKeyboardButton(f"+ {mid}", callback_data=cb)])
+            if len(filtered) > 25:
+                lines.append(f"  ... 和 {len(filtered) - 25} 个更多")
+            if not filtered:
+                lines.append("  无匹配结果")
+            buttons.append([InlineKeyboardButton("🔍 重新搜索", callback_data=f"ml_srch:{prov}")])
+            buttons.append([InlineKeyboardButton("⬅️ 返回厂商列表", callback_data=f"ep_models:{prov}")])
+            await self._gc_send(
+                chat_id,
+                "\n".join(lines)[:4000],
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            return
+
         field = state["field"]
 
         # Handle savegroup name input
