@@ -554,9 +554,10 @@ class TelegramChannel(BaseChannel):
             leader = " 👑" if self._groupchat_engine.leader == name else ""
             model = info.get("model", "?")
             # Tools summary
+            from nanobot.groupchat.engine import GroupChatEngine
             tools_cfg = info.get("tools")
             if isinstance(tools_cfg, dict):
-                on = [k for k, v in tools_cfg.items() if v]
+                on = [k for k, v in tools_cfg.items() if v and k in GroupChatEngine.TOOL_NAMES]
                 tools_str = ", ".join(on) if on else "无"
             elif info.get("tools_enabled", False):
                 tools_str = "全部"
