@@ -184,6 +184,7 @@ class TelegramChannel(BaseChannel):
         BotCommand("editprovider", "编辑提供商"),
         BotCommand("deleteprovider", "删除提供商"),
         BotCommand("deletemodel", "删除模型"),
+        BotCommand("speedtest", "提供商测速"),
         BotCommand("help", "Show commands"),
     ]
 
@@ -281,6 +282,7 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(CommandHandler("deletemodel", self._on_deletemodel))
         self._app.add_handler(CommandHandler("editprovider", self._on_editprovider))
         self._app.add_handler(CommandHandler("providers", self._on_providers))
+        self._app.add_handler(CommandHandler("speedtest", self._on_speedtest))
         self._app.add_handler(CallbackQueryHandler(self._on_callback))
 
         # Add message handler for text, photos, voice, documents
@@ -514,7 +516,8 @@ class TelegramChannel(BaseChannel):
             "/editprovider — 编辑提供商 (URL/Key/拉取模型)\n"
             "/deleteprovider — 删除提供商\n"
             "/newmodel — 添加模型\n"
-            "/deletemodel — 删除模型\n\n"
+            "/deletemodel — 删除模型\n"
+            "/speedtest — 提供商测速\n\n"
             "📊 日志 & 调试：\n"
             "/log — 查看 LLM 调用记录 (tokens/延迟/工具)\n"
             "/summary — 生成对话总结\n\n"
@@ -857,6 +860,114 @@ class TelegramChannel(BaseChannel):
                 lines.append("   (无模型，用 /newmodel 添加)")
             lines.append("")
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+    async def _on_speedtest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Benchmark all providers by sending a simple request."""
+        if not update.message or not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        pm = self._load_pm()
+        provs = pm.get("providers", {})
+        models = pm.get("models", {})
+        if not provs:
+            await update.message.reply_text("⚠️ 没有提供商")
+            return
+
+        msg = await update.message.reply_text("⏳ 测速中...\n\n" + "\n".join(
+            f"⏳ {name} — 等待中" for name in provs
+        ))
+
+        import aiohttp
+        import time as _time
+
+        results = []
+        status_lines = {name: f"⏳ {name} — 等待中" for name in provs}
+
+        for prov_name, info in provs.items():
+            url = (info.get("url") or "").rstrip("/")
+            api_key = info.get("apiKey", "")
+            prov_models = models.get(prov_name, [])
+            test_model = prov_models[0] if prov_models else None
+
+            if not url or not api_key or not test_model:
+                status_lines[prov_name] = f"⚠️ {prov_name} — 缺少配置"
+                results.append({"name": prov_name, "error": "缺少配置"})
+                continue
+
+            # Update status
+            status_lines[prov_name] = f"🔄 {prov_name} — 测试中..."
+            try:
+                await msg.edit_text("⏳ 测速中...\n\n" + "\n".join(status_lines.values()))
+            except Exception:
+                pass
+
+            # Strip provider prefix for raw model name
+            raw_model = test_model.split("/", 1)[-1] if "/" in test_model else test_model
+            chat_url = f"{url}/chat/completions" if "/v1" in url else f"{url}/v1/chat/completions"
+
+            payload = {
+                "model": raw_model,
+                "messages": [{"role": "user", "content": "say hi"}],
+                "max_tokens": 50,
+            }
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+
+            start = _time.monotonic()
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        chat_url, json=payload, headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=30)
+                    ) as resp:
+                        elapsed = round(_time.monotonic() - start, 2)
+                        if resp.status != 200:
+                            body = await resp.text()
+                            status_lines[prov_name] = f"❌ {prov_name} — HTTP {resp.status}"
+                            results.append({"name": prov_name, "model": raw_model, "error": f"HTTP {resp.status}", "time": elapsed})
+                            continue
+                        data = await resp.json()
+
+                elapsed = round(_time.monotonic() - start, 2)
+                # Extract token info
+                usage = data.get("usage", {})
+                total_tok = usage.get("total_tokens", 0)
+                comp_tok = usage.get("completion_tokens", 0)
+                tok_per_s = round(comp_tok / elapsed, 1) if elapsed > 0 and comp_tok else 0
+                reply = ""
+                choices = data.get("choices", [])
+                if choices:
+                    reply = (choices[0].get("message", {}).get("content", "") or "")[:50]
+
+                status_lines[prov_name] = f"✅ {prov_name} — {elapsed}s"
+                results.append({
+                    "name": prov_name, "model": raw_model,
+                    "time": elapsed, "tokens": total_tok,
+                    "tok_s": tok_per_s, "reply": reply,
+                })
+            except Exception as e:
+                elapsed = round(_time.monotonic() - start, 2)
+                status_lines[prov_name] = f"❌ {prov_name} — {str(e)[:30]}"
+                results.append({"name": prov_name, "error": str(e)[:50], "time": elapsed})
+
+        # Final results sorted by speed
+        results.sort(key=lambda r: r.get("time", 999))
+        lines = ["🏁 测速结果 (按延迟排序):\n"]
+        for i, r in enumerate(results):
+            if r.get("error"):
+                lines.append(f"{'❌'} {r['name']} — {r.get('time', '?')}s — {r['error']}")
+            else:
+                medal = ["🥇", "🥈", "🥉"][i] if i < 3 else "  "
+                lines.append(
+                    f"{medal} {r['name']} — {r['time']}s\n"
+                    f"     🤖 {r.get('model', '?')} | {r.get('tok_s', 0)} tok/s\n"
+                    f"     💬 {r.get('reply', '')}"
+                )
+        try:
+            await msg.edit_text("\n".join(lines)[:4096])
+        except Exception:
+            await update.message.reply_text("\n".join(lines)[:4096])
 
     async def _on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle InlineKeyboard button presses."""
