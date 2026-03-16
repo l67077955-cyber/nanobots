@@ -664,6 +664,9 @@ class GroupChatEngine:
 
     def _start_group_loop(self) -> None:
         """Start the async group chat loop."""
+        # Always cancel any prior task to avoid duplicate loops
+        if self._task and not self._task.done():
+            self._task.cancel()
         if self._running:
             return
         self._running = True
