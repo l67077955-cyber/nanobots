@@ -1370,6 +1370,53 @@ class TelegramChannel(BaseChannel):
                     f"请输入新值 (数字):"
                 )
 
+        elif data.startswith("hp_del:"):
+            key = data[7:]
+            provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
+            params = getattr(provider, 'sampling_params', None) if provider else None
+            if params and key in params:
+                del params[key]
+                # Persist
+                hp_path = Path.home() / ".nanobot" / "hyperparams.json"
+                try:
+                    hp_path.write_text(json.dumps(params, indent=2))
+                except Exception:
+                    pass
+                await query.edit_message_text(f"🗑 已删除 {key}")
+                await self._send_hyperparams_keyboard(chat_id, params)
+
+        elif data == "hp_add":
+            # Show common params to add
+            provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
+            params = getattr(provider, 'sampling_params', None) if provider else {}
+            common = ["temperature", "top_p", "top_k", "min_p", "top_a",
+                      "frequency_penalty", "presence_penalty", "repetition_penalty"]
+            available = [p for p in common if p not in params]
+            buttons = []
+            for p in available:
+                buttons.append([InlineKeyboardButton(f"➕ {p}", callback_data=f"hp_new:{p}")])
+            buttons.append([InlineKeyboardButton("✏️ 自定义参数名", callback_data="hp_custom")])
+            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="hp_back")])
+            await query.edit_message_text(
+                "➕ 选择要添加的参数:",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
+
+        elif data.startswith("hp_new:"):
+            key = data[7:]
+            self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key, "hp_is_new": True}
+            await query.edit_message_text(f"➕ 添加 {key}\n\n请输入值 (数字):")
+
+        elif data == "hp_custom":
+            self._edit_state[chat_id] = {"field": "hp_add_custom"}
+            await query.edit_message_text("✏️ 请输入参数名:")
+
+        elif data == "hp_back":
+            provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
+            params = getattr(provider, 'sampling_params', None) if provider else {}
+            await query.edit_message_text("⚙️ 返回...")
+            await self._send_hyperparams_keyboard(chat_id, params)
+
         elif data.startswith("ord:"):
             val = data[4:]
             if val == "done":
@@ -1794,8 +1841,8 @@ class TelegramChannel(BaseChannel):
                 return
             provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
             params = getattr(provider, 'sampling_params', None) if provider else None
-            if params and hp_key in params:
-                old_val = params[hp_key]
+            if params is not None:
+                old_val = params.get(hp_key, None)
                 params[hp_key] = value
                 # Persist to disk
                 hp_path = Path.home() / ".nanobot" / "hyperparams.json"
@@ -1803,9 +1850,23 @@ class TelegramChannel(BaseChannel):
                     hp_path.write_text(json.dumps(params, indent=2))
                 except Exception:
                     pass
-                await self._gc_send(chat_id, f"✅ {hp_key}: {old_val} → {value}\n即时生效，已持久化")
+                if old_val is not None:
+                    await self._gc_send(chat_id, f"✅ {hp_key}: {old_val} → {value}\n即时生效，已持久化")
+                else:
+                    await self._gc_send(chat_id, f"✅ 已添加 {hp_key} = {value}\n即时生效，已持久化")
                 # Refresh keyboard
                 await self._send_hyperparams_keyboard(chat_id, params)
+            return
+
+        # Handle custom hyperparam name input
+        if field == "hp_add_custom":
+            del self._edit_state[chat_id]
+            if content.strip() in ("0", "取消", "/cancel"):
+                await self._gc_send(chat_id, "❌ 已取消")
+                return
+            key = content.strip().lower().replace(" ", "_")
+            self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key, "hp_is_new": True}
+            await self._gc_send(chat_id, f"➕ 添加 {key}\n\n请输入值 (数字):")
             return
 
         # Handle savegroup name input
@@ -2033,12 +2094,16 @@ class TelegramChannel(BaseChannel):
         await self._send_hyperparams_keyboard(str(update.message.chat_id), params)
 
     async def _send_hyperparams_keyboard(self, chat_id: str, params: dict) -> None:
-        """Send hyperparams display with edit buttons."""
+        """Send hyperparams display with edit/delete buttons."""
         lines = ["⚙️ 当前超参数:\n"]
         buttons = []
         for k, v in params.items():
             lines.append(f"  {k}: {v}")
-            buttons.append([InlineKeyboardButton(f"✏️ {k} = {v}", callback_data=f"hp:{k}")])
+            buttons.append([
+                InlineKeyboardButton(f"✏️ {k} = {v}", callback_data=f"hp:{k}"),
+                InlineKeyboardButton("🗑", callback_data=f"hp_del:{k}"),
+            ])
+        buttons.append([InlineKeyboardButton("➕ 添加参数", callback_data="hp_add")])
         text = "\n".join(lines)
         await self._app.bot.send_message(
             chat_id=int(chat_id), text=text,
