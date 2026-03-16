@@ -1235,6 +1235,11 @@ class TelegramChannel(BaseChannel):
             # Already-added models
             existing = set(pm.get("models", {}).get(prov, []))
 
+            # Cache for local rebuild after add
+            if not hasattr(self, "_model_cache"):
+                self._model_cache = {}
+            self._model_cache[prov] = model_ids
+
             # Show first 30 models with add buttons
             lines = [f"📋 {prov} 可用模型 ({len(model_ids)}):\n"]
             buttons = []
@@ -1277,9 +1282,48 @@ class TelegramChannel(BaseChannel):
             # Reload in provider
             if self._groupchat_engine:
                 self._groupchat_engine.provider._pm_overrides = None
-            # Re-trigger model list view (stay on page)
-            query.data = f"ep_models:{prov}"
-            await self._on_callback(update, context)
+            # Toast notification + refresh list locally
+            try:
+                await query.answer(f"✅ 已添加 {model_id}", show_alert=False)
+            except Exception:
+                pass
+            # Rebuild model list from saved pm (no API re-fetch)
+            existing = set(prov_models)
+            all_models = getattr(self, "_model_cache", {}).get(prov, [])
+            if not all_models:
+                # No cache, just show confirmation
+                await query.edit_message_text(
+                    f"✅ 已添加 {model_id} 到 {prov}\n"
+                    f"当前 {len(prov_models)} 个模型\n\n"
+                    f"用 /editagent 切换 agent 模型",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("📋 刷新列表", callback_data=f"ep_models:{prov}")],
+                        [InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")],
+                    ])
+                )
+                return
+            # Rebuild from cache
+            from nanobot.groupchat.engine import GroupChatEngine
+            labels_map = {
+                "web_search": "🔍", "web_fetch": "🌐", "exec": "⚡",
+            }
+            lines = [f"📋 {prov} 可用模型 ({len(all_models)}):\n"]
+            buttons = []
+            for mid in all_models[:30]:
+                if mid in existing:
+                    lines.append(f"  ✅ {mid}")
+                else:
+                    lines.append(f"  ⚪ {mid}")
+                    cb = f"ep_addm:{prov}:{mid}"
+                    if len(cb.encode()) <= 64:
+                        buttons.append([InlineKeyboardButton(f"+ {mid}", callback_data=cb)])
+            if len(all_models) > 30:
+                lines.append(f"  ... 和 {len(all_models) - 30} 个更多")
+            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")])
+            await query.edit_message_text(
+                "\n".join(lines)[:4000],
+                reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
+            )
 
     async def _handle_edit_input(self, chat_id: str, content: str) -> None:
         """Process interactive edit state input."""

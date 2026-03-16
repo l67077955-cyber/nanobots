@@ -141,6 +141,7 @@ def _scan_agents_dir(
         # Read model from agent's config.json
         model = "minimax/minimax-m2.5"  # default
         config_file = d / "config.json"
+        tools_cfg = None  # Will be dict or None
         tools_enabled = False
         if config_file.exists():
             try:
@@ -148,7 +149,11 @@ def _scan_agents_dir(
                 # Top-level 'model' takes priority (written by /editagent)
                 # Fall back to agents.defaults.model for compat
                 model = acfg.get("model") or acfg.get("agents", {}).get("defaults", {}).get("model", model)
-                tools_enabled = acfg.get("tools", {}).get("enabled", False)
+                # Granular tools config: {web_search: true, exec: false, ...}
+                if isinstance(acfg.get("tools"), dict):
+                    tools_cfg = acfg["tools"]
+                # Legacy: tools_enabled: true/false
+                tools_enabled = acfg.get("tools_enabled", False)
             except Exception:
                 pass
 
@@ -157,6 +162,8 @@ def _scan_agents_dir(
             name = "Grok"
 
         agent_data: dict[str, Any] = {"model": model, "prompt": prompt, "tools_enabled": tools_enabled}
+        if tools_cfg is not None:
+            agent_data["tools"] = tools_cfg
 
         # Load optional EXAMPLES.md (few-shot dialogue examples)
         ws = d / "workspace"
