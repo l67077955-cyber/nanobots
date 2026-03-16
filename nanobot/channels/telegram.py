@@ -552,12 +552,30 @@ class TelegramChannel(BaseChannel):
             status = "🟢" if name in active else "⚪"
             leader = " 👑" if self._groupchat_engine.leader == name else ""
             model = info.get("model", "?")
-            lines.append(f"{status} {name}{leader} ({model})")
+            # Tools summary
+            tools_cfg = info.get("tools")
+            if isinstance(tools_cfg, dict):
+                on = [k for k, v in tools_cfg.items() if v]
+                tools_str = ", ".join(on) if on else "无"
+            elif info.get("tools_enabled", False):
+                tools_str = "全部"
+            else:
+                tools_str = "无"
+            # Persona preview
+            prompt = info.get("prompt", "")
+            persona = prompt[:60].replace("\n", " ") + "…" if len(prompt) > 60 else prompt.replace("\n", " ")
+            lines.append(f"{status} {name}{leader}")
+            lines.append(f"   🤖 {model}")
+            lines.append(f"   🔧 {tools_str}")
+            lines.append(f"   📝 {persona}")
+            lines.append("")
         if active:
-            lines.append(f"\n👥 活跃: {', '.join(active)}")
+            order = " → ".join(active)
+            lines.append(f"👥 发言顺序: {order}")
         else:
-            lines.append("\n💤 无活跃 agent")
-        await update.message.reply_text("\n".join(lines))
+            lines.append("💤 无活跃 agent")
+        text = "\n".join(lines)
+        await update.message.reply_text(text[:4096])
 
     async def _on_setleader(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Set or clear the leader agent."""
