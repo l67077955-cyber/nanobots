@@ -1527,18 +1527,29 @@ class TelegramChannel(BaseChannel):
                 return
             # Fetch /v1/models (or /models)
             import aiohttp
-            models_url = f"{url}/models" if "/v1" in url else f"{url}/v1/models"
+            import json as _json
+            if "openrouter" in url.lower():
+                # OpenRouter API: use /api/v1/models
+                models_url = "https://openrouter.ai/api/v1/models"
+            elif "/v1" in url:
+                models_url = f"{url}/models"
+            else:
+                models_url = f"{url}/v1/models"
             try:
                 async with aiohttp.ClientSession() as session:
                     headers = {"Authorization": f"Bearer {api_key}"}
                     async with session.get(models_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                        body = await resp.text()
                         if resp.status != 200:
-                            body = await resp.text()
                             await query.edit_message_text(f"❌ 拉取失败 (HTTP {resp.status})\n{body[:200]}")
                             return
-                        result = await resp.json()
+                        try:
+                            result = _json.loads(body)
+                        except Exception:
+                            await query.edit_message_text(f"❌ 拉取失败: 返回非JSON格式")
+                            return
             except Exception as e:
-                await query.edit_message_text(f"❌ 拉取失败: {e}")
+                await query.edit_message_text(f"❌ 拉取失败: {str(e)[:100]}")
                 return
 
             model_list = result.get("data", []) if isinstance(result, dict) else []
