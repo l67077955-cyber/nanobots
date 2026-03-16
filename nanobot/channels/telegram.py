@@ -1180,6 +1180,7 @@ class TelegramChannel(BaseChannel):
             buttons = [
                 [InlineKeyboardButton("🔗 修改 URL", callback_data=f"ep_field:{prov}:url")],
                 [InlineKeyboardButton("🔑 修改 API Key", callback_data=f"ep_field:{prov}:key")],
+                [InlineKeyboardButton("📋 拉取模型列表", callback_data=f"ep_models:{prov}")],
                 [InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")],
             ]
             await query.edit_message_text(
@@ -1195,6 +1196,91 @@ class TelegramChannel(BaseChannel):
             self._edit_state[chat_id] = {"field": f"ep_{fld}", "mode": "pm", "prov_name": prov}
             prompts = {"url": "请输入新的 API Base URL:", "key": "请输入新的 API Key:"}
             await query.edit_message_text(f"✏️ {prov} — {prompts.get(fld, fld)}")
+
+        elif data.startswith("ep_models:"):
+            prov = data[10:]
+            pm = self._load_pm()
+            info = pm.get("providers", {}).get(prov, {})
+            url = info.get("url", "").rstrip("/")
+            api_key = info.get("apiKey", "")
+            if not url or not api_key:
+                await query.edit_message_text(f"⚠️ {prov} 缺少 URL 或 API Key")
+                return
+            # Fetch /v1/models (or /models)
+            import aiohttp
+            models_url = f"{url}/models" if "/v1" in url else f"{url}/v1/models"
+            try:
+                async with aiohttp.ClientSession() as session:
+                    headers = {"Authorization": f"Bearer {api_key}"}
+                    async with session.get(models_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                        if resp.status != 200:
+                            body = await resp.text()
+                            await query.edit_message_text(f"❌ 拉取失败 (HTTP {resp.status})\n{body[:200]}")
+                            return
+                        result = await resp.json()
+            except Exception as e:
+                await query.edit_message_text(f"❌ 拉取失败: {e}")
+                return
+
+            model_list = result.get("data", []) if isinstance(result, dict) else []
+            if not model_list:
+                await query.edit_message_text(f"⚠️ {prov} 无可用模型")
+                return
+
+            # Extract model IDs and sort
+            model_ids = sorted(set(
+                m.get("id", "") for m in model_list if m.get("id")
+            ))
+
+            # Already-added models
+            existing = set(pm.get("models", {}).get(prov, []))
+
+            # Show first 30 models with add buttons
+            lines = [f"📋 {prov} 可用模型 ({len(model_ids)}):\n"]
+            buttons = []
+            for mid in model_ids[:30]:
+                if mid in existing:
+                    lines.append(f"  ✅ {mid}")
+                else:
+                    lines.append(f"  ⚪ {mid}")
+                    # Truncate callback_data to 64 bytes max
+                    cb = f"ep_addm:{prov}:{mid}"
+                    if len(cb.encode()) <= 64:
+                        buttons.append([InlineKeyboardButton(f"+ {mid}", callback_data=cb)])
+            if len(model_ids) > 30:
+                lines.append(f"  ... 和 {len(model_ids) - 30} 个更多")
+            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")])
+
+            text = "\n".join(lines)
+            await query.edit_message_text(
+                text[:4000],
+                reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
+            )
+
+        elif data.startswith("ep_addm:"):
+            # ep_addm:provider:model_id — add model to provider
+            parts = data.split(":", 2)
+            if len(parts) < 3:
+                return
+            prov, model_id = parts[1], parts[2]
+            pm = self._load_pm()
+            if prov not in pm.get("providers", {}):
+                await query.edit_message_text(f"❌ 提供商 {prov} 不存在")
+                return
+            models = pm.setdefault("models", {})
+            prov_models = models.setdefault(prov, [])
+            if model_id in prov_models:
+                await query.edit_message_text(f"⚠️ {model_id} 已存在")
+                return
+            prov_models.append(model_id)
+            self._save_pm(pm)
+            # Reload in provider
+            if self._groupchat_engine:
+                self._groupchat_engine.provider._pm_overrides = None
+            await query.edit_message_text(
+                f"✅ 已添加 {model_id} 到 {prov}\n"
+                f"用 /editagent 切换 agent 模型"
+            )
 
     async def _handle_edit_input(self, chat_id: str, content: str) -> None:
         """Process interactive edit state input."""
