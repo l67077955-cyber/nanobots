@@ -444,7 +444,7 @@ class GroupChatEngine:
         messages: list[dict[str, Any]],
         model: str,
         agent_name: str,
-        max_iterations: int = 30,
+        max_iterations: int = 5,
         is_direct: bool = False,
     ) -> tuple[str, list[str], dict[str, Any]]:
         """Chat with tool calling loop, matching nanobot core agent logic.
