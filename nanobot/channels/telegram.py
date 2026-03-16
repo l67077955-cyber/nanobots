@@ -1097,8 +1097,23 @@ class TelegramChannel(BaseChannel):
         elif data.startswith("pm_delp:"):
             prov = data[8:]
             pm = self._load_pm()
-            pm["providers"].pop(prov, None)
-            pm["models"].pop(prov, None)
+            model_count = len(pm.get("models", {}).get(prov, []))
+            await query.edit_message_text(
+                f"⚠️ 确认删除提供商 **{prov}**？\n\n"
+                f"这将同时删除该提供商下的 **{model_count}** 个模型。\n"
+                f"此操作不可撤销！",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🗑 确认删除", callback_data=f"pm_delp_yes:{prov}")],
+                    [InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")],
+                ])
+            )
+
+        elif data.startswith("pm_delp_yes:"):
+            prov = data[12:]
+            pm = self._load_pm()
+            pm.get("providers", {}).pop(prov, None)
+            pm.get("models", {}).pop(prov, None)
             self._save_pm(pm)
             await query.edit_message_text(f"✅ 提供商 {prov} 及其所有模型已删除")
 
