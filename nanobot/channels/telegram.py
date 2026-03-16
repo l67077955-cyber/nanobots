@@ -1222,15 +1222,12 @@ class TelegramChannel(BaseChannel):
             # Persist to config.json
             agent_entry = self._groupchat_engine.registry.get(name, {})
             if agent_entry.get("_default"):
-                # Default agent (Nanobot): save tool toggles to main config
-                main_cfg_path = Path.home() / ".nanobot" / "config.json"
-                if main_cfg_path.exists():
-                    try:
-                        cfg = json.loads(main_cfg_path.read_text())
-                        cfg["agent_tools"] = tools_cfg
-                        main_cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
-                    except Exception:
-                        pass
+                # Default agent (Nanobot): save tool toggles to separate file
+                tools_path = Path.home() / ".nanobot" / "nanobot_tools.json"
+                try:
+                    tools_path.write_text(json.dumps(tools_cfg, indent=2, ensure_ascii=False))
+                except Exception:
+                    pass
             else:
                 cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
                 cfg_path.parent.mkdir(parents=True, exist_ok=True)

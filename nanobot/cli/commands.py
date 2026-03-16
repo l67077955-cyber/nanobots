@@ -418,13 +418,13 @@ def gateway(
         base_soul = base_workspace / "SOUL.md"
         base_prompt = base_soul.read_text() if base_soul.exists() else "I am nanobot, a personal AI assistant."
         nanobot_entry = {"model": base_model, "prompt": base_prompt, "_default": True}
-        # Load saved tool toggles from config.json
+        # Load saved tool toggles from separate file
         try:
             import json as _json
-            main_cfg = _json.loads((Path.home() / ".nanobot" / "config.json").read_text())
-            if "agent_tools" in main_cfg:
-                nanobot_entry["tools"] = main_cfg["agent_tools"]
-                logger.info("Loaded Nanobot tools from config: {}", main_cfg["agent_tools"])
+            tools_path = Path.home() / ".nanobot" / "nanobot_tools.json"
+            if tools_path.exists():
+                nanobot_entry["tools"] = _json.loads(tools_path.read_text())
+                logger.info("Loaded Nanobot tools: {}", nanobot_entry["tools"])
         except Exception:
             pass
         gc_engine.registry["Nanobot"] = nanobot_entry
