@@ -1019,7 +1019,7 @@ class TelegramChannel(BaseChannel):
                 pass
 
             chat_url = f"{url}/chat/completions" if "/v1" in url else f"{url}/v1/chat/completions"
-            payload = {"model": raw_model, "messages": [{"role": "user", "content": "say hi"}], "max_tokens": 30}
+            payload = {"model": raw_model, "messages": [{"role": "user", "content": "say hi"}], "max_tokens": 50}
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
             start = _time.monotonic()
