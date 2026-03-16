@@ -207,6 +207,12 @@ class GroupChatEngine:
 
         self._active_agents[:] = resolved
         self._save_active()
+        # Auto-update saved group if one is loaded
+        if hasattr(self, '_current_group_name') and self._current_group_name:
+            groups = self._load_groups()
+            if self._current_group_name in groups:
+                groups[self._current_group_name] = list(resolved)
+                self._save_groups(groups)
         order_str = " → ".join(resolved)
         return f"✅ 发言顺序已调整\n📢 {order_str}"
 
@@ -328,6 +334,7 @@ class GroupChatEngine:
         if len(self._active_agents) >= 2:
             self._start_group_loop()
 
+        self._current_group_name = name
         return (
             f"✅ 已载入分组 「{name}」\n"
             f"👥 当前成员: {', '.join(self._active_agents)}"
