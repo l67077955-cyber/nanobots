@@ -1277,10 +1277,9 @@ class TelegramChannel(BaseChannel):
             # Reload in provider
             if self._groupchat_engine:
                 self._groupchat_engine.provider._pm_overrides = None
-            await query.edit_message_text(
-                f"✅ 已添加 {model_id} 到 {prov}\n"
-                f"用 /editagent 切换 agent 模型"
-            )
+            # Re-trigger model list view (stay on page)
+            query.data = f"ep_models:{prov}"
+            await self._on_callback(update, context)
 
     async def _handle_edit_input(self, chat_id: str, content: str) -> None:
         """Process interactive edit state input."""
