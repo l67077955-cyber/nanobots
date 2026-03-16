@@ -683,8 +683,14 @@ class TelegramChannel(BaseChannel):
 
     def _edit_menu_text(self, agent_name: str) -> str:
         agent = self._groupchat_engine.registry[agent_name]
-        tools_on = agent.get("tools_enabled", False)
-        tools_str = "✅ 开启" if tools_on else "❌ 关闭"
+        tools_cfg = agent.get("tools")
+        if isinstance(tools_cfg, dict):
+            on = [k for k, v in tools_cfg.items() if v]
+            tools_str = f"{len(on)}/{len(tools_cfg)} 开启" if on else "全部关闭"
+        elif agent.get("tools_enabled", False):
+            tools_str = "全部开启"
+        else:
+            tools_str = "全部关闭"
         return (
             f"✏️ 编辑 {agent_name}\n\n"
             f"模型: {agent['model']}\n"
@@ -693,13 +699,11 @@ class TelegramChannel(BaseChannel):
         )
 
     def _edit_menu_buttons(self, agent_name: str) -> InlineKeyboardMarkup:
-        tools_on = self._groupchat_engine.registry.get(agent_name, {}).get("tools_enabled", False)
-        tools_label = "🔧 工具: ✅ → 关闭" if tools_on else "🔧 工具: ❌ → 开启"
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("✏️ 修改名字", callback_data=f"ef:{agent_name}:name")],
             [InlineKeyboardButton("📝 修改人设", callback_data=f"ef:{agent_name}:persona")],
             [InlineKeyboardButton("🤖 修改模型", callback_data=f"ef:{agent_name}:model")],
-            [InlineKeyboardButton(tools_label, callback_data=f"ef:{agent_name}:tools")],
+            [InlineKeyboardButton("🔧 工具设置", callback_data=f"ef:{agent_name}:tools")],
             [InlineKeyboardButton("❌ 取消", callback_data=f"ef:{agent_name}:cancel")],
         ])
 
@@ -860,25 +864,40 @@ class TelegramChannel(BaseChannel):
                 await query.edit_message_text("❌ 已取消")
                 return
             if field == "tools":
-                # Immediate toggle — no text input needed
-                agent = self._groupchat_engine.registry.get(name)
-                if not agent:
-                    return
-                current = agent.get("tools_enabled", False)
-                agent["tools_enabled"] = not current
-                # Persist to config.json
-                cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
-                if cfg_path.exists():
-                    try:
-                        cfg = json.loads(cfg_path.read_text())
-                        cfg["tools_enabled"] = not current
-                        cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
-                    except Exception:
-                        pass
-                status = "✅ 开启" if not current else "❌ 关闭"
+                # Show per-tool toggle buttons
+                from nanobot.groupchat.engine import GroupChatEngine
+                agent = self._groupchat_engine.registry.get(name, {})
+                tools_cfg = agent.get("tools")
+                # Migrate legacy tools_enabled to granular dict
+                if not isinstance(tools_cfg, dict):
+                    all_on = agent.get("tools_enabled", False)
+                    tools_cfg = {t: all_on for t in GroupChatEngine.TOOL_NAMES}
+                    agent["tools"] = tools_cfg
+
+                labels = {
+                    "web_search": "🔍 网页搜索",
+                    "web_fetch": "🌐 网页抓取",
+                    "exec": "⚡ 执行命令",
+                    "read_file": "📄 读文件",
+                    "write_file": "✍️ 写文件",
+                    "edit_file": "✂️ 编辑文件",
+                    "list_dir": "📁 列目录",
+                }
+                buttons = []
+                for t in GroupChatEngine.TOOL_NAMES:
+                    on = tools_cfg.get(t, False)
+                    icon = "✅" if on else "❌"
+                    label = labels.get(t, t)
+                    buttons.append([InlineKeyboardButton(
+                        f"{icon} {label}",
+                        callback_data=f"tf:{name}:{t}"
+                    )])
+                buttons.append([InlineKeyboardButton("✅ 全开", callback_data=f"tf:{name}:__all_on"),
+                                InlineKeyboardButton("❌ 全关", callback_data=f"tf:{name}:__all_off")])
+                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
                 await query.edit_message_text(
-                    f"🔧 {name} 工具: {status}",
-                    reply_markup=self._edit_menu_buttons(name),
+                    f"🔧 {name} 工具设置:",
+                    reply_markup=InlineKeyboardMarkup(buttons)
                 )
                 return
             self._edit_state[chat_id] = {"agent": name, "field": field}
@@ -931,6 +950,62 @@ class TelegramChannel(BaseChannel):
                     lines.append(f"[{m['sender']}]: {text}")
                 full = "\n".join(lines)
                 await query.edit_message_text(full[:4096])
+
+        elif data.startswith("tf:"):
+            # tf:AgentName:tool_name — toggle individual tool
+            parts = data.split(":", 2)
+            if len(parts) < 3:
+                return
+            name, tool = parts[1], parts[2]
+            from nanobot.groupchat.engine import GroupChatEngine
+            agent = self._groupchat_engine.registry.get(name, {})
+            tools_cfg = agent.get("tools")
+            if not isinstance(tools_cfg, dict):
+                all_on = agent.get("tools_enabled", False)
+                tools_cfg = {t: all_on for t in GroupChatEngine.TOOL_NAMES}
+                agent["tools"] = tools_cfg
+
+            if tool == "__all_on":
+                for t in tools_cfg:
+                    tools_cfg[t] = True
+            elif tool == "__all_off":
+                for t in tools_cfg:
+                    tools_cfg[t] = False
+            elif tool in tools_cfg:
+                tools_cfg[tool] = not tools_cfg[tool]
+
+            # Persist to config.json
+            cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
+            if cfg_path.exists():
+                try:
+                    cfg = json.loads(cfg_path.read_text())
+                    cfg["tools"] = tools_cfg
+                    cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+                except Exception:
+                    pass
+
+            # Refresh buttons by re-triggering tools menu
+            labels = {
+                "web_search": "🔍 网页搜索", "web_fetch": "🌐 网页抓取",
+                "exec": "⚡ 执行命令", "read_file": "📄 读文件",
+                "write_file": "✍️ 写文件", "edit_file": "✂️ 编辑文件",
+                "list_dir": "📁 列目录",
+            }
+            buttons = []
+            for t in GroupChatEngine.TOOL_NAMES:
+                on = tools_cfg.get(t, False)
+                icon = "✅" if on else "❌"
+                label = labels.get(t, t)
+                buttons.append([InlineKeyboardButton(
+                    f"{icon} {label}", callback_data=f"tf:{name}:{t}"
+                )])
+            buttons.append([InlineKeyboardButton("✅ 全开", callback_data=f"tf:{name}:__all_on"),
+                            InlineKeyboardButton("❌ 全关", callback_data=f"tf:{name}:__all_off")])
+            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
+            await query.edit_message_text(
+                f"🔧 {name} 工具设置:",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
 
         elif data.startswith("logd:"):
             idx = int(data[5:])

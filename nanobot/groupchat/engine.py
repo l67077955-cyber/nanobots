@@ -35,6 +35,12 @@ class GroupChatEngine:
         engine.remove_agent("Grok")     # 0 agents → silent
     """
 
+    # All available tool names for granular control
+    TOOL_NAMES = [
+        "web_search", "web_fetch", "exec",
+        "read_file", "write_file", "edit_file", "list_dir",
+    ]
+
     def __init__(
         self,
         config: GroupChatConfig,
@@ -401,6 +407,32 @@ class GroupChatEngine:
                 return False
         return False
 
+    def _get_agent_tools(self, agent_cfg: dict, registry) -> list:
+        """Get filtered tool definitions based on agent's per-tool config.
+
+        Config format:
+          tools: {web_search: true, exec: false, ...}  # granular
+          tools_enabled: true  # legacy: all tools on
+        """
+        # Granular tools dict
+        tools_cfg = agent_cfg.get("tools")
+        if isinstance(tools_cfg, dict):
+            enabled = {k for k, v in tools_cfg.items() if v}
+            if not enabled:
+                return []
+            return [d for d in registry.get_definitions()
+                    if d.get("function", {}).get("name") in enabled]
+
+        # Legacy fallback
+        if agent_cfg.get("tools_enabled", False):
+            return registry.get_definitions()
+
+        # Default agent (_default flag)
+        if agent_cfg.get("_default"):
+            return registry.get_definitions()
+
+        return []
+
     async def _chat_with_tools(
         self,
         messages: list[dict[str, Any]],
@@ -419,12 +451,9 @@ class GroupChatEngine:
         agent_cfg = self.registry.get(agent_name, {})
         tool_defs: list = []
         if is_direct:
-            # Default agent gets full tools (exec, filesystem, web)
-            tool_defs = self.direct_tools.get_definitions()
-        elif agent_cfg.get("tools_enabled", False):
-            # Agent with tools_enabled always gets web tools — let the model
-            # decide when to search, not keyword matching
-            tool_defs = self.tools.get_definitions()
+            tool_defs = self._get_agent_tools(agent_cfg, self.direct_tools)
+        else:
+            tool_defs = self._get_agent_tools(agent_cfg, self.tools)
         tools_used: list[str] = []
         iteration = 0
         import time as _time
