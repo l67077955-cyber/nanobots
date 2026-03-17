@@ -14,6 +14,7 @@ import time as _time
 from pathlib import Path
 from typing import Any
 
+import httpx
 import json_repair
 from loguru import logger
 
@@ -78,6 +79,15 @@ class HttpxProvider(LLMProvider):
             except Exception:
                 pass
         self.sampling_params: dict[str, float] = defaults
+
+        # Shared httpx client (created lazily)
+        self._client: httpx.AsyncClient | None = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        """Get or create the shared httpx client."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=120.0)
+        return self._client
 
     def get_default_model(self) -> str:
         return self.default_model
@@ -468,7 +478,7 @@ class HttpxProvider(LLMProvider):
         api_base: str | None = None,
         api_key: str | None = None,
     ) -> LLMResponse:
-        """Send a chat completion request using the OpenAI SDK."""
+        """Send a chat completion request via httpx (raw JSON)."""
         original_model = model or self.default_model
 
         # Resolve provider
@@ -478,33 +488,77 @@ class HttpxProvider(LLMProvider):
         target_base = resolved.get("api_base") or api_base or self.api_base or ""
         target_key = resolved.get("api_key") or api_key or self.api_key or ""
 
-        # Build request body
+        # Build request
         body = self._build_body(
             messages=messages, model=raw_model, provider_name=prov_name,
             tools=tools, max_tokens=max_tokens, stream=False,
         )
-        body.pop("stream", None)
-        body.pop("stream_options", None)
 
-        # Separate SDK-native params from non-standard ones
-        _SDK_PARAMS = {"model", "messages", "max_tokens", "temperature", "top_p",
-                       "frequency_penalty", "presence_penalty", "tools", "tool_choice",
-                       "n", "stop", "logit_bias", "logprobs", "top_logprobs", "seed"}
-        sdk_body = {k: v for k, v in body.items() if k in _SDK_PARAMS}
-        extra_body = {k: v for k, v in body.items() if k not in _SDK_PARAMS}
+        url = f"{target_base}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {target_key}",
+            "Content-Type": "application/json",
+            **(self.extra_headers or {}),
+        }
 
         t0 = _time.time()
         try:
-            oai_client = self._get_openai_client(target_base, target_key)
-            resp = await oai_client.chat.completions.create(
-                **sdk_body,
-                extra_headers=self.extra_headers or None,
-                extra_body=extra_body or None,
-            )
-
+            client = self._get_client()
+            r = await client.post(url, json=body, headers=headers)
             latency = _time.time() - t0
-            # Convert SDK response to dict for logging + parsing
-            data = resp.model_dump()
+
+            if r.status_code != 200:
+                error_text = r.text[:300]
+                error_exc = _APIError(r.status_code, error_text)
+                self._log_request(
+                    model=raw_model, api_base=target_base, max_tokens=max_tokens,
+                    stream=False, params=self.sampling_params, tools_count=len(tools or []),
+                    messages=body["messages"], metadata=metadata, error=error_exc, latency=latency,
+                )
+
+                # Auto-detect tool message incompatibility
+                has_tool_msgs = any(m.get("role") == "tool" for m in messages)
+                if r.status_code == 502 and has_tool_msgs and prov_name:
+                    if prov_name not in self._compat_flatten:
+                        self._compat_flatten.add(prov_name)
+                        logger.warning("Auto-detected tool incompatibility for '{}', retrying with flatten", prov_name)
+                        body = self._build_body(messages=messages, model=raw_model, provider_name=prov_name, tools=tools, max_tokens=max_tokens, stream=False)
+                        r2 = await client.post(url, json=body, headers=headers)
+                        if r2.status_code == 200:
+                            data = r2.json()
+                            self._log_request(model=raw_model, api_base=target_base, max_tokens=max_tokens, stream=False, params=self.sampling_params, tools_count=len(tools or []), messages=body["messages"], metadata=metadata, response_data=data, latency=_time.time() - t0)
+                            return self._parse_response(data)
+
+                # Auto-detect unsupported params
+                if r.status_code == 400 and prov_name:
+                    _PARAM_NAMES_IN_ERRORS = (
+                        "presencePenalty", "presence_penalty",
+                        "frequencyPenalty", "frequency_penalty",
+                        "repetitionPenalty", "repetition_penalty",
+                        "top_k", "topK", "top_p", "topP",
+                        "min_p", "minP", "top_a", "topA",
+                    )
+                    if any(name in error_text for name in _PARAM_NAMES_IN_ERRORS):
+                        all_sampling = set(self.sampling_params.keys())
+                        drops = self._compat_drop_params.setdefault(prov_name, set())
+                        new_drops = all_sampling - drops
+                        if new_drops:
+                            drops.update(new_drops)
+                            logger.warning("Auto-detected param issues for '{}', retrying without sampling params", prov_name)
+                            body = self._build_body(messages=messages, model=raw_model, provider_name=prov_name, tools=tools, max_tokens=max_tokens, stream=False)
+                            r2 = await client.post(url, json=body, headers=headers)
+                            if r2.status_code == 200:
+                                data = r2.json()
+                                self._log_request(model=raw_model, api_base=target_base, max_tokens=max_tokens, stream=False, params=self.sampling_params, tools_count=len(tools or []), messages=body["messages"], metadata=metadata, response_data=data, latency=_time.time() - t0)
+                                return self._parse_response(data)
+
+                return LLMResponse(
+                    content=f"Error calling LLM: HTTP {r.status_code} - {error_text}",
+                    finish_reason="error",
+                    status_code=r.status_code,
+                )
+
+            data = r.json()
             self._log_request(
                 model=raw_model, api_base=target_base, max_tokens=max_tokens,
                 stream=False, params=self.sampling_params, tools_count=len(tools or []),
@@ -514,66 +568,15 @@ class HttpxProvider(LLMProvider):
 
         except Exception as e:
             latency = _time.time() - t0
-            error_text = str(e)
-            status_code = getattr(e, "status_code", None)
-
             self._log_request(
                 model=raw_model, api_base=target_base, max_tokens=max_tokens,
                 stream=False, params=self.sampling_params, tools_count=len(tools or []),
                 messages=body.get("messages", messages), metadata=metadata,
                 error=e, latency=latency,
             )
-
-            # Auto-detect tool message incompatibility (502)
-            if status_code == 502 and prov_name:
-                has_tool_msgs = any(m.get("role") == "tool" for m in messages)
-                if has_tool_msgs and prov_name not in self._compat_flatten:
-                    self._compat_flatten.add(prov_name)
-                    logger.warning("Auto-detected tool incompatibility for '{}', retrying with flatten", prov_name)
-                    body = self._build_body(messages=messages, model=raw_model, provider_name=prov_name, tools=tools, max_tokens=max_tokens, stream=False)
-                    body.pop("stream", None); body.pop("stream_options", None)
-                    sdk_body2 = {k: v for k, v in body.items() if k in _SDK_PARAMS}
-                    extra_body2 = {k: v for k, v in body.items() if k not in _SDK_PARAMS}
-                    try:
-                        resp2 = await oai_client.chat.completions.create(**sdk_body2, extra_headers=self.extra_headers or None, extra_body=extra_body2 or None)
-                        data2 = resp2.model_dump()
-                        self._log_request(model=raw_model, api_base=target_base, max_tokens=max_tokens, stream=False, params=self.sampling_params, tools_count=len(tools or []), messages=body["messages"], metadata=metadata, response_data=data2, latency=_time.time() - t0)
-                        return self._parse_response(data2)
-                    except Exception:
-                        pass
-
-            # Auto-detect unsupported params (400)
-            if status_code == 400 and prov_name:
-                _PARAM_NAMES_IN_ERRORS = (
-                    "presencePenalty", "presence_penalty",
-                    "frequencyPenalty", "frequency_penalty",
-                    "repetitionPenalty", "repetition_penalty",
-                    "top_k", "topK", "top_p", "topP",
-                    "min_p", "minP", "top_a", "topA",
-                )
-                if any(name in error_text for name in _PARAM_NAMES_IN_ERRORS):
-                    all_sampling = set(self.sampling_params.keys())
-                    drops = self._compat_drop_params.setdefault(prov_name, set())
-                    new_drops = all_sampling - drops
-                    if new_drops:
-                        drops.update(new_drops)
-                        logger.warning("Auto-detected param issues for '{}', retrying without sampling params", prov_name)
-                        body = self._build_body(messages=messages, model=raw_model, provider_name=prov_name, tools=tools, max_tokens=max_tokens, stream=False)
-                        body.pop("stream", None); body.pop("stream_options", None)
-                        sdk_body2 = {k: v for k, v in body.items() if k in _SDK_PARAMS}
-                        extra_body2 = {k: v for k, v in body.items() if k not in _SDK_PARAMS}
-                        try:
-                            resp2 = await oai_client.chat.completions.create(**sdk_body2, extra_headers=self.extra_headers or None, extra_body=extra_body2 or None)
-                            data2 = resp2.model_dump()
-                            self._log_request(model=raw_model, api_base=target_base, max_tokens=max_tokens, stream=False, params=self.sampling_params, tools_count=len(tools or []), messages=body["messages"], metadata=metadata, response_data=data2, latency=_time.time() - t0)
-                            return self._parse_response(data2)
-                        except Exception:
-                            pass
-
             return LLMResponse(
                 content=f"Error calling LLM: {e}",
                 finish_reason="error",
-                status_code=status_code,
             )
 
     # ── OpenAI SDK client cache for streaming ──
