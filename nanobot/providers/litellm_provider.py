@@ -41,8 +41,9 @@ class LiteLLMProvider(LLMProvider):
         default_model: str = "anthropic/claude-opus-4-5",
         extra_headers: dict[str, str] | None = None,
         provider_name: str | None = None,
+        retry_delays: tuple[int, ...] | None = None,
     ):
-        super().__init__(api_key, api_base)
+        super().__init__(api_key, api_base, retry_delays=retry_delays)
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
 
@@ -50,6 +51,13 @@ class LiteLLMProvider(LLMProvider):
         # provider_name (from config key) is the primary signal;
         # api_key / api_base are fallback for auto-detection.
         self._gateway = find_gateway(provider_name, api_key, api_base)
+
+        # Runtime auto-detected provider capabilities.
+        # Providers that need tool messages flattened (discovered on first 502).
+        self._compat_flatten: set[str] = set()
+        # Providers that reject specific params (discovered on first 400).
+        # Maps provider_name → set of kwargs keys to drop.
+        self._compat_drop_params: dict[str, set[str]] = {}
 
         # Configure environment variables
         if api_key:
@@ -191,6 +199,210 @@ class LiteLLMProvider(LLMProvider):
                     return
 
     @staticmethod
+    def _log_request(
+        kwargs: dict[str, Any],
+        response: Any | None = None,
+        error: Exception | None = None,
+        latency: float = 0.0,
+    ) -> None:
+        """Log every LLM request to ~/.nanobot/request_logs/YYYY-MM-DD.jsonl.
+
+        Each line is a JSON object with request kwargs (full message content),
+        response summary, and error info if any.
+        """
+        import json as _json
+        import time as _time
+
+        try:
+            log_dir = Path.home() / ".nanobot" / "request_logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = log_dir / f"{_time.strftime('%Y-%m-%d')}.jsonl"
+
+            # ── Request ──
+            meta = kwargs.get("metadata") or {}
+            record: dict[str, Any] = {
+                "ts": _time.strftime("%Y-%m-%d %H:%M:%S"),
+                "agent": meta.get("log_agent"),
+                "session": meta.get("log_session"),
+                "topic": meta.get("log_topic"),
+                "mode": meta.get("log_mode"),
+                "model": kwargs.get("model"),
+                "api_base": kwargs.get("api_base"),
+                "max_tokens": kwargs.get("max_tokens"),
+                "stream": kwargs.get("stream", False),
+                "params": {
+                    k: kwargs.get(k) for k in
+                    ("temperature", "top_p", "top_k", "min_p",
+                     "repetition_penalty", "frequency_penalty",
+                     "presence_penalty", "top_a",
+                     "reasoning_effort")
+                    if k in kwargs
+                },
+                "tools_count": len(kwargs.get("tools", []) or []),
+            }
+
+            # Full messages (complete content, not truncated)
+            msgs_log: list[dict[str, Any]] = []
+            total_chars = 0
+            for msg in kwargs.get("messages", []):
+                content = msg.get("content")
+                if isinstance(content, str):
+                    c_len = len(content)
+                elif isinstance(content, list):
+                    c_len = sum(len(b.get("text", "")) for b in content if isinstance(b, dict))
+                else:
+                    c_len = 0
+                total_chars += c_len
+
+                entry: dict[str, Any] = {
+                    "role": msg.get("role"),
+                    "content": content,           # full content
+                    "content_len": c_len,
+                }
+                if msg.get("name"):
+                    entry["name"] = msg["name"]
+                if msg.get("tool_call_id"):
+                    entry["tool_call_id"] = msg["tool_call_id"]
+                if msg.get("tool_calls"):
+                    entry["tool_calls"] = msg["tool_calls"]
+                msgs_log.append(entry)
+
+            record["messages"] = msgs_log
+            record["total_chars"] = total_chars
+            record["msg_count"] = len(msgs_log)
+            record["latency"] = round(latency, 2)
+
+            # ── Response ──
+            if error:
+                record["status"] = "error"
+                record["error"] = str(error)
+                record["error_type"] = type(error).__name__
+                record["status_code"] = getattr(error, "status_code", None)
+            elif response is not None:
+                record["status"] = "ok"
+                # Extract response summary
+                if hasattr(response, "choices") and response.choices:
+                    ch = response.choices[0]
+                    msg = ch.message
+                    record["reply_len"] = len(msg.content) if msg.content else 0
+                    record["reply_preview"] = (msg.content or "")[:500]
+                    record["finish_reason"] = ch.finish_reason
+                    record["has_tool_calls"] = bool(
+                        hasattr(msg, "tool_calls") and msg.tool_calls
+                    )
+                    if hasattr(msg, "tool_calls") and msg.tool_calls:
+                        record["reply_tool_calls"] = [
+                            {"name": tc.function.name, "args_len": len(tc.function.arguments or "")}
+                            for tc in msg.tool_calls
+                        ]
+                if hasattr(response, "usage") and response.usage:
+                    record["usage"] = {
+                        "prompt": response.usage.prompt_tokens,
+                        "completion": response.usage.completion_tokens,
+                        "total": response.usage.total_tokens,
+                    }
+            else:
+                record["status"] = "unknown"
+
+            # Append as one JSON line
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(_json.dumps(record, ensure_ascii=False, default=str) + "\n")
+
+        except Exception as log_err:
+            logger.debug("Request logging failed: {}", log_err)
+
+    def _log_stream_request(
+        self,
+        kwargs: dict[str, Any],
+        content: str,
+        tool_calls: list,
+        finish_reason: str,
+        usage: dict,
+        latency: float,
+    ) -> None:
+        """Log a completed streaming request (no raw response object available)."""
+        import json as _json
+        import time as _time
+
+        try:
+            log_dir = Path.home() / ".nanobot" / "request_logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = log_dir / f"{_time.strftime('%Y-%m-%d')}.jsonl"
+
+            # Build the same record structure as _log_request
+            meta = kwargs.get("metadata") or {}
+            record: dict[str, Any] = {
+                "ts": _time.strftime("%Y-%m-%d %H:%M:%S"),
+                "agent": meta.get("log_agent"),
+                "session": meta.get("log_session"),
+                "topic": meta.get("log_topic"),
+                "mode": meta.get("log_mode"),
+                "model": kwargs.get("model"),
+                "api_base": kwargs.get("api_base"),
+                "max_tokens": kwargs.get("max_tokens"),
+                "stream": True,
+                "params": {
+                    k: kwargs.get(k) for k in
+                    ("temperature", "top_p", "top_k", "min_p",
+                     "repetition_penalty", "frequency_penalty",
+                     "presence_penalty", "top_a",
+                     "reasoning_effort")
+                    if k in kwargs
+                },
+                "tools_count": len(kwargs.get("tools", []) or []),
+            }
+
+            # Full messages
+            msgs_log: list[dict[str, Any]] = []
+            total_chars = 0
+            for msg in kwargs.get("messages", []):
+                c = msg.get("content")
+                if isinstance(c, str):
+                    c_len = len(c)
+                elif isinstance(c, list):
+                    c_len = sum(len(b.get("text", "")) for b in c if isinstance(b, dict))
+                else:
+                    c_len = 0
+                total_chars += c_len
+                entry: dict[str, Any] = {
+                    "role": msg.get("role"),
+                    "content": c,
+                    "content_len": c_len,
+                }
+                if msg.get("name"):
+                    entry["name"] = msg["name"]
+                if msg.get("tool_call_id"):
+                    entry["tool_call_id"] = msg["tool_call_id"]
+                if msg.get("tool_calls"):
+                    entry["tool_calls"] = msg["tool_calls"]
+                msgs_log.append(entry)
+
+            record["messages"] = msgs_log
+            record["total_chars"] = total_chars
+            record["msg_count"] = len(msgs_log)
+            record["latency"] = round(latency, 2)
+
+            # Response
+            record["status"] = "ok"
+            record["reply_len"] = len(content) if content else 0
+            record["reply_preview"] = (content or "")[:500]
+            record["finish_reason"] = finish_reason
+            record["has_tool_calls"] = bool(tool_calls)
+            if tool_calls:
+                record["reply_tool_calls"] = [
+                    {"name": tc.name, "args_preview": str(tc.arguments)[:200]}
+                    for tc in tool_calls
+                ]
+            if usage:
+                record["usage"] = usage
+
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(_json.dumps(record, ensure_ascii=False, default=str) + "\n")
+
+        except Exception as log_err:
+            logger.debug("Stream request logging failed: {}", log_err)
+
+    @staticmethod
     def _extra_msg_keys(original_model: str, resolved_model: str) -> frozenset[str]:
         """Return provider-specific extra keys to preserve in request messages."""
         spec = find_by_model(original_model) or find_by_model(resolved_model)
@@ -287,36 +499,82 @@ class LiteLLMProvider(LLMProvider):
 
         return {"api_base": None, "api_key": None, "model": None, "provider_name": None}
 
-    async def chat(
+    @staticmethod
+    def _flatten_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Convert tool-protocol messages to plain text for incompatible APIs.
+
+        Transforms:
+        - assistant messages with ``tool_calls`` → appends "[调用 name(args)]"
+          to content and removes the ``tool_calls`` key.
+        - tool-role messages → "assistant" with "[name 结果]: content".
+
+        This allows providers that don't support the OpenAI tool-message
+        protocol (e.g. 闲鱼api) to receive tool results as normal text.
+        """
+        out: list[dict[str, Any]] = []
+        for m in messages:
+            role = m.get("role", "")
+
+            # Assistant message with tool_calls → flatten into content
+            if role == "assistant" and m.get("tool_calls"):
+                content = m.get("content") or ""
+                tc_lines: list[str] = []
+                for tc in m["tool_calls"]:
+                    fn = tc.get("function", {})
+                    name = fn.get("name", "unknown")
+                    args = fn.get("arguments", "")
+                    # Compact args preview
+                    if isinstance(args, str) and len(args) > 100:
+                        args = args[:100] + "…"
+                    tc_lines.append(f"[调用 {name}({args})]")
+                if tc_lines:
+                    content = (content + "\n" + "\n".join(tc_lines)).strip()
+                out.append({
+                    k: v for k, v in {
+                        "role": "assistant",
+                        "content": content,
+                        "name": m.get("name"),
+                    }.items() if v is not None
+                })
+                continue
+
+            # Tool result → convert to assistant message
+            if role == "tool":
+                tc_id = m.get("tool_call_id", "")
+                # Try to find the tool name from the preceding assistant tool_calls
+                tool_name = "tool"
+                for prev in reversed(out):
+                    # The original tool_calls have been flattened already,
+                    # but we can extract the name from the "[调用 name(...)]" text
+                    if prev.get("role") == "assistant" and tc_id:
+                        # The name was embedded by the flatten above
+                        break
+                result_text = m.get("content") or ""
+                out.append({
+                    "role": "assistant",
+                    "content": f"[工具结果]:\n{result_text}",
+                })
+                continue
+
+            # Normal message — pass through
+            out.append(m)
+        return out
+
+    def _build_kwargs(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
         max_tokens: int = 4096,
-        temperature: float = 0.7,
         reasoning_effort: str | None = None,
         metadata: dict[str, Any] | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> LLMResponse:
-        """
-        Send a chat completion request via LiteLLM.
-
-        Args:
-            messages: List of message dicts with 'role' and 'content'.
-            tools: Optional list of tool definitions in OpenAI format.
-            model: Model identifier (e.g., 'anthropic/claude-sonnet-4-5').
-            max_tokens: Maximum tokens in response.
-            temperature: Sampling temperature.
-
-        Returns:
-            LLMResponse with content and/or tool calls.
-        """
+    ) -> dict[str, Any]:
+        """Build the kwargs dict for acompletion (shared by chat and chat_stream)."""
         original_model = model or self.default_model
 
-        # ── Auto-resolve provider from providers_models.json ──
-        # Must run BEFORE _resolve_model, because _resolve_model may
-        # match the model to a native provider (e.g. 'claude-opus-4-5' → anthropic)
+        # Auto-resolve provider from providers_models.json
         pm_api_base = api_base
         pm_api_key = api_key
         pm_resolved = False
@@ -332,8 +590,6 @@ class LiteLLMProvider(LLMProvider):
                     logger.debug("PM override: {} → {} via {}", model, original_model, pm_api_base)
             pm_provider_name = resolved.get("provider_name")
 
-        # Skip _resolve_model for custom providers — the raw model name
-        # should NOT be rewritten by LiteLLM's provider matching
         if pm_resolved:
             model = original_model
         else:
@@ -343,52 +599,67 @@ class LiteLLMProvider(LLMProvider):
         if self._supports_cache_control(original_model):
             messages, tools = self._apply_cache_control(messages, tools)
 
-        # Clamp max_tokens to at least 1 — negative or zero values cause
-        # LiteLLM to reject the request with "max_tokens must be at least 1".
         max_tokens = max(1, max_tokens)
 
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": self._sanitize_messages(self._sanitize_empty_content(messages), extra_keys=extra_msg_keys),
             "max_tokens": max_tokens,
-            # Sampling params from instance (modifiable via /hyperparams)
             **self.sampling_params,
         }
 
-        # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
         self._apply_model_overrides(model, kwargs)
 
-        # Use PM-resolved values as the override base
+        # ── Provider-specific message transformations ──
+
+        # Flatten tool messages for providers that don't support the
+        # OpenAI tool-message protocol (tool role, tool_calls on assistant).
+        # Auto-detected at runtime OR configured via "flattenTools" in providers_models.json.
+        if pm_provider_name:
+            _needs_flatten = pm_provider_name in self._compat_flatten
+            if not _needs_flatten:
+                import json as _json
+                _pm_path = Path.home() / ".nanobot" / "providers_models.json"
+                try:
+                    pm = _json.loads(_pm_path.read_text()) if _pm_path.exists() else {}
+                except Exception:
+                    pm = {}
+                prov_cfg = pm.get("providers", {}).get(pm_provider_name, {})
+                _needs_flatten = prov_cfg.get("flattenTools", False)
+            if _needs_flatten:
+                kwargs["messages"] = self._flatten_tool_messages(kwargs["messages"])
+
+        # Auto-detected param drops — providers that reject specific params.
+        # Populated at runtime when a 400 error mentions the param name.
+        if pm_provider_name and pm_provider_name in self._compat_drop_params:
+            for k in self._compat_drop_params[pm_provider_name]:
+                kwargs.pop(k, None)
+
         api_base = pm_api_base
         api_key = pm_api_key
 
-        # Pass api_key directly — per-call override takes priority
         override_key = api_key or self.api_key
         if override_key:
             kwargs["api_key"] = override_key
 
-        # Pass api_base for custom endpoints — per-call override takes priority
         override_base = api_base or self.api_base
         if override_base:
             kwargs["api_base"] = override_base
 
-        # Pass extra headers (e.g. APP-Code for AiHubMix)
         if self.extra_headers:
             kwargs["extra_headers"] = self.extra_headers
-        
+
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
             kwargs["drop_params"] = True
-        
+
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        # Langfuse metadata (agent name, session, mode etc.)
         if metadata:
             kwargs["metadata"] = metadata
 
-        # OpenRouter provider routing — prioritize low-latency EU backends
         if pm_provider_name == "openrouter" or (not pm_provider_name and "openrouter" in (model or "")):
             kwargs["extra_body"] = {
                 "provider": {
@@ -397,17 +668,259 @@ class LiteLLMProvider(LLMProvider):
                     "allow_fallbacks": True,
                 }
             }
-            logger.debug("OpenRouter: using latency sort + EU-first order")
 
+        return kwargs
+
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        reasoning_effort: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+    ) -> LLMResponse:
+        """Send a chat completion request via LiteLLM."""
+        import time as _time
+        kwargs = self._build_kwargs(
+            messages, tools, model, max_tokens, reasoning_effort, metadata, api_base, api_key,
+        )
+        t0 = _time.time()
         try:
             response = await acompletion(**kwargs)
+            self._log_request(kwargs, response=response, latency=_time.time() - t0)
             return self._parse_response(response)
         except Exception as e:
-            # Return error as content for graceful handling
+            self._log_request(kwargs, error=e, latency=_time.time() - t0)
+
+            # Auto-detect tool message incompatibility:
+            # If 502 and request contained tool-role messages, flag this
+            # provider for flatten and re-raise so chat_with_retry retries.
+            sc = getattr(e, "status_code", None)
+            has_tool_msgs = any(m.get("role") == "tool" for m in messages)
+            if sc == 502 and has_tool_msgs:
+                resolved = self._resolve_pm_overrides(model or self.default_model)
+                prov = resolved.get("provider_name")
+                if prov and prov not in self._compat_flatten:
+                    self._compat_flatten.add(prov)
+                    logger.warning(
+                        "Auto-detected tool incompatibility for '{}', will flatten on retry", prov
+                    )
+                    raise  # Let chat_with_retry retry with flattened messages
+
+            # Auto-detect unsupported params:
+            # If 400 and error mentions a param name, drop it and retry.
+            if sc == 400:
+                err_msg = str(e)
+                # Map of possible param names in error messages → kwargs key
+                _PARAM_MAP = {
+                    "presencePenalty": "presence_penalty",
+                    "presence_penalty": "presence_penalty",
+                    "frequencyPenalty": "frequency_penalty",
+                    "frequency_penalty": "frequency_penalty",
+                    "repetitionPenalty": "repetition_penalty",
+                    "repetition_penalty": "repetition_penalty",
+                    "top_k": "top_k", "topK": "top_k",
+                    "top_p": "top_p", "topP": "top_p",
+                    "min_p": "min_p", "minP": "min_p",
+                    "top_a": "top_a", "topA": "top_a",
+                }
+                resolved = self._resolve_pm_overrides(model or self.default_model)
+                prov = resolved.get("provider_name")
+                if prov:
+                    detected = set()
+                    for err_name, kwarg_key in _PARAM_MAP.items():
+                        if err_name in err_msg and kwarg_key in kwargs:
+                            detected.add(kwarg_key)
+                    if detected:
+                        drops = self._compat_drop_params.setdefault(prov, set())
+                        new_drops = detected - drops
+                        if new_drops:
+                            drops.update(new_drops)
+                            logger.warning(
+                                "Auto-detected unsupported params for '{}': {}, will drop on retry",
+                                prov, new_drops,
+                            )
+                            raise  # Let chat_with_retry retry without these params
+
             return LLMResponse(
                 content=f"Error calling LLM: {str(e)}",
                 finish_reason="error",
             )
+
+    async def chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        max_tokens: int = 4096,
+        reasoning_effort: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+    ):
+        """Stream a chat completion, yielding text deltas.
+
+        Yields:
+            str — content delta tokens as they arrive.
+
+        Returns the full LLMResponse (access via ``async for ... in chat_stream()``
+        and then ``result = gen.asend(None)`` or use the helper in tool_loop).
+
+        If the response contains tool_calls, streaming is silently collected
+        and the *last* yielded value is a complete ``LLMResponse``.
+        """
+        import time as _time
+        kwargs = self._build_kwargs(
+            messages, tools, model, max_tokens, reasoning_effort, metadata, api_base, api_key,
+        )
+        kwargs["stream"] = True
+
+        t0 = _time.time()
+        try:
+            response = await acompletion(**kwargs)
+        except Exception as e:
+            self._log_request(kwargs, error=e, latency=_time.time() - t0)
+            # Auto-detect tool message incompatibility (same as chat())
+            sc = getattr(e, "status_code", None)
+            has_tool_msgs = any(m.get("role") == "tool" for m in messages)
+            if sc == 502 and has_tool_msgs:
+                resolved = self._resolve_pm_overrides(model or self.default_model)
+                prov = resolved.get("provider_name")
+                if prov and prov not in self._compat_flatten:
+                    self._compat_flatten.add(prov)
+                    logger.warning(
+                        "Auto-detected tool incompatibility for '{}' (stream), will flatten on retry", prov
+                    )
+            yield LLMResponse(content=f"Error calling LLM: {str(e)}", finish_reason="error")
+            return
+
+        # Collect the stream
+        full_content = ""
+        tool_calls_raw: list[dict] = []
+        finish_reason = "stop"
+        usage: dict[str, int] = {}
+        has_tool_calls = False
+
+        try:
+            async for chunk in response:
+                delta = chunk.choices[0].delta if chunk.choices else None
+                if not delta:
+                    continue
+
+                # Finish reason
+                fr = chunk.choices[0].finish_reason
+                if fr:
+                    finish_reason = fr
+
+                # Content delta
+                if delta.content:
+                    full_content += delta.content
+                    if not has_tool_calls:
+                        yield delta.content
+
+                # Tool call deltas — collect silently
+                tc_list = getattr(delta, "tool_calls", None)
+                if tc_list:
+                    has_tool_calls = True
+                    for tc_delta in tc_list:
+                        idx = getattr(tc_delta, "index", 0) or 0
+                        while len(tool_calls_raw) <= idx:
+                            tool_calls_raw.append({"id": "", "name": "", "arguments": ""})
+                        entry = tool_calls_raw[idx]
+                        tc_id = getattr(tc_delta, "id", None)
+                        if tc_id:
+                            entry["id"] = tc_id
+                        fn = getattr(tc_delta, "function", None)
+                        if fn:
+                            fn_name = getattr(fn, "name", None)
+                            fn_args = getattr(fn, "arguments", None)
+                            if fn_name:
+                                entry["name"] = fn_name
+                            if fn_args:
+                                entry["arguments"] += fn_args
+
+                # Usage (some providers send it in the last chunk)
+                if hasattr(chunk, "usage") and chunk.usage:
+                    usage = {
+                        "prompt_tokens": getattr(chunk.usage, "prompt_tokens", 0) or 0,
+                        "completion_tokens": getattr(chunk.usage, "completion_tokens", 0) or 0,
+                        "total_tokens": getattr(chunk.usage, "total_tokens", 0) or 0,
+                    }
+        except Exception as e:
+            yield LLMResponse(content=f"Error during streaming: {str(e)}", finish_reason="error")
+            return
+
+        # Build tool calls — try to infer names when empty (Claude streaming bug)
+        # Build a quick lookup: arg-keys-tuple → tool name from definitions
+        _tool_by_args: dict[frozenset, str] = {}
+        if tools:
+            for tdef in tools:
+                fn = tdef.get("function", {})
+                params = fn.get("parameters", {}).get("properties", {})
+                if params and fn.get("name"):
+                    _tool_by_args[frozenset(params.keys())] = fn["name"]
+
+        parsed_tool_calls = []
+        for tc in tool_calls_raw:
+            args = tc["arguments"]
+            if isinstance(args, str):
+                if not args.strip():
+                    args = {}
+                else:
+                    args = json_repair.loads(args)
+                    if not isinstance(args, dict):
+                        args = {}
+            name = tc["name"] or ""
+            if not name and isinstance(args, dict) and args:
+                # Try to infer tool name from argument keys
+                arg_keys = frozenset(args.keys())
+                inferred = _tool_by_args.get(arg_keys)
+                if inferred:
+                    name = inferred
+                    logger.info("Inferred tool name '{}' from args keys {}", name, list(arg_keys))
+                else:
+                    # Try partial match (args is a subset of tool params)
+                    for param_keys, tool_name in _tool_by_args.items():
+                        if arg_keys <= param_keys:
+                            name = tool_name
+                            logger.info("Inferred tool name '{}' from partial args match", name)
+                            break
+            if not name:
+                name = "_unknown_"
+                logger.warning("Tool call with empty name detected: args={}", tc["arguments"][:100])
+            parsed_tool_calls.append(ToolCallRequest(
+                id=_short_tool_id(),
+                name=name,
+                arguments=args,
+            ))
+
+        # Filter out ghost tool calls (empty name + empty args from streaming artifacts)
+        valid_tool_calls = [tc for tc in parsed_tool_calls if tc.name != "_unknown_" or tc.arguments]
+        if valid_tool_calls and not any(tc.name != "_unknown_" for tc in valid_tool_calls):
+            # All remaining are still _unknown_ — keep them for fallback detection
+            pass
+        elif valid_tool_calls != parsed_tool_calls:
+            logger.info("Filtered {} ghost tool calls", len(parsed_tool_calls) - len(valid_tool_calls))
+            parsed_tool_calls = valid_tool_calls
+
+        # If we successfully inferred names, set finish reason to tool_calls
+        if parsed_tool_calls and all(tc.name != "_unknown_" for tc in parsed_tool_calls):
+            finish_reason = "tool_calls"
+
+        # Log the completed stream request
+        self._log_stream_request(kwargs, full_content, parsed_tool_calls, finish_reason, usage, _time.time() - t0)
+
+        # Yield the final complete LLMResponse
+        yield LLMResponse(
+            content=full_content or None,
+            tool_calls=parsed_tool_calls,
+            finish_reason=finish_reason,
+            usage=usage,
+        )
 
     def _parse_response(self, response: Any) -> LLMResponse:
         """Parse LiteLLM response into our standard format."""

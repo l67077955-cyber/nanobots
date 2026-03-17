@@ -185,6 +185,7 @@ class TelegramChannel(BaseChannel):
         BotCommand("deleteprovider", "删除提供商"),
         BotCommand("deletemodel", "删除模型"),
         BotCommand("speedtest", "提供商测速"),
+        BotCommand("prompt", "查看/编辑/排序提示词"),
         BotCommand("help", "Show commands"),
     ]
 
@@ -213,6 +214,17 @@ class TelegramChannel(BaseChannel):
     def set_groupchat_engine(self, engine: GroupChatEngine) -> None:
         """Set the group chat engine for multi-agent discussions."""
         self._groupchat_engine = engine
+        # Load persisted retry config from pm.json
+        try:
+            pm = self._load_pm()
+            for _name, info in pm.get("providers", {}).items():
+                delays = info.get("retryDelays")
+                if delays and hasattr(engine, "provider"):
+                    engine.provider._retry_delays = tuple(delays)
+                    logger.info("Loaded retry delays from pm.json: {}", delays)
+                    break
+        except Exception:
+            pass
         logger.info("Telegram: group chat engine set with {} agents", len(engine.registry))
 
     def is_allowed(self, sender_id: str) -> bool:
@@ -276,6 +288,7 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(CommandHandler("order", self._on_order))
         self._app.add_handler(CommandHandler("setleader", self._on_setleader))
         self._app.add_handler(CommandHandler("debug", self._on_debug))
+        self._app.add_handler(CommandHandler("prompt", self._on_prompt))
         # Provider & model management
         self._app.add_handler(CommandHandler("newprovider", self._on_newprovider))
         self._app.add_handler(CommandHandler("newmodel", self._on_newmodel))
@@ -318,6 +331,26 @@ class TelegramChannel(BaseChannel):
             allowed_updates=["message", "callback_query"],
             drop_pending_updates=True  # Ignore old messages on startup
         )
+
+        # Check for post-restart notification
+        restart_file = Path("/tmp/nanobot_restart.json")
+        if restart_file.exists():
+            try:
+                import json as _json
+                info = _json.loads(restart_file.read_text())
+                chat_id = info.get("chat_id")
+                ts = info.get("ts", "?")
+                if chat_id:
+                    import time as _time
+                    boot_time = _time.strftime("%H:%M:%S")
+                    await self._app.bot.send_message(
+                        chat_id=int(chat_id),
+                        text=f"✅ 重启完成\n请求时间: {ts}\n启动时间: {boot_time}",
+                    )
+            except Exception as e:
+                logger.warning("Failed to send restart notification: {}", e)
+            finally:
+                restart_file.unlink(missing_ok=True)
 
         # Keep running until stopped
         while self._running:
@@ -521,6 +554,7 @@ class TelegramChannel(BaseChannel):
             "/speedtest — 提供商测速\n\n"
             "📊 日志 & 调试：\n"
             "/log — 查看 LLM 调用记录 (tokens/延迟/工具)\n"
+            "/prompt [agent] — 查看/编辑/排序提示词组件\n"
             "/summary — 生成对话总结\n\n"
             "💡 加入 agent 后直接发消息即可对话\n"
             "2+ agent 自动进入群聊模式"
@@ -529,11 +563,47 @@ class TelegramChannel(BaseChannel):
     # ── Agent Management Commands ────────────────────────────
 
     def _ensure_gc_send(self, chat_id: str) -> None:
-        """Ensure the group chat engine has a send callback for this chat."""
+        """Ensure the group chat engine has send/edit callbacks for this chat."""
         if self._groupchat_engine and not self._groupchat_engine._send_fn:
             async def send_fn(text: str) -> None:
                 await self._gc_send(chat_id, text)
             self._groupchat_engine.set_send_fn(send_fn)
+
+        if self._groupchat_engine and not self._groupchat_engine._edit_fn:
+            int_chat_id = int(chat_id)
+
+            async def send_and_get_id_fn(text: str) -> int | None:
+                """Send a message and return its message_id for later editing."""
+                if not self._app:
+                    return None
+                try:
+                    msg = await self._app.bot.send_message(
+                        chat_id=int_chat_id, text=text,
+                    )
+                    return msg.message_id
+                except Exception as e:
+                    logger.warning("gc_send_and_get_id failed: {}", e)
+                    return None
+
+            async def edit_fn(message_id: int, text: str) -> None:
+                """Edit a previously sent message by ID."""
+                if not self._app:
+                    return
+                try:
+                    await self._app.bot.edit_message_text(
+                        chat_id=int_chat_id,
+                        message_id=message_id,
+                        text=text,
+                    )
+                except Exception as e:
+                    logger.debug("gc_edit failed (likely text unchanged): {}", e)
+
+            self._groupchat_engine.set_edit_fn(edit_fn, send_and_get_id_fn)
+
+        if self._groupchat_engine and not self._groupchat_engine._on_round_done:
+            async def on_round_done() -> None:
+                self._stop_typing(chat_id)
+            self._groupchat_engine.set_on_round_done(on_round_done)
 
     async def _gc_send(self, chat_id: str, text: str) -> None:
         if not self._app:
@@ -736,9 +806,9 @@ class TelegramChannel(BaseChannel):
     def _edit_menu_buttons(self, agent_name: str) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("✏️ 修改名字", callback_data=f"ef:{agent_name}:name")],
-            [InlineKeyboardButton("📝 修改人设", callback_data=f"ef:{agent_name}:persona")],
-            [InlineKeyboardButton("🤖 修改模型", callback_data=f"ef:{agent_name}:model")],
-            [InlineKeyboardButton("🔧 工具设置", callback_data=f"ef:{agent_name}:tools")],
+            [InlineKeyboardButton("📝 修改提示词", callback_data=f"ef:{agent_name}:persona")],
+            [InlineKeyboardButton("🤖 更换模型/提供商", callback_data=f"ef:{agent_name}:model")],
+            [InlineKeyboardButton("🔧 工具权限设置", callback_data=f"ef:{agent_name}:tools")],
             [InlineKeyboardButton("❌ 取消", callback_data=f"ef:{agent_name}:cancel")],
         ])
 
@@ -1140,7 +1210,7 @@ class TelegramChannel(BaseChannel):
                                 InlineKeyboardButton("❌ 全关", callback_data=f"tf:{name}:__all_off")])
                 buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
                 await query.edit_message_text(
-                    f"🔧 {name} 工具设置:",
+                    f"🔧 {name} 工具权限设置:",
                     reply_markup=InlineKeyboardMarkup(buttons)
                 )
                 return
@@ -1258,15 +1328,192 @@ class TelegramChannel(BaseChannel):
                             InlineKeyboardButton("❌ 全关", callback_data=f"tf:{name}:__all_off")])
             buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
             await query.edit_message_text(
-                f"🔧 {name} 工具设置:",
+                f"🔧 {name} 工具权限设置:",
                 reply_markup=InlineKeyboardMarkup(buttons)
             )
 
         elif data.startswith("log_pg:"):
             page = int(data[7:])
             logs = self._groupchat_engine._request_log
-            text, markup = self._build_log_page(logs, page)
+            text, markup = self._build_log_page_v2(logs, page)
             await query.edit_message_text(text, reply_markup=markup)
+
+        elif data.startswith("rlog_pg:"):
+            page = int(data[8:])
+            logs = self._load_request_logs()
+            text, markup = self._build_log_page_v2(logs, page)
+            await query.edit_message_text(text, reply_markup=markup)
+
+        elif data.startswith("rlogs_pg:"):
+            # Search-filtered pagination
+            page = int(data[9:])
+            logs = self._load_request_logs()
+            kw = getattr(self, "_log_search", {}).get(chat_id, "")
+            if kw:
+                logs = self._filter_logs(logs, kw)
+            text, markup = self._build_log_page_v2(logs, page, keyword=kw)
+            await query.edit_message_text(text, reply_markup=markup)
+
+        elif data.startswith("rlogp:"):
+            # Persistent log prompt viewer: rlogp:<idx>:<msg_page>
+            parts = data[6:].split(":")
+            idx = int(parts[0])
+            msg_page = int(parts[1]) if len(parts) > 1 else 0
+            logs = self._load_request_logs()
+            if idx >= len(logs):
+                await query.edit_message_text("⚠️ 记录不存在")
+                return
+            r = logs[idx]
+            msgs = r.get("messages", [])
+            if not msgs:
+                await query.edit_message_text("📭 无消息记录")
+                return
+
+            per_page = 2
+            total_pages = max(1, (len(msgs) + per_page - 1) // per_page)
+            msg_page = max(0, min(msg_page, total_pages - 1))
+            start_m = msg_page * per_page
+            end_m = min(start_m + per_page, len(msgs))
+
+            model_short = (r.get("model") or "?").split("/")[-1][:20]
+            lines = [f"📝 请求内容 #{idx+1} {model_short} (第{msg_page+1}/{total_pages}页, 共{len(msgs)}条消息)\n"]
+            for mi in range(start_m, end_m):
+                m = msgs[mi]
+                role = m.get("role", "?")
+                name = m.get("name", "")
+                c_len = m.get("content_len", 0)
+                content = m.get("content")
+                tc_id = m.get("tool_call_id", "")
+                name_str = f" [{name}]" if name else ""
+                tc_str = f" tcid={tc_id[:9]}" if tc_id else ""
+                lines.append(f"── [{mi+1}] {role}{name_str} ({c_len}字){tc_str} ──")
+                if isinstance(content, str) and content:
+                    lines.append(content[:800])
+                    if len(content) > 800:
+                        lines.append(f"…(还有{len(content)-800}字)")
+                elif isinstance(content, list):
+                    # Content blocks
+                    for block in content[:3]:
+                        if isinstance(block, dict):
+                            lines.append(str(block.get("text", ""))[:400])
+                elif content is None:
+                    lines.append("(null)")
+                else:
+                    lines.append("(空)")
+                if m.get("tool_calls"):
+                    tc_list = m["tool_calls"]
+                    for tc in (tc_list if isinstance(tc_list, list) else []):
+                        fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                        lines.append(f"  🔧 {fn.get('name', '?')}({str(fn.get('arguments', ''))[:100]})")
+                lines.append("")
+
+            text = "\n".join(lines)
+            nav = []
+            if msg_page > 0:
+                nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"rlogp:{idx}:{msg_page-1}"))
+            if msg_page < total_pages - 1:
+                nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"rlogp:{idx}:{msg_page+1}"))
+            buttons = []
+            if nav:
+                buttons.append(nav)
+            buttons.append([InlineKeyboardButton("⬅️ 返回详情", callback_data=f"rlog:{idx}")])
+            await query.edit_message_text(text[:4096], reply_markup=InlineKeyboardMarkup(buttons))
+
+        elif data.startswith("rlog:"):
+            # Persistent log detail view
+            idx = int(data[5:])
+            logs = self._load_request_logs()
+            if idx >= len(logs):
+                await query.edit_message_text("⚠️ 记录不存在")
+                return
+            r = logs[idx]
+
+            def _trunc(s: str, limit: int) -> str:
+                if len(s) <= limit:
+                    return s
+                return s[:limit] + f"…(还有{len(s)-limit}字)"
+
+            model = r.get("model", "?")
+            agent = r.get("agent") or "?"
+            session = r.get("session") or "?"
+            topic = r.get("topic") or ""
+            mode = r.get("mode") or "?"
+            lines = [
+                f"--- 请求 #{idx+1} ---",
+                f"agent={agent} mode={mode}",
+                f"session={session}",
+            ]
+            if topic:
+                lines.append(f"topic={topic}")
+            lines += [
+                f"model={model}",
+                f"api_base={r.get('api_base', '(default)')}",
+                f"ts={r.get('ts', '?')} latency={r.get('latency', 0)}s",
+                f"max_tokens={r.get('max_tokens', '?')} stream={'是' if r.get('stream') else '否'}",
+                f"status={'✅ 成功' if r.get('status') == 'ok' else '❌ 失败'}",
+            ]
+
+            # Params
+            params = r.get("params", {})
+            if params:
+                ps = " ".join(f"{k}={v}" for k, v in params.items() if v is not None)
+                if ps:
+                    lines.append(f"params: {ps}")
+
+            # Messages summary
+            msgs = r.get("messages", [])
+            if msgs:
+                role_counts: dict[str, int] = {}
+                for m in msgs:
+                    rl = m.get("role", "?")
+                    role_counts[rl] = role_counts.get(rl, 0) + 1
+                rc_str = " ".join(f"{rl}={c}" for rl, c in role_counts.items())
+                lines.append(f"msgs: {len(msgs)} ({rc_str}) total={r.get('total_chars', 0)}字")
+
+            # Tools
+            tc_count = r.get("tools_count", 0)
+            if tc_count:
+                lines.append(f"tools_count: {tc_count}")
+
+            # Usage
+            usage = r.get("usage", {})
+            if usage:
+                lines.append(
+                    f"tokens: prompt={usage.get('prompt', 0)} "
+                    f"compl={usage.get('completion', 0)} "
+                    f"total={usage.get('total', 0)}"
+                )
+
+            # Response
+            reply_len = r.get("reply_len", 0)
+            finish = r.get("finish_reason", "")
+            lines.append(f"reply: {reply_len}字 finish={finish}")
+
+            if r.get("has_tool_calls"):
+                tc_list = r.get("reply_tool_calls", [])
+                for tc in tc_list[:5]:
+                    lines.append(f"  🔧 {tc.get('name', '?')} args={tc.get('args_len', tc.get('args_preview', '?'))}")
+
+            # Reply preview
+            preview = r.get("reply_preview", "")
+            if preview:
+                lines.append(f"\n[回复预览]\n{_trunc(preview, 300)}")
+
+            # Error
+            if r.get("error"):
+                lines.append(f"\n[错误] {r.get('error_type', '?')}")
+                lines.append(_trunc(r["error"], 300))
+                sc = r.get("status_code")
+                if sc:
+                    lines.append(f"http_status={sc}")
+
+            text = "\n".join(lines)
+            page = idx // 8
+            buttons = []
+            if msgs:
+                buttons.append([InlineKeyboardButton("📝 完整请求内容", callback_data=f"rlogp:{idx}:0")])
+            buttons.append([InlineKeyboardButton("⬅️ 返回列表", callback_data=f"rlog_pg:{page}")])
+            await query.edit_message_text(text[:4096], reply_markup=InlineKeyboardMarkup(buttons))
 
         elif data.startswith("logd:"):
             idx = int(data[5:])
@@ -1286,60 +1533,152 @@ class TelegramChannel(BaseChannel):
                 return s[:limit] + f"…(还有{len(s)-limit}字)"
 
             lines = [
-                f"📊 LLM 调用 #{idx+1} 详情\n",
-                f"👤 Agent: {r.get('agent', '?')}",
-                f"🤖 Model: {r.get('model', '?')}",
-                f"📌 Mode: {r.get('mode', '?')}",
-                f"🕐 Time: {r.get('time', '?')} (CST)",
-                f"⏱ Latency: {r.get('latency', 0)}s",
-                f"🔄 Iterations: {r.get('iterations', 1)}",
-                f"\n📊 Tokens:",
-                f"  Prompt: {tokens.get('prompt', 0)}",
-                f"  Completion: {tokens.get('completion', 0)}",
-                f"  Total: {tokens.get('total', 0)}",
+                f"--- LLM Call #{idx+1} ---",
+                f"agent={r.get('agent','?')} model={r.get('model','?')} mode={r.get('mode','?')}",
+                f"time={r.get('time','?')} latency={r.get('latency',0)}s iter={r.get('iterations',1)} max_tokens={r.get('max_tokens','?')}",
+                f"tokens: prompt={tokens.get('prompt',0)} compl={tokens.get('completion',0)} total={tokens.get('total',0)}",
             ]
-            if tools:
-                lines.append(f"\n🔧 Tools: {', '.join(tools)}")
+
+            # Show HTTP status code if error
+            sc = r.get("status_code")
+            if sc:
+                lines.append(f"http_status={sc}")
+
+            # Sampling params — compact single line
+            sp = r.get("sampling_params", {})
+            if sp:
+                sp_str = " ".join(f"{k}={v}" for k, v in sp.items() if v)
+                if sp_str:
+                    lines.append(f"params: {sp_str}")
+
+            # Tools
+            tools_avail = r.get("tools_available")
+            tool_names_list = r.get("tool_names", [])
+            if tools_avail is not None:
+                lines.append(f"tools: {','.join(tool_names_list) if tool_names_list else 'none'} | used: {','.join(tools) if tools else 'none'}")
+
+            # Messages summary — compact
+            msgs_snap = r.get("messages_snapshot", [])
+            if msgs_snap:
+                role_counts = {}
+                for m in msgs_snap:
+                    role = m.get("role", "?")
+                    role_counts[role] = role_counts.get(role, 0) + 1
+                total_chars = sum(m.get("content_len", 0) for m in msgs_snap)
+                rc_str = " ".join(f"{r}={c}" for r, c in role_counts.items())
+                lines.append(f"msgs: {len(msgs_snap)} ({rc_str}) chars={total_chars}")
+
+            # Per-iteration with retry details
+            if calls:
+                lines.append("\n[iterations]")
+                for c in calls[:10]:
+                    t = c.get("tools", [])
+                    t_str = f" tools=[{','.join(t)}]" if t else ""
+                    tok = c.get("tokens", {}).get("total_tokens", 0)
+                    lines.append(
+                        f"  i{c['iter']}: {c.get('latency',0)}s {tok}tok "
+                        f"finish={c.get('finish','?')}{t_str}"
+                    )
+                    # Per-retry details
+                    rl = c.get("retry_log", [])
+                    for ra in rl:
+                        lines.append(
+                            f"    retry#{ra['attempt']} [{ra.get('ts','')}] "
+                            f"HTTP {ra.get('status','?')} wait={ra.get('delay',0)}s "
+                            f"err={_trunc(ra.get('error',''), 80)}"
+                        )
+
             # Tool call details
             tcd = r.get("tool_calls_detail", [])
             if tcd:
-                lines.append(f"\n📋 工具调用 ({len(tcd)}):")
-                for i, tc in enumerate(tcd[:8]):
-                    lines.append(f"  {i+1}. {tc['name']}({_trunc(tc.get('args',''), 100)})")
-                    rlen = tc.get('result_len', 0)
-                    rp = tc.get('result_preview', '')
-                    if rp:
-                        lines.append(f"     → {_trunc(rp.replace(chr(10), ' '), 120)} ({rlen}字)")
-                if len(tcd) > 8:
-                    lines.append(f"  ...还有{len(tcd)-8}个调用")
-            elif calls:
-                lines.append("\n📋 Per-iteration:")
-                for c in calls[:10]:
-                    t = c.get("tools", [])
-                    t_str = f" → {','.join(t)}" if t else ""
-                    lines.append(
-                        f"  i{c['iter']}: {c.get('latency',0)}s "
-                        f"{c.get('tokens',{}).get('total_tokens',0)}tok "
-                        f"[{c.get('finish','?')}]{t_str}"
-                    )
-            # Input/Output preview
+                lines.append(f"\n[tool_calls] ({len(tcd)})")
+                for i, tc in enumerate(tcd[:10]):
+                    ts = tc.get("timestamp", "")
+                    dur = tc.get("duration", "?")
+                    ok = tc.get("success", True)
+                    status = "OK" if ok else "FAIL"
+                    lines.append(f"  {i+1}. [{ts}] {tc['name']} i{tc.get('iteration','?')} {dur}s {status}")
+                    lines.append(f"     args={_trunc(tc.get('args',''), 100)}")
+                    if ok:
+                        rp = tc.get('result_preview', '')
+                        if rp:
+                            lines.append(f"     => {_trunc(rp.replace(chr(10), ' '), 100)} ({tc.get('result_len',0)}字)")
+                    else:
+                        lines.append(f"     err={_trunc(tc.get('error',''), 120)}")
+                if len(tcd) > 10:
+                    lines.append(f"  ...+{len(tcd)-10} more")
+
+            # I/O
             inp = r.get("input_preview", "")
             out = r.get("output", "")
             if inp:
-                lines.append(f"\n📥 Input: {_trunc(inp, 200)}")
+                lines.append(f"\n[input] {_trunc(inp, 200)}")
             if out:
-                full_len = r.get("reply_len", len(out))
-                lines.append(f"\n📤 Output: {_trunc(out, 300)}")
+                lines.append(f"[output] {_trunc(out, 300)}")
             if r.get("error"):
-                lines.append(f"\n❌ Error: {_trunc(r['error'], 300)}")
-            lines.append(f"\n📏 Reply: {r.get('reply_len', 0)} chars")
+                lines.append(f"[error] {_trunc(r['error'], 300)}")
+            lines.append(f"reply_len={r.get('reply_len', 0)}")
             text = "\n".join(lines)
-            page = idx // 10
+            page = idx // 8
+            buttons = []
+            if msgs_snap:
+                buttons.append([InlineKeyboardButton("📝 完整 Prompt", callback_data=f"logp:{idx}:0")])
+            buttons.append([InlineKeyboardButton("⬅️ 返回列表", callback_data=f"log_pg:{page}")])
             await query.edit_message_text(
                 text[:4096],
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("⬅️ 返回列表", callback_data=f"log_pg:{page}")]
-                ])
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
+
+        elif data.startswith("logp:"):
+            # Prompt detail viewer: logp:<log_idx>:<msg_page>
+            parts = data[5:].split(":")
+            idx = int(parts[0])
+            msg_page = int(parts[1]) if len(parts) > 1 else 0
+            logs = self._groupchat_engine._request_log
+            if idx >= len(logs):
+                await query.edit_message_text("⚠️ 记录不存在")
+                return
+            r = logs[idx]
+            msgs_snap = r.get("messages_snapshot", [])
+            if not msgs_snap:
+                await query.edit_message_text("📭 无消息记录")
+                return
+
+            per_page = 3  # messages per page
+            total_pages = max(1, (len(msgs_snap) + per_page - 1) // per_page)
+            msg_page = max(0, min(msg_page, total_pages - 1))
+            start = msg_page * per_page
+            end = min(start + per_page, len(msgs_snap))
+
+            lines = [f"📝 Prompt 详情 #{idx+1} (第{msg_page+1}/{total_pages}页, 共{len(msgs_snap)}条消息)\n"]
+            for i in range(start, end):
+                m = msgs_snap[i]
+                role = m.get("role", "?")
+                name = m.get("name", "")
+                content_len = m.get("content_len", 0)
+                content = m.get("content", "")
+                name_str = f" [{name}]" if name else ""
+                lines.append(f"── [{i+1}] {role}{name_str} ({content_len}字) ──")
+                # Show content, truncated to fit in Telegram
+                if content:
+                    lines.append(content[:800])
+                else:
+                    lines.append("(空)")
+                lines.append("")
+
+            text = "\n".join(lines)
+            nav = []
+            if msg_page > 0:
+                nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"logp:{idx}:{msg_page-1}"))
+            if msg_page < total_pages - 1:
+                nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"logp:{idx}:{msg_page+1}"))
+            buttons = []
+            if nav:
+                buttons.append(nav)
+            buttons.append([InlineKeyboardButton("⬅️ 返回详情", callback_data=f"logd:{idx}")])
+            await query.edit_message_text(
+                text[:4096],
+                reply_markup=InlineKeyboardMarkup(buttons)
             )
 
         elif data.startswith("sl:"):
@@ -1442,6 +1781,140 @@ class TelegramChannel(BaseChannel):
                 # Refresh keyboard
                 await query.edit_message_text("📢 更新中...")
                 await self._send_order_keyboard(chat_id, self._groupchat_engine.active_agents)
+
+        # ── Prompt orchestration callbacks ──
+        elif data.startswith("pr:"):
+            # Refresh global prompt order view
+            await self._prompt_show_components(query)
+
+        elif data.startswith("pre:"):
+            # Edit global template: pre:__global__:component_key
+            parts = data[4:].split(":", 1)
+            if len(parts) == 2:
+                _, key = parts
+                engine = self._groupchat_engine
+                overrides = engine._load_prompt_overrides("__global__")
+                content = overrides.get(key) or engine._get_component_template(key)
+                label = engine._COMPONENT_LABELS.get(key, key)
+                self._edit_state[chat_id] = {"field": "prompt_edit", "agent": "__global__", "key": key}
+                preview = (content[:3500] + "…") if len(content) > 3500 else (content or "(空)")
+                await query.edit_message_text(
+                    f"✏️ 编辑全局模板 - {label}\n\n"
+                    f"当前内容 ({len(content or '')}字):\n"
+                    f"{preview}\n\n"
+                    f"💡 模板变量: {{{{agent}}}} {{{{members}}}} {{{{datetime}}}} {{{{round}}}} {{{{tools}}}} {{{{others}}}}\n"
+                    f"请回复新内容 (完整替换):",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("❌ 取消", callback_data="prcan")]
+                    ]),
+                )
+
+        elif data == "prcan":
+            # Cancel edit
+            self._edit_state.pop(chat_id, None)
+            await self._prompt_show_components(query)
+
+        elif data.startswith("pru:") or data.startswith("prd:"):
+            # Move component up/down: pru:<idx> or prd:<idx>
+            direction = -1 if data.startswith("pru:") else 1
+            idx = int(data[4:])
+            engine = self._groupchat_engine
+            order = engine.get_agent_prompt_order()
+            new_idx = idx + direction
+            if 0 <= new_idx < len(order):
+                order[idx], order[new_idx] = order[new_idx], order[idx]
+                engine.set_default_prompt_order(order)
+            await self._prompt_show_components(query)
+
+        elif data.startswith("prdel:"):
+            # Delete component: prdel:<idx>
+            idx = int(data[6:])
+            engine = self._groupchat_engine
+            result = engine.remove_prompt_component(idx)
+            await query.answer(result, show_alert=True)
+            await self._prompt_show_components(query)
+
+        elif data == "pradd":
+            # Show available components to add back
+            engine = self._groupchat_engine
+            available = engine.get_available_components()
+            if not available:
+                await query.answer("所有组件已在列表中", show_alert=True)
+                return
+            buttons = []
+            labels = engine._COMPONENT_LABELS
+            for key in available:
+                buttons.append([InlineKeyboardButton(
+                    f"➕ {labels.get(key, key)}",
+                    callback_data=f"pradd:{key}"
+                )])
+            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="pr:refresh")])
+            await query.edit_message_text(
+                "➕ 选择要添加的组件:",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+
+        elif data.startswith("pradd:"):
+            # Add component back: pradd:<key>
+            key = data[6:]
+            engine = self._groupchat_engine
+            order = engine.get_agent_prompt_order()
+            if key not in order:
+                order.append(key)
+                engine.set_default_prompt_order(order)
+            await self._prompt_show_components(query)
+
+        elif data.startswith("prv:"):
+            # Preview full template: prv:<page>
+            page = int(data[4:])
+            engine = self._groupchat_engine
+            order = engine.get_agent_prompt_order()
+            overrides = engine._load_prompt_overrides("__global__")
+            labels = engine._COMPONENT_LABELS
+
+            lines: list[str] = []
+            # Dynamic components show markers instead of placeholder text
+            dynamic_markers = {
+                "persona": "(→ 运行时加载每个 agent 的 SOUL.md)",
+                "history": "(→ 运行时自动插入聊天记录)",
+            }
+            for i, key in enumerate(order):
+                label = labels.get(key, key)
+                if key in dynamic_markers:
+                    lines.append(f"═══ [{i+1}] {label} ═══")
+                    lines.append(dynamic_markers[key])
+                    lines.append("")
+                    continue
+                tpl = overrides.get(key) or engine._get_component_template(key)
+                if not tpl:
+                    continue
+                lines.append(f"═══ [{i+1}] {label} ({len(tpl)}字) ═══")
+                preview = tpl[:400]
+                if len(tpl) > 400:
+                    preview += "…"
+                lines.append(preview)
+                lines.append("")
+
+            full_text = "\n".join(lines)
+            page_size = 3500
+            total_pages = max(1, (len(full_text) + page_size - 1) // page_size)
+            start = page * page_size
+            end = min(start + page_size, len(full_text))
+            page_text = f"🔍 全局 Prompt 模板预览 (第{page+1}/{total_pages}页)\n\n" + full_text[start:end]
+
+            nav = []
+            if page > 0:
+                nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"prv:{page-1}"))
+            if page < total_pages - 1:
+                nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"prv:{page+1}"))
+            buttons = []
+            if nav:
+                buttons.append(nav)
+            buttons.append([InlineKeyboardButton("⬅️ 返回组件列表", callback_data="pr:refresh")])
+            await query.edit_message_text(
+                page_text[:4096],
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
 
         # ── Provider/Model management callbacks ──
         elif data == "pm_cancel":
@@ -1589,16 +2062,20 @@ class TelegramChannel(BaseChannel):
             info = pm.get("providers", {}).get(prov, {})
             url = info.get("url", "?")
             key_preview = info.get("apiKey", "")[:8] + "..." if info.get("apiKey") else "(none)"
+            retry = info.get("retryDelays", [1, 2, 4])
+            retry_str = f"{len(retry)}次 ({','.join(str(d) for d in retry)}s)"
             buttons = [
                 [InlineKeyboardButton("🔗 修改 URL", callback_data=f"ep_field:{prov}:url")],
                 [InlineKeyboardButton("🔑 修改 API Key", callback_data=f"ep_field:{prov}:key")],
+                [InlineKeyboardButton(f"🔄 重试策略: {retry_str}", callback_data=f"ep_retry:{prov}")],
                 [InlineKeyboardButton("📋 拉取模型列表", callback_data=f"ep_models:{prov}")],
                 [InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")],
             ]
             await query.edit_message_text(
                 f"✏️ 编辑提供商: {prov}\n\n"
                 f"🔗 URL: {url}\n"
-                f"🔑 Key: {key_preview}",
+                f"🔑 Key: {key_preview}\n"
+                f"🔄 重试: {retry_str}",
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
 
@@ -1608,6 +2085,55 @@ class TelegramChannel(BaseChannel):
             self._edit_state[chat_id] = {"field": f"ep_{fld}", "mode": "pm", "prov_name": prov}
             prompts = {"url": "请输入新的 API Base URL:", "key": "请输入新的 API Key:"}
             await query.edit_message_text(f"✏️ {prov} — {prompts.get(fld, fld)}")
+
+        elif data.startswith("ep_retry:"):
+            prov = data[9:]
+            # Show retry presets
+            presets = {
+                "std": ("标准 3次", [1, 2, 4]),
+                "strong": ("加强 5次", [1, 2, 4, 8, 16]),
+                "max": ("极限 7次", [1, 2, 4, 8, 16, 32, 60]),
+            }
+            pm = self._load_pm()
+            current = pm.get("providers", {}).get(prov, {}).get("retryDelays", [1, 2, 4])
+            current_str = f"{len(current)}次 ({','.join(str(d) for d in current)}s)"
+            buttons = []
+            for key, (label, delays) in presets.items():
+                mark = " ✓" if delays == current else ""
+                buttons.append([InlineKeyboardButton(
+                    f"🔄 {label} ({','.join(str(d) for d in delays)}s){mark}",
+                    callback_data=f"ep_retry_set:{prov}:{key}",
+                )])
+            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")])
+            await query.edit_message_text(
+                f"🔄 {prov} 重试策略\n\n"
+                f"当前: {current_str}\n\n"
+                f"选择预设:",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+
+        elif data.startswith("ep_retry_set:"):
+            parts = data.split(":", 2)
+            prov, preset = parts[1], parts[2]
+            presets = {
+                "std": [1, 2, 4],
+                "strong": [1, 2, 4, 8, 16],
+                "max": [1, 2, 4, 8, 16, 32, 60],
+            }
+            delays = presets.get(preset, [1, 2, 4])
+            pm = self._load_pm()
+            if prov in pm.get("providers", {}):
+                pm["providers"][prov]["retryDelays"] = delays
+                self._save_pm(pm)
+            # Apply to live provider
+            engine = self._groupchat_engine
+            if engine and hasattr(engine, "provider"):
+                engine.provider._retry_delays = tuple(delays)
+            await query.edit_message_text(
+                f"✅ {prov} 重试策略已更新!\n"
+                f"🔄 {len(delays)}次重试 ({','.join(str(d) for d in delays)}s)\n\n"
+                f"总等待时间: {sum(delays)}s"
+            )
 
         elif data.startswith("ep_models:"):
             prov = data[10:]
@@ -1823,6 +2349,17 @@ class TelegramChannel(BaseChannel):
                 text="\n".join(lines)[:4000],
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
+            return
+
+        # Handle prompt_edit (from /prompt → edit component)
+        if state.get("field") == "prompt_edit":
+            del self._edit_state[chat_id]
+            agent_name = state.get("agent", "")
+            key = state.get("key", "")
+            engine = self._groupchat_engine
+            if engine:
+                result = engine.update_prompt_component(agent_name, key, content.strip())
+                await self._gc_send(chat_id, result)
             return
 
         field = state["field"]
@@ -2124,25 +2661,39 @@ class TelegramChannel(BaseChannel):
         await update.message.reply_text("⏹ 所有 agent 已移除")
 
     async def _on_restart(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Hard reset: stop everything, clear all state."""
+        """Hard restart: save state, spawn new process, terminate current."""
         if not update.message or not update.effective_user:
             return
         if not self.is_allowed(self._sender_id(update.effective_user)):
             return
+        import json as _json
+        import subprocess
+        import sys
+        import time as _time
+
         chat_id = str(update.message.chat_id)
-        # Clear edit state
-        self._edit_state.pop(chat_id, None)
-        if self._groupchat_engine:
-            # Stop group loop
-            self._groupchat_engine._stop_group_loop()
-            # Clear runtime state but keep send_fn and registry
-            self._groupchat_engine._active_agents.clear()
-            self._groupchat_engine._history.clear()
-            self._groupchat_engine._request_log.clear()
-            self._groupchat_engine._input_queue = __import__('asyncio').Queue()
-            self._groupchat_engine._topic = ""
-            self._groupchat_engine._running = False
-        await update.message.reply_text("🔄 系统已重置\n所有状态已清空，可以重新开始")
+        ts = _time.strftime("%H:%M:%S")
+
+        # Save restart notification info
+        Path("/tmp/nanobot_restart.json").write_text(
+            _json.dumps({"chat_id": chat_id, "ts": ts})
+        )
+
+        await update.message.reply_text(f"🔄 正在重启...\n请求时间: {ts}")
+
+        # Spawn new process
+        subprocess.Popen(
+            ["nanobot", "gateway"],
+            cwd=str(Path.home() / ".nanobot"),
+            start_new_session=True,
+            stdout=open("/tmp/nanobot.log", "w"),
+            stderr=subprocess.STDOUT,
+        )
+
+        # Give new process a moment to start, then exit
+        await asyncio.sleep(1)
+        import os
+        os._exit(0)
 
     async def _on_debug(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show comprehensive internal state for debugging."""
@@ -2156,6 +2707,11 @@ class TelegramChannel(BaseChannel):
             lines.append("⚠️ 群聊引擎未初始化")
             await update.message.reply_text("\n".join(lines))
             return
+
+        # Toggle debug context logging
+        engine._debug_context = not engine._debug_context
+        lines.append(f"🔬 上下文日志: {'✅ 已开启' if engine._debug_context else '❌ 已关闭'}")
+        lines.append("")
 
         # Engine state
         lines.append("⚙️ 引擎状态:")
@@ -2233,6 +2789,76 @@ class TelegramChannel(BaseChannel):
 
         text = "\n".join(lines)
         await update.message.reply_text(text[:4096])
+
+    # ── Prompt Orchestration ────────────────────────────────
+
+    async def _on_prompt(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /prompt command: view/edit prompt components per agent."""
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+
+        engine = self._groupchat_engine
+        if not engine:
+            await update.message.reply_text("⚠️ 群聊引擎未初始化")
+            return
+
+        # Directly show global component order editor
+        text, markup = self._build_prompt_order_view(engine)
+        await update.message.reply_text(text, reply_markup=markup)
+
+    def _build_prompt_order_view(self, engine) -> tuple[str, "InlineKeyboardMarkup"]:
+        """Build the global prompt component order view with edit/reorder buttons."""
+        order = engine.get_agent_prompt_order()
+        overrides = engine._load_prompt_overrides("__global__")
+        labels = engine._COMPONENT_LABELS
+        global_editable = engine._GLOBAL_EDITABLE
+        agent_editable = engine._AGENT_EDITABLE
+
+        lines = ["📝 提示词组件编排 (全局)\n"]
+        for i, key in enumerate(order):
+            if key in global_editable:
+                icon = "✏️"
+            elif key in agent_editable:
+                icon = "📂"
+            else:
+                icon = "🔒"
+            label = labels.get(key, key)
+            tpl = overrides.get(key) or engine._get_component_template(key)
+            preview = f" — {len(tpl)}字" if tpl else ""
+            lines.append(f"{i+1}. {icon} {label}{preview}")
+        lines.append(f"\n✏️ = 全局模板  📂 = 每个agent独立 (/editagent)  🔒 = 自动生成")
+        lines.append("💡 变量: {{agent}} {{members}} {{datetime}} {{round}} {{tools}} {{others}}")
+
+        buttons = []
+        for i, key in enumerate(order):
+            row = []
+            if key in global_editable:
+                row.append(InlineKeyboardButton(f"✏️ {key}", callback_data=f"pre:__global__:{key}"))
+            elif key in agent_editable:
+                row.append(InlineKeyboardButton(f"📂 {key}", callback_data="pr:refresh"))
+            else:
+                row.append(InlineKeyboardButton(f"🔒 {key}", callback_data="pr:refresh"))
+            if i > 0:
+                row.append(InlineKeyboardButton("⬆️", callback_data=f"pru:{i}"))
+            if i < len(order) - 1:
+                row.append(InlineKeyboardButton("⬇️", callback_data=f"prd:{i}"))
+            # Delete button (history cannot be removed)
+            if key != "history":
+                row.append(InlineKeyboardButton("❌", callback_data=f"prdel:{i}"))
+            buttons.append(row)
+        bottom_row = [InlineKeyboardButton("🔍 预览", callback_data="prv:0")]
+        if engine.get_available_components():
+            bottom_row.insert(0, InlineKeyboardButton("➕ 添加组件", callback_data="pradd"))
+        buttons.append(bottom_row)
+        return "\n".join(lines), InlineKeyboardMarkup(buttons)
+
+    async def _prompt_show_components(self, query) -> None:
+        """Helper: refresh global prompt order view via callback."""
+        engine = self._groupchat_engine
+        text, markup = self._build_prompt_order_view(engine)
+        await query.edit_message_text(text[:4096], reply_markup=markup)
 
     # ── Group Config Commands ───────────────────────────────
 
@@ -2356,26 +2982,89 @@ class TelegramChannel(BaseChannel):
         )
 
     async def _on_log(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Show LLM call records (Langfuse-style) with pagination."""
+        """Show persistent LLM request logs with session grouping and search.
+
+        Usage: /log          — browse all logs (last page first)
+               /log <keyword> — search logs by keyword
+        """
         if not update.message or not update.effective_user:
             return
         if not self.is_allowed(self._sender_id(update.effective_user)):
             return
-        if not self._groupchat_engine:
-            await update.message.reply_text("📭 无日志")
-            return
-        logs = self._groupchat_engine._request_log
+
+        keyword = " ".join(context.args).strip() if context.args else ""
+        chat_id = str(update.message.chat_id)
+
+        logs = self._load_request_logs()
         if not logs:
-            await update.message.reply_text("📭 当前会话无 LLM 调用记录")
+            await update.message.reply_text("📭 无 LLM 调用记录\n(记录保存在 ~/.nanobot/request_logs/)")
             return
-        # Show last page
-        page = max(0, (len(logs) - 1) // 10)
-        text, markup = self._build_log_page(logs, page)
+
+        if keyword:
+            # Store search keyword for callback pagination
+            if not hasattr(self, "_log_search"):
+                self._log_search: dict[str, str] = {}
+            self._log_search[chat_id] = keyword
+            logs = self._filter_logs(logs, keyword)
+            if not logs:
+                await update.message.reply_text(f"🔍 未找到匹配「{keyword}」的记录")
+                return
+
+        # Show LAST page first (newest entries)
+        total_pages = max(1, (len(logs) + 7) // 8)
+        page = total_pages - 1
+        text, markup = self._build_log_page_v2(logs, page, keyword=keyword)
         await update.message.reply_text(text, reply_markup=markup)
 
-    def _build_log_page(self, logs: list, page: int):
-        """Build a log page (10 items per page)."""
-        per_page = 10
+    @staticmethod
+    def _load_request_logs(max_lines: int = 500) -> list[dict]:
+        """Load recent request logs from JSONL files."""
+        import json as _json
+        log_dir = Path.home() / ".nanobot" / "request_logs"
+        if not log_dir.exists():
+            return []
+        files = sorted(log_dir.glob("*.jsonl"), reverse=True)
+        logs: list[dict] = []
+        for f in files:
+            try:
+                file_lines = f.read_text(encoding="utf-8").strip().split("\n")
+                for line in reversed(file_lines):
+                    if line.strip():
+                        try:
+                            logs.append(_json.loads(line))
+                        except Exception:
+                            pass
+                    if len(logs) >= max_lines:
+                        break
+            except Exception:
+                pass
+            if len(logs) >= max_lines:
+                break
+        logs.reverse()
+        return logs
+
+    @staticmethod
+    def _filter_logs(logs: list[dict], keyword: str) -> list[dict]:
+        """Filter logs by keyword across agent, model, topic, reply_preview, error."""
+        kw = keyword.lower()
+        filtered = []
+        for r in logs:
+            searchable = " ".join([
+                r.get("agent") or "",
+                r.get("model") or "",
+                r.get("topic") or "",
+                r.get("session") or "",
+                r.get("reply_preview") or "",
+                r.get("error") or "",
+                r.get("mode") or "",
+            ]).lower()
+            if kw in searchable:
+                filtered.append(r)
+        return filtered
+
+    def _build_log_page_v2(self, logs: list[dict], page: int, keyword: str = ""):
+        """Build a log page grouped by session, 8 items per page."""
+        per_page = 8
         total = len(logs)
         total_pages = max(1, (total + per_page - 1) // per_page)
         page = max(0, min(page, total_pages - 1))
@@ -2383,36 +3072,54 @@ class TelegramChannel(BaseChannel):
         end = min(start + per_page, total)
         page_logs = logs[start:end]
 
-        lines = [f"📊 LLM 调用记录 (第{page+1}/{total_pages}页, 共{total}条):\n"]
+        header = f"📊 LLM 请求日志 (第{page+1}/{total_pages}页, 共{total}条)"
+        if keyword:
+            header += f"\n🔍 关键词: {keyword}"
+        lines = [header + "\n"]
+
         buttons = []
+        last_session = None
         for i, r in enumerate(page_logs):
             idx = start + i
-            agent = r.get("agent", "?")
-            model = r.get("model", "?").split("/")[-1][:15]
-            tokens = r.get("tokens", {})
-            total_tok = tokens.get("total", 0)
+            # Session separator
+            session = r.get("session") or "unknown"
+            if session != last_session:
+                topic = r.get("topic") or ""
+                mode = r.get("mode") or ""
+                mode_icon = "👤" if mode == "direct" else "👥"
+                topic_str = f" — {topic}" if topic else ""
+                lines.append(f"━━ {mode_icon} {session}{topic_str} ━━")
+                last_session = session
+
+            # Entry line
+            agent = r.get("agent") or "?"
+            model = (r.get("model") or "?").split("/")[-1][:18]
+            status = "❌" if r.get("status") == "error" else "✅"
             latency = r.get("latency", 0)
-            iters = r.get("iterations", 1)
-            tools = r.get("tools", [])
-            error = r.get("error")
-            status = "❌" if error else "✅"
-            tool_str = f" 🔧×{len(tools)}" if tools else ""
+            ts = (r.get("ts") or "")[-8:]  # HH:MM:SS
+            usage = r.get("usage") or {}
+            total_tok = usage.get("total", 0) or usage.get("total_tokens", 0)
+            has_tc = " 🔧" if r.get("has_tool_calls") else ""
+            stream_icon = "🔄" if r.get("stream") else ""
+
             lines.append(
-                f"{status} #{idx+1} {r.get('time','')} {agent} "
-                f"[{model}] {total_tok}tok {latency}s"
-                f" i{iters}{tool_str}"
+                f"{status} #{idx+1} {ts} {agent} [{model}] "
+                f"{total_tok}tok {latency}s{has_tc}{stream_icon}"
             )
+            # Button: agent + time for easy identification
             buttons.append([InlineKeyboardButton(
-                f"#{idx+1} {agent} — 详情",
-                callback_data=f"logd:{idx}"
+                f"#{idx+1} {ts} {agent} [{model}]",
+                callback_data=f"rlog:{idx}"
             )])
 
-        # Pagination buttons
+        # Pagination
         nav = []
         if page > 0:
-            nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"log_pg:{page-1}"))
+            cb_prefix = "rlogs_pg" if keyword else "rlog_pg"
+            nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"{cb_prefix}:{page-1}"))
         if page < total_pages - 1:
-            nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"log_pg:{page+1}"))
+            cb_prefix = "rlogs_pg" if keyword else "rlog_pg"
+            nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"{cb_prefix}:{page+1}"))
         if nav:
             buttons.append(nav)
 

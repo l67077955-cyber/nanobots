@@ -25,6 +25,8 @@ class LLMResponse:
     usage: dict[str, int] = field(default_factory=dict)
     reasoning_content: str | None = None  # Kimi, DeepSeek-R1 etc.
     thinking_blocks: list[dict] | None = None  # Anthropic extended thinking
+    status_code: int | None = None  # HTTP status code on error
+    retry_log: list[dict[str, Any]] = field(default_factory=list)  # per-attempt records
     
     @property
     def has_tool_calls(self) -> bool:
@@ -55,7 +57,7 @@ class LLMProvider(ABC):
     while maintaining a consistent interface.
     """
 
-    _CHAT_RETRY_DELAYS = (1, 2, 4)
+    _DEFAULT_RETRY_DELAYS = (1, 2, 4)
     _TRANSIENT_ERROR_MARKERS = (
         "429",
         "rate limit",
@@ -73,10 +75,12 @@ class LLMProvider(ABC):
 
     _SENTINEL = object()
 
-    def __init__(self, api_key: str | None = None, api_base: str | None = None):
+    def __init__(self, api_key: str | None = None, api_base: str | None = None,
+                 retry_delays: tuple[int, ...] | None = None):
         self.api_key = api_key
         self.api_base = api_base
         self.generation: GenerationSettings = GenerationSettings()
+        self._retry_delays = retry_delays or self._DEFAULT_RETRY_DELAYS
 
     @staticmethod
     def _sanitize_empty_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -177,6 +181,7 @@ class LLMProvider(ABC):
         max_tokens: object = _SENTINEL,
         temperature: object = _SENTINEL,
         reasoning_effort: object = _SENTINEL,
+        metadata: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """Call chat() with retry on transient provider failures.
 
@@ -191,7 +196,11 @@ class LLMProvider(ABC):
         if reasoning_effort is self._SENTINEL:
             reasoning_effort = self.generation.reasoning_effort
 
-        for attempt, delay in enumerate(self._CHAT_RETRY_DELAYS, start=1):
+        import time as _time
+
+        retry_log: list[dict[str, Any]] = []
+
+        for attempt, delay in enumerate(self._retry_delays, start=1):
             try:
                 response = await self.chat(
                     messages=messages,
@@ -200,45 +209,71 @@ class LLMProvider(ABC):
                     max_tokens=max_tokens,
                     temperature=temperature,
                     reasoning_effort=reasoning_effort,
+                    metadata=metadata,
                 )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                sc = getattr(exc, "status_code", None)
                 response = LLMResponse(
                     content=f"Error calling LLM: {exc}",
                     finish_reason="error",
+                    status_code=sc,
                 )
 
             if response.finish_reason != "error":
+                response.retry_log = retry_log
                 return response
             if not self._is_transient_error(response.content):
+                response.retry_log = retry_log
                 return response
 
-            err = (response.content or "").lower()
+            err_msg = (response.content or "")[:120]
+            retry_log.append({
+                "attempt": attempt,
+                "ts": _time.strftime("%H:%M:%S"),
+                "status": response.status_code,
+                "delay": delay,
+                "error": err_msg,
+            })
             logger.warning(
                 "LLM transient error (attempt {}/{}), retrying in {}s: {}",
                 attempt,
-                len(self._CHAT_RETRY_DELAYS),
+                len(self._retry_delays),
                 delay,
-                err[:120],
+                err_msg,
             )
             await asyncio.sleep(delay)
 
+        # Final attempt after all retries exhausted
         try:
-            return await self.chat(
+            resp = await self.chat(
                 messages=messages,
                 tools=tools,
                 model=model,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 reasoning_effort=reasoning_effort,
+                metadata=metadata,
             )
+            resp.retry_log = retry_log
+            return resp
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            sc = getattr(exc, "status_code", None)
+            retry_log.append({
+                "attempt": len(self._retry_delays) + 1,
+                "ts": _time.strftime("%H:%M:%S"),
+                "status": sc,
+                "delay": 0,
+                "error": str(exc)[:120],
+            })
             return LLMResponse(
                 content=f"Error calling LLM: {exc}",
                 finish_reason="error",
+                status_code=sc,
+                retry_log=retry_log,
             )
 
     @abstractmethod

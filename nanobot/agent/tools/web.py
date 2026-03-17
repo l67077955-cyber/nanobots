@@ -112,34 +112,83 @@ class WebSearchTool(Tool):
 
 
 class WebFetchTool(Tool):
-    """Fetch and extract content from a URL using Readability."""
+    """Fetch and extract content from a URL.
+
+    Uses Jina Reader API (r.jina.ai) for token-optimized markdown extraction.
+    Falls back to python-readability if Jina is unavailable.
+    """
 
     name = "web_fetch"
-    description = "Fetch URL and extract readable content (HTML → markdown/text)."
+    description = "Fetch URL and extract readable content (HTML → clean markdown). Optimized for LLM token efficiency."
     parameters = {
         "type": "object",
         "properties": {
             "url": {"type": "string", "description": "URL to fetch"},
-            "extractMode": {"type": "string", "enum": ["markdown", "text"], "default": "markdown"},
-            "maxChars": {"type": "integer", "minimum": 100}
+            "maxChars": {"type": "integer", "minimum": 100, "description": "Max characters to return (default 20000)"}
         },
         "required": ["url"]
     }
 
-    def __init__(self, max_chars: int = 50000, proxy: str | None = None):
+    # Jina Reader endpoint
+    _JINA_BASE = "https://r.jina.ai/"
+
+    def __init__(self, max_chars: int = 20000, proxy: str | None = None):
         self.max_chars = max_chars
         self.proxy = proxy
 
-    async def execute(self, url: str, extractMode: str = "markdown", maxChars: int | None = None, **kwargs: Any) -> str:
-        from readability import Document
-
+    async def execute(self, url: str, maxChars: int | None = None, **kwargs: Any) -> str:
         max_chars = maxChars or self.max_chars
         is_valid, error_msg = _validate_url(url)
         if not is_valid:
             return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
 
+        # Try Jina Reader first (token-optimized markdown)
+        text = await self._fetch_via_jina(url, max_chars)
+        if text is not None:
+            return json.dumps({"url": url, "text": text}, ensure_ascii=False)
+
+        # Fallback to direct fetch + readability
+        logger.info("Jina Reader failed for {}, falling back to readability", url)
+        return await self._fetch_via_readability(url, max_chars)
+
+    async def _fetch_via_jina(self, url: str, max_chars: int) -> str | None:
+        """Fetch via Jina Reader API for clean, token-efficient markdown."""
         try:
-            logger.debug("WebFetch: {}", "proxy enabled" if self.proxy else "direct connection")
+            jina_url = f"{self._JINA_BASE}{url}"
+            headers = {
+                "X-Return-Format": "markdown",
+                "X-No-Cache": "true",
+                "Accept": "text/plain",
+            }
+            async with httpx.AsyncClient(
+                timeout=30.0,
+                proxy=self.proxy,
+            ) as client:
+                r = await client.get(jina_url, headers=headers)
+                r.raise_for_status()
+
+            text = r.text.strip()
+            if not text or len(text) < 50:
+                logger.warning("Jina Reader returned too short content for {}: {} chars", url, len(text))
+                return None
+
+            # Jina returns HTTP 200 with error text for blocked/failed urls
+            if text.startswith("Warning:") or "returned error" in text[:200]:
+                logger.info("Jina Reader got upstream error for {}: {}", url, text[:120])
+                return None
+
+            if len(text) > max_chars:
+                text = text[:max_chars]
+            return text
+        except Exception as e:
+            logger.warning("Jina Reader error for {}: {}", url, e)
+            return None
+
+    async def _fetch_via_readability(self, url: str, max_chars: int) -> str:
+        """Fallback: fetch directly and extract with python-readability."""
+        from readability import Document
+
+        try:
             async with httpx.AsyncClient(
                 follow_redirects=True,
                 max_redirects=MAX_REDIRECTS,
@@ -152,32 +201,26 @@ class WebFetchTool(Tool):
             ctype = r.headers.get("content-type", "")
 
             if "application/json" in ctype:
-                text, extractor = json.dumps(r.json(), indent=2, ensure_ascii=False), "json"
+                text = json.dumps(r.json(), indent=2, ensure_ascii=False)
             elif "text/html" in ctype or r.text[:256].lower().startswith(("<!doctype", "<html")):
                 doc = Document(r.text)
-                content = self._to_markdown(doc.summary()) if extractMode == "markdown" else _strip_tags(doc.summary())
+                content = self._to_markdown(doc.summary())
                 text = f"# {doc.title()}\n\n{content}" if doc.title() else content
-                extractor = "readability"
             else:
-                text, extractor = r.text, "raw"
+                text = r.text
 
-            truncated = len(text) > max_chars
-            if truncated: text = text[:max_chars]
+            if len(text) > max_chars:
+                text = text[:max_chars]
 
-            return json.dumps({"url": url, "finalUrl": str(r.url), "status": r.status_code,
-                              "extractor": extractor, "truncated": truncated, "length": len(text), "text": text}, ensure_ascii=False)
-        except httpx.ProxyError as e:
-            logger.error("WebFetch proxy error for {}: {}", url, e)
-            return json.dumps({"error": f"Proxy error: {e}", "url": url}, ensure_ascii=False)
+            return json.dumps({"url": url, "text": text}, ensure_ascii=False)
         except Exception as e:
-            logger.error("WebFetch error for {}: {}", url, e)
+            logger.error("WebFetch readability error for {}: {}", url, e)
             return json.dumps({"error": str(e), "url": url}, ensure_ascii=False)
 
-    def _to_markdown(self, html: str) -> str:
-        """Convert HTML to markdown."""
-        # Convert links, headings, lists before stripping tags
+    def _to_markdown(self, html_content: str) -> str:
+        """Convert HTML to markdown (used by readability fallback)."""
         text = re.sub(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>([\s\S]*?)</a>',
-                      lambda m: f'[{_strip_tags(m[2])}]({m[1]})', html, flags=re.I)
+                      lambda m: f'[{_strip_tags(m[2])}]({m[1]})', html_content, flags=re.I)
         text = re.sub(r'<h([1-6])[^>]*>([\s\S]*?)</h\1>',
                       lambda m: f'\n{"#" * int(m[1])} {_strip_tags(m[2])}\n', text, flags=re.I)
         text = re.sub(r'<li[^>]*>([\s\S]*?)</li>', lambda m: f'\n- {_strip_tags(m[1])}', text, flags=re.I)
