@@ -283,6 +283,22 @@ async def tool_loop(
             raw_content = response.content
             content = _strip_think(raw_content)
 
+            # Fallback: if content is empty but tools were used,
+            # use the thought/content from the last tool-calling iteration.
+            if not content and result.tools_used:
+                # Search backward through messages for the last assistant message
+                # that had content alongside tool_calls
+                for msg in reversed(messages):
+                    if msg.get("role") == "assistant" and msg.get("content"):
+                        fallback_text = _strip_think(msg["content"])
+                        if fallback_text:
+                            content = fallback_text
+                            logger.info(
+                                "tool_loop: using tool-iteration content as fallback "
+                                "({} chars)", len(content),
+                            )
+                            break
+
             # Diagnostic: warn when model returns near-empty
             if not content and response.finish_reason == "stop":
                 logger.warning(
