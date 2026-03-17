@@ -385,8 +385,27 @@ async def _stream_call(
         # Check for placeholder tool names (Claude streaming bug)
         has_unknown = any(tc.name == "_unknown_" for tc in response.tool_calls)
         if has_unknown:
-            logger.info("_stream_call: tool calls have unknown names, retrying non-streaming")
-            needs_fallback = True
+            # Check if arguments are also empty — if so, the API proxy
+            # can't stream tool_calls at all. Don't retry (API is
+            # non-deterministic and often returns empty on retry).
+            # Instead, return the content as a text response.
+            all_args_empty = all(not tc.arguments for tc in response.tool_calls)
+            if all_args_empty:
+                logger.warning(
+                    "_stream_call: tool calls have no names AND no args, "
+                    "treating as text response (content={} chars)",
+                    len(response.content or ""),
+                )
+                # Convert to text-only response
+                response = LLMResponse(
+                    content=response.content,
+                    tool_calls=[],
+                    finish_reason="stop",
+                    usage=response.usage,
+                )
+            else:
+                logger.info("_stream_call: tool calls have unknown names, retrying non-streaming")
+                needs_fallback = True
 
     if needs_fallback:
         logger.info("_stream_call: using non-streaming fallback")
