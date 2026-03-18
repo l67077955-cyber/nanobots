@@ -160,18 +160,29 @@ async def tool_loop(
 
         t0 = _time.time()
 
+        # On the last iteration, if tools were already used, skip passing
+        # tool definitions to force the model to generate a text response
+        # instead of calling more tools (avoids all-tool-call exhaustion).
+        iter_tool_defs = tool_defs
+        if iteration == max_iterations and result.tools_used:
+            logger.info(
+                "tool_loop iter {}: last iteration, dropping tools to force text response",
+                iteration,
+            )
+            iter_tool_defs = None
+
         # Use streaming when available for real-time text display.
         # _stream_call handles fallback to non-streaming if tool_calls
         # have empty names (Claude streaming bug).
         if _can_stream:
             response = await _stream_call(
-                provider, messages, tool_defs, model, max_tokens, metadata,
+                provider, messages, iter_tool_defs, model, max_tokens, metadata,
                 on_content_delta,
             )
         else:
             response = await provider.chat_with_retry(
                 messages=messages,
-                tools=tool_defs,
+                tools=iter_tool_defs,
                 model=model,
                 max_tokens=max_tokens,
                 metadata=metadata,
@@ -261,7 +272,7 @@ async def tool_loop(
                     "name": tc.name,
                     "args": args_str[:200],
                     "result_len": len(tool_result) if tool_result else 0,
-                    "result_preview": (tool_result or "")[:150],
+                    "result_preview": (tool_result or "")[:4000],
                     "timestamp": _time.strftime("%H:%M:%S"),
                     "duration": tc_duration,
                     "success": tc_error is None,

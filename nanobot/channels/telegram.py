@@ -178,6 +178,7 @@ class TelegramChannel(BaseChannel):
         BotCommand("groups", "List saved groups"),
         BotCommand("order", "Change agent speaking order"),
         BotCommand("setleader", "Set/clear leader agent"),
+        BotCommand("mode", "切换执行模式 (serial/broadcast)"),
         BotCommand("providers", "查看提供商和模型"),
         BotCommand("newprovider", "添加提供商"),
         BotCommand("newmodel", "添加模型"),
@@ -287,6 +288,7 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(CommandHandler("groups", self._on_groups))
         self._app.add_handler(CommandHandler("order", self._on_order))
         self._app.add_handler(CommandHandler("setleader", self._on_setleader))
+        self._app.add_handler(CommandHandler("mode", self._on_mode))
         self._app.add_handler(CommandHandler("debug", self._on_debug))
         self._app.add_handler(CommandHandler("prompt", self._on_prompt))
         # Provider & model management
@@ -543,7 +545,8 @@ class TelegramChannel(BaseChannel):
             "/delgroup <名称> — 删除分组\n"
             "/groups — 查看所有分组\n"
             "/order — 调整发言顺序\n"
-            "/setleader <name> — 设置/取消 Leader 👑\n\n"
+            "/setleader <name> — 设置/取消 Leader 👑\n"
+            "/mode <serial|broadcast> — 切换执行模式\n\n"
             "🏢 提供商 & 模型：\n"
             "/providers — 查看提供商和模型\n"
             "/newprovider — 添加提供商\n"
@@ -684,6 +687,39 @@ class TelegramChannel(BaseChannel):
                 return
         else:
             result = self._groupchat_engine.set_leader(args[0])
+        await update.message.reply_text(result)
+
+    async def _on_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Switch group chat execution mode (serial/broadcast)."""
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        if not self._groupchat_engine:
+            await update.message.reply_text("⚠️ 群聊引擎未初始化")
+            return
+
+        args = context.args or []
+        if not args:
+            current = self._groupchat_engine._mode
+            labels = {"serial": "串行轮流", "broadcast": "广播乱序"}
+            buttons = [
+                [InlineKeyboardButton(
+                    f"{'✅ ' if current == 'serial' else ''}串行轮流 (serial)",
+                    callback_data="mode:serial",
+                )],
+                [InlineKeyboardButton(
+                    f"{'✅ ' if current == 'broadcast' else ''}📡 广播乱序 (broadcast)",
+                    callback_data="mode:broadcast",
+                )],
+            ]
+            await update.message.reply_text(
+                f"🎭 当前模式: {labels.get(current, current)}\n\n选择执行模式:",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            return
+
+        result = self._groupchat_engine.set_mode(args[0])
         await update.message.reply_text(result)
 
     async def _on_addagent(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1684,6 +1720,11 @@ class TelegramChannel(BaseChannel):
         elif data.startswith("sl:"):
             name = data[3:]
             result = self._groupchat_engine.set_leader(name)
+            await query.edit_message_text(result)
+
+        elif data.startswith("mode:"):
+            mode = data[5:]
+            result = self._groupchat_engine.set_mode(mode)
             await query.edit_message_text(result)
 
         elif data.startswith("lg:"):

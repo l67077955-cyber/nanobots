@@ -712,7 +712,7 @@ class LiteLLMProvider(LLMProvider):
                     raise  # Let chat_with_retry retry with flattened messages
 
             # Auto-detect unsupported params:
-            # If 400 and error mentions a param name, drop it and retry.
+            # If 400 and error mentions a param name, drop it and retry immediately.
             if sc == 400:
                 err_msg = str(e)
                 # Map of possible param names in error messages → kwargs key
@@ -728,23 +728,43 @@ class LiteLLMProvider(LLMProvider):
                     "min_p": "min_p", "minP": "min_p",
                     "top_a": "top_a", "topA": "top_a",
                 }
+                # Penalty params that should be dropped together
+                _PENALTY_GROUP = {"presence_penalty", "frequency_penalty", "repetition_penalty"}
+
                 resolved = self._resolve_pm_overrides(model or self.default_model)
                 prov = resolved.get("provider_name")
+                # Fallback: derive provider key from model name
+                if not prov:
+                    _m = model or self.default_model or ""
+                    prov = _m.split("/")[0] if "/" in _m else _m.split("-")[0] if "-" in _m else _m
+                    if prov:
+                        logger.debug("Using fallback provider key: {}", prov)
+
                 if prov:
                     detected = set()
                     for err_name, kwarg_key in _PARAM_MAP.items():
                         if err_name in err_msg and kwarg_key in kwargs:
                             detected.add(kwarg_key)
+                    # If any penalty param is unsupported, proactively drop ALL of them
+                    # to avoid multiple retry round-trips
+                    if detected & _PENALTY_GROUP:
+                        detected = detected | {p for p in _PENALTY_GROUP if p in kwargs}
                     if detected:
                         drops = self._compat_drop_params.setdefault(prov, set())
                         new_drops = detected - drops
                         if new_drops:
                             drops.update(new_drops)
                             logger.warning(
-                                "Auto-detected unsupported params for '{}': {}, will drop on retry",
+                                "Auto-detected unsupported params for '{}': {}, retrying immediately",
                                 prov, new_drops,
                             )
-                            raise  # Let chat_with_retry retry without these params
+                            # Retry immediately — _build_kwargs will now drop the bad params
+                            return await self.chat(
+                                messages=messages, tools=tools, model=model,
+                                max_tokens=max_tokens, temperature=temperature,
+                                reasoning_effort=reasoning_effort,
+                                metadata=metadata, api_base=api_base, api_key=api_key,
+                            )
 
             return LLMResponse(
                 content=f"Error calling LLM: {str(e)}",
@@ -784,8 +804,9 @@ class LiteLLMProvider(LLMProvider):
             response = await acompletion(**kwargs)
         except Exception as e:
             self._log_request(kwargs, error=e, latency=_time.time() - t0)
-            # Auto-detect tool message incompatibility (same as chat())
             sc = getattr(e, "status_code", None)
+
+            # Auto-detect tool message incompatibility
             has_tool_msgs = any(m.get("role") == "tool" for m in messages)
             if sc == 502 and has_tool_msgs:
                 resolved = self._resolve_pm_overrides(model or self.default_model)
@@ -795,6 +816,51 @@ class LiteLLMProvider(LLMProvider):
                     logger.warning(
                         "Auto-detected tool incompatibility for '{}' (stream), will flatten on retry", prov
                     )
+
+            # Auto-detect unsupported params (same as chat()):
+            # Raise so _stream_call falls back to non-streaming chat_with_retry
+            # which will call chat() → the params are now in _compat_drop_params.
+            if sc == 400:
+                err_msg = str(e)
+                _PARAM_MAP = {
+                    "presencePenalty": "presence_penalty",
+                    "presence_penalty": "presence_penalty",
+                    "frequencyPenalty": "frequency_penalty",
+                    "frequency_penalty": "frequency_penalty",
+                    "repetitionPenalty": "repetition_penalty",
+                    "repetition_penalty": "repetition_penalty",
+                    "top_k": "top_k", "topK": "top_k",
+                    "top_p": "top_p", "topP": "top_p",
+                    "min_p": "min_p", "minP": "min_p",
+                    "top_a": "top_a", "topA": "top_a",
+                }
+                _PENALTY_GROUP = {"presence_penalty", "frequency_penalty", "repetition_penalty"}
+
+                resolved = self._resolve_pm_overrides(model or self.default_model)
+                prov = resolved.get("provider_name")
+                if not prov:
+                    _m = model or self.default_model or ""
+                    prov = _m.split("/")[0] if "/" in _m else _m.split("-")[0] if "-" in _m else _m
+                if prov:
+                    detected = set()
+                    for err_name, kwarg_key in _PARAM_MAP.items():
+                        if err_name in err_msg and kwarg_key in kwargs:
+                            detected.add(kwarg_key)
+                    # Proactively drop all penalty params together
+                    if detected & _PENALTY_GROUP:
+                        detected = detected | {p for p in _PENALTY_GROUP if p in kwargs}
+                    if detected:
+                        drops = self._compat_drop_params.setdefault(prov, set())
+                        new_drops = detected - drops
+                        if new_drops:
+                            drops.update(new_drops)
+                            logger.warning(
+                                "Auto-detected unsupported params for '{}' (stream): {}, "
+                                "falling back to non-streaming retry",
+                                prov, new_drops,
+                            )
+                            raise  # _stream_call catches this → falls back to chat_with_retry
+
             yield LLMResponse(content=f"Error calling LLM: {str(e)}", finish_reason="error")
             return
 

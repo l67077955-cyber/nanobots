@@ -247,14 +247,14 @@ def _make_provider(config: Config):
             default_model=model,
         )
     else:
-        from nanobot.providers.httpx_provider import HttpxProvider
+        from nanobot.providers.litellm_provider import LiteLLMProvider
         from nanobot.providers.registry import find_by_name
         spec = find_by_name(provider_name)
         if not model.startswith("bedrock/") and not (p and p.api_key) and not (spec and (spec.is_oauth or spec.is_local)):
             console.print("[red]Error: No API key configured.[/red]")
             console.print("Set one in ~/.nanobot/config.json under providers section")
             raise typer.Exit(1)
-        provider = HttpxProvider(
+        provider = LiteLLMProvider(
             api_key=p.api_key if p else None,
             api_base=config.get_api_base(model),
             default_model=model,

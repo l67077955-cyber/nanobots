@@ -31,6 +31,11 @@ def _normalize(text: str) -> str:
     return re.sub(r'\n{3,}', '\n\n', text).strip()
 
 
+def _has_cjk(text: str) -> bool:
+    """Return True if text contains CJK (Chinese/Japanese/Korean) characters."""
+    return bool(re.search(r'[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]', text))
+
+
 def _validate_url(url: str) -> tuple[bool, str]:
     """Validate URL: must be http(s) with valid domain."""
     try:
@@ -59,7 +64,7 @@ class WebSearchTool(Tool):
         "required": ["query"]
     }
 
-    def __init__(self, api_key: str | None = None, max_results: int = 5, proxy: str | None = None):
+    def __init__(self, api_key: str | None = None, max_results: int = 10, proxy: str | None = None):
         self._init_api_key = api_key
         self.max_results = max_results
         self.proxy = proxy
@@ -80,6 +85,10 @@ class WebSearchTool(Tool):
         try:
             n = min(max(count or self.max_results, 1), 10)
             params: dict[str, Any] = {"q": query, "count": n}
+            # Auto-detect CJK queries for better localized results
+            if _has_cjk(query):
+                params.setdefault("search_lang", "zh-hans")
+                params.setdefault("country", "cn")
             # Freshness filter for recent results
             if freshness and freshness in ("pd", "pw", "pm"):
                 params["freshness"] = freshness
@@ -97,10 +106,24 @@ class WebSearchTool(Tool):
             if not results:
                 return f"No results for: {query}"
 
-            lines = [f"Results for: {query}\n"]
+            lines = [f"Results for: {query}  ({len(results)} results)\n"]
             for i, item in enumerate(results, 1):
-                lines.append(f"{i}. {item.get('title', '')}\n   {item.get('url', '')}")
-                if desc := item.get("description"):
+                title = item.get("title", "")
+                url = item.get("url", "")
+                desc = item.get("description", "")
+                age = item.get("page_age") or item.get("age", "")
+                # Extract domain for quick scanning
+                domain = urlparse(url).netloc.replace("www.", "") if url else ""
+                # Format: number. title [domain] (age)
+                meta_parts = []
+                if domain:
+                    meta_parts.append(domain)
+                if age:
+                    meta_parts.append(age)
+                meta = f"  [{', '.join(meta_parts)}]" if meta_parts else ""
+                lines.append(f"{i}. {title}{meta}")
+                lines.append(f"   {url}")
+                if desc:
                     lines.append(f"   {desc}")
             return "\n".join(lines)
         except httpx.ProxyError as e:

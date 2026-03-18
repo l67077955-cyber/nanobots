@@ -26,6 +26,7 @@ from loguru import logger
 
 from nanobot.groupchat.agents import load_agents
 from nanobot.groupchat.config import GroupChatConfig
+from nanobot.groupchat.mailbox import MailboxHub
 from nanobot.providers.base import LLMProvider
 
 
@@ -46,6 +47,7 @@ class GroupChatEngine:
     TOOL_NAMES = [
         "web_search", "web_fetch", "exec",
         "read_file", "write_file", "edit_file", "list_dir",
+        "chatroom_send", "wait",
     ]
 
     def __init__(
@@ -60,6 +62,8 @@ class GroupChatEngine:
         self.workspace = workspace
         self.brave_api_key = brave_api_key
         self._pm_cache: dict | None = None
+        self._mailbox = MailboxHub()
+        self._mode: str = self._load_mode()
         self._register_tools()
 
     def _register_tools(self) -> None:
@@ -228,21 +232,6 @@ class GroupChatEngine:
         elif key == "persona":
             return agent.get("prompt", "")
         elif key == "tool_instructions":
-            if agent.get("tools_enabled", False) or agent.get("_default"):
-                return (
-                    "[Tool Usage Instructions]\n"
-                    "You have access to these tools: exec (bash commands), "
-                    "read_file, write_file, edit_file, list_dir, web_search, web_fetch.\n\n"
-                    "Guidelines:\n"
-                    "- USE tools proactively. Don't say 'I can't' when you have tools.\n"
-                    "- For complex tasks: briefly state your plan (1-2 lines), then execute step by step.\n"
-                    "- After each tool call, check the result before proceeding.\n"
-                    "- If a tool fails, try a different approach instead of repeating.\n"
-                    "- Verify your work: re-read files you wrote, test scripts you created.\n"
-                    "- For current events/news: use web_search immediately.\n"
-                    "- For URLs the user provides: use web_fetch to read them.\n"
-                    "- Don't ask 'should I do X?' — just do it if the intent is clear."
-                )
             return ""
         elif key == "examples":
             return agent.get("examples", "")
@@ -305,7 +294,9 @@ class GroupChatEngine:
                 "[Write the next reply only as {{agent}}. "
                 "Do NOT write dialogue for other characters. "
                 "Do NOT prefix your reply with your name (e.g. '{{agent}}:'). "
-                "Do NOT simulate tool calls in text (e.g. [Search ...], [Check ...]). "
+                "Do NOT simulate tool calls in text — no XML tags like <web_search>, <tool>, "
+                "<function_call>, [Search ...], [Check ...] etc. "
+                "If you need to use a tool, use the function calling API, not text. "
                 "Stay in character and respond naturally.]"
             ),
         }
@@ -533,6 +524,39 @@ class GroupChatEngine:
                 pass
         return None
 
+    # ── Mode Management (serial / broadcast) ────────────────
+
+    def set_mode(self, mode: str) -> str:
+        """Switch group chat execution mode."""
+        mode = mode.lower().strip()
+        if mode not in ("serial", "broadcast"):
+            return f"❌ 未知模式 '{mode}'，可选: serial, broadcast"
+        old = self._mode
+        self._mode = mode
+        self._save_mode()
+        labels = {"serial": "串行轮流", "broadcast": "广播乱序"}
+        return f"✅ 模式切换: {labels.get(old, old)} → {labels.get(mode, mode)}"
+
+    def _save_mode(self) -> None:
+        try:
+            p = Path.home() / ".nanobot" / "chat_mode.txt"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(self._mode)
+        except Exception:
+            pass
+
+    def _load_mode(self) -> str:
+        p = Path.home() / ".nanobot" / "chat_mode.txt"
+        if p.exists():
+            try:
+                mode = p.read_text().strip()
+                if mode in ("serial", "broadcast"):
+                    logger.info("Restored chat mode: {}", mode)
+                    return mode
+            except Exception:
+                pass
+        return self.config.mode or "serial"
+
     # ── Persistence ─────────────────────────────────────────
 
     @property
@@ -667,8 +691,14 @@ class GroupChatEngine:
                         content = "\n".join(lines[i:])
                         break
 
-        # 3. Strip fake/hallucinated tool calls: [Start search for ...], [Check ...], etc.
+        # 3. Strip fake/hallucinated tool calls in text
+        # Bracket style: [Start search for ...], [Check ...], etc.
         content = re.sub(r"\[(?:Start |Check |Search |Look up |Fetch |查|搜)[^\]]*\]", "", content)
+        # XML style: <function_calls>...</function_calls>, <web_search>...</web_search>, <tool>...</tool>, etc.
+        content = re.sub(
+            r"<(?:function_calls|invoke|web_search|web_fetch|tool|parameter|query|search)[\s\S]*?(?:</(?:function_calls|invoke|web_search|web_fetch|tool|parameter|query|search)>|$)",
+            "", content, flags=re.IGNORECASE,
+        )
 
         # 4. Strip ALL agent name prefixes (handles repeated "Benjamin: ..." throughout)
         all_names = list(self.registry.keys())
@@ -745,6 +775,8 @@ class GroupChatEngine:
         is_direct: bool = False,
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
         on_content_reset: Callable[[], Awaitable[None]] | None = None,
+        on_tool_start_override: Callable | None = None,
+        on_tool_result_override: Callable | None = None,
     ) -> tuple[str, list[str], dict[str, Any]]:
         """Chat with tool calling loop, delegating to the shared tool_loop.
 
@@ -875,12 +907,12 @@ class GroupChatEngine:
             max_iterations=max_iterations,
             tool_defs=effective_defs,
             metadata=trace_metadata,
-            on_tool_start=_on_tool_start,
-            on_tool_result=_on_tool_result,
+            on_tool_start=on_tool_start_override or _on_tool_start,
+            on_tool_result=on_tool_result_override or _on_tool_result,
             on_content_delta=on_content_delta,
             on_content_reset=on_content_reset,
             clean_response=lambda c: self._clean_response(c, agent_name),
-            result_max_chars=2000,
+            result_max_chars=20_000,
         )
 
         content = result.content or ""
@@ -1201,11 +1233,31 @@ class GroupChatEngine:
                 pass
         return {}
 
-    async def _agent_speak(self, agent_name: str) -> None:
+    async def _agent_speak(
+        self,
+        agent_name: str,
+        synthesis_context: str | None = None,
+    ) -> tuple[str, list[str], dict] | None:
+        """Run one agent's turn. Returns (content, tools_used, stats) or None on error.
+
+        Args:
+            synthesis_context: Optional research summary injected before the
+                agent's own prompt (used for leader synthesis in parallel mode).
+        """
         if agent_name not in self.registry:
-            return
+            return None
         model = self.registry[agent_name]["model"]
         messages = self._build_agent_prompt(agent_name)
+
+        # Inject synthesis context for leader (before the final nudge)
+        if synthesis_context:
+            # Insert before the last message (group_nudge) so the model sees
+            # the research results right before being asked to respond.
+            insert_pos = max(len(messages) - 1, 0)
+            messages.insert(insert_pos, {
+                "role": "system",
+                "content": synthesis_context,
+            })
 
         # ── Context size breakdown (only when /debug enabled) ──
         if self._debug_context:
@@ -1277,7 +1329,7 @@ class GroupChatEngine:
                 messages=messages,
                 model=model,
                 agent_name=agent_name,
-                max_iterations=3,  # Limit tool iterations in group chat
+                max_iterations=5,  # Tool iterations in group chat
                 on_content_delta=_delta_cb,
                 on_content_reset=_reset_cb,
             )
@@ -1305,12 +1357,15 @@ class GroupChatEngine:
                     "status_code": stats.get("status_code"),
                     **{k: v for k, v in stats.items() if k not in ("status_code",)},
                 })
-                return
+                return None
 
             if tools_used:
-                await self._send(f"✅ {agent_name} 完成 ({latency}s, {iters}次迭代, 工具: {', '.join(tools_used)})")
+                completion_msg = f"✅ {agent_name} 完成 ({latency}s, {iters}次迭代, 工具: {', '.join(tools_used)})"
             elif latency > 0:
-                await self._send(f"✅ {agent_name} 完成 ({latency}s)")
+                completion_msg = f"✅ {agent_name} 完成 ({latency}s)"
+            else:
+                completion_msg = ""
+
             self._request_log.append({
                 "agent": agent_name, "model": model,
                 "msgs": len(messages), "max_tokens": self.config.max_tokens,
@@ -1325,19 +1380,21 @@ class GroupChatEngine:
                 agent_name, len(content), tools_used, _stream_msg_id,
                 stats.get("iterations"), stats.get("latency"),
             )
+
+            # ── Final display: edit streamed message FIRST, then send completion ──
             if content:
                 self._add_message(agent_name, content)
                 final_text = f"{_header}{content}"
                 if _stream_msg_id and self._edit_fn:
                     try:
-                        await self._edit_fn(_stream_msg_id, final_text)
+                        await self._edit_fn(_stream_msg_id, final_text[:4096])
                         logger.info("Agent {}: final streamed edit OK", agent_name)
                     except Exception as edit_err:
                         logger.warning("Final stream edit failed for {}: {}", agent_name, edit_err)
-                        await self._send(final_text)
+                        await self._send(final_text[:4096])
                 else:
                     logger.info("Agent {}: sending via _send (len={})", agent_name, len(final_text))
-                    await self._send(final_text)
+                    await self._send(final_text[:4096])
             elif _stream_msg_id and self._edit_fn:
                 try:
                     await self._edit_fn(_stream_msg_id, f"{_header}(空回复)")
@@ -1346,6 +1403,11 @@ class GroupChatEngine:
                 logger.warning("Agent {} returned empty content (streamed placeholder updated)", agent_name)
             else:
                 logger.warning("Agent {} returned empty content, content repr: {!r}", agent_name, content)
+
+            # Send completion notification AFTER the final text is displayed
+            if completion_msg:
+                await self._send(completion_msg)
+            return (content, tools_used, stats)
         except Exception as e:
             logger.error("Groupchat: {} LLM call failed: {}", agent_name, e)
             self._request_log.append({
@@ -1355,6 +1417,258 @@ class GroupChatEngine:
                 "mode": "group", "error": str(e),
             })
             await self._send(f"⚠️ {agent_name} 回复失败: {e}")
+            return None
+
+    # ── Parallel Leader Mode (Orchestra) ─────────────────────────────
+
+    async def _orchestra_round(self, speak_order: list[str]) -> None:
+        """Run non-leader agents in parallel with Grok-style display,
+        then leader synthesizes all findings.
+
+        Visual style matches xAI's multi-agent output:
+        - Leader header: "👑 {Name}领导者"
+        - Agent sections: "Agent N (Name)" with tool activity
+        - Tool format: "已搜索的网络 query" / "已浏览 url"
+        - Consolidated per-agent editable messages
+        """
+        leader = self._leader
+        others = [a for a in speak_order if a != leader]
+
+        if not others or not leader:
+            return
+
+        total = len(speak_order)
+
+        # ── Phase 0: Leader announcement ──
+        await self._send(
+            f"👑 {leader}领导者\n"
+            f"正在分析任务并协调 {len(others)} 个 Agent 并行工作..."
+        )
+
+        async def _run_agent_grok(
+            name: str, agent_idx: int,
+        ) -> tuple[str, tuple[str, list[str], dict] | None]:
+            """Run one agent with Grok-style consolidated display."""
+            if name not in self.registry:
+                return (name, None)
+
+            agent_cfg = self.registry[name]
+            model = agent_cfg["model"]
+            model_short = model.split("/")[-1]
+            messages = self._build_agent_prompt(name)
+
+            # ── Consolidated editable message for this agent ──
+            _lines: list[str] = []       # tool activity lines
+            _msg_id: int | None = None
+            _header = f"Agent {agent_idx + 1} ({name})"
+
+            if self._send_and_get_id_fn:
+                _msg_id = await self._send_and_get_id_fn(
+                    f"{_header}\n⏳ 思考中... ({model_short})"
+                )
+
+            async def _edit_consolidated() -> None:
+                """Re-render the consolidated message."""
+                if not (_msg_id and self._edit_fn):
+                    return
+                text = f"{_header}\n" + "\n\n".join(_lines)
+                try:
+                    await self._edit_fn(_msg_id, text[:4096])
+                except Exception:
+                    pass
+
+            # ── Grok-style tool callbacks ──
+
+            async def _on_tool_start(tool_name: str, args: dict) -> None:
+                if not isinstance(args, dict):
+                    args = {}
+                if tool_name == "web_search":
+                    query = args.get("query", "")
+                    _lines.append(f"已搜索的网络\n{query}")
+                elif tool_name == "web_fetch":
+                    url = args.get("url", "")
+                    short = url[:60] + ("..." if len(url) > 60 else "")
+                    _lines.append(f"已浏览\n{short}")
+                elif tool_name == "exec":
+                    cmd = (args.get("command", "") or "")[:50]
+                    _lines.append(f"⚡ {cmd}")
+                else:
+                    short = ""
+                    if args:
+                        first = list(args.values())[0]
+                        if isinstance(first, str):
+                            short = first[:40]
+                    _lines.append(f"🔧 {tool_name}" + (f" {short}" if short else ""))
+                await _edit_consolidated()
+
+            async def _on_tool_result(
+                tool_name: str, tool_call_id: str, result: str,
+            ) -> None:
+                if not result or not _lines:
+                    return
+                rlen = len(result)
+                last = _lines[-1]
+                if tool_name == "web_search":
+                    # Parse actual result count from the output format:
+                    # "Results for: query  (N results)"
+                    import re as _re
+                    m = _re.search(r'\((\d+) results?\)', result[:100])
+                    count = int(m.group(1)) if m else max(result.count("\n") // 3, 1)
+                    _lines[-1] = f"{last}\n{count} 条结果"
+                elif tool_name == "web_fetch":
+                    _lines[-1] = f"{last}\n({rlen}字)"
+                else:
+                    preview = result.strip().replace("\n", " ")[:60]
+                    _lines[-1] = f"{last}\n↳ {preview}{'…' if rlen > 60 else ''}"
+                await _edit_consolidated()
+
+            # ── Streaming callback (accumulate text) ──
+            _stream_buf: list[str] = []
+            _last_edit: float = 0.0
+
+            async def _on_delta(delta: str) -> None:
+                nonlocal _last_edit
+                _stream_buf.append(delta)
+                now = _time.time()
+                if (_msg_id and self._edit_fn
+                        and (now - _last_edit) >= 0.8):
+                    activity = "\n\n".join(_lines) + "\n\n" if _lines else ""
+                    text = f"{_header}\n{activity}" + "".join(_stream_buf) + " ▍"
+                    try:
+                        await self._edit_fn(_msg_id, text[:4096])
+                    except Exception:
+                        pass
+                    _last_edit = now
+
+            async def _on_reset() -> None:
+                _stream_buf.clear()
+
+            _delta_cb = _on_delta if (self._edit_fn and self._send_and_get_id_fn) else None
+            _reset_cb = _on_reset if _delta_cb else None
+
+            # ── Run LLM with tools (pass Grok-style callbacks) ──
+            try:
+                content, tools_used, stats = await self._chat_with_tools(
+                    messages=messages,
+                    model=model,
+                    agent_name=name,
+                    max_iterations=5,
+                    on_content_delta=_delta_cb,
+                    on_content_reset=_reset_cb,
+                    on_tool_start_override=_on_tool_start,
+                    on_tool_result_override=_on_tool_result,
+                )
+                is_error = stats.get("finish_reason") == "error"
+                latency = stats.get("latency", 0)
+
+                if is_error:
+                    err_short = content[:150] if content else "Unknown error"
+                    if _msg_id and self._edit_fn:
+                        try:
+                            await self._edit_fn(
+                                _msg_id, f"{_header}\n⚠️ 失败 ({latency}s): {err_short}"
+                            )
+                        except Exception:
+                            pass
+                    self._request_log.append({
+                        "agent": name, "model": model,
+                        "reply_len": 0, "time": _cn_now().strftime("%H:%M:%S"),
+                        "mode": "orchestra", "error": err_short, **stats,
+                    })
+                    return (name, None)
+
+                # ── Final consolidated display ──
+                activity_text = "\n\n".join(_lines) if _lines else ""
+                if content:
+                    self._add_message(name, content)
+                    sep = "\n\n" if activity_text else ""
+                    final = f"{_header}\n{activity_text}{sep}{content}"
+                    if _msg_id and self._edit_fn:
+                        try:
+                            await self._edit_fn(_msg_id, final[:4096])
+                        except Exception:
+                            await self._send(final[:4096])
+                    else:
+                        await self._send(final[:4096])
+                elif _msg_id and self._edit_fn:
+                    try:
+                        await self._edit_fn(
+                            _msg_id, f"{_header}\n{activity_text}\n\n(空回复)" if activity_text
+                            else f"{_header}\n(空回复)"
+                        )
+                    except Exception:
+                        pass
+
+                self._request_log.append({
+                    "agent": name, "model": model,
+                    "reply_len": len(content), "time": _cn_now().strftime("%H:%M:%S"),
+                    "mode": "orchestra", "tools": tools_used, **stats,
+                })
+                return (name, (content, tools_used, stats))
+
+            except Exception as e:
+                logger.error("Orchestra: {} failed: {}", name, e)
+                if _msg_id and self._edit_fn:
+                    try:
+                        await self._edit_fn(_msg_id, f"{_header}\n⚠️ 失败: {e}")
+                    except Exception:
+                        pass
+                self._request_log.append({
+                    "agent": name, "model": model,
+                    "reply_len": 0, "time": _cn_now().strftime("%H:%M:%S"),
+                    "mode": "orchestra", "error": str(e),
+                })
+                return (name, None)
+
+        # ── Run all non-leader agents concurrently ──
+        tasks = [_run_agent_grok(name, si) for si, name in enumerate(others)]
+        parallel_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # ── Phase 2: Build synthesis context ──
+        research_parts: list[str] = []
+        for item in parallel_results:
+            if isinstance(item, Exception):
+                logger.error("Orchestra parallel agent error: {}", item)
+                continue
+            name, result = item
+            if result is None:
+                research_parts.append(f"[{name}]: (请求失败，无结果)")
+                continue
+            content, tools_used, stats = result
+            tool_str = f" | 工具: {', '.join(tools_used)}" if tools_used else ""
+            tool_details = stats.get("tool_calls_detail", [])
+            detail_lines = ""
+            if tool_details:
+                details = []
+                for td in tool_details[:8]:
+                    t_name = td.get("name", "?")
+                    t_result = td.get("result_preview", "")[:3000]
+                    details.append(f"  - {t_name}: {t_result}")
+                detail_lines = "\n" + "\n".join(details)
+            research_parts.append(
+                f"[{name}]{tool_str}:\n{content or '(空回复)'}{detail_lines}"
+            )
+
+        synthesis_context = (
+            "[团队研究结果 — 请综合以下所有 agent 的发现，给出最终回复]\n"
+            "[重要指令：\n"
+            "1. 直接基于以下 agent 报告中的信息综合回答，不要再调用任何工具。\n"
+            "2. 所有具体的版本号、日期、数值必须来自下面的 agent 报告。\n"
+            "3. 优先引用日期最新的信息，如果多个 agent 报告了不同版本，以最新的为准。\n"
+            "4. 信息不完整时如实说明即可。]\n\n"
+            + "\n\n---\n\n".join(research_parts)
+        )
+        logger.info(
+            "Orchestra synthesis context: {} agents, {} chars",
+            len(research_parts), len(synthesis_context),
+        )
+
+        # ── Phase 3: Leader synthesizes ──
+        await self._send(
+            f"\n👑 {leader}领导者\n"
+            f"正在综合 {len(others)} 个 Agent 的研究结果..."
+        )
+        await self._agent_speak(leader, synthesis_context=synthesis_context)
 
     async def _generate_summary(self) -> None:
         if not self._history:
@@ -1428,14 +1742,23 @@ class GroupChatEngine:
                 else:
                     speak_order = current_agents
 
-                for si, name in enumerate(speak_order):
-                    if not self._running or name not in self._active_agents:
-                        break
-                    badge = " 👑" if self._leader == name else ""
-                    model_short = self.registry.get(name, {}).get("model", "?").split("/")[-1]
-                    await self._send(f"⏳ {name}{badge} 思考中... ({model_short}) [{si+1}/{len(speak_order)}]")
-                    await asyncio.sleep(self.config.auto_reply_delay)
-                    await self._agent_speak(name)
+                # Parallel mode when leader is set (orchestra)
+                if self._leader and self._leader in current_agents and len(others) > 0:
+                    await self._orchestra_round(speak_order)
+                elif self._mode == "broadcast" and not self._leader:
+                    # Broadcast mode: all agents concurrently, out-of-order display
+                    from nanobot.groupchat.broadcast import broadcast_round
+                    await broadcast_round(speak_order, self, self._mailbox)
+                else:
+                    # Serial mode (no leader)
+                    for si, name in enumerate(speak_order):
+                        if not self._running or name not in self._active_agents:
+                            break
+                        badge = " 👑" if self._leader == name else ""
+                        model_short = self.registry.get(name, {}).get("model", "?").split("/")[-1]
+                        await self._send(f"⏳ {name}{badge} 思考中... ({model_short}) [{si+1}/{len(speak_order)}]")
+                        await asyncio.sleep(self.config.auto_reply_delay)
+                        await self._agent_speak(name)
 
                 # Signal round complete (e.g. stop typing indicator)
                 if self._on_round_done:

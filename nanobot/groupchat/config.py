@@ -20,6 +20,7 @@ class GroupChatConfig(Base):
     """Configuration for multi-agent group chat."""
 
     enabled: bool = False
+    mode: str = "broadcast"  # "serial" | "broadcast"
     agents_dir: str = ""  # Path to agents directory (e.g. "agents/")
     agents: dict[str, GroupChatAgentConfig] = Field(default_factory=dict)
     excluded_agents: list[str] = Field(default_factory=list)
@@ -27,3 +28,4 @@ class GroupChatConfig(Base):
     max_history: int = 50
     auto_reply_delay: int = 5  # seconds between agent turns
     max_tokens: int = 3000  # max tokens per agent response (match SillyTavern)
+
