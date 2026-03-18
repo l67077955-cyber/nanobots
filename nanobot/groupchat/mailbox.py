@@ -166,14 +166,13 @@ class MailboxHub:
                 return None
 
     def clear(self) -> None:
-        """Clear all queues and history."""
+        """Clear message queues but preserve history for later reading."""
         for q in self._queues.values():
             while not q.empty():
                 try:
                     q.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-        self._history.clear()
 
     def destroy(self) -> None:
         """Remove all mailboxes."""

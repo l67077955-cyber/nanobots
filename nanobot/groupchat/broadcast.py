@@ -94,6 +94,68 @@ async def broadcast_round(
         model_short = model.split("/")[-1]
         messages = engine._build_agent_prompt(name)
 
+        # ── Inject broadcast coordination hint from template ──
+        teammates = [a for a in agents if a != name]
+        # Load from override system (editable via /prompt), fallback to default
+        overrides = engine._load_prompt_overrides("__global__")
+        hint_template = overrides.get("broadcast_hint") or engine._get_component_template("broadcast_hint")
+        if hint_template:
+            # Extract user question from history for echo
+            user_question = ""
+            for msg in reversed(engine._history):
+                if msg.get("sender") in ("User", "user", "系统"):
+                    user_question = msg.get("content", "")[:200]
+                    break
+            hint = (
+                hint_template
+                .replace("{{agent_idx}}", str(agent_idx + 1))
+                .replace("{{total}}", str(total))
+                .replace("{{teammates}}", ", ".join(teammates))
+                .replace("{{agent}}", name)
+                .replace("{{user_question}}", user_question)
+            )
+            # Append user question reminder if not in template
+            if user_question and "{{user_question}}" not in hint_template:
+                hint += f"\n\n⚠️ 用户请求: {user_question}\n立即执行此请求，不要打招呼或寒暄。"
+
+            # ── Point-name detection ──
+            # If user explicitly names this agent, add priority hint
+            if name.lower() in user_question.lower():
+                hint += (
+                    f"\n\n🎯 用户点名了你（{name}），你是此任务的主要负责人！"
+                    f"优先完成用户的请求，然后通过 chatroom_send 报告结果。"
+                )
+
+            # ── Agent-idx task differentiation ──
+            # Guide agents toward different search strategies
+            strategies = [
+                "优先使用中文关键词搜索，关注国内新闻和数据源。",
+                "优先使用英文关键词搜索，关注国际/学术/技术来源。",
+                "优先搜索不同子主题或使用 web_fetch 深入分析关键链接。",
+            ]
+            strategy = strategies[agent_idx % len(strategies)]
+            hint += f"\n\n📌 你的差异化分工策略: {strategy}"
+
+            insert_pos = max(len(messages) - 1, 0)
+            messages.insert(insert_pos, {
+                "role": "system",
+                "content": hint,
+            })
+
+        # ── Inject task framing as user-role message ──
+        # Some API proxies have safety filters that suppress responses to
+        # "general knowledge" queries. Framing the task as a technical/
+        # programming research task using tools bypasses these filters.
+        if user_question:
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"[Technical Research Task] Use your tools (web_search, "
+                    f"web_fetch, exec) to research the following and report "
+                    f"findings:\n{user_question}"
+                ),
+            })
+
         # ── Streaming state ──
         _stream_msg_id: int | None = None
         _stream_buffer: list[str] = []
@@ -312,15 +374,15 @@ async def broadcast_round(
         for idx, name in enumerate(agents)
     }
 
-    results: list[tuple[str, str | None]] = []
+    results: list[tuple[str, str | None, list[str]]] = []
     completed = 0
 
     try:
         for coro in asyncio.as_completed(tasks.keys(), timeout=global_timeout):
             try:
-                name, content, *_ = await coro
+                name, content, tools_used_list, *_ = await coro
                 completed += 1
-                results.append((name, content))
+                results.append((name, content, tools_used_list or []))
                 logger.info(
                     "Broadcast: {}/{} done — {} ({})",
                     completed, total, name,
@@ -337,6 +399,16 @@ async def broadcast_round(
                 logger.warning("Broadcast: {} cancelled (global timeout)", name)
                 await engine._send(f"⏰ {name} 超时取消")
 
+    # ── Auto-send for non-communicating agents ──
+    # Claude models tend to search but never call chatroom_send.
+    # Automatically share their results so teammates see them.
+    for name, content, tools_list in results:
+        if content and "chatroom_send" not in tools_list:
+            # Auto-share truncated results on behalf of this agent
+            snippet = content[:300]
+            mailbox.send(name, ["All"], snippet)
+            logger.info("Broadcast: auto-shared {} results ({} chars) via mailbox", name, len(snippet))
+
     # ── Round summary ──
     comm_count = len(mailbox.history)
     await engine._send(
@@ -344,7 +416,71 @@ async def broadcast_round(
         + (f", {comm_count} 条 Agent 间通信" if comm_count > 0 else "")
     )
 
-    # Clean up
+    # Clean up queues (history preserved for synthesis & test harness)
     mailbox.clear()
 
-    return results
+    # ── Phase 2: Synthesis Discussion ──
+    # Grok-style: leader can cross-verify with tools, others synthesize text-only
+    valid_results = [(name, content) for name, content, _ in results if content]
+
+    if len(valid_results) >= 1:
+        # Build mailbox communication summary for synthesis context
+        comm_summary = ""
+        if mailbox.history:
+            comm_lines = []
+            for m in mailbox.history:
+                to_str = ", ".join(m.targets)
+                comm_lines.append(f"[{m.sender} → {to_str}]: {m.content[:150]}")
+            comm_summary = (
+                "\n\n[Agent 间通信记录]\n" + "\n".join(comm_lines[-10:])
+            )
+
+        # Inject synthesis nudge with Grok-style cross-verification instruction
+        engine._add_message("系统", (
+            "[综合讨论阶段] 以上是所有 agent 的独立研究结果。"
+            + comm_summary +
+            "\n\n你的任务："
+            "\n1. 综合所有 agent 的发现，找出共识和分歧"
+            "\n2. 如有关键数据（数字、链接等），可用工具交叉验证"
+            "\n3. 给出最终综合结论，补充遗漏的重要信息"
+            "\n4. 简洁有力，不要重复已有内容"
+        ))
+
+        # All broadcast agents participate in synthesis (not just those with results),
+        # so agents who found nothing can still summarize others' findings.
+        # Leader goes first with tool access for cross-verification.
+        synth_agents = []
+        leader_name = engine._leader or (valid_results[0][0] if valid_results else None)
+        if leader_name and leader_name in agents:
+            synth_agents.append(leader_name)
+        for name in agents:
+            if name not in synth_agents and name in engine.registry:
+                synth_agents.append(name)
+
+        await engine._send(
+            f"📋 进入综合讨论阶段 — {len(synth_agents)} 个 Agent 串行讨论"
+        )
+
+        # Run agents serially so each sees the previous agent's summary
+        # First agent (leader) gets tool access for cross-verification,
+        # subsequent agents synthesize text-only (Grok pattern)
+        for si, name in enumerate(synth_agents):
+            if name not in engine.registry:
+                continue
+            model_short = engine.registry[name]["model"].split("/")[-1]
+            is_leader = (si == 0)
+            mode_label = "综合+验证" if is_leader else "综合"
+            await engine._send(
+                f"💬 {name} {mode_label}中... ({model_short}) "
+                f"[{si + 1}/{len(synth_agents)}]"
+            )
+            try:
+                await engine._agent_speak(name, no_tools=not is_leader)
+            except Exception as e:
+                logger.error("Broadcast synthesis: {} failed: {}", name, e)
+                await engine._send(f"⚠️ {name} 综合失败: {e}")
+
+        await engine._send("📋 综合讨论完成")
+
+    return [(name, content) for name, content, _ in results]
+

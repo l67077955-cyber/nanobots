@@ -35,7 +35,13 @@ class ChatroomSendTool(Tool):
     def description(self) -> str:
         return (
             "Send a message to other agents in the group chat. "
-            "Use this to share findings, ask questions, or coordinate with teammates. "
+            "REQUIRES two parameters: 'to' (target agent name or \"All\") and 'message' (the content). "
+            "Use cases: (1) Share your findings with teammates, "
+            "(2) Reply to a teammate's request with your results, "
+            "(3) Ask a teammate for help or information. "
+            "IMPORTANT: When you receive a message from a teammate (via wait), "
+            "you MUST reply back using chatroom_send — do not just include it in your final text response. "
+            "Example: chatroom_send(to=\"Harper\", message=\"我搜到了3篇相关论文: ...\") "
             "Set 'to' to a specific agent name, a list of names, or \"All\" to broadcast."
         )
 

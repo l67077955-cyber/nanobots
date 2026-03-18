@@ -631,9 +631,20 @@ class LiteLLMProvider(LLMProvider):
 
         # Auto-detected param drops — providers that reject specific params.
         # Populated at runtime when a 400 error mentions the param name.
-        if pm_provider_name and pm_provider_name in self._compat_drop_params:
-            for k in self._compat_drop_params[pm_provider_name]:
-                kwargs.pop(k, None)
+        # Check both the resolved provider name and the fallback model-prefix key.
+        _drop_keys_to_check = set()
+        if pm_provider_name:
+            _drop_keys_to_check.add(pm_provider_name)
+        # Fallback: derive provider key from model name (mirrors 400 handler logic)
+        _m = kwargs.get("model", "")
+        if "/" in _m:
+            _drop_keys_to_check.add(_m.split("/")[0])
+        elif "-" in _m:
+            _drop_keys_to_check.add(_m.split("-")[0])
+        for _dk in _drop_keys_to_check:
+            if _dk in self._compat_drop_params:
+                for k in self._compat_drop_params[_dk]:
+                    kwargs.pop(k, None)
 
         api_base = pm_api_base
         api_key = pm_api_key
@@ -856,10 +867,18 @@ class LiteLLMProvider(LLMProvider):
                             drops.update(new_drops)
                             logger.warning(
                                 "Auto-detected unsupported params for '{}' (stream): {}, "
-                                "falling back to non-streaming retry",
+                                "retrying immediately",
                                 prov, new_drops,
                             )
-                            raise  # _stream_call catches this → falls back to chat_with_retry
+                            # Retry immediately — _build_kwargs will now drop the bad params
+                            async for item in self.chat_stream(
+                                messages=messages, tools=tools, model=model,
+                                max_tokens=max_tokens,
+                                reasoning_effort=reasoning_effort,
+                                metadata=metadata, api_base=api_base, api_key=api_key,
+                            ):
+                                yield item
+                            return
 
             yield LLMResponse(content=f"Error calling LLM: {str(e)}", finish_reason="error")
             return

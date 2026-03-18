@@ -89,6 +89,13 @@ class GroupChatEngine:
         self.tools.register(EditFileTool(workspace=sandbox, allowed_dir=sandbox))
         self.tools.register(ListDirTool(workspace=sandbox, allowed_dir=sandbox))
 
+        # Register chatroom tools (agent name set per-call)
+        from nanobot.groupchat.chatroom_tools import ChatroomSendTool, WaitTool
+        self._chatroom_send_tool = ChatroomSendTool(mailbox=self._mailbox)
+        self._wait_tool = WaitTool(mailbox=self._mailbox)
+        self.tools.register(self._chatroom_send_tool)
+        self.tools.register(self._wait_tool)
+
         # Direct chat tools (default agent gets same + full exec)
         self.direct_tools = ToolRegistry()
         self.direct_tools.register(ExecTool(timeout=120, working_dir=home))
@@ -132,6 +139,7 @@ class GroupChatEngine:
         "group_context",
         "persona",
         "tool_instructions",
+        "broadcast_hint",
         "examples",
         "history",
         "instructions",
@@ -143,6 +151,7 @@ class GroupChatEngine:
         "group_context": "群聊上下文 (group_context)",
         "persona": "人设/SOUL (persona)",
         "tool_instructions": "工具指令 (tool_instructions)",
+        "broadcast_hint": "广播协调 (broadcast_hint)",
         "examples": "示例对话 (examples)",
         "history": "聊天记录 (history)",
         "instructions": "后置指令 (instructions)",
@@ -151,7 +160,7 @@ class GroupChatEngine:
     }
     # Components editable via /prompt (global templates with {{agent}})
     _GLOBAL_EDITABLE = {
-        "main_prompt", "group_context", "tool_instructions",
+        "main_prompt", "group_context", "tool_instructions", "broadcast_hint",
         "examples", "instructions", "leader_prompt", "group_nudge",
     }
     # Components editable only via /editagent (per-agent files)
@@ -243,6 +252,10 @@ class GroupChatEngine:
             if self._leader == agent_name:
                 return "[Leader prompt — 自动生成]"
             return ""
+        elif key == "broadcast_hint":
+            # Only rendered when broadcast mode is active;
+            # placeholders filled by broadcast.py
+            return ""
         elif key == "group_nudge":
             return (
                 f"[Write the next reply only as {agent_name}. "
@@ -257,9 +270,10 @@ class GroupChatEngine:
         """Return the default template for a component, using {{agent}} as placeholder."""
         templates = {
             "main_prompt": (
-                "Write {{agent}}'s next reply in a fictional group chat. "
+                "Write {{agent}}'s next reply in a group chat. "
                 "Write 1 reply only in character as {{agent}}. "
-                "Do not write as or for other characters."
+                "Do not write as or for other characters. "
+                "Focus on executing the user's request — do not just greet or ask what to do."
             ),
             "group_context": (
                 "[Start a new group chat. Group members: {{members}}]\n"
@@ -267,18 +281,42 @@ class GroupChatEngine:
             ),
             "persona": "[从 SOUL.md 加载 — 在 /editagent 中编辑]",
             "tool_instructions": (
-                "[Tool Usage Instructions]\n"
-                "You have access to these tools: exec (bash commands), "
-                "read_file, write_file, edit_file, list_dir, web_search, web_fetch.\n\n"
-                "Guidelines:\n"
-                "- USE tools proactively. Don't say 'I can't' when you have tools.\n"
-                "- For complex tasks: briefly state your plan (1-2 lines), then execute step by step.\n"
-                "- After each tool call, check the result before proceeding.\n"
-                "- If a tool fails, try a different approach instead of repeating.\n"
-                "- Verify your work: re-read files you wrote, test scripts you created.\n"
-                "- For current events/news: use web_search immediately.\n"
-                "- For URLs the user provides: use web_fetch to read them.\n"
-                "- Don't ask 'should I do X?' — just do it if the intent is clear."
+                "[工具使用规范]\n\n"
+                "可用工具: exec, read_file, write_file, edit_file, list_dir, "
+                "web_search, web_fetch, chatroom_send, wait\n\n"
+                "## 核心原则\n"
+                "- 有工具就用，禁止说「我没有能力」「我无法搜索」。\n"
+                "- 意图明确就直接执行，不要问「需要我搜索吗？」。\n"
+                "- 每次工具调用后检查结果再决定下一步。\n"
+                "- 工具失败→换方案，不要重复同一调用。\n\n"
+                "## 搜索规范\n"
+                "- 时事/新闻: web_search(query=..., freshness=\"pd\") 或 \"pw\"\n"
+                "- 用户给的URL: web_fetch(url=...) 直接读取\n\n"
+                "## 协作通信协议\n"
+                "chatroom_send(to=\"Harper\", message=\"搜索结果...\")\n"
+                "chatroom_send(to=\"All\", message=\"关键发现...\")\n\n"
+                "### 收到消息后的响应规则（关键！）\n"
+                "收到队友消息时：执行请求 → 用 chatroom_send 回复结果。\n"
+                "禁止：只在最终回复里提到，而不通过 chatroom_send 回复发送者。\n\n"
+                "wait(timeout=30) 等待消息，不要超过60s。"
+            ),
+            "broadcast_hint": (
+                "[广播模式 — 技术研究协作环境]\n"
+                "你是 {{agent_idx}}/{{total}} 号研究助手，代号 {{agent}}\n"
+                "队友: {{teammates}}\n\n"
+                "⚠️ 研究任务: {{user_question}}\n\n"
+                "## 立即行动\n"
+                "使用工具执行任务。不要打招呼、不要问「有什么任务」。\n\n"
+                "## 协作流程\n"
+                "1. 立即搜索，选择与队友不同的角度/关键词\n"
+                "2. 搜到初步结果 → chatroom_send(to=\"All\", message=\"初步结果: ...\") 分享\n"
+                "3. 继续深入 → chatroom_send 发送更新版本\n"
+                "4. 收到队友结果 → chatroom_send 回复确认或补充\n"
+                "5. wait 超时没收到回复 → 主动再发一次提醒\n\n"
+                "## 通信时序\n"
+                "发消息: chatroom_send(to=\"目标\", message=\"内容\")\n"
+                "等回复: wait(timeout=30)\n"
+                "超时继续工作并主动再分享"
             ),
             "examples": "",
             "history": "[聊天记录 — 自动插入]",
@@ -777,6 +815,7 @@ class GroupChatEngine:
         on_content_reset: Callable[[], Awaitable[None]] | None = None,
         on_tool_start_override: Callable | None = None,
         on_tool_result_override: Callable | None = None,
+        force_no_tools: bool = False,
     ) -> tuple[str, list[str], dict[str, Any]]:
         """Chat with tool calling loop, delegating to the shared tool_loop.
 
@@ -792,6 +831,13 @@ class GroupChatEngine:
             tool_defs = self._get_agent_tools(agent_cfg, self.tools)
 
         tool_registry = self.direct_tools if is_direct else self.tools
+
+        # Set chatroom tool context for this agent
+        if hasattr(self, '_chatroom_send_tool'):
+            self._chatroom_send_tool.set_agent(agent_name)
+            self._wait_tool.set_agent(agent_name)
+            # Ensure mailbox exists for this agent
+            self._mailbox.create(agent_name)
 
         # Langfuse trace metadata + request log enrichment
         session_id = self._session_dir.name if self._session_dir else "direct"
@@ -863,7 +909,7 @@ class GroupChatEngine:
             _tool_msg_id = None
             _tool_msg_text = ""
 
-        effective_defs = tool_defs if tool_defs else None
+        effective_defs = None if force_no_tools else (tool_defs if tool_defs else None)
         logger.info(
             "_chat_with_tools: agent={} model={} tool_defs={} is_direct={}",
             agent_name, model,
@@ -1237,12 +1283,15 @@ class GroupChatEngine:
         self,
         agent_name: str,
         synthesis_context: str | None = None,
+        no_tools: bool = False,
     ) -> tuple[str, list[str], dict] | None:
         """Run one agent's turn. Returns (content, tools_used, stats) or None on error.
 
         Args:
             synthesis_context: Optional research summary injected before the
                 agent's own prompt (used for leader synthesis in parallel mode).
+            no_tools: If True, disable tool calling (forces pure text response).
+                Useful for synthesis/discussion phases.
         """
         if agent_name not in self.registry:
             return None
@@ -1329,9 +1378,10 @@ class GroupChatEngine:
                 messages=messages,
                 model=model,
                 agent_name=agent_name,
-                max_iterations=5,  # Tool iterations in group chat
+                max_iterations=1 if no_tools else 5,
                 on_content_delta=_delta_cb,
                 on_content_reset=_reset_cb,
+                force_no_tools=no_tools,
             )
             iters = stats.get("iterations", 1)
             latency = stats.get("latency", 0)
