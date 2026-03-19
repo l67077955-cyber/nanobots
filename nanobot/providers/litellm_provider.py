@@ -57,7 +57,10 @@ class LiteLLMProvider(LLMProvider):
         self._compat_flatten: set[str] = set()
         # Providers that reject specific params (discovered on first 400).
         # Maps provider_name → set of kwargs keys to drop.
-        self._compat_drop_params: dict[str, set[str]] = {}
+        self._compat_drop_params: dict[str, set[str]] = {
+            # xAI/Grok models reject presence_penalty, frequency_penalty, repetition_penalty
+            "xai": {"presence_penalty", "frequency_penalty", "repetition_penalty", "top_k", "min_p", "top_a"},
+        }
 
         # Configure environment variables
         if api_key:
@@ -68,6 +71,11 @@ class LiteLLMProvider(LLMProvider):
 
         # Disable LiteLLM logging noise
         litellm.suppress_debug_info = True
+        # Suppress langfuse import errors
+        import os
+        os.environ["LITELLM_LOG"] = "ERROR"
+        litellm.success_callback = []
+        litellm.failure_callback = []
         # Drop unsupported parameters for providers (e.g., gpt-5 rejects some params)
         litellm.drop_params = True
         litellm.modify_params = True
