@@ -12,21 +12,17 @@ import asyncio
 import json
 import random
 import time as _time
-from datetime import datetime, timezone, timedelta
-
-_CST = timezone(timedelta(hours=8))
-
-def _cn_now() -> datetime:
-    """Return current time in China Standard Time (UTC+8)."""
-    return datetime.now(_CST)
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from loguru import logger
 
+from nanobot.groupchat import display as _d
 from nanobot.groupchat.agents import load_agents
 from nanobot.groupchat.config import GroupChatConfig
 from nanobot.groupchat.mailbox import MailboxHub
+from nanobot.groupchat.prompt_builder import PromptBuilder
+from nanobot.groupchat.utils import cn_now as _cn_now
 from nanobot.providers.base import LLMProvider
 
 
@@ -62,8 +58,9 @@ class GroupChatEngine:
         self.workspace = workspace
         self.brave_api_key = brave_api_key
         self._pm_cache: dict | None = None
-        self._mailbox = MailboxHub()
+        self._mailbox = MailboxHub(on_message=self._on_agent_comm)
         self._mode: str = self._load_mode()
+        self._prompt_builder = PromptBuilder(config=config, workspace=workspace)
         self._register_tools()
 
     def _register_tools(self) -> None:
@@ -91,7 +88,7 @@ class GroupChatEngine:
 
         # Register chatroom tools (agent name set per-call)
         from nanobot.groupchat.chatroom_tools import ChatroomSendTool, WaitTool
-        self._chatroom_send_tool = ChatroomSendTool(mailbox=self._mailbox, send_fn=lambda msg: self._send(msg))
+        self._chatroom_send_tool = ChatroomSendTool(mailbox=self._mailbox)
         self._wait_tool = WaitTool(mailbox=self._mailbox)
         self.tools.register(self._chatroom_send_tool)
         self.tools.register(self._wait_tool)
@@ -131,279 +128,14 @@ class GroupChatEngine:
         self._request_log: list[dict[str, Any]] = []  # LLM request log
         self._session_dir: Path | None = None
         self._debug_context: bool = False  # /debug toggles context breakdown logs
-        self._prompt_order: dict[str, list[str]] = self._load_prompt_order()
+        self._prompt_order: dict[str, list[str]] = self._prompt_builder._load_prompt_order()
 
-    # ── Prompt component keys (in default order) ──
-    _DEFAULT_PROMPT_ORDER = [
-        "main_prompt",
-        "group_context",
-        "persona",
-        "tool_instructions",
-        "broadcast_hint",
-        "examples",
-        "history",
-        "instructions",
-        "leader_prompt",
-        "group_nudge",
-    ]
-    _COMPONENT_LABELS = {
-        "main_prompt": "主提示 (main_prompt)",
-        "group_context": "群聊上下文 (group_context)",
-        "persona": "人设/SOUL (persona)",
-        "tool_instructions": "工具指令 (tool_instructions)",
-        "broadcast_hint": "广播协调 (broadcast_hint)",
-        "examples": "示例对话 (examples)",
-        "history": "聊天记录 (history)",
-        "instructions": "后置指令 (instructions)",
-        "leader_prompt": "领袖指令 (leader_prompt)",
-        "group_nudge": "群聊规范 (group_nudge)",
-    }
-    # Components editable via /prompt (global templates with {{agent}})
-    _GLOBAL_EDITABLE = {
-        "main_prompt", "group_context", "tool_instructions", "broadcast_hint",
-        "examples", "instructions", "leader_prompt", "group_nudge",
-    }
-    # Components editable only via /editagent (per-agent files)
-    _AGENT_EDITABLE = {"persona"}
-    _EDITABLE_COMPONENTS = _GLOBAL_EDITABLE | _AGENT_EDITABLE
+    # ── Public access to PromptBuilder ────────────────────────
 
-    def _load_prompt_order(self) -> dict[str, list[str]]:
-        f = Path.home() / ".nanobot" / "prompt_order.json"
-        if f.exists():
-            try:
-                data = json.loads(f.read_text())
-                if isinstance(data, list):
-                    return {"default": data}
-                return data
-            except Exception:
-                pass
-        return {}
-
-    def _save_prompt_order(self) -> None:
-        f = Path.home() / ".nanobot" / "prompt_order.json"
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(self._prompt_order, ensure_ascii=False, indent=2))
-
-    def get_agent_prompt_order(self, agent_name: str = "") -> list[str]:
-        """Get prompt component order (same for all agents)."""
-        return list(self._prompt_order.get("default", self._DEFAULT_PROMPT_ORDER))
-
-    def set_default_prompt_order(self, order: list[str]) -> None:
-        """Set prompt component order for all agents."""
-        self._prompt_order["default"] = order
-        self._save_prompt_order()
-
-    def remove_prompt_component(self, idx: int) -> str:
-        """Remove a component from the order by index."""
-        order = self.get_agent_prompt_order()
-        if idx < 0 or idx >= len(order):
-            return "❌ 无效索引"
-        key = order[idx]
-        if key == "history":
-            return "❌ 聊天记录 (history) 不可删除"
-        label = self._COMPONENT_LABELS.get(key, key)
-        order.pop(idx)
-        self.set_default_prompt_order(order)
-        return f"🗑 已移除: {label}"
-
-    def get_available_components(self) -> list[str]:
-        """Return components not in current order (can be added back)."""
-        current = set(self.get_agent_prompt_order())
-        return [k for k in self._DEFAULT_PROMPT_ORDER if k not in current]
-
-    def get_prompt_components(self, agent_name: str) -> list[dict[str, Any]]:
-        """Return component list with key, label, content preview, char count, editable flag."""
-        agent = self.registry.get(agent_name, {})
-        order = self.get_agent_prompt_order(agent_name)
-        components = []
-        for key in order:
-            content = self._get_component_content(agent_name, agent, key)
-            components.append({
-                "key": key,
-                "label": self._COMPONENT_LABELS.get(key, key),
-                "content": content,
-                "chars": len(content) if content else 0,
-                "editable": key in self._EDITABLE_COMPONENTS,
-            })
-        return components
-
-    def _get_component_content(self, agent_name: str, agent: dict, key: str) -> str:
-        if key == "main_prompt":
-            return (
-                f"Write {agent_name}'s next reply in a fictional group chat. "
-                f"Write 1 reply only in character as {agent_name}. "
-                f"Do not write as or for other characters."
-            )
-        elif key == "group_context":
-            members = ", ".join(self._active_agents) if self._active_agents else "(无)"
-            now = _cn_now().strftime("%Y年%m月%d日 %H:%M")
-            return f"[Start a new group chat. Group members: {members}]\n[Current date and time: {now}]"
-        elif key == "persona":
-            return agent.get("prompt", "")
-        elif key == "tool_instructions":
-            return ""
-        elif key == "examples":
-            return agent.get("examples", "")
-        elif key == "history":
-            return f"[聊天记录 — {len(self._history)} 条消息]"
-        elif key == "instructions":
-            return agent.get("instructions", "")
-        elif key == "leader_prompt":
-            if self._leader == agent_name:
-                return "[Leader prompt — 自动生成]"
-            return ""
-        elif key == "broadcast_hint":
-            # Only rendered when broadcast mode is active;
-            # placeholders filled by broadcast.py
-            return ""
-        elif key == "group_nudge":
-            return (
-                f"[Write the next reply only as {agent_name}. "
-                f"Do NOT write dialogue for other characters. "
-                f"Do NOT prefix your reply with your name (e.g. '{agent_name}:'). "
-                f"Do NOT simulate tool calls in text (e.g. [Search ...], [Check ...]). "
-                f"Stay in character and respond naturally.]"
-            )
-        return ""
-
-    def _get_component_template(self, key: str) -> str:
-        """Return the default template for a component, using {{agent}} as placeholder."""
-        templates = {
-            "main_prompt": (
-                "Write {{agent}}'s next reply in a group chat. "
-                "Write 1 reply only in character as {{agent}}. "
-                "Do not write as or for other characters. "
-                "Focus on executing the user's request — do not just greet or ask what to do."
-            ),
-            "group_context": (
-                "[Start a new group chat. Group members: {{members}}]\n"
-                "[Current date and time: {{datetime}}]"
-            ),
-            "persona": "[从 SOUL.md 加载 — 在 /editagent 中编辑]",
-            "tool_instructions": (
-                "[工具使用规范]\n\n"
-                "可用工具: exec, read_file, write_file, edit_file, list_dir, "
-                "web_search, web_fetch, chatroom_send, wait\n\n"
-                "## 核心原则\n"
-                "- 有工具就用，禁止说「我没有能力」「我无法搜索」。\n"
-                "- 意图明确就直接执行，不要问「需要我搜索吗？」。\n"
-                "- 每次工具调用后检查结果再决定下一步。\n"
-                "- 工具失败→换方案，不要重复同一调用。\n\n"
-                "## 搜索规范\n"
-                "- 时事/新闻: web_search(query=..., freshness=\"pd\") 或 \"pw\"\n"
-                "- 用户给的URL: web_fetch(url=...) 直接读取\n\n"
-                "## 协作通信协议\n"
-                "chatroom_send(to=\"Harper\", message=\"搜索结果...\")\n"
-                "chatroom_send(to=\"All\", message=\"关键发现...\")\n\n"
-                "### 收到消息后的响应规则（关键！）\n"
-                "收到队友消息时：执行请求 → 用 chatroom_send 回复结果。\n"
-                "禁止：只在最终回复里提到，而不通过 chatroom_send 回复发送者。\n\n"
-                "wait(timeout=30) 等待消息，不要超过60s。"
-            ),
-            "broadcast_hint": (
-                "[广播模式 — 技术研究协作环境]\n"
-                "你是 {{agent_idx}}/{{total}} 号研究助手，代号 {{agent}}\n"
-                "队友: {{teammates}}\n\n"
-                "⚠️ 研究任务: {{user_question}}\n\n"
-                "## 立即行动\n"
-                "使用工具执行任务。不要打招呼、不要问「有什么任务」。\n\n"
-                "## 协作流程\n"
-                "1. 立即搜索，选择与队友不同的角度/关键词\n"
-                "2. 搜到初步结果 → chatroom_send(to=\"All\", message=\"初步结果: ...\") 分享\n"
-                "3. 继续深入 → chatroom_send 发送更新版本\n"
-                "4. 收到队友结果 → chatroom_send 回复确认或补充\n"
-                "5. wait 超时没收到回复 → 主动再发一次提醒\n\n"
-                "## 通信时序\n"
-                "发消息: chatroom_send(to=\"目标\", message=\"内容\")\n"
-                "等回复: wait(timeout=30)\n"
-                "超时继续工作并主动再分享"
-            ),
-            "examples": "",
-            "history": "[聊天记录 — 自动插入]",
-            "instructions": "",
-            "leader_prompt": (
-                "[你是 GROUP LEADER 👑。你的职责：\n"
-                "- 分析用户请求，制定计划\n"
-                "- 其他 agent 已先发言，请审阅他们的回复\n"
-                "- 纠正错误信息，补充遗漏，去重整合\n"
-                "- 给出最终汇总回复]"
-            ),
-            "group_nudge": (
-                "[Write the next reply only as {{agent}}. "
-                "Do NOT write dialogue for other characters. "
-                "Do NOT prefix your reply with your name (e.g. '{{agent}}:'). "
-                "Do NOT simulate tool calls in text — no XML tags like <web_search>, <tool>, "
-                "<function_call>, [Search ...], [Check ...] etc. "
-                "If you need to use a tool, use the function calling API, not text. "
-                "Stay in character and respond naturally.]"
-            ),
-        }
-        return templates.get(key, "")
-
-    def update_prompt_component(self, agent_name: str, key: str, content: str) -> str:
-        """Update a component's content. Persists to file where applicable."""
-        if key not in self._EDITABLE_COMPONENTS:
-            return f"❌ 组件 '{key}' 不可编辑"
-
-        # Global template edit (from /prompt)
-        if agent_name == "__global__":
-            overrides_file = Path.home() / ".nanobot" / "prompt_overrides.json"
-            overrides: dict = {}
-            if overrides_file.exists():
-                try:
-                    overrides = json.loads(overrides_file.read_text())
-                except Exception:
-                    pass
-            overrides.setdefault("__global__", {})[key] = content
-            overrides_file.parent.mkdir(parents=True, exist_ok=True)
-            overrides_file.write_text(json.dumps(overrides, ensure_ascii=False, indent=2))
-            label = self._COMPONENT_LABELS.get(key, key)
-            return f"✅ 已更新全局模板: {label}\n💡 使用 {{{{agent}}}} 代表 agent 名字"
-
-        # Per-agent edit (from /editagent)
-        agent = self.registry.get(agent_name)
-        if not agent:
-            return f"❌ Agent '{agent_name}' 不存在"
-
-        if key == "persona":
-            agent["prompt"] = content
-            self._persist_agent_file(agent_name, "SOUL.md", content)
-        elif key == "examples":
-            agent["examples"] = content
-            self._persist_agent_file(agent_name, "EXAMPLES.md", content)
-        elif key == "instructions":
-            agent["instructions"] = content
-            self._persist_agent_file(agent_name, "INSTRUCTIONS.md", content)
-        elif key in ("main_prompt", "tool_instructions", "group_nudge"):
-            # These are templates — store overrides in a JSON file
-            overrides_file = Path.home() / ".nanobot" / "prompt_overrides.json"
-            overrides: dict = {}
-            if overrides_file.exists():
-                try:
-                    overrides = json.loads(overrides_file.read_text())
-                except Exception:
-                    pass
-            overrides.setdefault(agent_name, {})[key] = content
-            overrides_file.write_text(json.dumps(overrides, ensure_ascii=False, indent=2))
-            # Also update in-memory for _get_component_content
-            agent[f"_override_{key}"] = content
-
-        return f"✅ 已更新 {agent_name} 的 {self._COMPONENT_LABELS.get(key, key)}"
-
-    def _persist_agent_file(self, agent_name: str, filename: str, content: str) -> None:
-        """Write content to the agent's workspace file."""
-        agents_dir = Path(self.config.agents_dir or "~/.nanobot/agents").expanduser()
-        if not agents_dir.is_absolute():
-            agents_dir = self.workspace / self.config.agents_dir
-        # Find the agent dir (case-insensitive match)
-        for d in agents_dir.iterdir():
-            if d.is_dir() and d.name.lower() == agent_name.lower():
-                ws = d / "workspace"
-                ws.mkdir(parents=True, exist_ok=True)
-                (ws / filename).write_text(content)
-                logger.info("Persisted {} for agent {} ({} chars)", filename, agent_name, len(content))
-                return
-        logger.warning("Could not find agent dir for {}", agent_name)
+    @property
+    def prompt_builder(self) -> PromptBuilder:
+        """Public access to the prompt builder (used by telegram, broadcast)."""
+        return self._prompt_builder
 
     @property
     def is_running(self) -> bool:
@@ -434,6 +166,62 @@ class GroupChatEngine:
     def set_on_round_done(self, cb: Callable[[], Awaitable[None]]) -> None:
         """Set callback invoked when all agents finish speaking in a round."""
         self._on_round_done = cb
+
+    # ── Public API (used by channels) ─────────────────────────
+
+    @property
+    def mode(self) -> str:
+        """Current chat mode (e.g. 'broadcast', 'orchestra')."""
+        return self._mode
+
+    @property
+    def history(self) -> list[dict[str, str]]:
+        """Chat message history."""
+        return self._history
+
+    @property
+    def request_log(self) -> list[dict[str, Any]]:
+        """LLM request log for the current session."""
+        return self._request_log
+
+    @property
+    def has_send_fn(self) -> bool:
+        """Whether a send callback is registered."""
+        return self._send_fn is not None
+
+    @property
+    def has_edit_fn(self) -> bool:
+        """Whether edit callbacks are registered."""
+        return self._edit_fn is not None
+
+    @property
+    def has_on_round_done(self) -> bool:
+        """Whether a round-done callback is registered."""
+        return self._on_round_done is not None
+
+    def resolve_agent_name(self, name: str) -> str | None:
+        """Case-insensitive agent name lookup. Returns canonical name or None."""
+        return self._resolve_agent_name(name)
+
+    def load_groups(self) -> dict[str, list[str]]:
+        """Load saved agent groups from disk."""
+        return self._load_groups()
+
+    def save_groups(self, groups: dict[str, list[str]]) -> None:
+        """Save agent groups to disk."""
+        self._save_groups(groups)
+
+    def save_active(self) -> None:
+        """Persist the current active agents list to disk."""
+        self._save_active()
+
+    def reset(self) -> None:
+        """Clear history, request log, active agents, and stop the loop."""
+        self.stop()
+        self._history.clear()
+        self._request_log.clear()
+        self._active_agents.clear()
+        self._session_dir = None
 
     # ── Agent Management ─────────────────────────────────────
 
@@ -861,11 +649,6 @@ class GroupChatEngine:
 
         # ── Callbacks ──
 
-        _TOOL_ICONS = {
-            "web_search": "🔍", "web_fetch": "🌐", "exec": "⚡",
-            "read_file": "📖", "write_file": "✏️", "edit_file": "✏️",
-            "list_dir": "📁",
-        }
 
         _tool_msg_id: int | None = None  # Track message ID for tool call consolidation
         _tool_msg_text: str = ""  # Store original message text for editing
@@ -876,6 +659,11 @@ class GroupChatEngine:
             _tool_msg_text = ""
             if not isinstance(args, dict):
                 args = {}
+            # Persist tool_call event
+            self._save_event("tool_call", agent=agent_name, extra={
+                "tool": name,
+                "args": {k: (v[:200] if isinstance(v, str) else v) for k, v in args.items()},
+            })
             short = (
                 args.get("command") or args.get("query")
                 or args.get("url") or args.get("path") or ""
@@ -884,8 +672,8 @@ class GroupChatEngine:
                 short = list(args.values())[0]
             if isinstance(short, str) and len(short) > 80:
                 short = short[:80] + "…"
-            icon = _TOOL_ICONS.get(name, "🔧")
-            text = f"{icon} {agent_name}: {name}({short})"
+            icon = _d.tool_icon(name)
+            text = _d.tool_call_line(agent_name, name, short if isinstance(short, str) else str(short))
             _tool_msg_text = text
             # Try to send as editable message
             if self._send_and_get_id_fn:
@@ -895,6 +683,12 @@ class GroupChatEngine:
 
         async def _on_tool_result(name: str, tool_call_id: str, result: str) -> None:
             nonlocal _tool_msg_id, _tool_msg_text
+            # Persist tool_result event
+            self._save_event("tool_result", agent=agent_name, extra={
+                "tool": name,
+                "result_len": len(result) if result else 0,
+                "success": not (result or "").startswith("Error:"),
+            })
             if not result:
                 _tool_msg_id = None
                 return
@@ -996,6 +790,21 @@ class GroupChatEngine:
         agent_name = self._active_agents[0]
         agent = self.registry[agent_name]
 
+        # Ensure session directory exists for structured logging
+        if not self._session_dir:
+            timestamp = _cn_now().strftime("%Y%m%d-%H%M%S")
+            sessions_dir = Path.home() / ".nanobot" / "collab-sessions"
+            sessions_dir.mkdir(parents=True, exist_ok=True)
+            self._session_dir = sessions_dir / f"gc-{timestamp}"
+            self._session_dir.mkdir(parents=True, exist_ok=True)
+            self._save_event("session_start", extra={
+                "agents": [agent_name],
+                "mode": "direct",
+                "topic": self._topic or "",
+                "leader": None,
+                "models": {agent_name: agent.get("model", "?")},
+            })
+
         # Build messages matching SillyTavern's minimal flow:
         # system(persona) → [history as user/assistant] → user(new)
         now = _cn_now().strftime("%Y年%m月%d日 %H:%M")
@@ -1009,7 +818,7 @@ class GroupChatEngine:
             messages.append({"role": "system", "content": f"以下是对话风格示例：\n{examples}"})
 
         # Chat history as proper alternating messages
-        messages.extend(self._history_to_messages(agent_name))
+        messages.extend(PromptBuilder.history_to_messages(self._history, agent_name))
 
         # Current user message
         messages.append({"role": "user", "content": user_message})
@@ -1146,6 +955,15 @@ class GroupChatEngine:
         self._session_dir = sessions_dir / f"gc-{timestamp}"
         self._session_dir.mkdir(parents=True, exist_ok=True)
 
+        # Write session metadata to structured log
+        self._save_event("session_start", extra={
+            "agents": list(self._active_agents),
+            "mode": self._mode,
+            "topic": self._topic,
+            "leader": self._leader,
+            "models": {n: self.registry.get(n, {}).get("model", "?") for n in self._active_agents},
+        })
+
         self._task = asyncio.create_task(self._run_loop())
         logger.info("Group chat loop started with {}", self._active_agents)
 
@@ -1170,32 +988,64 @@ class GroupChatEngine:
         if self._session_dir:
             with open(self._session_dir / "chat_log.txt", "a") as f:
                 f.write(f"[{sender}]: {content}\n---\n")
+        self._save_event("message", agent=sender, content=content)
+
+    def _save_event(
+        self,
+        event_type: str,
+        *,
+        agent: str = "",
+        content: str = "",
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        """Append a structured event to session.jsonl.
+
+        Event types: session_start, round_start, round_end, message,
+                     tool_call, tool_result, agent_comm, system.
+        """
+        if not self._session_dir:
+            return
+        record: dict[str, Any] = {
+            "type": event_type,
+            "ts": _cn_now().isoformat(),
+        }
+        if agent:
+            record["agent"] = agent
+        if content:
+            record["content"] = content
+        if extra:
+            record.update(extra)
+        try:
+            with open(self._session_dir / "session.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        except Exception as e:
+            logger.debug("_save_event failed: {}", e)
+
+    def _save_round_summary(
+        self,
+        round_num: int,
+        agents_responded: int,
+        comm_count: int = 0,
+        duration: float = 0.0,
+    ) -> None:
+        """Write a round_end event summarizing the round."""
+        self._save_event("round_end", extra={
+            "round": round_num,
+            "agents_responded": agents_responded,
+            "comm_count": comm_count,
+            "duration": round(duration, 2),
+        })
+
+    def _on_agent_comm(self, sender: str, targets: list[str], content: str) -> None:
+        """Callback from MailboxHub.send() — persist agent communication."""
+        self._save_event("agent_comm", agent=sender, content=content, extra={
+            "targets": targets,
+        })
 
     def _format_history(self) -> str:
         return "\n\n".join(f"[{m['sender']}]: {m['content']}" for m in self._history)
 
-    def _history_to_messages(self, current_agent: str = "") -> list[dict[str, Any]]:
-        """Convert history into proper API messages (SillyTavern style).
 
-        Uses `name` field + content prefix for attribution,
-        matching SillyTavern's DEFAULT character_names_behavior.
-        """
-        msgs: list[dict[str, Any]] = []
-        for m in self._history:
-            sender = m["sender"]
-            content = m["content"]
-            if sender == "用户":
-                msgs.append({"role": "user", "content": content})
-            elif sender == "系统":
-                msgs.append({"role": "system", "content": content})
-            else:
-                # SillyTavern DEFAULT: name field + content prefix
-                msgs.append({
-                    "role": "assistant",
-                    "content": f"{sender}: {content}",
-                    "name": sender.replace(" ", "_"),
-                })
-        return msgs
 
     def _pick_next_speaker(self, last_content: str = "") -> str:
         names = self._active_agents
@@ -1216,73 +1066,17 @@ class GroupChatEngine:
         return random.choice(candidates) if candidates else random.choice(names)
 
     def _build_agent_prompt(self, agent_name: str) -> list[dict[str, Any]]:
-        """Build prompt with configurable component order.
+        """Build prompt — delegates to PromptBuilder."""
+        return self._prompt_builder.build_agent_prompt(
+            agent_name,
+            registry=self.registry,
+            active_agents=self._active_agents,
+            history=self._history,
+            leader=self._leader,
+            round_num=self._round,
+        )
 
-        Component order is configurable via /prompt command (global).
-        Template overrides use {{agent}}, {{members}}, {{datetime}}, etc.
-        Overrides stored in ~/.nanobot/prompt_overrides.json under __global__ key.
-        """
-        agent = self.registry[agent_name]
-        order = self.get_agent_prompt_order()
 
-        # Load global template overrides
-        overrides = self._load_prompt_overrides("__global__")
-
-        # Template variables for expansion
-        members_list = ", ".join(self._active_agents) if self._active_agents else "(无)"
-        other_members = [a for a in self._active_agents if a != agent_name]
-        now = _cn_now().strftime("%Y年%m月%d日 %H:%M")
-        tool_names = "web_search, web_fetch, exec, read_file, write_file, edit_file, list_dir"
-        tpl_vars = {
-            "{{agent}}": agent_name,
-            "{{members}}": members_list,
-            "{{datetime}}": now,
-            "{{round}}": str(self._round),
-            "{{tools}}": tool_names,
-            "{{others}}": ", ".join(other_members),
-        }
-
-        messages: list[dict[str, Any]] = []
-        for key in order:
-            if key == "history":
-                messages.extend(self._history_to_messages(agent_name))
-                continue
-            if key == "leader_prompt" and self._leader != agent_name:
-                continue
-
-            # Check for global override first, then default content
-            override = overrides.get(key)
-            if override:
-                content = self._expand_template_vars(override, tpl_vars)
-            else:
-                content = self._get_component_content(agent_name, agent, key)
-            if not content:
-                continue
-            # Wrap examples with label
-            if key == "examples":
-                content = f"[Example Chat]\n{content}"
-            messages.append({"role": "system", "content": content})
-
-        return messages
-
-    @staticmethod
-    def _expand_template_vars(text: str, tpl_vars: dict[str, str]) -> str:
-        """Expand template variables like {{agent}}, {{members}}, etc."""
-        for key, val in tpl_vars.items():
-            text = text.replace(key, val)
-        return text
-
-    @staticmethod
-    def _load_prompt_overrides(agent_name: str) -> dict[str, str]:
-        """Load template overrides from prompt_overrides.json."""
-        f = Path.home() / ".nanobot" / "prompt_overrides.json"
-        if f.exists():
-            try:
-                data = json.loads(f.read_text())
-                return data.get(agent_name, {})
-            except Exception:
-                pass
-        return {}
 
     async def _agent_speak(
         self,
@@ -1348,9 +1142,7 @@ class GroupChatEngine:
 
         total = len(self._active_agents)
         idx = self._active_agents.index(agent_name) + 1 if agent_name in self._active_agents else 0
-        badge = " 👑" if self._leader == agent_name else ""
-        round_tag = f" [{idx}/{total}]" if total > 1 else ""
-        _header = f"💬 {agent_name}{badge}{round_tag}:\n\n"
+        _header = _d.agent_header(agent_name, leader=self._leader, idx=idx, total=total)
 
         async def _on_delta(delta: str) -> None:
             nonlocal _stream_msg_id, _last_edit
@@ -1377,7 +1169,7 @@ class GroupChatEngine:
             # Update Telegram message to show tool status instead of stale content
             if _stream_msg_id and self._edit_fn:
                 try:
-                    await self._edit_fn(_stream_msg_id, f"{_header}🔧 使用工具中...")
+                    await self._edit_fn(_stream_msg_id, _d.tool_in_progress_msg(_header))
                 except Exception:
                     pass
 
@@ -1407,7 +1199,7 @@ class GroupChatEngine:
                 # ── Error: do NOT add to history, show warning ──
                 err_short = content[:150] if content else "Unknown error"
                 logger.error("Agent {} LLM error ({}s): {}", agent_name, latency, err_short)
-                err_msg = f"⚠️ {agent_name} 请求失败 ({latency}s): {err_short}"
+                err_msg = _d.error_msg(agent_name, err_short, latency)
                 if _stream_msg_id and self._edit_fn:
                     try:
                         await self._edit_fn(_stream_msg_id, err_msg)
@@ -1425,12 +1217,7 @@ class GroupChatEngine:
                 })
                 return None
 
-            if tools_used:
-                completion_msg = f"✅ {agent_name} 完成 ({latency}s, {iters}次迭代, 工具: {', '.join(tools_used)})"
-            elif latency > 0:
-                completion_msg = f"✅ {agent_name} 完成 ({latency}s)"
-            else:
-                completion_msg = ""
+            completion_msg = _d.completion_msg(agent_name, latency, iters, tools_used)
 
             self._request_log.append({
                 "agent": agent_name, "model": model,
@@ -1483,7 +1270,7 @@ class GroupChatEngine:
                 "reply_len": 0, "time": _cn_now().strftime("%H:%M:%S"),
                 "mode": "group", "error": str(e),
             })
-            await self._send(f"⚠️ {agent_name} 回复失败: {e}")
+            await self._send(_d.error_msg(agent_name, str(e)))
             return None
 
     # ── Parallel Leader Mode (Orchestra) ─────────────────────────────
@@ -1821,9 +1608,8 @@ class GroupChatEngine:
                     for si, name in enumerate(speak_order):
                         if not self._running or name not in self._active_agents:
                             break
-                        badge = " 👑" if self._leader == name else ""
                         model_short = self.registry.get(name, {}).get("model", "?").split("/")[-1]
-                        await self._send(f"⏳ {name}{badge} 思考中... ({model_short}) [{si+1}/{len(speak_order)}]")
+                        await self._send(_d.thinking_msg(name, model_short, leader=self._leader, idx=si+1, total=len(speak_order)))
                         await asyncio.sleep(self.config.auto_reply_delay)
                         await self._agent_speak(name)
 

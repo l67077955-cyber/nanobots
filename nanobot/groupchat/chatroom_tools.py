@@ -2,14 +2,66 @@
 
 Provides ``chatroom_send`` and ``wait`` tools that agents use
 to communicate with each other during broadcast group chat rounds.
+Also contains ``CachedSearchTool`` for cross-agent search deduplication.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from nanobot.agent.tools.base import Tool
-from nanobot.groupchat.mailbox import MailboxHub
+from nanobot.groupchat.mailbox import MailboxHub, ConversationPool, SpeakQueue
+
+
+class CachedSearchTool(Tool):
+    """Wrapper around WebSearchTool with cross-agent dedup cache.
+
+    All agents in a broadcast round share a single cache dict.
+    If agent B searches the same query agent A already searched,
+    B gets cached results + a hint to try different keywords.
+    """
+
+    name = "web_search"
+
+    def __init__(self, original: Tool, agent_name: str, cache: dict) -> None:
+        self._original = original
+        self._agent_name = agent_name
+        self._cache = cache
+
+    @property
+    def description(self):
+        return self._original.description
+
+    @property
+    def parameters(self):
+        return self._original.parameters
+
+    @staticmethod
+    def _normalize_query(q: str) -> str:
+        """Normalize query for cache lookup (lowercase, strip, collapse spaces)."""
+        return re.sub(r'\s+', ' ', q.lower().strip())
+
+    async def execute(self, **kwargs):
+        query = kwargs.get("query", "")
+        norm_q = self._normalize_query(query)
+
+        # Check cache for exact or near-duplicate match
+        if norm_q in self._cache:
+            cached_result, searcher = self._cache[norm_q]
+            return (
+                f"[CACHED] {searcher} 已经搜过相同的关键词。结果如下：\n"
+                f"{cached_result}\n\n"
+                f"💡 请使用不同的关键词、角度或语言来搜索，"
+                f"避免重复劳动。"
+            )
+
+        # Execute real search
+        result = await self._original.execute(**kwargs)
+
+        # Cache the result
+        self._cache[norm_q] = (result, self._agent_name)
+        return result
 
 
 class ChatroomSendTool(Tool):
@@ -20,10 +72,11 @@ class ChatroomSendTool(Tool):
     user with ``"User"``.
     """
 
-    def __init__(self, mailbox: MailboxHub, agent_name: str = "", send_fn=None) -> None:
+    def __init__(self, mailbox: MailboxHub, agent_name: str = "", pool: ConversationPool | None = None) -> None:
         self._mailbox = mailbox
         self._agent_name = agent_name  # Set per-round by the engine
-        self._send_fn = send_fn  # engine._send_fn for User target
+        self._pool = pool
+        self._last_received_from: str | None = None  # track who we last received from
 
     def set_agent(self, name: str) -> None:
         """Set which agent is using this tool instance."""
@@ -37,16 +90,16 @@ class ChatroomSendTool(Tool):
     def description(self) -> str:
         return (
             "Send a message to other agents in the group chat. "
-            "REQUIRES two parameters: 'to' (target agent name, \"All\", or \"User\") and 'message' (the content). "
+            "REQUIRES two parameters: 'to' (target agent name or \"All\") and 'message' (the content). "
             "Use cases: (1) Share your findings with teammates, "
             "(2) Reply to a teammate's request with your results, "
-            "(3) Ask a teammate for help or information, "
-            "(4) Send final summary to the user with to=\"User\". "
+            "(3) Ask a teammate for help or information. "
             "IMPORTANT: When you receive a message from a teammate (via wait), "
             "you MUST reply back using chatroom_send — do not just include it in your final text response. "
             "Example: chatroom_send(to=\"Harper\", message=\"我搜到了3篇相关论文: ...\") "
-            "Example: chatroom_send(to=\"User\", message=\"最终总结: ...\") "
-            "Set 'to' to a specific agent name, a list of names, \"All\" to broadcast, or \"User\" to send to user."
+            "Example: chatroom_send(to=\"All\", message=\"我的发现: ...\") "
+            "Set 'to' to a specific agent name, a list of names, or \"All\" to broadcast. "
+            "注意：不要发送给 User，你的文字回复会自动展示给用户。"
         )
 
     @property
@@ -57,8 +110,8 @@ class ChatroomSendTool(Tool):
                 "to": {
                     "description": (
                         "Target agent name(s). Can be a single name (e.g. \"Harper\"), "
-                        "a list (e.g. [\"Harper\", \"Lucas\"]), \"All\" to broadcast "
-                        "to everyone, or \"User\" to send summary to user."
+                        "a list (e.g. [\"Harper\", \"Lucas\"]), or \"All\" to broadcast "
+                        "to everyone. Do NOT send to \"User\"."
                     ),
                     # Accept both string and array via oneOf
                     "oneOf": [
@@ -88,34 +141,40 @@ class ChatroomSendTool(Tool):
         else:
             targets = [str(to)]
 
-        # Handle "User" target — display directly to user
-        user_sent = False
-        agent_targets = []
-        for t in targets:
-            if t.lower() == "user":
-                user_sent = True
-            else:
-                agent_targets.append(t)
+        # Reject "User" target — agent text response is auto-displayed
+        targets = [t for t in targets if t.lower() != "user"]
+        if not targets:
+            return "⚠️ 不支持发送给 User。你的文字回复会自动展示给用户，直接写在回复里即可。"
 
-        results = []
-        if user_sent and self._send_fn:
-            import asyncio
-            try:
-                await self._send_fn(
-                    f"📋 **{self._agent_name} → 用户**:\n{message}"
+        # Deduplicate: "All" already includes everyone, strip individual names
+        if any(t.lower() == "all" for t in targets):
+            targets = ["All"]
+
+        # Expand "All" to actual agent names for slot counting
+        if "All" in targets:
+            actual_recipients = [a for a in self._mailbox.agent_names if a != self._agent_name]
+        else:
+            actual_recipients = [t for t in targets if t != self._agent_name]
+
+        # Allocate conversation slots (blocks if pool exhausted)
+        if self._pool:
+            ok = await self._pool.allocate(self._agent_name, actual_recipients)
+            if not ok:
+                return (
+                    f"BLOCKED: pool full ({self._pool.used}/{self._pool.capacity}), "
+                    "message dropped. Use wait() to free slots, or send to fewer people."
                 )
-                results.append("✅ 已发送给用户")
-            except Exception:
-                results.append("⚠️ 发送给用户失败")
-            # Also record in mailbox history
-            self._mailbox.send(self._agent_name, ["User"], message)
+            # If replying to someone who sent us a message, mark it replied
+            if self._last_received_from:
+                self._pool.mark_replied(self._agent_name, self._last_received_from)
 
-        if agent_targets:
-            delivered = self._mailbox.send(self._agent_name, agent_targets, message)
-            target_str = ", ".join(agent_targets)
-            results.append(f"✅ 消息已发送给 {target_str} ({delivered} 个 agent 收到)")
+        delivered = self._mailbox.send(self._agent_name, targets, message)
 
-        return "  ".join(results) if results else "Error: no valid targets"
+        avail_hint = ""
+        if self._pool:
+            avail_hint = f" [{self._pool.used}/{self._pool.capacity} threads]"
+        target_str = ", ".join(targets)
+        return f"✅ sent to {target_str} ({delivered} delivered){avail_hint}"
 
 
 class WaitTool(Tool):
@@ -125,9 +184,11 @@ class WaitTool(Tool):
     in its mailbox, or the timeout is reached.
     """
 
-    def __init__(self, mailbox: MailboxHub, agent_name: str = "") -> None:
+    def __init__(self, mailbox: MailboxHub, agent_name: str = "", pool: ConversationPool | None = None) -> None:
         self._mailbox = mailbox
         self._agent_name = agent_name
+        self._pool = pool
+        self._send_tool: ChatroomSendTool | None = None  # linked for last_received tracking
 
     def set_agent(self, name: str) -> None:
         """Set which agent is using this tool instance."""
@@ -177,6 +238,11 @@ class WaitTool(Tool):
         if not self._agent_name:
             return "Error: agent context not set"
 
+        # Release unread slots before waiting ("not replying" to pending messages)
+        released = 0
+        if self._pool:
+            released = self._pool.release_unread(self._agent_name)
+
         msg = await self._mailbox.wait(
             agent_name=self._agent_name,
             timeout=float(min(timeout, 120)),
@@ -187,4 +253,68 @@ class WaitTool(Tool):
             source = f"来自 {from_agent} 的" if from_agent else ""
             return f"⏰ 等待超时 ({timeout}s)，未收到{source}消息"
 
+        # Track who we received from → next chatroom_send knows it's a "reply"
+        if self._send_tool:
+            self._send_tool._last_received_from = msg.sender
+
         return f"[{msg.sender}]: {msg.content}"
+
+
+class YieldTurnTool(Tool):
+    """Yield the current speaking turn to a specific teammate.
+
+    When an agent decides another teammate is better suited to speak
+    next, it can yield its turn. The yielding agent's timestamp is
+    refreshed (counts as having spoken), so it moves to the back of
+    the LRU queue.
+    """
+
+    def __init__(self, speak_queue: SpeakQueue, agent_name: str = "") -> None:
+        self._speak_queue = speak_queue
+        self._agent_name = agent_name
+
+    def set_agent(self, name: str) -> None:
+        self._agent_name = name
+
+    @property
+    def name(self) -> str:
+        return "yield_turn"
+
+    @property
+    def description(self) -> str:
+        return (
+            "让出你的发言机会给指定队友。"
+            "使用场景：你觉得某个队友更适合先发言，或你暂时没有新观点。"
+            "让出后，你的发言顺序会被刷新（视为已发言），排到队列后面。"
+            "Example: yield_turn(to=\"Harper\", reason=\"她对这个话题更专业\")"
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "to": {
+                    "type": "string",
+                    "description": "要让出发言机会的队友名字",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "让出的原因（可选）",
+                },
+            },
+            "required": ["to"],
+        }
+
+    async def execute(self, to: str = "", reason: str = "", **kwargs: Any) -> str:
+        if not self._agent_name:
+            return "Error: agent context not set"
+        if not to:
+            return "Error: 必须指定让出给谁 (to)"
+
+        ok = await self._speak_queue.yield_to(self._agent_name, to)
+        if not ok:
+            return f"⚠️ 队友 '{to}' 不存在"
+
+        reason_str = f"（原因: {reason}）" if reason else ""
+        return f"✅ 已将发言机会让给 {to}{reason_str}"

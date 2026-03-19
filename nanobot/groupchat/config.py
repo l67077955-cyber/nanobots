@@ -26,6 +26,6 @@ class GroupChatConfig(Base):
     excluded_agents: list[str] = Field(default_factory=list)
     max_rounds: int = 30
     max_history: int = 50
-    auto_reply_delay: int = 5  # seconds between agent turns
+    auto_reply_delay: int = 0  # seconds between agent turns
     max_tokens: int = 3000  # max tokens per agent response (match SillyTavern)
 

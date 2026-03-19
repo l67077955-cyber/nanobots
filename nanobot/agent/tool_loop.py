@@ -73,7 +73,28 @@ _THINK_RE = re.compile(r"<think>[\s\S]*?</think>")
 # Tools that are idempotent and safe to dedup (same args => same result).
 # chatroom_send is included to prevent agents from looping identical messages
 # (e.g. sending the same greeting over and over, consuming all iterations).
-_DEDUP_TOOLS = frozenset({"web_search", "web_fetch", "chatroom_send"})
+_DEDUP_TOOLS = frozenset({
+    "web_search", "web_fetch", "chatroom_send",
+    "exec", "list_dir", "read_file",
+})
+
+# Shell redirections to strip when normalizing exec commands for dedup.
+_SHELL_REDIR_RE = re.compile(
+    r'\s*(?:2>&1|2>/dev/null|>/dev/null|2>\s*\S+|&>\s*\S+)\s*',
+)
+
+
+def _normalize_dedup_args(name: str, arguments: dict) -> str:
+    """Build a normalized dedup key for a tool call.
+
+    For ``exec``, strip trailing shell redirections (e.g. ``2>&1``) so that
+    ``git clone foo 2>&1`` and ``git clone foo`` are treated as identical.
+    """
+    if name == "exec" and "command" in arguments:
+        norm = dict(arguments)
+        norm["command"] = _SHELL_REDIR_RE.sub("", norm["command"]).strip()
+        return f"{name}:{json.dumps(norm, sort_keys=True, ensure_ascii=False)}"
+    return f"{name}:{json.dumps(arguments, sort_keys=True, ensure_ascii=False)}"
 
 
 def _strip_think(text: str | None) -> str | None:
@@ -259,13 +280,10 @@ async def tool_loop(
                 args_str = json.dumps(tc.arguments, ensure_ascii=False)
                 logger.info("tool_loop: {}({})", tc.name, args_str[:200])
 
-                if on_tool_start:
-                    await on_tool_start(tc.name, tc.arguments)
-
-                # ── Dedup check for idempotent tools ──
+                # ── Dedup check BEFORE display (so dupes are silent) ──
                 dedup_key = None
                 if tc.name in _DEDUP_TOOLS:
-                    dedup_key = f"{tc.name}:{json.dumps(tc.arguments, sort_keys=True, ensure_ascii=False)}"
+                    dedup_key = _normalize_dedup_args(tc.name, tc.arguments)
                     if dedup_key in _seen_calls:
                         tool_result = (
                             _seen_calls[dedup_key]
@@ -288,14 +306,16 @@ async def tool_loop(
                             "iteration": iteration,
                             "duplicate": True,
                         })
-                        if on_tool_result:
-                            await on_tool_result(tc.name, tc.id, tool_result)
+                        # Skip on_tool_start — user doesn't see dupes
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tc.id,
                             "content": tool_result[:result_max_chars],
                         })
                         continue
+
+                if on_tool_start:
+                    await on_tool_start(tc.name, tc.arguments)
 
                 tc_start = _time.time()
                 tc_error = None

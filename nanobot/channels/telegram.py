@@ -20,6 +20,11 @@ from nanobot.channels.base import BaseChannel
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import TelegramConfig
 from nanobot.groupchat.engine import GroupChatEngine
+from nanobot.groupchat import display as _d
+from nanobot.groupchat.prompt_builder import (
+    PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
+    GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
+)
 from nanobot.utils.helpers import split_message
 
 TELEGRAM_MAX_MESSAGE_LEN = 4000  # Telegram message character limit
@@ -567,12 +572,12 @@ class TelegramChannel(BaseChannel):
 
     def _ensure_gc_send(self, chat_id: str) -> None:
         """Ensure the group chat engine has send/edit callbacks for this chat."""
-        if self._groupchat_engine and not self._groupchat_engine._send_fn:
+        if self._groupchat_engine and not self._groupchat_engine.has_send_fn:
             async def send_fn(text: str) -> None:
                 await self._gc_send(chat_id, text)
             self._groupchat_engine.set_send_fn(send_fn)
 
-        if self._groupchat_engine and not self._groupchat_engine._edit_fn:
+        if self._groupchat_engine and not self._groupchat_engine.has_edit_fn:
             int_chat_id = int(chat_id)
 
             async def send_and_get_id_fn(text: str) -> int | None:
@@ -603,7 +608,7 @@ class TelegramChannel(BaseChannel):
 
             self._groupchat_engine.set_edit_fn(edit_fn, send_and_get_id_fn)
 
-        if self._groupchat_engine and not self._groupchat_engine._on_round_done:
+        if self._groupchat_engine and not self._groupchat_engine.has_on_round_done:
             async def on_round_done() -> None:
                 self._stop_typing(chat_id)
             self._groupchat_engine.set_on_round_done(on_round_done)
@@ -628,7 +633,7 @@ class TelegramChannel(BaseChannel):
         pm = self._load_pm()
         for name, info in registry.items():
             status = "🟢" if name in active else "⚪"
-            leader = " 👑" if self._groupchat_engine.leader == name else ""
+            leader = _d.agent_badge(name, self._groupchat_engine.leader)
             model = info.get("model", "?")
             # Tools summary
             from nanobot.groupchat.engine import GroupChatEngine
@@ -701,7 +706,7 @@ class TelegramChannel(BaseChannel):
 
         args = context.args or []
         if not args:
-            current = self._groupchat_engine._mode
+            current = self._groupchat_engine.mode
             labels = {"serial": "串行轮流", "broadcast": "广播乱序"}
             buttons = [
                 [InlineKeyboardButton(
@@ -779,7 +784,7 @@ class TelegramChannel(BaseChannel):
             await update.message.reply_text("⚠️ 未配置 agent")
             return
         name = " ".join(context.args) if context.args else ""
-        if name and self._groupchat_engine._resolve_agent_name(name):
+        if name and self._groupchat_engine.resolve_agent_name(name):
             await update.message.reply_text(f"⚠️ Agent '{name}' 已存在，用 /editagent 修改")
             return
         chat_id = str(update.message.chat_id)
@@ -816,7 +821,7 @@ class TelegramChannel(BaseChannel):
                 buttons.append([InlineKeyboardButton(f"{n} ({model})", callback_data=f"edit:{n}")])
             await update.message.reply_text("✏️ 选择要编辑的 Agent:", reply_markup=InlineKeyboardMarkup(buttons))
             return
-        matched = self._groupchat_engine._resolve_agent_name(name)
+        matched = self._groupchat_engine.resolve_agent_name(name)
         if not matched:
             await update.message.reply_text(f"❌ Agent '{name}' 不存在")
             return
@@ -1370,7 +1375,7 @@ class TelegramChannel(BaseChannel):
 
         elif data.startswith("log_pg:"):
             page = int(data[7:])
-            logs = self._groupchat_engine._request_log
+            logs = self._groupchat_engine.request_log
             text, markup = self._build_log_page_v2(logs, page)
             await query.edit_message_text(text, reply_markup=markup)
 
@@ -1553,7 +1558,7 @@ class TelegramChannel(BaseChannel):
 
         elif data.startswith("logd:"):
             idx = int(data[5:])
-            logs = self._groupchat_engine._request_log
+            logs = self._groupchat_engine.request_log
             if idx >= len(logs):
                 await query.edit_message_text("⚠️ 记录不存在")
                 return
@@ -1670,7 +1675,7 @@ class TelegramChannel(BaseChannel):
             parts = data[5:].split(":")
             idx = int(parts[0])
             msg_page = int(parts[1]) if len(parts) > 1 else 0
-            logs = self._groupchat_engine._request_log
+            logs = self._groupchat_engine.request_log
             if idx >= len(logs):
                 await query.edit_message_text("⚠️ 记录不存在")
                 return
@@ -1802,14 +1807,14 @@ class TelegramChannel(BaseChannel):
             if val == "done":
                 agents = self._groupchat_engine.active_agents
                 # Persist final order
-                self._groupchat_engine._save_active()
+                self._groupchat_engine.save_active()
                 # Auto-update saved group
                 gname = getattr(self._groupchat_engine, '_current_group_name', None)
                 if gname:
-                    groups = self._groupchat_engine._load_groups()
+                    groups = self._groupchat_engine.load_groups()
                     if gname in groups:
                         groups[gname] = list(agents)
-                        self._groupchat_engine._save_groups(groups)
+                        self._groupchat_engine.save_groups(groups)
                 order_str = " → ".join(agents)
                 await query.edit_message_text(f"📢 发言顺序:\n{order_str}")
             else:
@@ -1818,7 +1823,7 @@ class TelegramChannel(BaseChannel):
                 if 0 < idx < len(agents):
                     # Swap with previous
                     agents[idx], agents[idx-1] = agents[idx-1], agents[idx]
-                    self._groupchat_engine._active_agents[:] = agents
+                    self._groupchat_engine.reorder_agents(list(agents))
                 # Refresh keyboard
                 await query.edit_message_text("📢 更新中...")
                 await self._send_order_keyboard(chat_id, self._groupchat_engine.active_agents)
@@ -1834,9 +1839,9 @@ class TelegramChannel(BaseChannel):
             if len(parts) == 2:
                 _, key = parts
                 engine = self._groupchat_engine
-                overrides = engine._load_prompt_overrides("__global__")
-                content = overrides.get(key) or engine._get_component_template(key)
-                label = engine._COMPONENT_LABELS.get(key, key)
+                overrides = PromptBuilder._load_prompt_overrides("__global__")
+                content = overrides.get(key) or PromptBuilder.get_component_template(key)
+                label = _COMPONENT_LABELS.get(key, key)
                 self._edit_state[chat_id] = {"field": "prompt_edit", "agent": "__global__", "key": key}
                 preview = (content[:3500] + "…") if len(content) > 3500 else (content or "(空)")
                 await query.edit_message_text(
@@ -1860,30 +1865,30 @@ class TelegramChannel(BaseChannel):
             direction = -1 if data.startswith("pru:") else 1
             idx = int(data[4:])
             engine = self._groupchat_engine
-            order = engine.get_agent_prompt_order()
+            order = engine.prompt_builder.get_agent_prompt_order()
             new_idx = idx + direction
             if 0 <= new_idx < len(order):
                 order[idx], order[new_idx] = order[new_idx], order[idx]
-                engine.set_default_prompt_order(order)
+                engine.prompt_builder.set_default_prompt_order(order)
             await self._prompt_show_components(query)
 
         elif data.startswith("prdel:"):
             # Delete component: prdel:<idx>
             idx = int(data[6:])
             engine = self._groupchat_engine
-            result = engine.remove_prompt_component(idx)
+            result = engine.prompt_builder.remove_prompt_component(idx)
             await query.answer(result, show_alert=True)
             await self._prompt_show_components(query)
 
         elif data == "pradd":
             # Show available components to add back
             engine = self._groupchat_engine
-            available = engine.get_available_components()
+            available = engine.prompt_builder.get_available_components()
             if not available:
                 await query.answer("所有组件已在列表中", show_alert=True)
                 return
             buttons = []
-            labels = engine._COMPONENT_LABELS
+            labels = _COMPONENT_LABELS
             for key in available:
                 buttons.append([InlineKeyboardButton(
                     f"➕ {labels.get(key, key)}",
@@ -1899,19 +1904,19 @@ class TelegramChannel(BaseChannel):
             # Add component back: pradd:<key>
             key = data[6:]
             engine = self._groupchat_engine
-            order = engine.get_agent_prompt_order()
+            order = engine.prompt_builder.get_agent_prompt_order()
             if key not in order:
                 order.append(key)
-                engine.set_default_prompt_order(order)
+                engine.prompt_builder.set_default_prompt_order(order)
             await self._prompt_show_components(query)
 
         elif data.startswith("prv:"):
             # Preview full template: prv:<page>
             page = int(data[4:])
             engine = self._groupchat_engine
-            order = engine.get_agent_prompt_order()
-            overrides = engine._load_prompt_overrides("__global__")
-            labels = engine._COMPONENT_LABELS
+            order = engine.prompt_builder.get_agent_prompt_order()
+            overrides = PromptBuilder._load_prompt_overrides("__global__")
+            labels = _COMPONENT_LABELS
 
             lines: list[str] = []
             # Dynamic components show markers instead of placeholder text
@@ -1926,7 +1931,7 @@ class TelegramChannel(BaseChannel):
                     lines.append(dynamic_markers[key])
                     lines.append("")
                     continue
-                tpl = overrides.get(key) or engine._get_component_template(key)
+                tpl = overrides.get(key) or PromptBuilder.get_component_template(key)
                 if not tpl:
                     continue
                 lines.append(f"═══ [{i+1}] {label} ({len(tpl)}字) ═══")
@@ -2399,7 +2404,11 @@ class TelegramChannel(BaseChannel):
             key = state.get("key", "")
             engine = self._groupchat_engine
             if engine:
-                result = engine.update_prompt_component(agent_name, key, content.strip())
+                result = engine.prompt_builder.update_prompt_component(
+                    agent_name, key, content.strip(),
+                    engine.registry, engine.workspace,
+                    Path(engine.config.agents_dir or "~/.nanobot/agents").expanduser(),
+                )
                 await self._gc_send(chat_id, result)
             return
 
@@ -2851,11 +2860,11 @@ class TelegramChannel(BaseChannel):
 
     def _build_prompt_order_view(self, engine) -> tuple[str, "InlineKeyboardMarkup"]:
         """Build the global prompt component order view with edit/reorder buttons."""
-        order = engine.get_agent_prompt_order()
-        overrides = engine._load_prompt_overrides("__global__")
-        labels = engine._COMPONENT_LABELS
-        global_editable = engine._GLOBAL_EDITABLE
-        agent_editable = engine._AGENT_EDITABLE
+        order = engine.prompt_builder.get_agent_prompt_order()
+        overrides = PromptBuilder._load_prompt_overrides("__global__")
+        labels = _COMPONENT_LABELS
+        global_editable = _GLOBAL_EDITABLE
+        agent_editable = _AGENT_EDITABLE
 
         lines = ["📝 提示词组件编排 (全局)\n"]
         for i, key in enumerate(order):
@@ -2866,7 +2875,7 @@ class TelegramChannel(BaseChannel):
             else:
                 icon = "🔒"
             label = labels.get(key, key)
-            tpl = overrides.get(key) or engine._get_component_template(key)
+            tpl = overrides.get(key) or PromptBuilder.get_component_template(key)
             preview = f" — {len(tpl)}字" if tpl else ""
             lines.append(f"{i+1}. {icon} {label}{preview}")
         lines.append(f"\n✏️ = 全局模板  📂 = 每个agent独立 (/editagent)  🔒 = 自动生成")
@@ -2890,7 +2899,7 @@ class TelegramChannel(BaseChannel):
                 row.append(InlineKeyboardButton("❌", callback_data=f"prdel:{i}"))
             buttons.append(row)
         bottom_row = [InlineKeyboardButton("🔍 预览", callback_data="prv:0")]
-        if engine.get_available_components():
+        if engine.prompt_builder.get_available_components():
             bottom_row.insert(0, InlineKeyboardButton("➕ 添加组件", callback_data="pradd"))
         buttons.append(bottom_row)
         return "\n".join(lines), InlineKeyboardMarkup(buttons)
@@ -2937,7 +2946,7 @@ class TelegramChannel(BaseChannel):
         self._ensure_gc_send(chat_id)
         args = (context.args or [])
         if not args:
-            groups = self._groupchat_engine._load_groups()
+            groups = self._groupchat_engine.load_groups()
             if not groups:
                 await update.message.reply_text("📋 没有保存的分组\n用 /savegroup 保存当前成员")
                 return
@@ -2963,7 +2972,7 @@ class TelegramChannel(BaseChannel):
             return
         args = (context.args or [])
         if not args:
-            groups = self._groupchat_engine._load_groups()
+            groups = self._groupchat_engine.load_groups()
             if not groups:
                 await update.message.reply_text("📋 没有保存的分组")
                 return
@@ -3296,9 +3305,7 @@ class TelegramChannel(BaseChannel):
             str_chat_id = str(message.chat_id)
             self._edit_state.pop(str_chat_id, None)
             if cmd == "/new" and self._groupchat_engine:
-                self._groupchat_engine._history.clear()
-                self._groupchat_engine._request_log.clear()
-                self._groupchat_engine._active_agents.clear()
+                self._groupchat_engine.reset()
                 # Auto-add default agent so user can chat immediately
                 if "Nanobot" in self._groupchat_engine.registry:
                     self._groupchat_engine.add_agent("Nanobot")
@@ -3428,9 +3435,9 @@ class TelegramChannel(BaseChannel):
         # Route to active agents if any
         if self._groupchat_engine and self._groupchat_engine.active_agents:
             self._ensure_gc_send(str_chat_id)
-            if self._groupchat_engine.is_running:
-                # 2+ agents: inject message into group chat (async)
-                # Keep typing indicator alive — agents are still generating
+            if len(self._groupchat_engine.active_agents) >= 2:
+                # 2+ agents: inject message into group chat
+                # inject() will lazy-start the loop if not running
                 self._groupchat_engine.inject(content)
             else:
                 # 1 agent: direct chat (synchronous)
