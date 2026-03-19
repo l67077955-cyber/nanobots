@@ -734,7 +734,12 @@ class GroupChatEngine:
         content = re.sub(r"\[(?:Start |Check |Search |Look up |Fetch |查|搜)[^\]]*\]", "", content)
         # XML style: <function_calls>...</function_calls>, <web_search>...</web_search>, <tool>...</tool>, etc.
         content = re.sub(
-            r"<(?:function_calls|invoke|web_search|web_fetch|tool|parameter|query|search)[\s\S]*?(?:</(?:function_calls|invoke|web_search|web_fetch|tool|parameter|query|search)>|$)",
+            r"<(?:function_calls|invoke|web_search|web_fetch|tool|parameter|query|search|tool_call|parameters|freshness|count)[\s\S]*?(?:</(?:function_calls|invoke|web_search|web_fetch|tool|parameter|query|search|tool_call|parameters|freshness|count)>|$)",
+            "", content, flags=re.IGNORECASE,
+        )
+        # Stray closing tags left behind
+        content = re.sub(
+            r"</(?:function_calls|invoke|web_search|web_fetch|tool|parameter|query|search|tool_call|parameters|freshness|count)>",
             "", content, flags=re.IGNORECASE,
         )
 
@@ -1285,6 +1290,7 @@ class GroupChatEngine:
         synthesis_context: str | None = None,
         no_tools: bool = False,
         no_stream: bool = False,
+        silent: bool = False,
     ) -> tuple[str, list[str], dict] | None:
         """Run one agent's turn. Returns (content, tools_used, stats) or None on error.
 
@@ -1295,6 +1301,9 @@ class GroupChatEngine:
                 Useful for synthesis/discussion phases.
             no_stream: If True, disable streaming (avoids empty content issues
                 with tool calls in litellm streaming mode).
+            silent: If True, suppress all internal display (no _send, no
+                _edit_fn). Caller handles display. Used by broadcast synthesis
+                to avoid double-sending.
         """
         if agent_name not in self.registry:
             return None
@@ -1441,17 +1450,18 @@ class GroupChatEngine:
             # ── Final display: edit streamed message FIRST, then send completion ──
             if content:
                 self._add_message(agent_name, content)
-                final_text = f"{_header}{content}"
-                if _stream_msg_id and self._edit_fn:
-                    try:
-                        await self._edit_fn(_stream_msg_id, final_text[:4096])
-                        logger.info("Agent {}: final streamed edit OK", agent_name)
-                    except Exception as edit_err:
-                        logger.warning("Final stream edit failed for {}: {}", agent_name, edit_err)
+                if not silent:
+                    final_text = f"{_header}{content}"
+                    if _stream_msg_id and self._edit_fn:
+                        try:
+                            await self._edit_fn(_stream_msg_id, final_text[:4096])
+                            logger.info("Agent {}: final streamed edit OK", agent_name)
+                        except Exception as edit_err:
+                            logger.warning("Final stream edit failed for {}: {}", agent_name, edit_err)
+                            await self._send(final_text[:4096])
+                    else:
+                        logger.info("Agent {}: sending via _send (len={})", agent_name, len(final_text))
                         await self._send(final_text[:4096])
-                else:
-                    logger.info("Agent {}: sending via _send (len={})", agent_name, len(final_text))
-                    await self._send(final_text[:4096])
             elif _stream_msg_id and self._edit_fn:
                 try:
                     await self._edit_fn(_stream_msg_id, f"{_header}(空回复)")
@@ -1462,7 +1472,7 @@ class GroupChatEngine:
                 logger.warning("Agent {} returned empty content, content repr: {!r}", agent_name, content)
 
             # Send completion notification AFTER the final text is displayed
-            if completion_msg:
+            if completion_msg and not silent:
                 await self._send(completion_msg)
             return (content, tools_used, stats)
         except Exception as e:

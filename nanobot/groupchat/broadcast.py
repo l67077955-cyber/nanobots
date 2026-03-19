@@ -465,7 +465,7 @@ async def broadcast_round(
                 f"[{si + 1}/{len(synth_agents)}]"
             )
             try:
-                speak_result = await engine._agent_speak(name, no_tools=not is_leader, no_stream=True)
+                speak_result = await engine._agent_speak(name, no_tools=not is_leader, no_stream=True, silent=True)
                 # Always re-send the synthesis text via _send (guaranteed visible)
                 # _agent_speak's streaming display may be swallowed by _edit_fn
                 if speak_result:
@@ -483,7 +483,7 @@ async def broadcast_round(
                             "请现在综合所有搜索和工具结果，直接给出文字总结回复用户。"
                             "不要再调用任何工具，直接输出文字。"
                         ))
-                        retry = await engine._agent_speak(name, no_tools=True, no_stream=True)
+                        retry = await engine._agent_speak(name, no_tools=True, no_stream=True, silent=True)
                         if retry:
                             retry_content, _, _ = retry
                             if retry_content:
