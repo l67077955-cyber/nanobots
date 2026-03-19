@@ -192,6 +192,7 @@ class TelegramChannel(BaseChannel):
         BotCommand("deletemodel", "删除模型"),
         BotCommand("speedtest", "提供商测速"),
         BotCommand("prompt", "查看/编辑/排序提示词"),
+        BotCommand("groupchat", "群聊参数设置"),
         BotCommand("help", "Show commands"),
     ]
 
@@ -304,6 +305,7 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(CommandHandler("editprovider", self._on_editprovider))
         self._app.add_handler(CommandHandler("providers", self._on_providers))
         self._app.add_handler(CommandHandler("speedtest", self._on_speedtest))
+        self._app.add_handler(CommandHandler("groupchat", self._on_groupchat))
         self._app.add_handler(CallbackQueryHandler(self._on_callback))
 
         # Add message handler for text, photos, voice, documents
@@ -564,6 +566,8 @@ class TelegramChannel(BaseChannel):
             "/log — 查看 LLM 调用记录 (tokens/延迟/工具)\n"
             "/prompt [agent] — 查看/编辑/排序提示词组件\n"
             "/summary — 生成对话总结\n\n"
+            "⚙️ 群聊设置：\n"
+            "/groupchat — 对话池/搜索预算等参数\n\n"
             "💡 加入 agent 后直接发消息即可对话\n"
             "2+ agent 自动进入群聊模式"
         )
@@ -1802,6 +1806,18 @@ class TelegramChannel(BaseChannel):
             await query.edit_message_text("⚙️ 返回...")
             await self._send_hyperparams_keyboard(chat_id, params)
 
+        elif data.startswith("gc:"):
+            key = data[3:]
+            settings = self._load_gc_settings()
+            label = self.GC_SETTINGS_LABELS.get(key, key)
+            val = settings.get(key, self.GC_SETTINGS_DEFAULTS.get(key, "?"))
+            self._edit_state[chat_id] = {"field": "gc_value", "gc_key": key}
+            await query.edit_message_text(
+                f"✏️ 修改 {label}\n"
+                f"当前值: {val}\n\n"
+                f"请输入新值 (整数):"
+            )
+
         elif data.startswith("ord:"):
             val = data[4:]
             if val == "done":
@@ -2456,7 +2472,28 @@ class TelegramChannel(BaseChannel):
             await self._gc_send(chat_id, f"➕ 添加 {key}\n\n请输入值 (数字):")
             return
 
-        # Handle savegroup name input
+        # Handle groupchat settings value input
+        if field == "gc_value":
+            del self._edit_state[chat_id]
+            if content.strip() in ("0", "取消", "/cancel"):
+                await self._gc_send(chat_id, "❌ 已取消")
+                return
+            gc_key = state.get("gc_key", "")
+            try:
+                value = int(content.strip())
+            except ValueError:
+                await self._gc_send(chat_id, "⚠️ 值必须是整数")
+                return
+            if value < 1:
+                await self._gc_send(chat_id, "⚠️ 值必须 ≥ 1")
+                return
+            settings = self._load_gc_settings()
+            old_val = settings.get(gc_key, self.GC_SETTINGS_DEFAULTS.get(gc_key))
+            settings[gc_key] = value
+            self._save_gc_settings(settings)
+            label = self.GC_SETTINGS_LABELS.get(gc_key, gc_key)
+            await self._gc_send(chat_id, f"✅ {label}: {old_val} → {value}\n下次群聊生效，已持久化")
+            return
         if field == "sg_name":
             del self._edit_state[chat_id]
             if content.strip() in ("0", "取消", "/cancel"):
@@ -2694,6 +2731,70 @@ class TelegramChannel(BaseChannel):
         text = "\n".join(lines)
         await self._app.bot.send_message(
             chat_id=int(chat_id), text=text,
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+
+    # ── Groupchat Settings ─────────────────────────────────────
+
+    GC_SETTINGS_DEFAULTS = {
+        "pool_multiplier": 3,      # pool capacity = agents × multiplier
+        "search_initial": 2,       # initial search credits per agent
+        "search_max": 5,           # max search credits per agent
+        "allocate_timeout": 15,    # seconds before message is dropped
+    }
+    GC_SETTINGS_LABELS = {
+        "pool_multiplier":  "对话池倍率 (pool = agents × N)",
+        "search_initial":   "初始搜索额度",
+        "search_max":       "最大搜索额度",
+        "allocate_timeout": "分配超时 (秒)",
+    }
+
+    @staticmethod
+    def _gc_settings_path() -> Path:
+        return Path.home() / ".nanobot" / "groupchat_settings.json"
+
+    def _load_gc_settings(self) -> dict:
+        p = self._gc_settings_path()
+        defaults = dict(self.GC_SETTINGS_DEFAULTS)
+        if p.exists():
+            try:
+                saved = json.loads(p.read_text())
+                defaults.update(saved)
+            except Exception:
+                pass
+        return defaults
+
+    def _save_gc_settings(self, data: dict) -> None:
+        p = self._gc_settings_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, indent=2))
+
+    async def _on_groupchat(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /groupchat command: view/edit groupchat parameters."""
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+
+        settings = self._load_gc_settings()
+        lines = ["⚙️ 群聊参数设置:\n"]
+        buttons = []
+        for key, label in self.GC_SETTINGS_LABELS.items():
+            val = settings.get(key, self.GC_SETTINGS_DEFAULTS[key])
+            lines.append(f"  {label}: {val}")
+            buttons.append([InlineKeyboardButton(
+                f"✏️ {label} = {val}",
+                callback_data=f"gc:{key}",
+            )])
+
+        # Show pool capacity preview
+        active = len(self._groupchat_engine.active_agents) if self._groupchat_engine else 0
+        if active > 0:
+            cap = active * settings.get("pool_multiplier", 3)
+            lines.append(f"\n  → 当前 {active} agents, pool = {cap} threads")
+
+        await update.message.reply_text(
+            "\n".join(lines),
             reply_markup=InlineKeyboardMarkup(buttons),
         )
 

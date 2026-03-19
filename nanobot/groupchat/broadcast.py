@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import time as _time
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
 from loguru import logger
@@ -92,9 +93,22 @@ async def broadcast_round(
     })
     await engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout)))
 
+    # ── Load groupchat settings ──
+    _gc_settings_path = Path.home() / ".nanobot" / "groupchat_settings.json"
+    _gc_defaults = {"pool_multiplier": 3, "search_initial": 2, "search_max": 5, "allocate_timeout": 15}
+    gc_settings = dict(_gc_defaults)
+    if _gc_settings_path.exists():
+        try:
+            import json as _json
+            gc_settings.update(_json.loads(_gc_settings_path.read_text()))
+        except Exception:
+            pass
+
     # ── ConversationPool: OS-style resource pool ──
-    pool_capacity = len(agents) * 3
+    pool_multiplier = gc_settings["pool_multiplier"]
+    pool_capacity = len(agents) * pool_multiplier
     pool = ConversationPool(capacity=pool_capacity, agents=list(agents))
+    pool.ALLOCATE_TIMEOUT = float(gc_settings["allocate_timeout"])
     await engine._send(f"── threads {_d.thread_bar(0, pool_capacity)} ──")
 
     # ── Build per-agent tool registries with chatroom tools ──
@@ -110,7 +124,11 @@ async def broadcast_round(
     _search_cache: dict[str, tuple[str, str]] = {}
 
     # ── Per-agent search budget ──
-    search_budget = SearchBudget(agents=list(agents), initial=2, max_budget=5)
+    search_budget = SearchBudget(
+        agents=list(agents),
+        initial=gc_settings["search_initial"],
+        max_budget=gc_settings["search_max"],
+    )
 
 
     for name in agents:
