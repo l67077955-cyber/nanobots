@@ -378,6 +378,8 @@ async def broadcast_round(
             "\n2. 如有关键数据（数字、链接等），可用工具交叉验证"
             "\n3. 给出最终综合结论，补充遗漏的重要信息"
             "\n4. 简洁有力，不要重复已有内容"
+            "\n\n❗❗ 重要：你必须输出文字回复（不能只调工具不回复）。"
+            "你的文字回复将直接发送给用户作为最终答案。"
         ))
 
         # All broadcast agents participate in synthesis (not just those with results),
@@ -420,11 +422,30 @@ async def broadcast_round(
                             f"{synth_content[:4096]}"
                         )
                     else:
-                        await engine._send(f"📨 {name} [{si + 1}/{len(synth_agents)}]: (空回复)")
+                        # Empty content — force a text-only follow-up
+                        logger.warning("Synthesis: {} returned empty, forcing text generation", name)
+                        engine._add_message("系统", (
+                            f"[{name}] 你刚才只调用了工具但没有输出文字回复。"
+                            "请现在综合所有搜索和工具结果，直接给出文字总结回复用户。"
+                            "不要再调用任何工具，直接输出文字。"
+                        ))
+                        retry = await engine._agent_speak(name, no_tools=True, no_stream=True)
+                        if retry:
+                            retry_content, _, _ = retry
+                            if retry_content:
+                                await engine._send(
+                                    f"📨 💬 {name} [{si + 1}/{len(synth_agents)}]:  "
+                                    f"{retry_content[:4096]}"
+                                )
+                            else:
+                                await engine._send(f"📨 {name} [{si + 1}/{len(synth_agents)}]: (空回复)")
+                        else:
+                            await engine._send(f"📨 {name} [{si + 1}/{len(synth_agents)}]: (空回复)")
+                else:
+                    await engine._send(f"📨 {name} [{si + 1}/{len(synth_agents)}]: (失败)")
             except Exception as e:
                 logger.error("Broadcast synthesis: {} failed: {}", name, e)
                 await engine._send(f"⚠️ {name} 综合失败: {e}")
-
         await engine._send("📋 综合讨论完成")
 
     return [(name, content) for name, content, _ in results]
