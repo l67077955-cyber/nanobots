@@ -378,7 +378,14 @@ async def broadcast_round(
                 )
             except Exception as e:
                 completed += 1
+                # Find which agent this task belonged to
+                failed_name = "Unknown"
+                for task_obj, task_name in tasks.items():
+                    if task_obj == coro.__self__ if hasattr(coro, '__self__') else False:
+                        failed_name = task_name
+                        break
                 logger.error("Broadcast: agent task error: {}", e)
+                await engine._send(f"⚠️ Agent 异常: {e}")
     except asyncio.TimeoutError:
         # Cancel remaining tasks
         for task, name in tasks.items():

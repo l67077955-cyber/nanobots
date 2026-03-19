@@ -60,6 +60,8 @@ class LiteLLMProvider(LLMProvider):
         self._compat_drop_params: dict[str, set[str]] = {
             # xAI/Grok models reject presence_penalty, frequency_penalty, repetition_penalty
             "xai": {"presence_penalty", "frequency_penalty", "repetition_penalty", "top_k", "min_p", "top_a"},
+            # Anthropic/Claude (via 闲鱼api proxy) also rejects these OpenAI-specific params
+            "闲鱼api": {"presence_penalty", "frequency_penalty", "repetition_penalty", "top_k", "min_p", "top_a"},
         }
 
         # Configure environment variables
