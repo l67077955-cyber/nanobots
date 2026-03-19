@@ -14,6 +14,50 @@ from nanobot.agent.tools.base import Tool
 from nanobot.groupchat.mailbox import MailboxHub, ConversationPool, SpeakQueue
 
 
+class SearchBudget:
+    """Per-agent search credit system.
+
+    - Each agent starts with `initial` credits
+    - Each web_search/web_fetch costs 1 credit
+    - Each chatroom_send earns +1 credit (up to `max_budget`)
+    - Credits are NOT returned after search completes
+
+    This incentivizes agents to participate in conversation
+    before doing more searches.
+    """
+
+    def __init__(self, agents: list[str], initial: int = 2, max_budget: int = 5) -> None:
+        self._initial = initial
+        self._max = max_budget
+        self._credits: dict[str, int] = {a: initial for a in agents}
+        self._total_used: dict[str, int] = {a: 0 for a in agents}
+
+    def can_search(self, agent_name: str) -> bool:
+        """Check if agent has credits remaining."""
+        return self._credits.get(agent_name, 0) > 0
+
+    def consume(self, agent_name: str) -> bool:
+        """Consume 1 search credit. Returns False if none left."""
+        if self._credits.get(agent_name, 0) <= 0:
+            return False
+        self._credits[agent_name] -= 1
+        self._total_used[agent_name] = self._total_used.get(agent_name, 0) + 1
+        return True
+
+    def earn(self, agent_name: str) -> None:
+        """Earn +1 credit from chatroom_send (capped at max)."""
+        current = self._credits.get(agent_name, 0)
+        if current < self._max:
+            self._credits[agent_name] = current + 1
+
+    def status(self, agent_name: str) -> str:
+        """Return credit status string for agent."""
+        return f"{self._credits.get(agent_name, 0)}/{self._max}"
+
+    def credits(self, agent_name: str) -> int:
+        return self._credits.get(agent_name, 0)
+
+
 class CachedSearchTool(Tool):
     """Wrapper around WebSearchTool with cross-agent dedup cache.
 
@@ -24,10 +68,11 @@ class CachedSearchTool(Tool):
 
     name = "web_search"
 
-    def __init__(self, original: Tool, agent_name: str, cache: dict) -> None:
+    def __init__(self, original: Tool, agent_name: str, cache: dict, budget: SearchBudget | None = None) -> None:
         self._original = original
         self._agent_name = agent_name
         self._cache = cache
+        self._budget = budget
 
     @property
     def description(self):
@@ -56,11 +101,23 @@ class CachedSearchTool(Tool):
                 f"避免重复劳动。"
             )
 
+        # Check search budget
+        if self._budget and not self._budget.consume(self._agent_name):
+            return (
+                f"BLOCKED: search budget exhausted "
+                f"({self._budget.status(self._agent_name)} credits). "
+                f"Use chatroom_send to earn +1 credit, then search again."
+            )
+
         # Execute real search
         result = await self._original.execute(**kwargs)
 
         # Cache the result
         self._cache[norm_q] = (result, self._agent_name)
+
+        # Show remaining credits
+        if self._budget:
+            result += f"\n[search credits: {self._budget.status(self._agent_name)}]"
         return result
 
 
@@ -72,10 +129,11 @@ class ChatroomSendTool(Tool):
     user with ``"User"``.
     """
 
-    def __init__(self, mailbox: MailboxHub, agent_name: str = "", pool: ConversationPool | None = None) -> None:
+    def __init__(self, mailbox: MailboxHub, agent_name: str = "", pool: ConversationPool | None = None, search_budget: SearchBudget | None = None) -> None:
         self._mailbox = mailbox
         self._agent_name = agent_name  # Set per-round by the engine
         self._pool = pool
+        self._search_budget = search_budget
         self._last_received_from: str | None = None  # track who we last received from
 
     def set_agent(self, name: str) -> None:
@@ -169,6 +227,10 @@ class ChatroomSendTool(Tool):
                 self._pool.mark_replied(self._agent_name, self._last_received_from)
 
         delivered = self._mailbox.send(self._agent_name, targets, message)
+
+        # Earn +1 search credit for participating in conversation
+        if self._search_budget:
+            self._search_budget.earn(self._agent_name)
 
         avail_hint = ""
         if self._pool:

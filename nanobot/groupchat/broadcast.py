@@ -101,15 +101,16 @@ async def broadcast_round(
     from nanobot.agent.tools.registry import ToolRegistry
     from nanobot.agent.tools.base import Tool
     from nanobot.groupchat.chatroom_tools import (
-        ChatroomSendTool, WaitTool, CachedSearchTool,
+        ChatroomSendTool, WaitTool, CachedSearchTool, SearchBudget,
     )
 
     agent_tool_registries: dict[str, ToolRegistry] = {}
 
     # ── Shared search cache for deduplication ──
-    # All agents share this cache. If agent B searches the same query agent A
-    # already searched, B gets cached results + a hint to try different keywords.
-    _search_cache: dict[str, tuple[str, str]] = {}  # query → (result, searcher_name)
+    _search_cache: dict[str, tuple[str, str]] = {}
+
+    # ── Per-agent search budget ──
+    search_budget = SearchBudget(agents=list(agents), initial=2, max_budget=5)
 
 
     for name in agents:
@@ -120,12 +121,11 @@ async def broadcast_round(
             tool = engine.tools.get(tool_name)
             if tool:
                 if tool_name == "web_search":
-                    # Wrap with caching dedup
-                    registry.register(CachedSearchTool(tool, name, _search_cache))
+                    registry.register(CachedSearchTool(tool, name, _search_cache, budget=search_budget))
                 else:
                     registry.register(tool)
         # Add chatroom tools (per-agent instances with ConversationPool)
-        send_tool = ChatroomSendTool(mailbox=mailbox, agent_name=name, pool=pool)
+        send_tool = ChatroomSendTool(mailbox=mailbox, agent_name=name, pool=pool, search_budget=search_budget)
         wait_tool = WaitTool(mailbox=mailbox, agent_name=name, pool=pool)
         wait_tool._send_tool = send_tool  # link for reply tracking
         registry.register(send_tool)
