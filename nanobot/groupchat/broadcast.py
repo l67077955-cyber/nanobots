@@ -64,16 +64,69 @@ async def broadcast_round(
     from nanobot.groupchat.chatroom_tools import ChatroomSendTool, WaitTool
 
     agent_tool_registries: dict[str, ToolRegistry] = {}
+
+    # ── Shared search cache for deduplication ──
+    # All agents share this cache. If agent B searches the same query agent A
+    # already searched, B gets cached results + a hint to try different keywords.
+    _search_cache: dict[str, tuple[str, str]] = {}  # query → (result, searcher_name)
+
+    class _CachedSearchTool(Tool):
+        """Wrapper around WebSearchTool with cross-agent dedup cache."""
+        name = "web_search"
+
+        def __init__(self, original: Tool, agent_name: str, cache: dict):
+            self._original = original
+            self._agent_name = agent_name
+            self._cache = cache
+
+        @property
+        def description(self):
+            return self._original.description
+
+        @property
+        def parameters(self):
+            return self._original.parameters
+
+        def _normalize_query(self, q: str) -> str:
+            """Normalize query for cache lookup (lowercase, strip, collapse spaces)."""
+            import re
+            return re.sub(r'\s+', ' ', q.lower().strip())
+
+        async def execute(self, **kwargs):
+            query = kwargs.get("query", "")
+            norm_q = self._normalize_query(query)
+
+            # Check cache for exact or near-duplicate match
+            if norm_q in self._cache:
+                cached_result, searcher = self._cache[norm_q]
+                return (
+                    f"[CACHED] {searcher} 已经搜过相同的关键词。结果如下：\n"
+                    f"{cached_result}\n\n"
+                    f"💡 请使用不同的关键词、角度或语言来搜索，"
+                    f"避免重复劳动。"
+                )
+
+            # Execute real search
+            result = await self._original.execute(**kwargs)
+
+            # Cache the result
+            self._cache[norm_q] = (result, self._agent_name)
+            return result
+
     for name in agents:
         # Clone the engine's group tool registry and add chatroom tools
         registry = ToolRegistry()
-        # Copy existing tools from default registry
+        # Copy existing tools from default registry, wrapping web_search with cache
         for tool_name in engine.tools.tool_names:
             tool = engine.tools.get(tool_name)
             if tool:
-                registry.register(tool)
+                if tool_name == "web_search":
+                    # Wrap with caching dedup
+                    registry.register(_CachedSearchTool(tool, name, _search_cache))
+                else:
+                    registry.register(tool)
         # Add chatroom tools (per-agent instances)
-        send_tool = ChatroomSendTool(mailbox=mailbox, agent_name=name)
+        send_tool = ChatroomSendTool(mailbox=mailbox, agent_name=name, send_fn=lambda msg: engine._send(msg))
         wait_tool = WaitTool(mailbox=mailbox, agent_name=name)
         registry.register(send_tool)
         registry.register(wait_tool)
