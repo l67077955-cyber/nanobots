@@ -105,8 +105,8 @@ async def broadcast_round(
             pass
 
     # ── ConversationPool: OS-style resource pool ──
-    pool_multiplier = gc_settings["pool_multiplier"]
-    pool_capacity = len(agents) * pool_multiplier
+    n = len(agents)
+    pool_capacity = n * (n - 1)  # each agent can msg all others once
     pool = ConversationPool(capacity=pool_capacity, agents=list(agents))
     pool.ALLOCATE_TIMEOUT = float(gc_settings["allocate_timeout"])
     await engine._send(f"── threads {_d.thread_bar(0, pool_capacity)} ──")

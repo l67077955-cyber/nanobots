@@ -2737,13 +2737,11 @@ class TelegramChannel(BaseChannel):
     # ── Groupchat Settings ─────────────────────────────────────
 
     GC_SETTINGS_DEFAULTS = {
-        "pool_multiplier": 3,      # pool capacity = agents × multiplier
         "search_initial": 2,       # initial search credits per agent
         "search_max": 5,           # max search credits per agent
         "allocate_timeout": 15,    # seconds before message is dropped
     }
     GC_SETTINGS_LABELS = {
-        "pool_multiplier":  "对话池倍率 (pool = agents × N)",
         "search_initial":   "初始搜索额度",
         "search_max":       "最大搜索额度",
         "allocate_timeout": "分配超时 (秒)",
@@ -2790,8 +2788,8 @@ class TelegramChannel(BaseChannel):
         # Show pool capacity preview
         active = len(self._groupchat_engine.active_agents) if self._groupchat_engine else 0
         if active > 0:
-            cap = active * settings.get("pool_multiplier", 3)
-            lines.append(f"\n  → 当前 {active} agents, pool = {cap} threads")
+            cap = active * (active - 1)
+            lines.append(f"\n  对话池: {active} agents × {active - 1} = {cap} threads")
 
         await update.message.reply_text(
             "\n".join(lines),
