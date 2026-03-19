@@ -61,6 +61,7 @@ async def broadcast_round(
 
     # ── Build per-agent tool registries with chatroom tools ──
     from nanobot.agent.tools.registry import ToolRegistry
+    from nanobot.agent.tools.base import Tool
     from nanobot.groupchat.chatroom_tools import ChatroomSendTool, WaitTool
 
     agent_tool_registries: dict[str, ToolRegistry] = {}
