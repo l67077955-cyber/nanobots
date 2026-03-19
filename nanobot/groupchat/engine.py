@@ -91,7 +91,7 @@ class GroupChatEngine:
 
         # Register chatroom tools (agent name set per-call)
         from nanobot.groupchat.chatroom_tools import ChatroomSendTool, WaitTool
-        self._chatroom_send_tool = ChatroomSendTool(mailbox=self._mailbox)
+        self._chatroom_send_tool = ChatroomSendTool(mailbox=self._mailbox, send_fn=lambda msg: self._send(msg))
         self._wait_tool = WaitTool(mailbox=self._mailbox)
         self.tools.register(self._chatroom_send_tool)
         self.tools.register(self._wait_tool)

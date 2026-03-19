@@ -15,13 +15,15 @@ from nanobot.groupchat.mailbox import MailboxHub
 class ChatroomSendTool(Tool):
     """Send a message to one or more agents in the group chat.
 
-    Supports sending to specific agents by name, or broadcasting
-    to all agents with ``"All"``.
+    Supports sending to specific agents by name, broadcasting
+    to all agents with ``"All"``, or sending a summary to the
+    user with ``"User"``.
     """
 
-    def __init__(self, mailbox: MailboxHub, agent_name: str = "") -> None:
+    def __init__(self, mailbox: MailboxHub, agent_name: str = "", send_fn=None) -> None:
         self._mailbox = mailbox
         self._agent_name = agent_name  # Set per-round by the engine
+        self._send_fn = send_fn  # engine._send_fn for User target
 
     def set_agent(self, name: str) -> None:
         """Set which agent is using this tool instance."""
@@ -35,14 +37,16 @@ class ChatroomSendTool(Tool):
     def description(self) -> str:
         return (
             "Send a message to other agents in the group chat. "
-            "REQUIRES two parameters: 'to' (target agent name or \"All\") and 'message' (the content). "
+            "REQUIRES two parameters: 'to' (target agent name, \"All\", or \"User\") and 'message' (the content). "
             "Use cases: (1) Share your findings with teammates, "
             "(2) Reply to a teammate's request with your results, "
-            "(3) Ask a teammate for help or information. "
+            "(3) Ask a teammate for help or information, "
+            "(4) Send final summary to the user with to=\"User\". "
             "IMPORTANT: When you receive a message from a teammate (via wait), "
             "you MUST reply back using chatroom_send — do not just include it in your final text response. "
             "Example: chatroom_send(to=\"Harper\", message=\"我搜到了3篇相关论文: ...\") "
-            "Set 'to' to a specific agent name, a list of names, or \"All\" to broadcast."
+            "Example: chatroom_send(to=\"User\", message=\"最终总结: ...\") "
+            "Set 'to' to a specific agent name, a list of names, \"All\" to broadcast, or \"User\" to send to user."
         )
 
     @property
@@ -53,8 +57,8 @@ class ChatroomSendTool(Tool):
                 "to": {
                     "description": (
                         "Target agent name(s). Can be a single name (e.g. \"Harper\"), "
-                        "a list (e.g. [\"Harper\", \"Lucas\"]), or \"All\" to broadcast "
-                        "to everyone."
+                        "a list (e.g. [\"Harper\", \"Lucas\"]), \"All\" to broadcast "
+                        "to everyone, or \"User\" to send summary to user."
                     ),
                     # Accept both string and array via oneOf
                     "oneOf": [
@@ -84,9 +88,34 @@ class ChatroomSendTool(Tool):
         else:
             targets = [str(to)]
 
-        delivered = self._mailbox.send(self._agent_name, targets, message)
-        target_str = ", ".join(targets)
-        return f"✅ 消息已发送给 {target_str} ({delivered} 个 agent 收到)"
+        # Handle "User" target — display directly to user
+        user_sent = False
+        agent_targets = []
+        for t in targets:
+            if t.lower() == "user":
+                user_sent = True
+            else:
+                agent_targets.append(t)
+
+        results = []
+        if user_sent and self._send_fn:
+            import asyncio
+            try:
+                await self._send_fn(
+                    f"📋 **{self._agent_name} → 用户**:\n{message}"
+                )
+                results.append("✅ 已发送给用户")
+            except Exception:
+                results.append("⚠️ 发送给用户失败")
+            # Also record in mailbox history
+            self._mailbox.send(self._agent_name, ["User"], message)
+
+        if agent_targets:
+            delivered = self._mailbox.send(self._agent_name, agent_targets, message)
+            target_str = ", ".join(agent_targets)
+            results.append(f"✅ 消息已发送给 {target_str} ({delivered} 个 agent 收到)")
+
+        return "  ".join(results) if results else "Error: no valid targets"
 
 
 class WaitTool(Tool):
