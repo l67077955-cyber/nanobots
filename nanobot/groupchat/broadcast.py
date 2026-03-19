@@ -409,7 +409,7 @@ async def broadcast_round(
                 f"[{si + 1}/{len(synth_agents)}]"
             )
             try:
-                speak_result = await engine._agent_speak(name, no_tools=not is_leader)
+                speak_result = await engine._agent_speak(name, no_tools=not is_leader, no_stream=True)
                 # Always re-send the synthesis text via _send (guaranteed visible)
                 # _agent_speak's streaming display may be swallowed by _edit_fn
                 if speak_result:

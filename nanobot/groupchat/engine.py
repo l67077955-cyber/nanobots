@@ -1284,6 +1284,7 @@ class GroupChatEngine:
         agent_name: str,
         synthesis_context: str | None = None,
         no_tools: bool = False,
+        no_stream: bool = False,
     ) -> tuple[str, list[str], dict] | None:
         """Run one agent's turn. Returns (content, tools_used, stats) or None on error.
 
@@ -1292,6 +1293,8 @@ class GroupChatEngine:
                 agent's own prompt (used for leader synthesis in parallel mode).
             no_tools: If True, disable tool calling (forces pure text response).
                 Useful for synthesis/discussion phases.
+            no_stream: If True, disable streaming (avoids empty content issues
+                with tool calls in litellm streaming mode).
         """
         if agent_name not in self.registry:
             return None
@@ -1369,9 +1372,13 @@ class GroupChatEngine:
                 except Exception:
                     pass
 
-        # Only enable streaming if edit callbacks are available
-        _delta_cb = _on_delta if (self._edit_fn and self._send_and_get_id_fn) else None
-        _reset_cb = _on_reset if _delta_cb else None
+        # Only enable streaming if edit callbacks are available AND not in no_stream mode
+        if no_stream:
+            _delta_cb = None
+            _reset_cb = None
+        else:
+            _delta_cb = _on_delta if (self._edit_fn and self._send_and_get_id_fn) else None
+            _reset_cb = _on_reset if _delta_cb else None
 
         try:
             content, tools_used, stats = await self._chat_with_tools(
