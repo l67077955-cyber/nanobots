@@ -177,42 +177,30 @@ async def broadcast_round(
             if not isinstance(args, dict):
                 args = {}
             icon = _TOOL_ICONS.get(tool_name, "🔧")
+            # Build internal log line
             if tool_name == "chatroom_send":
                 to = args.get("to", "?")
                 msg_full = (args.get("message", "") or "")
                 line = f"{name}: chatroom_send({to})"
-                detail = f"  → {msg_full}"
-            elif tool_name == "wait":
-                from_who = args.get("from_agent", "")
-                t = args.get("timeout", 30)
-                line = f"{name}: wait({'来自 ' + from_who if from_who else '消息'}, {t}s)"
-                detail = ""
-            elif tool_name == "web_search":
-                query = args.get("query", "")
-                line = f"{name}: web_search({query})"
-                detail = ""
-            elif tool_name == "web_fetch":
-                url = (args.get("url", "") or "")[:60]
-                line = f"{name}: web_fetch({url})"
-                detail = ""
+                _tool_lines.append(line)
+                # Only chatroom_send is shown to user (full message)
+                await engine._send(f"   📨 {icon} {line}\n  → {msg_full}")
             else:
-                short = ""
-                if args:
-                    first = list(args.values())[0]
-                    if isinstance(first, str):
-                        short = first[:40]
-                line = f"{name}: {tool_name}" + (f"({short})" if short else "")
-                detail = ""
-
-            _tool_lines.append(line)
-            await engine._send(f"   📨 {icon} {line}" + (f"\n{detail}" if detail else ""))
+                # All other tools: log internally but don't flood chat
+                if tool_name == "web_search":
+                    line = f"{name}: web_search({args.get('query', '')})"
+                elif tool_name == "web_fetch":
+                    line = f"{name}: web_fetch({(args.get('url', '') or '')[:60]})"
+                elif tool_name == "wait":
+                    from_who = args.get("from_agent", "")
+                    line = f"{name}: wait({'来自 ' + from_who if from_who else '消息'})"
+                else:
+                    line = f"{name}: {tool_name}"
+                _tool_lines.append(line)
 
         async def _on_tool_result(tool_name: str, tool_call_id: str, result: str) -> None:
-            if not result:
-                return
-            preview = result.strip().replace("\n", " ")[:80]
-            suffix = "…" if len(result) > 80 else ""
-            await engine._send(f"   📨    ↳ {preview}{suffix}")
+            # Silent — don't flood chat with tool results
+            pass
 
         # ── Determine tool definitions ──
         reg = agent_tool_registries[name]
