@@ -169,17 +169,6 @@ async def broadcast_round(
                 .replace("{{agent}}", name)
                 .replace("{{user_question}}", user_question)
             )
-            # Append user question reminder if not in template
-            if user_question and "{{user_question}}" not in hint_template:
-                hint += f"\n\n⚠️ 用户请求: {user_question}\n立即执行此请求，不要打招呼或寒暄。"
-
-            # ── Point-name detection ──
-            # If user explicitly names this agent, add priority hint
-            if name.lower() in user_question.lower():
-                hint += (
-                    f"\n\n🎯 用户点名了你（{name}），你是此任务的主要负责人！"
-                    f"优先完成用户的请求，然后通过 chatroom_send 报告结果。"
-                )
 
             insert_pos = max(len(messages) - 1, 0)
             messages.insert(insert_pos, {
