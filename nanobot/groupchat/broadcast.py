@@ -409,17 +409,18 @@ async def broadcast_round(
                 f"[{si + 1}/{len(synth_agents)}]"
             )
             try:
-                await engine._agent_speak(name, no_tools=not is_leader)
-                # Re-send the full synthesis content as a guaranteed message
-                # (streaming _agent_speak may have partial display issues)
-                if engine._history:
-                    last = engine._history[-1]
-                    if last.get("role") == "assistant" and last.get("content"):
-                        synth_text = last["content"]
+                speak_result = await engine._agent_speak(name, no_tools=not is_leader)
+                # Always re-send the synthesis text via _send (guaranteed visible)
+                # _agent_speak's streaming display may be swallowed by _edit_fn
+                if speak_result:
+                    synth_content, _, _ = speak_result
+                    if synth_content:
                         await engine._send(
                             f"📨 💬 {name} [{si + 1}/{len(synth_agents)}]:  "
-                            f"{synth_text[:4096]}"
+                            f"{synth_content[:4096]}"
                         )
+                    else:
+                        await engine._send(f"📨 {name} [{si + 1}/{len(synth_agents)}]: (空回复)")
             except Exception as e:
                 logger.error("Broadcast synthesis: {} failed: {}", name, e)
                 await engine._send(f"⚠️ {name} 综合失败: {e}")
