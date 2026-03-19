@@ -156,39 +156,16 @@ async def broadcast_round(
                 ),
             })
 
-        # ── Streaming state ──
-        _stream_msg_id: int | None = None
-        _stream_buffer: list[str] = []
+        # ── Non-streaming display (broadcast mode) ──
+        # No streaming edits — each event gets its own message.
+        # This prevents messages from being swallowed by concurrent edits.
         _tool_lines: list[str] = []
-        _last_edit: float = 0.0
-        _EDIT_INTERVAL = 0.8
 
         badge = f" [{agent_idx + 1}/{total}]"
-        _header = f"📡 {name}{badge}:\n\n"
+        _header = f"📡 {name}{badge}: "
 
-        # Send initial "thinking" message
-        if engine._send_and_get_id_fn:
-            _stream_msg_id = await engine._send_and_get_id_fn(
-                f"⏳ {name} 思考中... ({model_short})"
-            )
-
-        # ── Streaming callbacks ──
-
-        async def _on_delta(delta: str) -> None:
-            nonlocal _last_edit
-            _stream_buffer.append(delta)
-            now = _time.time()
-            if _stream_msg_id and engine._edit_fn and (now - _last_edit) >= _EDIT_INTERVAL:
-                activity = "\n".join(_tool_lines) + "\n\n" if _tool_lines else ""
-                text = f"{_header}{activity}" + "".join(_stream_buffer) + " ▍"
-                try:
-                    await engine._edit_fn(_stream_msg_id, text[:4096])
-                except Exception:
-                    pass
-                _last_edit = now
-
-        async def _on_reset() -> None:
-            _stream_buffer.clear()
+        # Send initial status
+        await engine._send(f"⏳ {name} 思考中... ({model_short}){badge}")
 
         _TOOL_ICONS = {
             "web_search": "🔍", "web_fetch": "🌐", "exec": "⚡",
@@ -202,46 +179,40 @@ async def broadcast_round(
             icon = _TOOL_ICONS.get(tool_name, "🔧")
             if tool_name == "chatroom_send":
                 to = args.get("to", "?")
-                msg_preview = (args.get("message", "") or "")[:40]
-                _tool_lines.append(f"{icon} → {to}: {msg_preview}")
+                msg_preview = (args.get("message", "") or "")[:80]
+                line = f"{name}: chatroom_send({to})"
+                detail = f"  → {msg_preview}"
             elif tool_name == "wait":
                 from_who = args.get("from_agent", "")
                 t = args.get("timeout", 30)
-                _tool_lines.append(f"{icon} 等待{'来自 ' + from_who if from_who else '消息'} ({t}s)")
+                line = f"{name}: wait({'来自 ' + from_who if from_who else '消息'}, {t}s)"
+                detail = ""
             elif tool_name == "web_search":
                 query = args.get("query", "")
-                _tool_lines.append(f"{icon} 搜索: {query}")
+                line = f"{name}: web_search({query})"
+                detail = ""
             elif tool_name == "web_fetch":
-                url = (args.get("url", "") or "")[:50]
-                _tool_lines.append(f"{icon} 浏览: {url}")
+                url = (args.get("url", "") or "")[:60]
+                line = f"{name}: web_fetch({url})"
+                detail = ""
             else:
                 short = ""
                 if args:
                     first = list(args.values())[0]
                     if isinstance(first, str):
                         short = first[:40]
-                _tool_lines.append(f"{icon} {tool_name}" + (f" {short}" if short else ""))
+                line = f"{name}: {tool_name}" + (f"({short})" if short else "")
+                detail = ""
 
-            # Update consolidated message
-            if _stream_msg_id and engine._edit_fn:
-                text = f"{_header}" + "\n".join(_tool_lines)
-                try:
-                    await engine._edit_fn(_stream_msg_id, text[:4096])
-                except Exception:
-                    pass
+            _tool_lines.append(line)
+            await engine._send(f"   📨 {icon} {line}" + (f"\n{detail}" if detail else ""))
 
         async def _on_tool_result(tool_name: str, tool_call_id: str, result: str) -> None:
-            if not result or not _tool_lines:
+            if not result:
                 return
-            rlen = len(result)
-            preview = result.strip().replace("\n", " ")[:60]
-            _tool_lines[-1] += f"\n  ↳ {preview}{'…' if rlen > 60 else ''}"
-            if _stream_msg_id and engine._edit_fn:
-                text = f"{_header}" + "\n".join(_tool_lines)
-                try:
-                    await engine._edit_fn(_stream_msg_id, text[:4096])
-                except Exception:
-                    pass
+            preview = result.strip().replace("\n", " ")[:80]
+            suffix = "…" if len(result) > 80 else ""
+            await engine._send(f"   📨    ↳ {preview}{suffix}")
 
         # ── Determine tool definitions ──
         reg = agent_tool_registries[name]
@@ -260,9 +231,7 @@ async def broadcast_round(
         else:
             tool_defs = chatroom_defs
 
-        _delta_cb = _on_delta if (engine._edit_fn and engine._send_and_get_id_fn) else None
-        _reset_cb = _on_reset if _delta_cb else None
-
+        # No streaming callbacks — broadcast uses non-streaming mode
         # ── Run the tool loop ──
         from nanobot.agent.tool_loop import tool_loop
 
@@ -286,8 +255,8 @@ async def broadcast_round(
                 },
                 on_tool_start=_on_tool_start,
                 on_tool_result=_on_tool_result,
-                on_content_delta=_delta_cb,
-                on_content_reset=_reset_cb,
+                on_content_delta=None,
+                on_content_reset=None,
                 clean_response=lambda c: engine._clean_response(c, name),
                 result_max_chars=20_000,
             )
@@ -298,14 +267,7 @@ async def broadcast_round(
 
             if is_error:
                 err_short = content[:150] if content else "Unknown error"
-                if _stream_msg_id and engine._edit_fn:
-                    try:
-                        await engine._edit_fn(
-                            _stream_msg_id,
-                            f"{_header}⚠️ 失败 ({latency}s): {err_short}"
-                        )
-                    except Exception:
-                        pass
+                await engine._send(f"   📨 ⚠️ {name} 请求失败 ({latency}s): {err_short}")
                 engine._request_log.append({
                     "agent": name, "model": model,
                     "reply_len": 0, "time": engine._history[-1]["content"][:50] if engine._history else "",
@@ -316,26 +278,14 @@ async def broadcast_round(
 
             # ── Final display ──
             tools_used = result.tools_used
-            activity = "\n".join(_tool_lines) + "\n\n" if _tool_lines else ""
 
             if content:
                 engine._add_message(name, content)
-                final = f"{_header}{activity}{content}"
-                if _stream_msg_id and engine._edit_fn:
-                    try:
-                        await engine._edit_fn(_stream_msg_id, final[:4096])
-                    except Exception:
-                        await engine._send(final[:4096])
-                else:
-                    await engine._send(final[:4096])
-            elif _stream_msg_id and engine._edit_fn:
-                try:
-                    await engine._edit_fn(
-                        _stream_msg_id,
-                        f"{_header}{activity}(空回复)" if activity else f"{_header}(空回复)",
-                    )
-                except Exception:
-                    pass
+                # Send final content as a complete message
+                final = f"{_header}\n{content}"
+                await engine._send(f"   📨 {final[:4096]}")
+            else:
+                await engine._send(f"   📨 {_header}(空回复)")
 
             # Completion notification
             if tools_used:
@@ -356,11 +306,7 @@ async def broadcast_round(
 
         except Exception as e:
             logger.error("Broadcast: {} failed: {}", name, e)
-            if _stream_msg_id and engine._edit_fn:
-                try:
-                    await engine._edit_fn(_stream_msg_id, f"{_header}⚠️ 失败: {e}")
-                except Exception:
-                    pass
+            await engine._send(f"   📨 ⚠️ {name} 异常: {e}")
             engine._request_log.append({
                 "agent": name, "model": model,
                 "reply_len": 0, "time": _time.strftime("%H:%M:%S"),
