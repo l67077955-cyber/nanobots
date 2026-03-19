@@ -82,9 +82,14 @@ class LiteLLMProvider(LLMProvider):
 
         # Langfuse tracing via LiteLLM OTEL callback (langfuse v3+/v4 compatible)
         if os.environ.get("LANGFUSE_PUBLIC_KEY"):
-            litellm.success_callback = ["langfuse"]
-            litellm.failure_callback = ["langfuse"]
-            logger.info("Langfuse tracing enabled (OTEL mode)")
+            try:
+                import langfuse  # noqa: F401
+                litellm.success_callback = ["langfuse"]
+                litellm.failure_callback = ["langfuse"]
+                logger.info("Langfuse tracing enabled (OTEL mode)")
+            except ImportError:
+                logger.warning("LANGFUSE_PUBLIC_KEY set but langfuse not installed, skipping")
+                os.environ.pop("LANGFUSE_PUBLIC_KEY", None)
 
         # Sampling parameters — modifiable at runtime via /hyperparams
         defaults = {
