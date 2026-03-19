@@ -179,9 +179,9 @@ async def broadcast_round(
             icon = _TOOL_ICONS.get(tool_name, "🔧")
             if tool_name == "chatroom_send":
                 to = args.get("to", "?")
-                msg_preview = (args.get("message", "") or "")[:80]
+                msg_full = (args.get("message", "") or "")
                 line = f"{name}: chatroom_send({to})"
-                detail = f"  → {msg_preview}"
+                detail = f"  → {msg_full}"
             elif tool_name == "wait":
                 from_who = args.get("from_agent", "")
                 t = args.get("timeout", 30)
