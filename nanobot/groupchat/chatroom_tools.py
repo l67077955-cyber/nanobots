@@ -22,8 +22,8 @@ class SearchTree:
     Each search consumes 1 point and adds a child node to the tree.
 
     Refund rules (incentivize exploration over redundancy):
-    - Hanging on a LEAF node (new direction): instant refund of `k` points
-    - Hanging on a NON-LEAF node (already explored): refund after search completes
+    - Hanging on a LEAF node (new direction): instant refund of `k` points (exploring is FREE)
+    - Hanging on a NON-LEAF node (redundant direction): NO refund (permanently costs 1 point)
     """
 
     def __init__(self, agents: list[str], total: int | None = None, refund: int = 1) -> None:
@@ -91,9 +91,8 @@ class SearchTree:
         return True, node_id, leaf
 
     def post_search(self, node_id: int, was_leaf: bool) -> None:
-        """After search completes: delayed refund for non-leaf branches."""
-        if not was_leaf:
-            self._refund_points()
+        """After search completes. Non-leaf branches get NO refund."""
+        pass  # non-leaf: no refund — permanently costs 1 point
 
     def status(self) -> str:
         """Return pool status string."""
@@ -215,10 +214,10 @@ class CachedSearchTool(Tool):
         # Post-search: delayed refund for non-leaf branches
         if self._tree:
             self._tree.post_search(node_id, was_leaf)
-            refund_note = "⚡instant" if was_leaf else "✓delayed"
+            refund_note = "⚡refund (new direction)" if was_leaf else "✗no refund (existing branch)"
             result += (
                 f"\n[search pool: {self._tree.status()} | "
-                f"node #{node_id} on {'leaf' if was_leaf else 'branch'} → refund {refund_note}]"
+                f"node #{node_id} → {refund_note}]"
                 f"\n[search tree]\n{self._tree.tree_str()}"
             )
         return result
