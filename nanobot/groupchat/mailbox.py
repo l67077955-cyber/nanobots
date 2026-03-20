@@ -62,24 +62,15 @@ class ConversationPool:
         Costs len(recipients) slots. One slot per recipient.
         Returns True if allocated, False if timeout (pool full too long).
 
-        User priority: when user is allocating, all agent allocations
-        immediately return False (message dropped).
+        When user priority is active, agents are immediately rejected.
         """
-        is_user = sender in ("User", "用户")
-
-        # ── User priority gate ──
-        if is_user:
-            # Block agents while user allocates
-            self._user_priority.clear()
-            logger.info("ConversationPool: user priority ON — agents blocked")
-        else:
-            # Agent: if user has priority, fail immediately
-            if not self._user_priority.is_set():
-                logger.info(
-                    "ConversationPool: {} rejected — user priority active",
-                    sender,
-                )
-                return False
+        # Agent: if user has priority, fail immediately
+        if not self._user_priority.is_set():
+            logger.info(
+                "ConversationPool: {} rejected — user priority active",
+                sender,
+            )
+            return False
 
         n = len(recipients)
         acquired = 0
@@ -89,12 +80,19 @@ class ConversationPool:
                     self._sem.acquire(), timeout=self.ALLOCATE_TIMEOUT,
                 )
                 acquired += 1
+                # Re-check: user priority may have been set while waiting
+                if not self._user_priority.is_set():
+                    for _ in range(acquired):
+                        self._sem.release()
+                    logger.info(
+                        "ConversationPool: {} interrupted — user priority",
+                        sender,
+                    )
+                    return False
         except asyncio.TimeoutError:
             # Release any partially acquired slots
             for _ in range(acquired):
                 self._sem.release()
-            if is_user:
-                self._user_priority.set()  # restore agent access on failure
             logger.warning(
                 "ConversationPool: {} failed to allocate {} slots "
                 "(acquired {}, pool full)",
@@ -108,11 +106,6 @@ class ConversationPool:
                 self._pending[r].append(sender)
 
         self._available -= n
-
-        # Restore agent access after user allocation succeeds
-        if is_user:
-            self._user_priority.set()
-            logger.info("ConversationPool: user priority OFF — agents unblocked")
 
         logger.debug(
             "ConversationPool: {} → {} ({} slots used, {} available)",
