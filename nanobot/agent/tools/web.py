@@ -50,7 +50,7 @@ def _validate_url(url: str) -> tuple[bool, str]:
 
 
 class WebSearchTool(Tool):
-    """Search the web using Brave Search API."""
+    """Search the web using DuckDuckGo Lite (no API key required)."""
 
     name = "web_search"
     description = "Search the web. Returns titles, URLs, and snippets. Use freshness='pd' for today's news."
@@ -59,79 +59,105 @@ class WebSearchTool(Tool):
         "properties": {
             "query": {"type": "string", "description": "Search query"},
             "count": {"type": "integer", "description": "Results (1-10)", "minimum": 1, "maximum": 10},
-            "freshness": {"type": "string", "description": "Time filter: 'pd'=past day, 'pw'=past week, 'pm'=past month, or YYYY-MM-DDtoYYYY-MM-DD", "enum": ["pd", "pw", "pm"]}
+            "freshness": {"type": "string", "description": "Time filter: 'pd'=past day, 'pw'=past week, 'pm'=past month", "enum": ["pd", "pw", "pm"]}
         },
         "required": ["query"]
     }
 
+    _DDG_LITE_URL = "https://lite.duckduckgo.com/lite/"
+
     def __init__(self, api_key: str | None = None, max_results: int = 10, proxy: str | None = None):
-        self._init_api_key = api_key
+        self._init_api_key = api_key  # kept for compat, not used by DDG
         self.max_results = max_results
         self.proxy = proxy
 
     @property
     def api_key(self) -> str:
-        """Resolve API key at call time so env/config changes are picked up."""
+        """Kept for backward compatibility."""
         return self._init_api_key or os.environ.get("BRAVE_API_KEY", "")
 
     async def execute(self, query: str, count: int | None = None, freshness: str | None = None, **kwargs: Any) -> str:
-        if not self.api_key:
-            return (
-                "Error: Brave Search API key not configured. Set it in "
-                "~/.nanobot/config.json under tools.web.search.apiKey "
-                "(or export BRAVE_API_KEY), then restart the gateway."
-            )
-
         try:
             n = min(max(count or self.max_results, 1), 10)
-            params: dict[str, Any] = {"q": query, "count": n}
-            # Auto-detect CJK queries for better localized results
+
+            # Append time hint to query for freshness filtering
+            time_query = query
+            if freshness == "pd":
+                time_query = f"{query} 今天"
+            elif freshness == "pw":
+                time_query = f"{query} 本周"
+            elif freshness == "pm":
+                time_query = f"{query} 本月"
+
+            # DuckDuckGo Lite HTML endpoint (works from servers, no API key)
+            data = {"q": time_query}
             if _has_cjk(query):
-                params.setdefault("search_lang", "zh-hans")
-                params.setdefault("country", "cn")
-            # Freshness filter for recent results
-            if freshness and freshness in ("pd", "pw", "pm"):
-                params["freshness"] = freshness
-            logger.debug("WebSearch: {} (freshness={})", "proxy" if self.proxy else "direct", freshness or "none")
-            async with httpx.AsyncClient(proxy=self.proxy) as client:
-                r = await client.get(
-                    "https://api.search.brave.com/res/v1/web/search",
-                    params=params,
-                    headers={"Accept": "application/json", "X-Subscription-Token": self.api_key},
-                    timeout=10.0
+                data["kl"] = "cn-zh"
+
+            headers = {"User-Agent": USER_AGENT}
+            logger.debug("WebSearch DDG: q={} (freshness={})", query[:50], freshness or "none")
+
+            async with httpx.AsyncClient(proxy=self.proxy, follow_redirects=True) as client:
+                r = await client.post(
+                    self._DDG_LITE_URL,
+                    data=data,
+                    headers=headers,
+                    timeout=10.0,
                 )
                 r.raise_for_status()
 
-            results = r.json().get("web", {}).get("results", [])[:n]
+            # Parse results from HTML
+            results = self._parse_lite_html(r.text, n)
             if not results:
                 return f"No results for: {query}"
 
             lines = [f"Results for: {query}  ({len(results)} results)\n"]
             for i, item in enumerate(results, 1):
-                title = item.get("title", "")
-                url = item.get("url", "")
-                desc = item.get("description", "")
-                age = item.get("page_age") or item.get("age", "")
-                # Extract domain for quick scanning
+                title = item["title"]
+                url = item["url"]
+                desc = item.get("desc", "")
                 domain = urlparse(url).netloc.replace("www.", "") if url else ""
-                # Format: number. title [domain] (age)
-                meta_parts = []
-                if domain:
-                    meta_parts.append(domain)
-                if age:
-                    meta_parts.append(age)
-                meta = f"  [{', '.join(meta_parts)}]" if meta_parts else ""
+                meta = f"  [{domain}]" if domain else ""
                 lines.append(f"{i}. {title}{meta}")
                 lines.append(f"   {url}")
                 if desc:
                     lines.append(f"   {desc}")
             return "\n".join(lines)
-        except httpx.ProxyError as e:
-            logger.error("WebSearch proxy error: {}", e)
-            return f"Proxy error: {e}"
         except Exception as e:
-            logger.error("WebSearch error: {}", e)
+            logger.error("WebSearch DDG error: {}", e)
             return f"Error: {e}"
+
+    @staticmethod
+    def _parse_lite_html(html_text: str, max_results: int) -> list[dict]:
+        """Parse DuckDuckGo Lite HTML response into structured results."""
+        results: list[dict] = []
+
+        # Extract result links: <a rel="nofollow" href="URL" class="result-link">Title</a>
+        link_pattern = re.compile(
+            r'<a[^>]+rel="nofollow"[^>]+href="(https?://[^"]+)"[^>]*>([^<]+)</a>',
+            re.I,
+        )
+        # Extract snippets: <td class="result-snippet">...</td>
+        snippet_pattern = re.compile(
+            r'<td[^>]*class="result-snippet"[^>]*>(.*?)</td>',
+            re.I | re.DOTALL,
+        )
+
+        links = link_pattern.findall(html_text)
+        snippets = snippet_pattern.findall(html_text)
+
+        for i, (url, title) in enumerate(links):
+            if i >= max_results:
+                break
+            desc = ""
+            if i < len(snippets):
+                desc = _normalize(_strip_tags(snippets[i]))
+            results.append({
+                "title": html.unescape(title).strip(),
+                "url": url,
+                "desc": desc,
+            })
+        return results
 
 
 class WebFetchTool(Tool):
