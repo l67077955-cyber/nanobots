@@ -69,6 +69,12 @@ class ToolLoopResult:
 # ── Helpers ───────────────────────────────────────────────────────────────
 
 _THINK_RE = re.compile(r"<think>[\s\S]*?</think>")
+_VENDOR_TAG_RE = re.compile(
+    r"</?(?:minimax|anthropic|openai|meta):[^>]*>[\s\S]*?"
+    r"(?:</(?:minimax|anthropic|openai|meta):[^>]*>|$)",
+    re.I,
+)
+_TOOL_CALL_TAG_RE = re.compile(r"</?tool_call>[\s\S]*?(?:</tool_call>|$)", re.I)
 
 # Tools that are idempotent and safe to dedup (same args => same result).
 # chatroom_send is included to prevent agents from looping identical messages
@@ -98,10 +104,13 @@ def _normalize_dedup_args(name: str, arguments: dict) -> str:
 
 
 def _strip_think(text: str | None) -> str | None:
-    """Remove ``<think>…</think>`` blocks embedded by some models."""
+    """Remove ``<think>…</think>``, vendor XML tags, and leaked tool_call tags."""
     if not text:
         return None
-    return _THINK_RE.sub("", text).strip() or None
+    text = _THINK_RE.sub("", text)
+    text = _VENDOR_TAG_RE.sub("", text)
+    text = _TOOL_CALL_TAG_RE.sub("", text)
+    return text.strip() or None
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────
