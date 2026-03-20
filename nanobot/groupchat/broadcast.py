@@ -259,7 +259,11 @@ async def broadcast_round(
                 await engine._send(_d.chatroom_wait_msg(name, result))
             # Show tool result brief for network/exec tools
             elif tool_name in ("web_search", "web_fetch", "exec") and result:
-                await engine._send(_d.tool_result_brief(name, tool_name, result))
+                brief = _d.tool_result_brief(name, tool_name, result)
+                if tool_name == "web_search" and search_tree:
+                    node_count = search_tree._next_id - 1  # exclude root
+                    brief += f"\n    {_d.search_bar(search_tree.pool, search_tree.total, node_count)}"
+                await engine._send(brief)
 
         # ── Determine tool definitions ──
         reg = agent_tool_registries[name]

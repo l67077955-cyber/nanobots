@@ -132,8 +132,19 @@ def thread_bar(used: int, capacity: int) -> str:
     Example: '▰▰▰▱▱▱▱▱▱▱▱▱ 3/12'
     """
     filled = "▰" * used
-    empty = "▱" * (capacity - used)
+    empty = "▱" * max(capacity - used, 0)
     return f"{filled}{empty} {used}/{capacity}"
+
+
+def search_bar(pool: int, total: int, nodes: int) -> str:
+    """Render search tree status as compact bar.
+
+    Example: '🔍 ▰▰▱▱ 2/4 · 3 nodes'
+    """
+    used = total - pool
+    filled = "▰" * used
+    empty = "▱" * max(pool, 0)
+    return f"🔍 {filled}{empty} {used}/{total} · {nodes} nodes"
 
 
 def chat_chain_summary(
