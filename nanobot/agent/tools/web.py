@@ -237,7 +237,10 @@ class WebFetchTool(Tool):
         if not is_valid:
             return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
 
-        result = await self._fetch_jina(url, max_chars)
+        # Only use Jina Reader when API key is available (free mode truncates heavily)
+        result = None
+        if os.environ.get("JINA_API_KEY"):
+            result = await self._fetch_jina(url, max_chars)
         if result is None:
             result = await self._fetch_readability(url, extractMode, max_chars)
         return result

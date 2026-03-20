@@ -73,6 +73,16 @@ class ConversationPool:
             return False
 
         n = len(recipients)
+
+        # Check real available slots (user force-alloc may have drained them)
+        if self._available < n:
+            logger.warning(
+                "ConversationPool: {} rejected — not enough slots "
+                "({} needed, {} available)",
+                sender, n, self._available,
+            )
+            return False
+
         acquired = 0
         try:
             for _ in range(n):
@@ -167,8 +177,8 @@ class ConversationPool:
 
     @property
     def available(self) -> int:
-        """Number of available slots."""
-        return self._available
+        """Number of available slots (clamped to >= 0)."""
+        return max(0, self._available)
 
     @property
     def capacity(self) -> int:
@@ -177,8 +187,8 @@ class ConversationPool:
 
     @property
     def used(self) -> int:
-        """Number of used slots."""
-        return self._capacity - self._available
+        """Number of used slots (clamped to capacity)."""
+        return min(self._capacity, self._capacity - self._available)
 
 
 # Keep SpeakQueue as alias for backward compat (referenced in imports)

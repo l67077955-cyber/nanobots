@@ -7,7 +7,6 @@ Agents can communicate with each other via chatroom_send/wait tools.
 from __future__ import annotations
 
 import asyncio
-import time as _time
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
@@ -15,6 +14,7 @@ from loguru import logger
 
 from nanobot.groupchat import display as _d
 from nanobot.groupchat.mailbox import MailboxHub, ConversationPool
+from nanobot.groupchat.utils import log_request
 
 
 @runtime_checkable
@@ -85,6 +85,7 @@ async def broadcast_round(
     total = len(agents)
 
     # Announce broadcast start
+    import time as _time
     _round_t0 = _time.time()
     engine._save_event("round_start", extra={
         "round": engine._round + 1,
@@ -95,7 +96,7 @@ async def broadcast_round(
 
     # ── Load groupchat settings ──
     _gc_settings_path = Path.home() / ".nanobot" / "groupchat_settings.json"
-    _gc_defaults = {"search_initial": 1, "search_refund": 1, "allocate_timeout": 15}
+    _gc_defaults = {"search_initial": 2, "search_earn_interval": 4, "allocate_timeout": 15}
     gc_settings = dict(_gc_defaults)
     if _gc_settings_path.exists():
         try:
@@ -115,31 +116,32 @@ async def broadcast_round(
     from nanobot.agent.tools.registry import ToolRegistry
     from nanobot.agent.tools.base import Tool
     from nanobot.groupchat.chatroom_tools import (
-        ChatroomSendTool, WaitTool, CachedSearchTool, SearchTree,
+        ChatroomSendTool, WaitTool, CachedSearchTool, SearchPool,
     )
 
     agent_tool_registries: dict[str, ToolRegistry] = {}
 
-    # ── Shared search cache for deduplication ──
+    # ── Shared search cache + pool ──
     _search_cache: dict[str, tuple[str, str]] = {}
-
-    # ── Shared search tree (agents × initial points, refund k per search) ──
-    search_tree = SearchTree(
+    search_pool = SearchPool(
         agents=list(agents),
-        total=n * gc_settings["search_initial"],
-        refund=gc_settings["search_refund"],
+        initial_per_agent=gc_settings["search_initial"],
+        earn_interval=gc_settings["search_earn_interval"],
     )
 
     for name in agents:
-        # Clone the engine's group tool registry and add chatroom tools
+        # Get per-agent registry (respects workspace_scope), clone and add chatroom tools
+        base_reg = engine._get_agent_registry(name)
         registry = ToolRegistry()
-        # Copy existing tools from default registry, wrapping web_search with cache
-        for tool_name in engine.tools.tool_names:
-            tool = engine.tools.get(tool_name)
+        # Copy existing tools, wrapping web_search with cache
+        # (web_fetch is already wrapped with SmartFetchTool at engine level)
+        for tool_name in base_reg.tool_names:
+            tool = base_reg.get(tool_name)
             if tool:
                 if tool_name == "web_search":
-                    registry.register(CachedSearchTool(tool, name, _search_cache, search_tree=search_tree))
-                else:
+                    registry.register(CachedSearchTool(tool, name, _search_cache, search_pool=search_pool))
+                elif tool_name not in ("chatroom_send", "wait"):
+                    # Skip base chatroom tools — we'll add pool-aware versions below
                     registry.register(tool)
         # Add chatroom tools (per-agent instances with ConversationPool)
         send_tool = ChatroomSendTool(mailbox=mailbox, agent_name=name, pool=pool)
@@ -260,9 +262,8 @@ async def broadcast_round(
             # Show tool result brief for network/exec tools
             elif tool_name in ("web_search", "web_fetch", "exec") and result:
                 brief = _d.tool_result_brief(name, tool_name, result)
-                if tool_name == "web_search" and search_tree:
-                    node_count = search_tree._next_id - 1  # exclude root
-                    brief += f"\n    {_d.search_bar(search_tree.pool, search_tree.total, node_count)}"
+                if tool_name == "web_search" and search_pool:
+                    brief += f"\n    🔍 {search_pool.status()}"
                 await engine._send(brief)
 
         # ── Determine tool definitions ──
@@ -336,17 +337,16 @@ async def broadcast_round(
                 if is_error:
                     err_short = content[:150] if content else "Unknown error"
                     await engine._send(f"  ✗ {name} failed ({latency:.1f}s): {err_short}")
-                    engine._request_log.append({
-                        "agent": name, "model": model,
-                        "reply_len": 0, "time": engine._history[-1]["content"][:50] if engine._history else "",
-                        "mode": "broadcast", "error": err_short,
-                        "iterations": total_iterations, "latency": total_latency,
-                    })
+                    log_request(engine, name, model, "broadcast",
+                                error=err_short, iterations=total_iterations,
+                                latency=total_latency)
                     return (name, None, [], {})
 
                 # Record final text in history (not displayed)
                 if content:
                     engine._add_message(name, content)
+                    # Track output for search pool credit recovery
+                    search_pool.on_output(name)
 
                 # ── Auto-wait: enter idle state ──
                 # If agent never used chatroom_send, auto-share its findings
@@ -392,12 +392,10 @@ async def broadcast_round(
             if comp:
                 await engine._send(comp)
 
-            engine._request_log.append({
-                "agent": name, "model": model,
-                "reply_len": len(content) if content else 0, "time": _time.strftime("%H:%M:%S"),
-                "mode": "broadcast", "tools": all_tools_used,
-                "iterations": total_iterations, "latency": round(total_latency, 1),
-            })
+            log_request(engine, name, model, "broadcast",
+                        reply_len=len(content) if content else 0,
+                        tools=all_tools_used, iterations=total_iterations,
+                        latency=round(total_latency, 1))
             return (name, content, all_tools_used, {})
 
         except asyncio.CancelledError:
@@ -410,11 +408,8 @@ async def broadcast_round(
         except Exception as e:
             logger.error("Broadcast: {} failed: {}", name, e)
             await engine._send(f"  ✗ {name} error: {e}")
-            engine._request_log.append({
-                "agent": name, "model": model,
-                "reply_len": 0, "time": _time.strftime("%H:%M:%S"),
-                "mode": "broadcast", "error": str(e),
-            })
+            log_request(engine, name, model, "broadcast",
+                        error=str(e))
             return (name, None, [], {})
         finally:
             mailbox.mark_agent_done(name)

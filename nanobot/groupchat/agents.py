@@ -120,6 +120,27 @@ def _scan_agents_dir(
         if name in agents:
             continue  # Already loaded from explicit config
 
+        # Check for system agent (role: system in config.json)
+        config_file = d / "config.json"
+        if config_file.exists():
+            try:
+                _cfg = json.loads(config_file.read_text())
+                if _cfg.get("role") == "system":
+                    model = (
+                        _cfg.get("model")
+                        or _cfg.get("agents", {}).get("defaults", {}).get("model", "?")
+                    )
+                    desc = _cfg.get("description", "系统 agent")
+                    agents[name] = {
+                        "model": model, "prompt": "", "role": "system",
+                        "description": desc, "tools_enabled": False,
+                        "workspace_scope": "workspace", "agent_dir": str(d),
+                    }
+                    logger.info("Groupchat: discovered system agent {} (model={}, {})", name, model, desc)
+                    continue
+            except Exception:
+                pass
+
         # Look for SOUL.md
         soul_file = d / "workspace" / "SOUL.md"
         if not soul_file.exists():
@@ -143,6 +164,7 @@ def _scan_agents_dir(
         config_file = d / "config.json"
         tools_cfg = None  # Will be dict or None
         tools_enabled = False
+        workspace_scope = "workspace"  # default
         if config_file.exists():
             try:
                 acfg = json.loads(config_file.read_text())
@@ -154,6 +176,8 @@ def _scan_agents_dir(
                     tools_cfg = acfg["tools"]
                 # Legacy: tools_enabled: true/false
                 tools_enabled = acfg.get("tools_enabled", False)
+                # Per-agent workspace scope
+                workspace_scope = acfg.get("workspace", "workspace")
             except Exception:
                 pass
 
@@ -164,6 +188,10 @@ def _scan_agents_dir(
         agent_data: dict[str, Any] = {"model": model, "prompt": prompt, "tools_enabled": tools_enabled}
         if tools_cfg is not None:
             agent_data["tools"] = tools_cfg
+
+        # Per-agent workspace scope and agent directory
+        agent_data["workspace_scope"] = workspace_scope
+        agent_data["agent_dir"] = str(d)
 
         # Load optional EXAMPLES.md (few-shot dialogue examples)
         ws = d / "workspace"

@@ -9,19 +9,19 @@ Supports fluid agent management:
 from __future__ import annotations
 
 import asyncio
-import json
 import random
-import time as _time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from loguru import logger
 
-from nanobot.groupchat import display as _d
+
 from nanobot.groupchat.agents import load_agents
 from nanobot.groupchat.config import GroupChatConfig
 from nanobot.groupchat.mailbox import MailboxHub
+from nanobot.groupchat.persistence import GroupChatState
 from nanobot.groupchat.prompt_builder import PromptBuilder
+from nanobot.groupchat.response_cleanup import clean_response as _clean_response_fn
 from nanobot.groupchat.utils import cn_now as _cn_now
 from nanobot.providers.base import LLMProvider
 
@@ -51,76 +51,158 @@ class GroupChatEngine:
         config: GroupChatConfig,
         provider: LLMProvider,
         workspace: Path,
-        brave_api_key: str = "",
+        web_search_config: Any = None,
+        web_proxy: str | None = None,
     ):
         self.config = config
         self.provider = provider
         self.workspace = workspace
-        self.brave_api_key = brave_api_key
+        self.web_search_config = web_search_config
+        self.web_proxy = web_proxy
         self._pm_cache: dict | None = None
         self._mailbox = MailboxHub(on_message=self._on_agent_comm)
-        self._mode: str = self._load_mode()
         self._prompt_builder = PromptBuilder(config=config, workspace=workspace)
 
         # Skills system (shared with single-chat)
         from nanobot.agent.skills import SkillsLoader
         self._skills = SkillsLoader(workspace)
         self._register_tools()
+        self._init_state()
+
+    # ── Workspace scope presets ────────────────────────────────
+    _WORKSPACE_PRESETS = {"source", "workspace", "prompts", "tmp"}
+
+    def _resolve_agent_workspace(self, agent_name: str) -> Path:
+        """Resolve an agent's workspace path from its workspace_scope config.
+
+        Presets:
+            "source"    → nanobot source code root (auto-detected)
+            "workspace" → user-configured workspace (default)
+            "prompts"   → agent's own directory (~/.nanobot/agents/<name>)
+            "tmp"       → /tmp sandbox
+            <abs path>  → literal path
+        """
+        agent_cfg = self.registry.get(agent_name, {})
+        scope = agent_cfg.get("workspace_scope", "workspace")
+
+        if scope == "workspace":
+            return self.workspace
+        elif scope == "source":
+            # Auto-detect nanobot source root from package location
+            import nanobot
+            return Path(nanobot.__file__).parent.parent
+        elif scope == "prompts":
+            agent_dir = agent_cfg.get("agent_dir")
+            return Path(agent_dir) if agent_dir else self.workspace
+        elif scope == "tmp":
+            return Path("/tmp")
+        elif scope.startswith("/"):
+            return Path(scope)
+        else:
+            logger.warning("Unknown workspace scope '{}' for {}, using workspace", scope, agent_name)
+            return self.workspace
 
     def _register_tools(self) -> None:
-        # Tool registry (same tools as core AgentLoop)
+        """Register default tool registries and per-agent registry cache."""
         # Lazy import to avoid circular: engine → agent.tools → agent → config → groupchat
         from nanobot.agent.tools.registry import ToolRegistry
-        from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
-        from nanobot.agent.tools.shell import ExecTool
-        from nanobot.agent.tools.filesystem import (
-            ReadFileTool, WriteFileTool, EditFileTool, ListDirTool,
-        )
 
-        home = str(Path.home())
-        sandbox = Path("/tmp")
+        ws = self.workspace
 
-        # Web + file + exec tools (available to agents with tools_enabled)
-        self.tools = ToolRegistry()
-        self.tools.register(WebSearchTool(api_key=self.brave_api_key or None))
-        self.tools.register(WebFetchTool())
-        self.tools.register(ExecTool(timeout=120, working_dir=home))
-        # ReadFileTool: allow reading workspace (skills, memory) + /tmp
-        self.tools.register(ReadFileTool(workspace=self.workspace, allowed_dir=None))
-        self.tools.register(WriteFileTool(workspace=sandbox, allowed_dir=sandbox))
-        self.tools.register(EditFileTool(workspace=sandbox, allowed_dir=sandbox))
-        self.tools.register(ListDirTool(workspace=self.workspace, allowed_dir=None))
+        # Default group chat tools (used for agents without custom workspace)
+        self.tools = self._build_tool_registry(ws)
 
-        # Register chatroom tools (agent name set per-call)
+        # Register chatroom tools on default registry
         from nanobot.groupchat.chatroom_tools import ChatroomSendTool, WaitTool
         self._chatroom_send_tool = ChatroomSendTool(mailbox=self._mailbox)
         self._wait_tool = WaitTool(mailbox=self._mailbox)
         self.tools.register(self._chatroom_send_tool)
         self.tools.register(self._wait_tool)
 
-        # Direct chat tools (default agent gets same + full exec)
-        self.direct_tools = ToolRegistry()
-        self.direct_tools.register(ExecTool(timeout=120, working_dir=home))
-        self.direct_tools.register(ReadFileTool(workspace=sandbox, allowed_dir=sandbox))
-        self.direct_tools.register(WriteFileTool(workspace=sandbox, allowed_dir=sandbox))
-        self.direct_tools.register(EditFileTool(workspace=sandbox, allowed_dir=sandbox))
-        self.direct_tools.register(ListDirTool(workspace=sandbox, allowed_dir=sandbox))
-        self.direct_tools.register(WebSearchTool(api_key=self.brave_api_key or None))
-        self.direct_tools.register(WebFetchTool())
+        # Direct chat tools (default agent — workspace scope)
+        self.direct_tools = self._build_tool_registry(ws)
+
+        # Per-agent registry cache {workspace_path_str: ToolRegistry}
+        self._tool_registry_cache: dict[str, ToolRegistry] = {
+            str(ws): self.tools,
+        }
+
         logger.info("Groupchat: registered {} group tools, {} direct tools",
                     len(self.tools), len(self.direct_tools))
 
-        # Registry: all known agents {name: {model, prompt}}
+    def _build_tool_registry(self, ws: Path) -> "ToolRegistry":
+        """Build a ToolRegistry scoped to the given workspace path."""
+        from nanobot.agent.tools.registry import ToolRegistry
+        from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
+        from nanobot.agent.tools.shell import ExecTool
+        from nanobot.agent.tools.filesystem import (
+            ReadFileTool, WriteFileTool, EditFileTool, ListDirTool,
+        )
+        from nanobot.groupchat.chatroom_tools import SmartFetchTool
+
+        registry = ToolRegistry()
+        registry.register(WebSearchTool(config=self.web_search_config, proxy=self.web_proxy))
+        # Wrap web_fetch with AI reader — model configurable via agents/reader/
+        raw_fetch = WebFetchTool()
+        reader_model = self._get_reader_model()
+        registry.register(SmartFetchTool(raw_fetch, reader_model=reader_model, provider=self.provider))
+        registry.register(ExecTool(timeout=120, working_dir=str(ws)))
+        registry.register(ReadFileTool(workspace=ws, allowed_dir=None))
+        registry.register(WriteFileTool(workspace=ws, allowed_dir=ws))
+        registry.register(EditFileTool(workspace=ws, allowed_dir=ws))
+        registry.register(ListDirTool(workspace=ws, allowed_dir=None))
+        return registry
+
+    def _get_reader_model(self) -> str:
+        """Read the reader agent's model from config. Falls back to default."""
+        import json as _json
+        reader_cfg_path = Path.home() / ".nanobot" / "agents" / "reader" / "config.json"
+        default_model = "openai/gpt-4.1-nano"
+        if reader_cfg_path.exists():
+            try:
+                cfg = _json.loads(reader_cfg_path.read_text())
+                model = (
+                    cfg.get("model")
+                    or cfg.get("agents", {}).get("defaults", {}).get("model")
+                )
+                if model:
+                    return model
+            except Exception:
+                pass
+        return default_model
+
+    def _get_agent_registry(self, agent_name: str) -> "ToolRegistry":
+        """Get (or build and cache) the tool registry for an agent's workspace scope."""
+        ws = self._resolve_agent_workspace(agent_name)
+        key = str(ws)
+        if key not in self._tool_registry_cache:
+            reg = self._build_tool_registry(ws)
+            # Add chatroom tools to custom registries too
+            from nanobot.groupchat.chatroom_tools import ChatroomSendTool, WaitTool
+            reg.register(ChatroomSendTool(mailbox=self._mailbox))
+            reg.register(WaitTool(mailbox=self._mailbox))
+            self._tool_registry_cache[key] = reg
+            logger.info("Groupchat: built tool registry for {} → {}", agent_name, ws)
+        return self._tool_registry_cache[key]
+
+    def _init_state(self) -> None:
+        """Load agent registry, persistence layer, and initialize runtime state."""
+        # Agent registry: all known agents {name: {model, prompt}}
         self.registry: dict[str, dict[str, Any]] = load_agents(self.config, self.workspace)
 
-        # Active participants in current conversation
-        self._active_agents: list[str] = self._load_active()
+        # Persistence layer
+        self._state = GroupChatState(
+            registry=self.registry,
+            default_mode=self.config.mode or "serial",
+        )
 
-        # Leader mode
-        self._leader: str | None = self._load_leader()
-        self._round: int = 0  # Current round number
+        # Restore persisted state
+        self._active_agents: list[str] = self._state.load_active()
+        self._leader: str | None = self._state.load_leader()
+        self._mode: str = self._state.load_mode()
+        self._round: int = 0
 
-        # Runtime state
+        # Runtime state (ephemeral, not persisted)
         self._task: asyncio.Task | None = None
         self._running = False
         self._input_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -130,9 +212,8 @@ class GroupChatEngine:
         self._send_and_get_id_fn: Callable[[str], Awaitable[int | None]] | None = None
         self._topic: str = ""
         self._history: list[dict[str, str]] = []
-        self._request_log: list[dict[str, Any]] = []  # LLM request log
-        self._session_dir: Path | None = None
-        self._debug_context: bool = False  # /debug toggles context breakdown logs
+        self._request_log: list[dict[str, Any]] = []
+        self._debug_context: bool = False
         self._prompt_order: dict[str, list[str]] = self._prompt_builder._load_prompt_order()
 
     # ── Public access to PromptBuilder ────────────────────────
@@ -210,15 +291,15 @@ class GroupChatEngine:
 
     def load_groups(self) -> dict[str, list[str]]:
         """Load saved agent groups from disk."""
-        return self._load_groups()
+        return self._state.load_groups()
 
     def save_groups(self, groups: dict[str, list[str]]) -> None:
         """Save agent groups to disk."""
-        self._save_groups(groups)
+        self._state.save_groups(groups)
 
     def save_active(self) -> None:
         """Persist the current active agents list to disk."""
-        self._save_active()
+        self._state.save_active(self._active_agents)
 
     def reset(self) -> None:
         """Clear history, request log, active agents, and stop the loop."""
@@ -244,7 +325,7 @@ class GroupChatEngine:
             return f"⚠️ {matched} 已在对话中"
 
         self._active_agents.append(matched)
-        self._save_active()
+        self._state.save_active(self._active_agents)
         logger.info("Groupchat: added agent {}, active={}", matched, self._active_agents)
 
         # Don't auto-start loop here — inject() will lazy-start
@@ -268,7 +349,7 @@ class GroupChatEngine:
             return f"⚠️ {name} 不在当前对话中。当前: {', '.join(self._active_agents) or '无'}"
 
         self._active_agents.remove(matched)
-        self._save_active()
+        self._state.save_active(self._active_agents)
         logger.info("Groupchat: removed agent {}, active={}", matched, self._active_agents)
 
         # If below 2 agents, stop group loop
@@ -301,13 +382,13 @@ class GroupChatEngine:
             return f"⚠️ 缺少: {', '.join(missing)}"
 
         self._active_agents[:] = resolved
-        self._save_active()
+        self._state.save_active(self._active_agents)
         # Auto-update saved group if one is loaded
         if hasattr(self, '_current_group_name') and self._current_group_name:
-            groups = self._load_groups()
+            groups = self._state.load_groups()
             if self._current_group_name in groups:
                 groups[self._current_group_name] = list(resolved)
-                self._save_groups(groups)
+                self._state.save_groups(groups)
         order_str = " → ".join(resolved)
         return f"✅ 发言顺序已调整\n📢 {order_str}"
 
@@ -322,7 +403,7 @@ class GroupChatEngine:
         if name is None:
             old = self._leader
             self._leader = None
-            self._save_leader()
+            self._state.save_leader(None)
             return f"✅ 已取消 Leader 模式" + (f" ({old})" if old else "")
 
         matched = self._resolve_agent_name(name)
@@ -330,30 +411,8 @@ class GroupChatEngine:
             return f"❌ Agent '{name}' 不存在。可用: {', '.join(self.registry.keys())}"
 
         self._leader = matched
-        self._save_leader()
+        self._state.save_leader(matched)
         return f"👑 {matched} 已设为 Leader\n其他 agent 会先发言，{matched} 最后汇总"
-
-    def _save_leader(self) -> None:
-        try:
-            p = Path.home() / ".nanobot" / "leader.txt"
-            if self._leader:
-                p.write_text(self._leader)
-            elif p.exists():
-                p.unlink()
-        except Exception:
-            pass
-
-    def _load_leader(self) -> str | None:
-        p = Path.home() / ".nanobot" / "leader.txt"
-        if p.exists():
-            try:
-                name = p.read_text().strip()
-                if name and name in self.registry:
-                    logger.info("Restored leader: {}", name)
-                    return name
-            except Exception:
-                pass
-        return None
 
     # ── Mode Management (serial / broadcast) ────────────────
 
@@ -364,86 +423,23 @@ class GroupChatEngine:
             return f"❌ 未知模式 '{mode}'，可选: serial, broadcast"
         old = self._mode
         self._mode = mode
-        self._save_mode()
+        self._state.save_mode(mode)
         labels = {"serial": "串行轮流", "broadcast": "广播乱序"}
         return f"✅ 模式切换: {labels.get(old, old)} → {labels.get(mode, mode)}"
 
-    def _save_mode(self) -> None:
-        try:
-            p = Path.home() / ".nanobot" / "chat_mode.txt"
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(self._mode)
-        except Exception:
-            pass
-
-    def _load_mode(self) -> str:
-        p = Path.home() / ".nanobot" / "chat_mode.txt"
-        if p.exists():
-            try:
-                mode = p.read_text().strip()
-                if mode in ("serial", "broadcast"):
-                    logger.info("Restored chat mode: {}", mode)
-                    return mode
-            except Exception:
-                pass
-        return self.config.mode or "serial"
-
-    # ── Persistence ─────────────────────────────────────────
-
-    @property
-    def _active_file(self) -> Path:
-        return Path.home() / ".nanobot" / "active_agents.json"
-
-    def _save_active(self) -> None:
-        """Persist active agents list (and order) to disk."""
-        try:
-            self._active_file.parent.mkdir(parents=True, exist_ok=True)
-            self._active_file.write_text(json.dumps(self._active_agents, ensure_ascii=False))
-        except Exception:
-            pass
-
-    def _load_active(self) -> list[str]:
-        """Load active agents from disk, filtering out unregistered ones."""
-        if self._active_file.exists():
-            try:
-                saved = json.loads(self._active_file.read_text())
-                # Only keep agents that exist in registry
-                valid = [a for a in saved if a in self.registry]
-                if valid:
-                    logger.info("Restored active agents: {}", valid)
-                return valid
-            except Exception:
-                pass
-        return []
-
-    @property
-    def _groups_file(self) -> Path:
-        return Path.home() / ".nanobot" / "groups.json"
-
-    def _load_groups(self) -> dict[str, list[str]]:
-        if self._groups_file.exists():
-            try:
-                return json.loads(self._groups_file.read_text())
-            except Exception:
-                return {}
-        return {}
-
-    def _save_groups(self, groups: dict[str, list[str]]) -> None:
-        self._groups_file.parent.mkdir(parents=True, exist_ok=True)
-        self._groups_file.write_text(json.dumps(groups, ensure_ascii=False, indent=2))
 
     def save_group(self, name: str) -> str:
         """Save current active agents as a named group."""
         if not self._active_agents:
             return "⚠️ 没有活跃 agent，无法保存"
-        groups = self._load_groups()
+        groups = self._state.load_groups()
         groups[name] = list(self._active_agents)
-        self._save_groups(groups)
+        self._state.save_groups(groups)
         return f"✅ 已保存分组 「{name}」\n👥 成员: {', '.join(self._active_agents)}"
 
     def load_group(self, name: str) -> str:
         """Load a saved group config, setting agents directly."""
-        groups = self._load_groups()
+        groups = self._state.load_groups()
         if name not in groups:
             available = ', '.join(groups.keys()) if groups else '无'
             return f"⚠️ 分组 「{name}」 不存在\n📋 可用分组: {available}"
@@ -456,7 +452,7 @@ class GroupChatEngine:
         # Set agents directly (no add/remove to avoid loop race)
         valid = [a for a in target if self._resolve_agent_name(a)]
         self._active_agents = valid
-        self._save_active()
+        self._state.save_active(self._active_agents)
 
         # Start group loop if 2+ agents
         if len(self._active_agents) >= 2:
@@ -479,16 +475,16 @@ class GroupChatEngine:
 
     def delete_group(self, name: str) -> str:
         """Delete a saved group config."""
-        groups = self._load_groups()
+        groups = self._state.load_groups()
         if name not in groups:
             return f"⚠️ 分组 「{name}」 不存在"
         del groups[name]
-        self._save_groups(groups)
+        self._state.save_groups(groups)
         return f"🗑 已删除分组 「{name}」"
 
     def list_groups(self) -> str:
         """List all saved group configs."""
-        groups = self._load_groups()
+        groups = self._state.load_groups()
         if not groups:
             return "📋 没有保存的分组\n用 /savegroup 保存当前成员"
         lines = ["📋 已保存的分组：\n"]
@@ -506,49 +502,8 @@ class GroupChatEngine:
     # ── Response cleanup ───
 
     def _clean_response(self, content: str, agent_name: str) -> str:
-        """Clean up model response: strip think blocks, name prefixes, fake tool calls, etc."""
-        import re
-
-        # 1. Strip <think>...</think> blocks (deepseek, some models)
-        content = re.sub(r"<think>[\s\S]*?</think>", "", content).strip()
-
-        # 2. Strip Grok-style reasoning prefix (starts with "A: " or similar)
-        if content.startswith("A: ") or content.startswith("A："):
-            lines = content.split("\n")
-            for i, line in enumerate(lines):
-                stripped = line.strip()
-                if stripped and not stripped.startswith("A:") and not stripped.startswith("A："):
-                    if i > 0 and not lines[i-1].strip():
-                        content = "\n".join(lines[i:])
-                        break
-
-        # 3. Strip fake/hallucinated tool calls in text
-        # Bracket style: [Start search for ...], [Check ...], etc.
-        content = re.sub(r"\[(?:Start |Check |Search |Look up |Fetch |查|搜)[^\]]*\]", "", content)
-        # XML style: <function_calls>...</function_calls>, <web_search>...</web_search>, <tool>...</tool>, etc.
-        content = re.sub(
-            r"<(?:function_calls|invoke|web_search|web_fetch|tool|parameter|query|search|tool_call|parameters|freshness|count)[\s\S]*?(?:</(?:function_calls|invoke|web_search|web_fetch|tool|parameter|query|search|tool_call|parameters|freshness|count)>|$)",
-            "", content, flags=re.IGNORECASE,
-        )
-        # Stray closing tags left behind
-        content = re.sub(
-            r"</(?:function_calls|invoke|web_search|web_fetch|tool|parameter|query|search|tool_call|parameters|freshness|count)>",
-            "", content, flags=re.IGNORECASE,
-        )
-
-        # 4. Strip ALL agent name prefixes (handles repeated "Benjamin: ..." throughout)
-        all_names = list(self.registry.keys())
-        for name in all_names:
-            for sep in (": ", "：", ":\n"):
-                prefix = f"{name}{sep}"
-                content = content.replace(prefix, "")
-            # Also strip markdown headers like "# Benjamin" or "## Benjamin"
-            content = re.sub(rf"^#+\s*{re.escape(name)}\s*$", "", content, flags=re.MULTILINE)
-
-        # 5. Clean up excessive blank lines left after stripping
-        content = re.sub(r"\n{3,}", "\n\n", content)
-
-        return content.strip()
+        """Clean up model response — delegates to response_cleanup module."""
+        return _clean_response_fn(content, agent_name, list(self.registry.keys()))
 
     # ── Tool-augmented chat (matching AgentLoop._run_agent_loop) ───
 
@@ -615,303 +570,54 @@ class GroupChatEngine:
         on_tool_result_override: Callable | None = None,
         force_no_tools: bool = False,
     ) -> tuple[str, list[str], dict[str, Any]]:
-        """Chat with tool calling loop, delegating to the shared tool_loop.
+        """Chat with tool calling loop — delegates to tool_chat module.
 
         Returns (content, tools_used, stats).
         """
-        from nanobot.agent.tool_loop import tool_loop
+        from nanobot.groupchat.tool_chat import chat_with_tools
 
-        # Tool selection
+        # Tool selection — use per-agent registry based on workspace_scope
         agent_cfg = self.registry.get(agent_name, {})
-        if is_direct:
-            tool_defs = self._get_agent_tools(agent_cfg, self.direct_tools)
-        else:
-            tool_defs = self._get_agent_tools(agent_cfg, self.tools)
-
-        tool_registry = self.direct_tools if is_direct else self.tools
+        tool_registry = self.direct_tools if is_direct else self._get_agent_registry(agent_name)
+        tool_defs = self._get_agent_tools(agent_cfg, tool_registry)
 
         # Set chatroom tool context for this agent
         if hasattr(self, '_chatroom_send_tool'):
             self._chatroom_send_tool.set_agent(agent_name)
             self._wait_tool.set_agent(agent_name)
-            # Ensure mailbox exists for this agent
             self._mailbox.create(agent_name)
 
-        # Langfuse trace metadata + request log enrichment
         session_id = self._session_dir.name if self._session_dir else "direct"
-        trace_metadata = {
-            "trace_name": f"{'direct' if is_direct else 'group'}_{agent_name}",
-            "trace_user_id": "groupchat",
-            "tags": [agent_name, "direct" if is_direct else "group"],
-            "generation_name": f"{agent_name}_loop",
-            "debug_context": self._debug_context,
-            # Fields consumed by _log_request
-            "log_agent": agent_name,
-            "log_session": session_id,
-            "log_topic": self._topic or "",
-            "log_mode": "direct" if is_direct else "group",
-        }
 
-        # ── Callbacks ──
-
-
-        _tool_msg_id: int | None = None  # Track message ID for tool call consolidation
-        _tool_msg_text: str = ""  # Store original message text for editing
-
-        async def _on_tool_start(name: str, args: dict) -> None:
-            nonlocal _tool_msg_id, _tool_msg_text
-            _tool_msg_id = None
-            _tool_msg_text = ""
-            if not isinstance(args, dict):
-                args = {}
-            # Persist tool_call event
-            self._save_event("tool_call", agent=agent_name, extra={
-                "tool": name,
-                "args": {k: (v[:200] if isinstance(v, str) else v) for k, v in args.items()},
-            })
-            short = (
-                args.get("command") or args.get("query")
-                or args.get("url") or args.get("path") or ""
-            )
-            if not short and args:
-                short = list(args.values())[0]
-            if isinstance(short, str) and len(short) > 80:
-                short = short[:80] + "…"
-            icon = _d.tool_icon(name)
-            text = _d.tool_call_line(agent_name, name, short if isinstance(short, str) else str(short))
-            _tool_msg_text = text
-            # Try to send as editable message
-            if self._send_and_get_id_fn:
-                _tool_msg_id = await self._send_and_get_id_fn(text)
-            elif self._send_fn:
-                await self._send(text)
-
-        async def _on_tool_result(name: str, tool_call_id: str, result: str) -> None:
-            nonlocal _tool_msg_id, _tool_msg_text
-            # Persist tool_result event
-            self._save_event("tool_result", agent=agent_name, extra={
-                "tool": name,
-                "result_len": len(result) if result else 0,
-                "success": not (result or "").startswith("Error:"),
-            })
-            if not result:
-                _tool_msg_id = None
-                return
-            rlen = len(result)
-            preview = result.strip().replace("\n", " ")[:80]
-            result_line = f"↳ {preview}{'…' if rlen > 80 else ''} ({rlen}字)"
-            # Edit the tool start message to append the result
-            if _tool_msg_id and self._edit_fn and _tool_msg_text:
-                try:
-                    updated = f"{_tool_msg_text}\n{result_line}"
-                    await self._edit_fn(_tool_msg_id, updated)
-                except Exception:
-                    if self._send_fn:
-                        await self._send(f"   {result_line}")
-            elif self._send_fn:
-                await self._send(f"   {result_line}")
-            _tool_msg_id = None
-            _tool_msg_text = ""
-
-        effective_defs = None if force_no_tools else (tool_defs if tool_defs else None)
-        logger.info(
-            "_chat_with_tools: agent={} model={} tool_defs={} is_direct={}",
-            agent_name, model,
-            len(tool_defs) if tool_defs else 0,
-            is_direct,
-        )
-
-        # Snapshot messages before tool_loop mutates them
-        messages_snapshot = []
-        for m in messages:
-            entry = {"role": m.get("role", "?")}
-            if m.get("name"):
-                entry["name"] = m["name"]
-            content = m.get("content", "")
-            if isinstance(content, str):
-                entry["content"] = content[:500]
-                entry["content_len"] = len(content)
-            elif isinstance(content, list):
-                # Content blocks (e.g. cache_control)
-                text_parts = [b.get("text", "") for b in content if isinstance(b, dict)]
-                joined = " ".join(text_parts)
-                entry["content"] = joined[:500]
-                entry["content_len"] = len(joined)
-            else:
-                entry["content"] = str(content)[:500] if content else ""
-                entry["content_len"] = len(str(content)) if content else 0
-            messages_snapshot.append(entry)
-
-        # Capture sampling params
-        sampling = dict(getattr(self.provider, "sampling_params", {}))
-
-        # Tool definition names
-        tool_names = [d.get("function", {}).get("name", "?") for d in (tool_defs or [])]
-
-        result = await tool_loop(
+        return await chat_with_tools(
             provider=self.provider,
             messages=messages,
-            tool_registry=tool_registry,
             model=model,
+            agent_name=agent_name,
+            tool_registry=tool_registry,
+            tool_defs=tool_defs,
             max_tokens=self.config.max_tokens,
             max_iterations=max_iterations,
-            tool_defs=effective_defs,
-            metadata=trace_metadata,
-            on_tool_start=on_tool_start_override or _on_tool_start,
-            on_tool_result=on_tool_result_override or _on_tool_result,
+            session_id=session_id,
+            is_direct=is_direct,
+            debug_context=self._debug_context,
+            topic=self._topic or "",
+            clean_response=lambda c: self._clean_response(c, agent_name),
             on_content_delta=on_content_delta,
             on_content_reset=on_content_reset,
-            clean_response=lambda c: self._clean_response(c, agent_name),
-            result_max_chars=20_000,
+            on_tool_start_override=on_tool_start_override,
+            on_tool_result_override=on_tool_result_override,
+            save_event=self._save_event,
+            send_fn=self._send_fn,
+            send_and_get_id_fn=self._send_and_get_id_fn,
+            edit_fn=self._edit_fn,
+            force_no_tools=force_no_tools,
         )
 
-        content = result.content or ""
-        stats = {
-            "iterations": result.iterations,
-            "latency": result.latency,
-            "tokens": result.token_usage,
-            "calls": result.call_details,
-            "tool_calls_detail": result.tool_calls_detail,
-            "tools_available": result.tools_available,
-            "tool_defs_count": len(tool_defs) if tool_defs else 0,
-            "tool_names": tool_names,
-            "messages_snapshot": messages_snapshot,
-            "sampling_params": sampling,
-            "max_tokens": self.config.max_tokens,
-            "status_code": result.status_code,
-            "finish_reason": result.finish_reason,
-        }
-        return content, result.tools_used, stats
-
     async def direct_chat(self, user_message: str) -> str | None:
-        """Send message to single active agent (1-on-1 mode).
-
-        Uses proper multi-message format (like SillyTavern) with tool calling
-        matching nanobot core agent logic.
-        """
-        if len(self._active_agents) != 1:
-            return None
-
-        agent_name = self._active_agents[0]
-        agent = self.registry[agent_name]
-
-        # Ensure session directory exists for structured logging
-        if not self._session_dir:
-            timestamp = _cn_now().strftime("%Y%m%d-%H%M%S")
-            sessions_dir = Path.home() / ".nanobot" / "collab-sessions"
-            sessions_dir.mkdir(parents=True, exist_ok=True)
-            self._session_dir = sessions_dir / f"gc-{timestamp}"
-            self._session_dir.mkdir(parents=True, exist_ok=True)
-            self._save_event("session_start", extra={
-                "agents": [agent_name],
-                "mode": "direct",
-                "topic": self._topic or "",
-                "leader": None,
-                "models": {agent_name: agent.get("model", "?")},
-            })
-
-        # Build messages matching SillyTavern's minimal flow:
-        # system(persona) → [history as user/assistant] → user(new)
-        now = _cn_now().strftime("%Y年%m月%d日 %H:%M")
-        messages: list[dict[str, str]] = [
-            {"role": "system", "content": agent["prompt"] + f"\n\n[Current date and time: {now}]"},
-        ]
-
-        # Few-shot examples (only if EXAMPLES.md exists)
-        examples = agent.get("examples", "")
-        if examples:
-            messages.append({"role": "system", "content": f"以下是对话风格示例：\n{examples}"})
-
-        # Chat history as proper alternating messages
-        messages.extend(PromptBuilder.history_to_messages(self._history, agent_name))
-
-        # Current user message
-        messages.append({"role": "user", "content": user_message})
-
-        # Post-history instructions only if explicitly defined
-        instructions = agent.get("instructions", "")
-        if instructions:
-            messages.append({"role": "system", "content": instructions})
-
-        # ── Streaming state ──
-        _stream_msg_id: int | None = None
-        _stream_buffer: list[str] = []
-        _last_edit: float = 0.0
-        _EDIT_INTERVAL = 0.8
-        _header = f"💬 {agent_name}:\n\n"
-
-        async def _on_delta(delta: str) -> None:
-            nonlocal _stream_msg_id, _last_edit
-            _stream_buffer.append(delta)
-            now_t = _time.time()
-
-            if _stream_msg_id is None and self._send_and_get_id_fn:
-                text = _header + "".join(_stream_buffer) + " ▍"
-                _stream_msg_id = await self._send_and_get_id_fn(text)
-                _last_edit = now_t
-            elif _stream_msg_id and self._edit_fn and (now_t - _last_edit) >= _EDIT_INTERVAL:
-                text = _header + "".join(_stream_buffer) + " ▍"
-                try:
-                    await self._edit_fn(_stream_msg_id, text)
-                except Exception:
-                    pass
-                _last_edit = now_t
-
-        async def _on_reset() -> None:
-            """Clear stream buffer when tool calls interrupt mid-stream."""
-            _stream_buffer.clear()
-
-        _delta_cb = _on_delta if (self._edit_fn and self._send_and_get_id_fn) else None
-        _reset_cb = _on_reset if _delta_cb else None
-
-        try:
-            content, tools_used, stats = await self._chat_with_tools(
-                messages=messages,
-                model=agent["model"],
-                agent_name=agent_name,
-                is_direct=True,
-                on_content_delta=_delta_cb,
-                on_content_reset=_reset_cb,
-            )
-            self._request_log.append({
-                "agent": agent_name, "model": agent["model"],
-                "msgs": len(messages), "max_tokens": self.config.max_tokens,
-                "reply_len": len(content), "time": _cn_now().strftime("%H:%M:%S"),
-                "mode": "direct", "tools": tools_used,
-                "input_preview": user_message[:200],
-                "output": content[:500],
-                **stats,
-            })
-            if content:
-                self._add_message("用户", user_message)
-                self._add_message(agent_name, content)
-                final_text = f"{_header}{content}"
-                if _stream_msg_id and self._edit_fn:
-                    # Final edit — remove cursor
-                    try:
-                        await self._edit_fn(_stream_msg_id, final_text)
-                    except Exception:
-                        await self._send(final_text)
-                    return None  # Already sent via streaming
-                else:
-                    return final_text
-            else:
-                if _stream_msg_id and self._edit_fn:
-                    try:
-                        await self._edit_fn(_stream_msg_id, f"⚠️ {agent_name} 返回空回复")
-                    except Exception:
-                        pass
-                    return None
-                return f"⚠️ {agent_name} 返回空回复 (模型可能暂时异常，请重试)"
-        except Exception as e:
-            logger.error("Direct chat with {} failed: {}", agent_name, e)
-            self._request_log.append({
-                "agent": agent_name, "model": agent["model"],
-                "msgs": len(messages), "max_tokens": self.config.max_tokens,
-                "reply_len": 0, "time": _cn_now().strftime("%H:%M:%S"),
-                "mode": "direct", "error": str(e),
-            })
-            return f"⚠️ {agent_name} 回复失败: {e}"
+        """Send message to single active agent — delegates to direct_chat module."""
+        from nanobot.groupchat.direct_chat import direct_chat as _direct_chat
+        return await _direct_chat(self, user_message)
 
     def inject(self, message: str) -> None:
         """Inject a user message into the group chat."""
@@ -930,7 +636,7 @@ class GroupChatEngine:
         """Stop everything and clear active agents."""
         self._stop_group_loop()
         self._active_agents.clear()
-        self._save_active()
+        self._state.save_active(self._active_agents)
 
     # ── Internal ─────────────────────────────────────────────
 
@@ -986,14 +692,20 @@ class GroupChatEngine:
             except Exception as e:
                 logger.error("Groupchat send failed: {}", e)
 
+    @property
+    def _session_dir(self) -> Path | None:
+        """Delegate session_dir to persistence layer."""
+        return self._state.session_dir
+
+    @_session_dir.setter
+    def _session_dir(self, value: Path | None) -> None:
+        self._state.session_dir = value
+
     def _add_message(self, sender: str, content: str) -> None:
         self._history.append({"sender": sender, "content": content})
         if len(self._history) > self.config.max_history:
             self._history = self._history[-self.config.max_history:]
-        if self._session_dir:
-            with open(self._session_dir / "chat_log.txt", "a") as f:
-                f.write(f"[{sender}]: {content}\n---\n")
-        self._save_event("message", agent=sender, content=content)
+        self._state.save_message(sender, content, self._history)
 
     def _save_event(
         self,
@@ -1003,28 +715,8 @@ class GroupChatEngine:
         content: str = "",
         extra: dict[str, Any] | None = None,
     ) -> None:
-        """Append a structured event to session.jsonl.
-
-        Event types: session_start, round_start, round_end, message,
-                     tool_call, tool_result, agent_comm, system.
-        """
-        if not self._session_dir:
-            return
-        record: dict[str, Any] = {
-            "type": event_type,
-            "ts": _cn_now().isoformat(),
-        }
-        if agent:
-            record["agent"] = agent
-        if content:
-            record["content"] = content
-        if extra:
-            record.update(extra)
-        try:
-            with open(self._session_dir / "session.jsonl", "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-        except Exception as e:
-            logger.debug("_save_event failed: {}", e)
+        """Delegate to persistence layer."""
+        self._state.save_event(event_type, agent=agent, content=content, extra=extra)
 
     def _save_round_summary(
         self,
@@ -1033,24 +725,17 @@ class GroupChatEngine:
         comm_count: int = 0,
         duration: float = 0.0,
     ) -> None:
-        """Write a round_end event summarizing the round."""
-        self._save_event("round_end", extra={
-            "round": round_num,
-            "agents_responded": agents_responded,
-            "comm_count": comm_count,
-            "duration": round(duration, 2),
-        })
+        """Delegate to persistence layer."""
+        self._state.save_round_summary(round_num, agents_responded, comm_count, duration)
 
     def _on_agent_comm(self, sender: str, targets: list[str], content: str) -> None:
         """Callback from MailboxHub.send() — persist agent communication."""
-        self._save_event("agent_comm", agent=sender, content=content, extra={
+        self._state.save_event("agent_comm", agent=sender, content=content, extra={
             "targets": targets,
         })
 
     def _format_history(self) -> str:
         return "\n\n".join(f"[{m['sender']}]: {m['content']}" for m in self._history)
-
-
 
     def _pick_next_speaker(self, last_content: str = "") -> str:
         names = self._active_agents
@@ -1103,8 +788,6 @@ class GroupChatEngine:
 
         return messages
 
-
-
     async def _agent_speak(
         self,
         agent_name: str,
@@ -1113,553 +796,32 @@ class GroupChatEngine:
         no_stream: bool = False,
         silent: bool = False,
     ) -> tuple[str, list[str], dict] | None:
-        """Run one agent's turn. Returns (content, tools_used, stats) or None on error.
+        """Run one agent's turn — delegates to speaker module."""
+        from nanobot.groupchat.speaker import agent_speak
+        return await agent_speak(
+            self, agent_name,
+            synthesis_context=synthesis_context,
+            no_tools=no_tools,
+            no_stream=no_stream,
+            silent=silent,
+        )
 
-        Args:
-            synthesis_context: Optional research summary injected before the
-                agent's own prompt (used for leader synthesis in parallel mode).
-            no_tools: If True, disable tool calling (forces pure text response).
-                Useful for synthesis/discussion phases.
-            no_stream: If True, disable streaming (avoids empty content issues
-                with tool calls in litellm streaming mode).
-            silent: If True, suppress all internal display (no _send, no
-                _edit_fn). Caller handles display. Used by broadcast synthesis
-                to avoid double-sending.
-        """
-        if agent_name not in self.registry:
-            return None
-        model = self.registry[agent_name]["model"]
-        messages = self._build_agent_prompt(agent_name)
-
-        # Inject synthesis context for leader (before the final nudge)
-        if synthesis_context:
-            # Insert before the last message (group_nudge) so the model sees
-            # the research results right before being asked to respond.
-            insert_pos = max(len(messages) - 1, 0)
-            messages.insert(insert_pos, {
-                "role": "system",
-                "content": synthesis_context,
-            })
-
-        # ── Context size breakdown (only when /debug enabled) ──
-        if self._debug_context:
-            total_chars = 0
-            parts: list[str] = []
-            for i, msg in enumerate(messages):
-                role = msg.get("role", "?")
-                name = msg.get("name", "")
-                content = msg.get("content", "")
-                c_len = len(content) if isinstance(content, str) else sum(
-                    len(b.get("text", "")) for b in content if isinstance(b, dict)
-                ) if isinstance(content, list) else 0
-                total_chars += c_len
-                label = (content[:30] if isinstance(content, str) else "").replace("\n", " ")
-                tag = f"{name}:" if name else ""
-                parts.append(f"  [{i}] {role}{':' if tag else ''}{tag} {c_len:,}字 | {label}…")
-            logger.info(
-                "Context for {} ({}):\n{}\n  ── TOTAL: {:,} chars, {} messages",
-                agent_name, model, "\n".join(parts), total_chars, len(messages),
-            )
-
-        # ── Streaming state ──
-        _stream_msg_id: int | None = None
-        _stream_buffer: list[str] = []
-        _last_edit: float = 0.0
-        _EDIT_INTERVAL = 0.8  # Telegram rate-limit safe interval
-
-        total = len(self._active_agents)
-        idx = self._active_agents.index(agent_name) + 1 if agent_name in self._active_agents else 0
-        _header = _d.agent_header(agent_name, leader=self._leader, idx=idx, total=total)
-
-        async def _on_delta(delta: str) -> None:
-            nonlocal _stream_msg_id, _last_edit
-            _stream_buffer.append(delta)
-            now = _time.time()
-
-            if _stream_msg_id is None and self._send_and_get_id_fn:
-                # First chunk — send initial message
-                text = _header + "".join(_stream_buffer) + " ▍"
-                _stream_msg_id = await self._send_and_get_id_fn(text)
-                _last_edit = now
-            elif _stream_msg_id and self._edit_fn and (now - _last_edit) >= _EDIT_INTERVAL:
-                # Throttled edit
-                text = _header + "".join(_stream_buffer) + " ▍"
-                try:
-                    await self._edit_fn(_stream_msg_id, text)
-                except Exception:
-                    pass  # Telegram may reject if text unchanged
-                _last_edit = now
-
-        async def _on_reset() -> None:
-            """Clear stream buffer when tool calls interrupt mid-stream."""
-            _stream_buffer.clear()
-            # Update Telegram message to show tool status instead of stale content
-            if _stream_msg_id and self._edit_fn:
-                try:
-                    await self._edit_fn(_stream_msg_id, _d.tool_in_progress_msg(_header))
-                except Exception:
-                    pass
-
-        # Only enable streaming if edit callbacks are available AND not in no_stream mode
-        if no_stream:
-            _delta_cb = None
-            _reset_cb = None
-        else:
-            _delta_cb = _on_delta if (self._edit_fn and self._send_and_get_id_fn) else None
-            _reset_cb = _on_reset if _delta_cb else None
-
-        try:
-            content, tools_used, stats = await self._chat_with_tools(
-                messages=messages,
-                model=model,
-                agent_name=agent_name,
-                max_iterations=1 if no_tools else 5,
-                on_content_delta=_delta_cb,
-                on_content_reset=_reset_cb,
-                force_no_tools=no_tools,
-            )
-            iters = stats.get("iterations", 1)
-            latency = stats.get("latency", 0)
-            is_error = stats.get("finish_reason") == "error"
-
-            if is_error:
-                # ── Error: do NOT add to history, show warning ──
-                err_short = content[:150] if content else "Unknown error"
-                logger.error("Agent {} LLM error ({}s): {}", agent_name, latency, err_short)
-                err_msg = _d.error_msg(agent_name, err_short, latency)
-                if _stream_msg_id and self._edit_fn:
-                    try:
-                        await self._edit_fn(_stream_msg_id, err_msg)
-                    except Exception:
-                        await self._send(err_msg)
-                else:
-                    await self._send(err_msg)
-                self._request_log.append({
-                    "agent": agent_name, "model": model,
-                    "msgs": len(messages), "max_tokens": self.config.max_tokens,
-                    "reply_len": 0, "time": _cn_now().strftime("%H:%M:%S"),
-                    "mode": "group", "error": err_short,
-                    "status_code": stats.get("status_code"),
-                    **{k: v for k, v in stats.items() if k not in ("status_code",)},
-                })
-                return None
-
-            completion_msg = _d.completion_msg(agent_name, latency, iters, tools_used)
-
-            self._request_log.append({
-                "agent": agent_name, "model": model,
-                "msgs": len(messages), "max_tokens": self.config.max_tokens,
-                "reply_len": len(content), "time": _cn_now().strftime("%H:%M:%S"),
-                "mode": "group", "tools": tools_used,
-                "input_preview": (self._history[-2]["content"][:200] if len(self._history) >= 2 else ""),
-                "output": content[:500],
-                **stats,
-            })
-            logger.info(
-                "Agent {} result: content_len={} tools={} stream_msg_id={} iters={} latency={}",
-                agent_name, len(content), tools_used, _stream_msg_id,
-                stats.get("iterations"), stats.get("latency"),
-            )
-
-            # ── Final display: edit streamed message FIRST, then send completion ──
-            if content:
-                self._add_message(agent_name, content)
-                if not silent:
-                    final_text = f"{_header}{content}"
-                    if _stream_msg_id and self._edit_fn:
-                        try:
-                            await self._edit_fn(_stream_msg_id, final_text[:4096])
-                            logger.info("Agent {}: final streamed edit OK", agent_name)
-                        except Exception as edit_err:
-                            logger.warning("Final stream edit failed for {}: {}", agent_name, edit_err)
-                            await self._send(final_text[:4096])
-                    else:
-                        logger.info("Agent {}: sending via _send (len={})", agent_name, len(final_text))
-                        await self._send(final_text[:4096])
-            elif _stream_msg_id and self._edit_fn:
-                try:
-                    await self._edit_fn(_stream_msg_id, f"{_header}(空回复)")
-                except Exception:
-                    pass
-                logger.warning("Agent {} returned empty content (streamed placeholder updated)", agent_name)
-            else:
-                logger.warning("Agent {} returned empty content, content repr: {!r}", agent_name, content)
-
-            # Send completion notification AFTER the final text is displayed
-            if completion_msg and not silent:
-                await self._send(completion_msg)
-            return (content, tools_used, stats)
-        except Exception as e:
-            logger.error("Groupchat: {} LLM call failed: {}", agent_name, e)
-            self._request_log.append({
-                "agent": agent_name, "model": model,
-                "msgs": len(messages), "max_tokens": self.config.max_tokens,
-                "reply_len": 0, "time": _cn_now().strftime("%H:%M:%S"),
-                "mode": "group", "error": str(e),
-            })
-            await self._send(_d.error_msg(agent_name, str(e)))
-            return None
 
     # ── Parallel Leader Mode (Orchestra) ─────────────────────────────
 
     async def _orchestra_round(self, speak_order: list[str]) -> None:
-        """Run non-leader agents in parallel with Grok-style display,
-        then leader synthesizes all findings.
-
-        Visual style matches xAI's multi-agent output:
-        - Leader header: "👑 {Name}领导者"
-        - Agent sections: "Agent N (Name)" with tool activity
-        - Tool format: "已搜索的网络 query" / "已浏览 url"
-        - Consolidated per-agent editable messages
-        """
-        leader = self._leader
-        others = [a for a in speak_order if a != leader]
-
-        if not others or not leader:
-            return
-
-        total = len(speak_order)
-
-        # ── Phase 0: Leader announcement ──
-        await self._send(
-            f"👑 {leader}领导者\n"
-            f"正在分析任务并协调 {len(others)} 个 Agent 并行工作..."
-        )
-
-        async def _run_agent_grok(
-            name: str, agent_idx: int,
-        ) -> tuple[str, tuple[str, list[str], dict] | None]:
-            """Run one agent with Grok-style consolidated display."""
-            if name not in self.registry:
-                return (name, None)
-
-            agent_cfg = self.registry[name]
-            model = agent_cfg["model"]
-            model_short = model.split("/")[-1]
-            messages = self._build_agent_prompt(name)
-
-            # ── Consolidated editable message for this agent ──
-            _lines: list[str] = []       # tool activity lines
-            _msg_id: int | None = None
-            _header = f"Agent {agent_idx + 1} ({name})"
-
-            if self._send_and_get_id_fn:
-                _msg_id = await self._send_and_get_id_fn(
-                    f"{_header}\n⏳ 思考中... ({model_short})"
-                )
-
-            async def _edit_consolidated() -> None:
-                """Re-render the consolidated message."""
-                if not (_msg_id and self._edit_fn):
-                    return
-                text = f"{_header}\n" + "\n\n".join(_lines)
-                try:
-                    await self._edit_fn(_msg_id, text[:4096])
-                except Exception:
-                    pass
-
-            # ── Grok-style tool callbacks ──
-
-            async def _on_tool_start(tool_name: str, args: dict) -> None:
-                if not isinstance(args, dict):
-                    args = {}
-                if tool_name == "web_search":
-                    query = args.get("query", "")
-                    _lines.append(f"已搜索的网络\n{query}")
-                elif tool_name == "web_fetch":
-                    url = args.get("url", "")
-                    short = url[:60] + ("..." if len(url) > 60 else "")
-                    _lines.append(f"已浏览\n{short}")
-                elif tool_name == "exec":
-                    cmd = (args.get("command", "") or "")[:50]
-                    _lines.append(f"⚡ {cmd}")
-                else:
-                    short = ""
-                    if args:
-                        first = list(args.values())[0]
-                        if isinstance(first, str):
-                            short = first[:40]
-                    _lines.append(f"🔧 {tool_name}" + (f" {short}" if short else ""))
-                await _edit_consolidated()
-
-            async def _on_tool_result(
-                tool_name: str, tool_call_id: str, result: str,
-            ) -> None:
-                if not result or not _lines:
-                    return
-                rlen = len(result)
-                last = _lines[-1]
-                if tool_name == "web_search":
-                    # Parse actual result count from the output format:
-                    # "Results for: query  (N results)"
-                    import re as _re
-                    m = _re.search(r'\((\d+) results?\)', result[:100])
-                    count = int(m.group(1)) if m else max(result.count("\n") // 3, 1)
-                    _lines[-1] = f"{last}\n{count} 条结果"
-                elif tool_name == "web_fetch":
-                    _lines[-1] = f"{last}\n({rlen}字)"
-                else:
-                    preview = result.strip().replace("\n", " ")[:60]
-                    _lines[-1] = f"{last}\n↳ {preview}{'…' if rlen > 60 else ''}"
-                await _edit_consolidated()
-
-            # ── Streaming callback (accumulate text) ──
-            _stream_buf: list[str] = []
-            _last_edit: float = 0.0
-
-            async def _on_delta(delta: str) -> None:
-                nonlocal _last_edit
-                _stream_buf.append(delta)
-                now = _time.time()
-                if (_msg_id and self._edit_fn
-                        and (now - _last_edit) >= 0.8):
-                    activity = "\n\n".join(_lines) + "\n\n" if _lines else ""
-                    text = f"{_header}\n{activity}" + "".join(_stream_buf) + " ▍"
-                    try:
-                        await self._edit_fn(_msg_id, text[:4096])
-                    except Exception:
-                        pass
-                    _last_edit = now
-
-            async def _on_reset() -> None:
-                _stream_buf.clear()
-
-            _delta_cb = _on_delta if (self._edit_fn and self._send_and_get_id_fn) else None
-            _reset_cb = _on_reset if _delta_cb else None
-
-            # ── Run LLM with tools (pass Grok-style callbacks) ──
-            try:
-                content, tools_used, stats = await self._chat_with_tools(
-                    messages=messages,
-                    model=model,
-                    agent_name=name,
-                    max_iterations=5,
-                    on_content_delta=_delta_cb,
-                    on_content_reset=_reset_cb,
-                    on_tool_start_override=_on_tool_start,
-                    on_tool_result_override=_on_tool_result,
-                )
-                is_error = stats.get("finish_reason") == "error"
-                latency = stats.get("latency", 0)
-
-                if is_error:
-                    err_short = content[:150] if content else "Unknown error"
-                    if _msg_id and self._edit_fn:
-                        try:
-                            await self._edit_fn(
-                                _msg_id, f"{_header}\n⚠️ 失败 ({latency}s): {err_short}"
-                            )
-                        except Exception:
-                            pass
-                    self._request_log.append({
-                        "agent": name, "model": model,
-                        "reply_len": 0, "time": _cn_now().strftime("%H:%M:%S"),
-                        "mode": "orchestra", "error": err_short, **stats,
-                    })
-                    return (name, None)
-
-                # ── Final consolidated display ──
-                activity_text = "\n\n".join(_lines) if _lines else ""
-                if content:
-                    self._add_message(name, content)
-                    sep = "\n\n" if activity_text else ""
-                    final = f"{_header}\n{activity_text}{sep}{content}"
-                    if _msg_id and self._edit_fn:
-                        try:
-                            await self._edit_fn(_msg_id, final[:4096])
-                        except Exception:
-                            await self._send(final[:4096])
-                    else:
-                        await self._send(final[:4096])
-                elif _msg_id and self._edit_fn:
-                    try:
-                        await self._edit_fn(
-                            _msg_id, f"{_header}\n{activity_text}\n\n(空回复)" if activity_text
-                            else f"{_header}\n(空回复)"
-                        )
-                    except Exception:
-                        pass
-
-                self._request_log.append({
-                    "agent": name, "model": model,
-                    "reply_len": len(content), "time": _cn_now().strftime("%H:%M:%S"),
-                    "mode": "orchestra", "tools": tools_used, **stats,
-                })
-                return (name, (content, tools_used, stats))
-
-            except Exception as e:
-                logger.error("Orchestra: {} failed: {}", name, e)
-                if _msg_id and self._edit_fn:
-                    try:
-                        await self._edit_fn(_msg_id, f"{_header}\n⚠️ 失败: {e}")
-                    except Exception:
-                        pass
-                self._request_log.append({
-                    "agent": name, "model": model,
-                    "reply_len": 0, "time": _cn_now().strftime("%H:%M:%S"),
-                    "mode": "orchestra", "error": str(e),
-                })
-                return (name, None)
-
-        # ── Run all non-leader agents concurrently ──
-        tasks = [_run_agent_grok(name, si) for si, name in enumerate(others)]
-        parallel_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # ── Phase 2: Build synthesis context ──
-        research_parts: list[str] = []
-        for item in parallel_results:
-            if isinstance(item, Exception):
-                logger.error("Orchestra parallel agent error: {}", item)
-                continue
-            name, result = item
-            if result is None:
-                research_parts.append(f"[{name}]: (请求失败，无结果)")
-                continue
-            content, tools_used, stats = result
-            tool_str = f" | 工具: {', '.join(tools_used)}" if tools_used else ""
-            tool_details = stats.get("tool_calls_detail", [])
-            detail_lines = ""
-            if tool_details:
-                details = []
-                for td in tool_details[:8]:
-                    t_name = td.get("name", "?")
-                    t_result = td.get("result_preview", "")[:3000]
-                    details.append(f"  - {t_name}: {t_result}")
-                detail_lines = "\n" + "\n".join(details)
-            research_parts.append(
-                f"[{name}]{tool_str}:\n{content or '(空回复)'}{detail_lines}"
-            )
-
-        synthesis_context = (
-            "[团队研究结果 — 请综合以下所有 agent 的发现，给出最终回复]\n"
-            "[重要指令：\n"
-            "1. 直接基于以下 agent 报告中的信息综合回答，不要再调用任何工具。\n"
-            "2. 所有具体的版本号、日期、数值必须来自下面的 agent 报告。\n"
-            "3. 优先引用日期最新的信息，如果多个 agent 报告了不同版本，以最新的为准。\n"
-            "4. 信息不完整时如实说明即可。]\n\n"
-            + "\n\n---\n\n".join(research_parts)
-        )
-        logger.info(
-            "Orchestra synthesis context: {} agents, {} chars",
-            len(research_parts), len(synthesis_context),
-        )
-
-        # ── Phase 3: Leader synthesizes ──
-        await self._send(
-            f"\n👑 {leader}领导者\n"
-            f"正在综合 {len(others)} 个 Agent 的研究结果..."
-        )
-        await self._agent_speak(leader, synthesis_context=synthesis_context)
+        """Delegate to orchestra module — runs non-leader agents in parallel,
+        then leader synthesizes."""
+        from nanobot.groupchat.orchestra import orchestra_round
+        await orchestra_round(speak_order, self)
 
     async def _generate_summary(self) -> None:
-        if not self._history:
-            return
-        # Use first active agent's model
-        agent_name = self._active_agents[0] if self._active_agents else list(self.registry.keys())[0]
-        model = self.registry[agent_name]["model"]
-
-        try:
-            response = await self.provider.chat_with_retry(
-                messages=[
-                    {"role": "system", "content": "你是一个讨论总结专家。"},
-                    {"role": "user", "content": (
-                        f"话题：{self._topic}\n\n"
-                        f"群聊记录：\n{self._format_history()}\n\n"
-                        "请输出简洁总结：1)核心观点 2)分歧点 3)初步结论"
-                    )},
-                ],
-                model=model,
-                max_tokens=2000,
-            )
-            summary = response.content or "无法生成总结"
-            await self._send(f"📋 讨论总结:\n\n{summary}")
-        except Exception as e:
-            logger.error("Summary failed: {}", e)
-            await self._send(f"⚠️ 总结生成失败: {e}")
+        """Generate discussion summary — delegates to run_loop module."""
+        from nanobot.groupchat.run_loop import generate_summary
+        await generate_summary(self)
 
     async def _run_loop(self) -> None:
-        """Main group chat loop — runs while 2+ agents are active."""
-        _my_task = asyncio.current_task()
-        try:
-            await self._send(
-                f"🎭 群聊模式！\n"
-                f"👥 成员: {', '.join(self._active_agents)}\n"
-                f"📌 直接发消息，所有 agent 会轮流回复"
-            )
+        """Main group chat loop — delegates to run_loop module."""
+        from nanobot.groupchat.run_loop import run_loop
+        await run_loop(self)
 
-            if not any(m["sender"] == "系统" for m in self._history):
-                self._add_message("系统", f"话题：{self._topic}")
-
-            rounds = 0
-            while self._running and rounds < self.config.max_rounds:
-                rounds += 1
-
-                # Wait for user input (block until user sends something)
-                user_input = None
-                while self._running:
-                    try:
-                        user_input = await asyncio.wait_for(self._input_queue.get(), timeout=1.0)
-                        break
-                    except asyncio.TimeoutError:
-                        continue
-
-                if not self._running or not user_input:
-                    break
-
-                if user_input == "__SUMMARY__":
-                    await self._generate_summary()
-                    continue
-
-                # Record user message (no echo)
-                self._add_message("用户", user_input)
-                self._round = rounds
-
-                # Determine speaking order
-                current_agents = list(self._active_agents)
-                if self._leader and self._leader in current_agents:
-                    # Leader mode: others first, leader last
-                    others = [a for a in current_agents if a != self._leader]
-                    speak_order = others + [self._leader]
-                else:
-                    speak_order = current_agents
-
-                # Parallel mode when leader is set (orchestra)
-                if self._leader and self._leader in current_agents and len(others) > 0:
-                    await self._orchestra_round(speak_order)
-                elif self._mode == "broadcast" and not self._leader:
-                    # Broadcast mode: all agents concurrently, out-of-order display
-                    from nanobot.groupchat.broadcast import broadcast_round
-                    await broadcast_round(speak_order, self, self._mailbox)
-                else:
-                    # Serial mode (no leader)
-                    for si, name in enumerate(speak_order):
-                        if not self._running or name not in self._active_agents:
-                            break
-                        model_short = self.registry.get(name, {}).get("model", "?").split("/")[-1]
-                        await self._send(_d.thinking_msg(name, model_short, leader=self._leader, idx=si+1, total=len(speak_order)))
-                        await asyncio.sleep(self.config.auto_reply_delay)
-                        await self._agent_speak(name)
-
-                # Signal round complete (e.g. stop typing indicator)
-                if self._on_round_done:
-                    try:
-                        await self._on_round_done()
-                    except Exception:
-                        pass
-
-            if self._running:
-                await self._send("🔚 群聊结束！正在生成总结...")
-                await self._generate_summary()
-
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error("Group chat loop error: {}", e)
-            await self._send(f"❌ 群聊异常: {e}")
-        finally:
-            # Only reset _running if we are still the active loop.
-            # A replacement loop (via /loadgroup after /new) may have already
-            # set _running = True — don't clobber it.
-            if self._task is _my_task:
-                self._running = False
-            logger.info("Group chat loop ended")

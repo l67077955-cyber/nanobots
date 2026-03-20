@@ -406,11 +406,19 @@ async def main():
             api_key = prov["apiKey"]
             break
 
-    brave_key = raw_config.get("tools", {}).get("web", {}).get("search", {}).get("apiKey", "")
+    from nanobot.config.schema import WebSearchConfig
+
     provider = LiteLLMProvider(api_key=api_key)
     workspace = Path.home() / ".nanobot"
 
-    engine = GroupChatEngine(gc_config, provider, workspace, brave_api_key=brave_key)
+    web_search_raw = raw_config.get("tools", {}).get("web", {}).get("search", {})
+    web_search_config = WebSearchConfig(
+        api_key=web_search_raw.get("apiKey", ""),
+        provider=web_search_raw.get("provider", "brave"),
+    )
+    web_proxy = raw_config.get("tools", {}).get("web", {}).get("proxy") or None
+
+    engine = GroupChatEngine(gc_config, provider, workspace, web_search_config=web_search_config, web_proxy=web_proxy)
 
     print(f"📋 可用 agents: {list(engine.registry.keys())}", flush=True)
     print(f"🧪 测试题数: {len(TEST_CASES)}", flush=True)

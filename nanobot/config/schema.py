@@ -28,6 +28,16 @@ class ChannelsConfig(Base):
     send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("…"))
 
 
+class TelegramConfig(Base):
+    """Telegram channel configuration."""
+
+    token: str = ""
+    proxy: str | None = None
+    reply_to_message: bool = True
+    group_policy: str = "restricted"  # "open" or "restricted"
+    allow_from: list[str] = []
+
+
 class AgentDefaults(Base):
     """Default agent configuration."""
 

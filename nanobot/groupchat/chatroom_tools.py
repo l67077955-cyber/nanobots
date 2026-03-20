@@ -9,32 +9,30 @@ from __future__ import annotations
 
 import re
 import threading
+from pathlib import Path
 from typing import Any
 
 from nanobot.agent.tools.base import Tool
 from nanobot.groupchat.mailbox import MailboxHub, ConversationPool, SpeakQueue
 
 
-class SearchTree:
-    """Shared search tree with point-pool resource management.
+class SearchPool:
+    """Shared search credit pool for broadcast mode.
 
-    All agents share a tree of search results and a shared point pool.
-    Each search consumes 1 point and adds a child node to the tree.
-
-    Refund rules (incentivize exploration over redundancy):
-    - Hanging on a LEAF node (new direction): instant refund of `k` points (exploring is FREE)
-    - Hanging on a NON-LEAF node (redundant direction): NO refund (permanently costs 1 point)
+    - Each search costs 1 credit (spend)
+    - Every N agent outputs earns 1 credit back (earn_interval)
+    - Pool starts at initial_per_agent × n_agents
     """
 
-    def __init__(self, agents: list[str], total: int | None = None, refund: int = 1) -> None:
+    def __init__(self, agents: list[str], initial_per_agent: int = 2,
+                 earn_interval: int = 4) -> None:
         self._agents = agents
-        self._total = total if total is not None else len(agents)
-        self._refund = refund
-        self._pool = self._total  # shared point pool
+        self._total = initial_per_agent * len(agents)
+        self._pool = self._total
+        self._earn_interval = earn_interval
+        self._output_count = 0  # total outputs across all agents
         self._lock = threading.Lock()
-        # Tree: node 0 = root (no data)
-        self._nodes: list[dict] = [{"id": 0, "query": "", "agent": "", "children": []}]
-        self._next_id = 1
+        self._searches: dict[str, int] = {a: 0 for a in agents}
 
     @property
     def pool(self) -> int:
@@ -44,130 +42,62 @@ class SearchTree:
     def total(self) -> int:
         return self._total
 
-    def consume(self) -> bool:
-        """Consume 1 point from shared pool. Returns False if empty."""
+    def spend(self, agent: str) -> bool:
+        """Spend 1 credit for a search. Returns False if pool empty."""
         with self._lock:
             if self._pool <= 0:
                 return False
             self._pool -= 1
+            self._searches[agent] = self._searches.get(agent, 0) + 1
             return True
 
-    def _refund_points(self) -> None:
-        """Return k points to shared pool."""
+    def on_output(self, agent: str) -> None:
+        """Record an agent output. Every earn_interval outputs earns +1 credit."""
         with self._lock:
-            self._pool = min(self._pool + self._refund, self._total)
+            self._output_count += 1
+            if self._output_count % self._earn_interval == 0:
+                self._pool = min(self._pool + 1, self._total)
 
-    def is_leaf(self, node_id: int) -> bool:
-        """Check if a node is a leaf (no children)."""
-        if 0 <= node_id < len(self._nodes):
-            return len(self._nodes[node_id]["children"]) == 0
-        return True
-
-    def add_node(self, agent: str, query: str, parent_id: int = 0) -> int:
-        """Add a search node to the tree. Returns the new node ID."""
-        if parent_id < 0 or parent_id >= len(self._nodes):
-            parent_id = 0
-        new_id = self._next_id
-        self._next_id += 1
-        node = {"id": new_id, "query": query, "agent": agent, "children": []}
-        self._nodes.append(node)
-        self._nodes[parent_id]["children"].append(new_id)
-        return new_id
-
-    def pre_search(self, agent: str, query: str, parent_id: int = 0) -> tuple[bool, int, bool]:
-        """Before executing search: consume point, check leaf, add node.
-
-        Returns: (ok, node_id, is_leaf_parent)
-        - ok: False if pool empty
-        - node_id: the new node ID
-        - is_leaf_parent: True if parent was a leaf (instant refund)
-        """
-        if not self.consume():
-            return False, -1, False
-        leaf = self.is_leaf(parent_id)
-        node_id = self.add_node(agent, query, parent_id)
-        if leaf:
-            self._refund_points()  # instant refund for exploring new ground
-        return True, node_id, leaf
-
-    def post_search(self, node_id: int, was_leaf: bool) -> None:
-        """After search completes. Non-leaf branches get NO refund."""
-        pass  # non-leaf: no refund — permanently costs 1 point
+    def agent_searches(self, agent: str) -> int:
+        """How many searches this agent has done."""
+        return self._searches.get(agent, 0)
 
     def status(self) -> str:
         """Return pool status string."""
-        return f"{self._pool}/{self._total}"
-
-    def tree_str(self, max_depth: int = 3) -> str:
-        """Render tree as text for agent display."""
-        lines: list[str] = []
-        self._render(0, "", True, lines, 0, max_depth)
-        return "\n".join(lines) if lines else "(empty)"
-
-    def _render(self, node_id: int, prefix: str, is_last: bool,
-                lines: list[str], depth: int, max_depth: int) -> None:
-        if depth > max_depth:
-            return
-        node = self._nodes[node_id]
-        if node_id == 0:
-            lines.append("search_tree (root)")
-        else:
-            connector = "└── " if is_last else "├── "
-            q_short = node["query"][:40]
-            n_children = len(node["children"])
-            suffix = f" ({n_children}↓)" if n_children > 0 else ""
-            lines.append(f"{prefix}{connector}#{node_id} [{node['agent']}] \"{q_short}\"{suffix}")
-        children = node["children"]
-        for i, child_id in enumerate(children):
-            child_prefix = prefix + ("    " if is_last else "│   ") if node_id != 0 else ""
-            self._render(child_id, child_prefix, i == len(children) - 1,
-                        lines, depth + 1, max_depth)
+        total_searches = sum(self._searches.values())
+        return f"{self._pool}/{self._total} ({total_searches} searches)"
 
 
 class CachedSearchTool(Tool):
-    """Wrapper around WebSearchTool with search-tree resource management.
+    """Wrapper around WebSearchTool with search-pool resource management.
 
-    All agents share a SearchTree. Each search adds a node to the tree.
-    Agents specify a `parent` node to branch from (default: root).
+    All agents share a SearchPool and a deduplication cache.
+    Each search costs 1 credit from the pool.
     """
 
     name = "web_search"
 
     def __init__(self, original: Tool, agent_name: str, cache: dict,
-                 search_tree: SearchTree | None = None) -> None:
+                 search_pool: SearchPool | None = None) -> None:
         self._original = original
         self._agent_name = agent_name
         self._cache = cache
-        self._tree = search_tree
+        self._pool = search_pool
 
     @property
     def description(self):
         base = self._original.description
-        if self._tree:
+        if self._pool:
             return (
                 f"{base} "
-                "Optional 'parent' param: node ID to branch from in the search tree. "
-                "Default=0 (root, new topic). Set to a node ID to drill deeper into "
-                "an existing search direction. Exploring new branches (leaf nodes) is "
-                "cheaper than re-exploring existing ones."
+                "Searches cost credits from a shared pool. "
+                "Credits regenerate when agents produce output."
             )
         return base
 
     @property
     def parameters(self):
-        params = dict(self._original.parameters)
-        if self._tree:
-            props = dict(params.get("properties", {}))
-            props["parent"] = {
-                "type": "integer",
-                "description": (
-                    "Parent node ID in the search tree to branch from. "
-                    "0 = root (new topic). Use a node ID to drill deeper. "
-                    "Branching from leaf nodes gives instant point refund."
-                ),
-            }
-            params["properties"] = props
-        return params
+        return self._original.parameters
 
     @staticmethod
     def _normalize_query(q: str) -> str:
@@ -176,33 +106,26 @@ class CachedSearchTool(Tool):
 
     async def execute(self, **kwargs):
         query = kwargs.get("query", "")
-        parent_id = int(kwargs.pop("parent", 0))
         norm_q = self._normalize_query(query)
 
         # Check cache for exact or near-duplicate match
         if norm_q in self._cache:
             cached_result, searcher = self._cache[norm_q]
-            tree_hint = ""
-            if self._tree:
-                tree_hint = f"\n\n[search tree]\n{self._tree.tree_str()}\n[pool: {self._tree.status()}]"
+            pool_hint = f"\n\n[search pool: {self._pool.status()}]" if self._pool else ""
             return (
                 f"[CACHED] {searcher} 已经搜过相同的关键词。结果如下：\n"
                 f"{cached_result}\n\n"
                 f"💡 请使用不同的关键词、角度或语言来搜索，"
-                f"避免重复劳动。{tree_hint}"
+                f"避免重复劳动。{pool_hint}"
             )
 
-        # Check search tree budget
-        if self._tree:
-            ok, node_id, was_leaf = self._tree.pre_search(
-                self._agent_name, query, parent_id,
-            )
-            if not ok:
+        # Check search pool budget
+        if self._pool:
+            if not self._pool.spend(self._agent_name):
                 return (
-                    f"BLOCKED: search pool exhausted "
-                    f"({self._tree.status()} points). "
-                    f"Wait for teammates to finish their searches.\n\n"
-                    f"[search tree]\n{self._tree.tree_str()}"
+                    f"BLOCKED: 搜索额度用完了 "
+                    f"({self._pool.status()})。\n"
+                    f"先产出一些分析结果，额度会自动恢复。"
                 )
 
         # Execute real search
@@ -211,16 +134,157 @@ class CachedSearchTool(Tool):
         # Cache the result
         self._cache[norm_q] = (result, self._agent_name)
 
-        # Post-search: delayed refund for non-leaf branches
-        if self._tree:
-            self._tree.post_search(node_id, was_leaf)
-            refund_note = "⚡refund (new direction)" if was_leaf else "✗no refund (existing branch)"
-            result += (
-                f"\n[search pool: {self._tree.status()} | "
-                f"node #{node_id} → {refund_note}]"
-                f"\n[search tree]\n{self._tree.tree_str()}"
-            )
+        # Append pool status hint
+        if self._pool:
+            result += f"\n[search pool: {self._pool.status()}]"
         return result
+
+
+class SmartFetchTool(Tool):
+    """Wrapper around WebFetchTool that uses a cheap model to extract key content.
+
+    Flow: fetch URL → pass raw text to cheap LLM → return clean extraction.
+    Falls back to raw content if LLM call fails.
+    """
+
+    name = "web_fetch"
+    description = (
+        "Fetch URL and extract readable content. "
+        "Content is automatically processed by an AI reader for clean extraction."
+    )
+
+    def __init__(self, original: Tool, reader_model: str = "openai/gpt-4.1-nano",
+                 provider: Any = None, max_extract_chars: int = 30000) -> None:
+        self._original = original
+        self._reader_model = reader_model
+        self._provider = provider  # LiteLLMProvider instance
+        self._max_extract_chars = max_extract_chars
+
+    @property
+    def parameters(self):
+        return self._original.parameters
+
+    async def execute(self, **kwargs) -> str:
+        import json as _json
+
+        # Step 1: Fetch raw content
+        raw_result = await self._original.execute(**kwargs)
+
+        # Parse the JSON result from WebFetchTool
+        try:
+            data = _json.loads(raw_result)
+        except (ValueError, TypeError):
+            return raw_result  # Not JSON, return as-is
+
+        if "error" in data:
+            return raw_result  # Error response, pass through
+
+        raw_text = data.get("text", "")
+        url = data.get("url", kwargs.get("url", ""))
+
+        if not raw_text or len(raw_text) < 50:
+            return raw_result  # Too short to process
+
+        # Step 2: Extract via cheap model
+        try:
+            extracted = await self._extract_content(url, raw_text)
+            if extracted:
+                result_data = {
+                    "url": url,
+                    "finalUrl": data.get("finalUrl", url),
+                    "status": data.get("status", 200),
+                    "extractor": "ai_reader",
+                    "reader_model": self._reader_model,
+                    "truncated": data.get("truncated", False),
+                    "original_length": len(raw_text),
+                    "extracted_length": len(extracted),
+                    "text": extracted,
+                }
+                return _json.dumps(result_data, ensure_ascii=False)
+        except Exception as e:
+            from loguru import logger
+            logger.warning("SmartFetch: AI extraction failed for {}: {}", url, e)
+
+        # Fallback: return raw content
+        return raw_result
+
+    async def _extract_content(self, url: str, raw_text: str) -> str | None:
+        """Use cheap LLM to extract key content from raw fetched text."""
+        from loguru import logger
+
+        # Truncate input to avoid excessive token usage
+        input_text = raw_text[:self._max_extract_chars]
+
+        prompt = (
+            "你是一个网页内容提取助手。请从以下网页内容中提取关键信息，"
+            "保留所有重要的事实、数据、日期、链接和结论。"
+            "去掉导航菜单、广告、页脚等无关内容。"
+            "用简洁清晰的中文输出，保持原文的关键细节。\n\n"
+            f"URL: {url}\n\n"
+            f"--- 网页内容 ---\n{input_text}\n--- 结束 ---"
+        )
+
+        messages = [{"role": "user", "content": prompt}]
+
+        # Build a LiteLLMProvider from reader agent config
+        reader_cfg = self._load_reader_config()
+        model = reader_cfg.get("model", self._reader_model)
+        provider_name = reader_cfg.get("provider", "openrouter")
+
+        from nanobot.providers.litellm_provider import LiteLLMProvider
+        import json as _json
+        # Read provider credentials from nanobot config
+        api_key, api_base = "", ""
+        try:
+            cfg_path = Path.home() / ".nanobot" / "config.json"
+            if cfg_path.exists():
+                cfg = _json.loads(cfg_path.read_text())
+                pcfg = (cfg.get("providers") or {}).get(provider_name, {}) or {}
+                api_key = pcfg.get("apiKey", "")
+                api_base = pcfg.get("apiBase", "")
+        except Exception:
+            pass
+
+        llm = LiteLLMProvider(
+            default_model=model,
+            api_key=api_key or None,
+            api_base=api_base or None,
+            provider_name=provider_name,
+        )
+
+        logger.info("SmartFetch: extracting {} via {}/{} (input={}c)",
+                     url[:60], provider_name, model, len(input_text))
+        response = await llm.chat(messages, max_tokens=4000, temperature=0.1)
+        result = response.content.strip() if response.content else None
+        if result:
+            logger.info("SmartFetch: extracted {}c from {}c", len(result), len(input_text))
+        return result
+
+    @staticmethod
+    def _load_reader_config() -> dict[str, Any]:
+        """Load reader agent config from disk."""
+        import json as _json
+        cfg_path = Path.home() / ".nanobot" / "agents" / "reader" / "config.json"
+        if cfg_path.exists():
+            try:
+                cfg = _json.loads(cfg_path.read_text())
+                model = (
+                    cfg.get("model")
+                    or cfg.get("agents", {}).get("defaults", {}).get("model")
+                )
+                provider = (
+                    cfg.get("provider")
+                    or cfg.get("agents", {}).get("defaults", {}).get("provider")
+                )
+                result: dict[str, Any] = {}
+                if model:
+                    result["model"] = model
+                if provider:
+                    result["provider"] = provider
+                return result
+            except Exception:
+                pass
+        return {}
 
 
 class ChatroomSendTool(Tool):

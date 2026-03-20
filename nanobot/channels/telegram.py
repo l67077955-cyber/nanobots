@@ -202,6 +202,9 @@ class TelegramChannel(BaseChannel):
         bus: MessageBus,
         groq_api_key: str = "",
     ):
+        # Convert raw dict to TelegramConfig model if needed
+        if isinstance(config, dict):
+            config = TelegramConfig(**config)
         super().__init__(config, bus)
         self.config: TelegramConfig = config
         self.groq_api_key = groq_api_key
@@ -2737,14 +2740,14 @@ class TelegramChannel(BaseChannel):
     # ── Groupchat Settings ─────────────────────────────────────
 
     GC_SETTINGS_DEFAULTS = {
-        "search_initial": 1,       # search pool = agents × N
-        "search_refund": 1,        # points refunded per search
-        "allocate_timeout": 15,    # seconds before message is dropped
+        "search_initial": 2,           # search pool = agents × N
+        "search_earn_interval": 4,     # every N outputs earns +1 credit
+        "allocate_timeout": 15,        # seconds before message is dropped
     }
     GC_SETTINGS_LABELS = {
-        "search_initial":   "搜索点数倍率 (pool = agents × N)",
-        "search_refund":    "每次搜索返还点数",
-        "allocate_timeout": "分配超时 (秒)",
+        "search_initial":        "初始搜索额度 (每 agent × N)",
+        "search_earn_interval":  "每 N 次对话返还 1 搜索额度",
+        "allocate_timeout":      "消息分配超时 (秒)",
     }
 
     @staticmethod

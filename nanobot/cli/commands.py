@@ -564,7 +564,8 @@ def gateway(
             config=config.groupchat,
             provider=provider,
             workspace=config.workspace_path,
-            brave_api_key=config.tools.web.search.api_key or "",
+            web_search_config=config.tools.web.search,
+            web_proxy=config.tools.web.proxy or None,
         )
         # Register the base model as an agent too
         base_model = config.agents.defaults.model or "anthropic/claude-opus-4.5"
