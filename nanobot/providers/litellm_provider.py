@@ -116,6 +116,8 @@ class LiteLLMProvider(LLMProvider):
                 pass
         self.sampling_params: dict[str, float] = defaults
 
+        self._langsmith_enabled = bool(os.getenv("LANGSMITH_API_KEY"))
+
     def _setup_env(self, api_key: str, api_base: str | None, model: str) -> None:
         """Set environment variables based on detected provider."""
         spec = self._gateway or find_by_model(model)
@@ -143,11 +145,10 @@ class LiteLLMProvider(LLMProvider):
     def _resolve_model(self, model: str) -> str:
         """Resolve model name by applying provider/gateway prefixes."""
         if self._gateway:
-            # Gateway mode: apply gateway prefix, skip provider-specific prefixes
             prefix = self._gateway.litellm_prefix
             if self._gateway.strip_model_prefix:
                 model = model.split("/")[-1]
-            if prefix and not model.startswith(f"{prefix}/"):
+            if prefix:
                 model = f"{prefix}/{model}"
             return model
 
@@ -706,6 +707,7 @@ class LiteLLMProvider(LLMProvider):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         metadata: dict[str, Any] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
     ) -> LLMResponse:
@@ -714,6 +716,9 @@ class LiteLLMProvider(LLMProvider):
         kwargs = self._build_kwargs(
             messages, tools, model, max_tokens, reasoning_effort, metadata, api_base, api_key,
         )
+        # Override tool_choice if explicitly passed
+        if tool_choice and tools:
+            kwargs["tool_choice"] = tool_choice
         t0 = _time.time()
         try:
             response = await acompletion(**kwargs)
@@ -1057,10 +1062,17 @@ class LiteLLMProvider(LLMProvider):
             if isinstance(args, str):
                 args = json_repair.loads(args)
 
+            provider_specific_fields = getattr(tc, "provider_specific_fields", None) or None
+            function_provider_specific_fields = (
+                getattr(tc.function, "provider_specific_fields", None) or None
+            )
+
             tool_calls.append(ToolCallRequest(
                 id=_short_tool_id(),
                 name=tc.function.name,
                 arguments=args,
+                provider_specific_fields=provider_specific_fields,
+                function_provider_specific_fields=function_provider_specific_fields,
             ))
 
         usage = {}

@@ -1,6 +1,7 @@
 """Base LLM provider interface."""
 
 import asyncio
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
@@ -14,6 +15,24 @@ class ToolCallRequest:
     id: str
     name: str
     arguments: dict[str, Any]
+    provider_specific_fields: dict[str, Any] | None = None
+    function_provider_specific_fields: dict[str, Any] | None = None
+
+    def to_openai_tool_call(self) -> dict[str, Any]:
+        """Serialize to an OpenAI-style tool_call payload."""
+        tool_call = {
+            "id": self.id,
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "arguments": json.dumps(self.arguments, ensure_ascii=False),
+            },
+        }
+        if self.provider_specific_fields:
+            tool_call["provider_specific_fields"] = self.provider_specific_fields
+        if self.function_provider_specific_fields:
+            tool_call["function"]["provider_specific_fields"] = self.function_provider_specific_fields
+        return tool_call
 
 
 @dataclass
@@ -84,11 +103,7 @@ class LLMProvider(ABC):
 
     @staticmethod
     def _sanitize_empty_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Replace empty text content that causes provider 400 errors.
-
-        Empty content can appear when MCP tools return nothing. Most providers
-        reject empty-string content or empty text blocks in list content.
-        """
+        """Sanitize message content: fix empty blocks, strip internal _meta fields."""
         result: list[dict[str, Any]] = []
         for msg in messages:
             content = msg.get("content")
@@ -100,18 +115,25 @@ class LLMProvider(ABC):
                 continue
 
             if isinstance(content, list):
-                filtered = [
-                    item for item in content
-                    if not (
+                new_items: list[Any] = []
+                changed = False
+                for item in content:
+                    if (
                         isinstance(item, dict)
                         and item.get("type") in ("text", "input_text", "output_text")
                         and not item.get("text")
-                    )
-                ]
-                if len(filtered) != len(content):
+                    ):
+                        changed = True
+                        continue
+                    if isinstance(item, dict) and "_meta" in item:
+                        new_items.append({k: v for k, v in item.items() if k != "_meta"})
+                        changed = True
+                    else:
+                        new_items.append(item)
+                if changed:
                     clean = dict(msg)
-                    if filtered:
-                        clean["content"] = filtered
+                    if new_items:
+                        clean["content"] = new_items
                     elif msg.get("role") == "assistant" and msg.get("tool_calls"):
                         clean["content"] = None
                     else:
@@ -152,6 +174,7 @@ class LLMProvider(ABC):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         metadata: dict[str, Any] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request.
@@ -162,6 +185,7 @@ class LLMProvider(ABC):
             model: Model identifier (provider-specific).
             max_tokens: Maximum tokens in response.
             temperature: Sampling temperature.
+            tool_choice: Tool selection strategy ("auto", "required", or specific tool dict).
         
         Returns:
             LLMResponse with content and/or tool calls.
@@ -173,6 +197,37 @@ class LLMProvider(ABC):
         err = (content or "").lower()
         return any(marker in err for marker in cls._TRANSIENT_ERROR_MARKERS)
 
+    @staticmethod
+    def _strip_image_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+        """Replace image_url blocks with text placeholder. Returns None if no images found."""
+        found = False
+        result = []
+        for msg in messages:
+            content = msg.get("content")
+            if isinstance(content, list):
+                new_content = []
+                for b in content:
+                    if isinstance(b, dict) and b.get("type") == "image_url":
+                        path = (b.get("_meta") or {}).get("path", "")
+                        placeholder = f"[image: {path}]" if path else "[image omitted]"
+                        new_content.append({"type": "text", "text": placeholder})
+                        found = True
+                    else:
+                        new_content.append(b)
+                result.append({**msg, "content": new_content})
+            else:
+                result.append(msg)
+        return result if found else None
+
+    async def _safe_chat(self, **kwargs: Any) -> LLMResponse:
+        """Call chat() and convert unexpected exceptions to error responses."""
+        try:
+            return await self.chat(**kwargs)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return LLMResponse(content=f"Error calling LLM: {exc}", finish_reason="error")
+
     async def chat_with_retry(
         self,
         messages: list[dict[str, Any]],
@@ -182,6 +237,7 @@ class LLMProvider(ABC):
         temperature: object = _SENTINEL,
         reasoning_effort: object = _SENTINEL,
         metadata: dict[str, Any] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
         """Call chat() with retry on transient provider failures.
 
@@ -210,6 +266,7 @@ class LLMProvider(ABC):
                     temperature=temperature,
                     reasoning_effort=reasoning_effort,
                     metadata=metadata,
+                    tool_choice=tool_choice,
                 )
             except asyncio.CancelledError:
                 raise
@@ -224,7 +281,23 @@ class LLMProvider(ABC):
             if response.finish_reason != "error":
                 response.retry_log = retry_log
                 return response
+
             if not self._is_transient_error(response.content):
+                # Non-transient error: try stripping images as a last resort
+                stripped = self._strip_image_content(messages)
+                if stripped is not None:
+                    logger.warning("Non-transient LLM error with image content, retrying without images")
+                    try:
+                        resp = await self.chat(
+                            messages=stripped, tools=tools, model=model,
+                            max_tokens=max_tokens, temperature=temperature,
+                            reasoning_effort=reasoning_effort, metadata=metadata,
+                            tool_choice=tool_choice,
+                        )
+                        resp.retry_log = retry_log
+                        return resp
+                    except Exception:
+                        pass
                 response.retry_log = retry_log
                 return response
 
@@ -255,6 +328,7 @@ class LLMProvider(ABC):
                 temperature=temperature,
                 reasoning_effort=reasoning_effort,
                 metadata=metadata,
+                tool_choice=tool_choice,
             )
             resp.retry_log = retry_log
             return resp
