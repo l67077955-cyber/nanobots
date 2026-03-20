@@ -114,26 +114,21 @@ class ConversationPool:
         return True
 
     async def allocate_user(self, recipients: list[str]) -> None:
-        """Allocate slots for a user message — never times out.
+        """Force-allocate slots for a user message — never blocked.
 
-        1. Sets _user_priority to block all agent allocations
-        2. Waits (indefinitely) for len(recipients) slots
-        3. Restores _user_priority after allocation
-
-        Agents that call wait() release slots, so space will free up.
+        User messages go directly into the pool, even if it exceeds
+        capacity. Agents still follow normal wait/timeout/drop logic.
+        _user_priority blocks agents during delivery.
         """
         self._user_priority.clear()
-        logger.info("ConversationPool: user priority ON — waiting for {} slots", len(recipients))
-
         n = len(recipients)
-        for _ in range(n):
-            await self._sem.acquire()  # no timeout — blocks until free
+        logger.info("ConversationPool: user force-allocate {} slots", n)
 
         for r in recipients:
             if r in self._pending:
                 self._pending[r].append("User")
 
-        self._available -= n
+        self._available -= n  # can go negative (over capacity)
 
         self._user_priority.set()
         logger.info(
