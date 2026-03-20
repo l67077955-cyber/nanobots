@@ -95,7 +95,7 @@ async def broadcast_round(
 
     # ── Load groupchat settings ──
     _gc_settings_path = Path.home() / ".nanobot" / "groupchat_settings.json"
-    _gc_defaults = {"pool_multiplier": 3, "search_initial": 2, "search_max": 5, "allocate_timeout": 15}
+    _gc_defaults = {"search_initial": 1, "search_refund": 1, "allocate_timeout": 15}
     gc_settings = dict(_gc_defaults)
     if _gc_settings_path.exists():
         try:
@@ -115,7 +115,7 @@ async def broadcast_round(
     from nanobot.agent.tools.registry import ToolRegistry
     from nanobot.agent.tools.base import Tool
     from nanobot.groupchat.chatroom_tools import (
-        ChatroomSendTool, WaitTool, CachedSearchTool, SearchBudget,
+        ChatroomSendTool, WaitTool, CachedSearchTool, SearchTree,
     )
 
     agent_tool_registries: dict[str, ToolRegistry] = {}
@@ -123,13 +123,12 @@ async def broadcast_round(
     # ── Shared search cache for deduplication ──
     _search_cache: dict[str, tuple[str, str]] = {}
 
-    # ── Per-agent search budget ──
-    search_budget = SearchBudget(
+    # ── Shared search tree (agents × initial points, refund k per search) ──
+    search_tree = SearchTree(
         agents=list(agents),
-        initial=gc_settings["search_initial"],
-        max_budget=gc_settings["search_max"],
+        total=n * gc_settings["search_initial"],
+        refund=gc_settings["search_refund"],
     )
-
 
     for name in agents:
         # Clone the engine's group tool registry and add chatroom tools
@@ -139,11 +138,11 @@ async def broadcast_round(
             tool = engine.tools.get(tool_name)
             if tool:
                 if tool_name == "web_search":
-                    registry.register(CachedSearchTool(tool, name, _search_cache, budget=search_budget))
+                    registry.register(CachedSearchTool(tool, name, _search_cache, search_tree=search_tree))
                 else:
                     registry.register(tool)
         # Add chatroom tools (per-agent instances with ConversationPool)
-        send_tool = ChatroomSendTool(mailbox=mailbox, agent_name=name, pool=pool, search_budget=search_budget)
+        send_tool = ChatroomSendTool(mailbox=mailbox, agent_name=name, pool=pool)
         wait_tool = WaitTool(mailbox=mailbox, agent_name=name, pool=pool)
         wait_tool._send_tool = send_tool  # link for reply tracking
         registry.register(send_tool)

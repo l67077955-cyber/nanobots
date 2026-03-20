@@ -2,85 +2,173 @@
 
 Provides ``chatroom_send`` and ``wait`` tools that agents use
 to communicate with each other during broadcast group chat rounds.
-Also contains ``CachedSearchTool`` for cross-agent search deduplication.
+Also contains ``CachedSearchTool`` with search-tree resource management.
 """
 
 from __future__ import annotations
 
 import re
+import threading
 from typing import Any
 
 from nanobot.agent.tools.base import Tool
 from nanobot.groupchat.mailbox import MailboxHub, ConversationPool, SpeakQueue
 
 
-class SearchBudget:
-    """Per-agent search credit system.
+class SearchTree:
+    """Shared search tree with point-pool resource management.
 
-    - Each agent starts with `initial` credits
-    - Each web_search/web_fetch costs 1 credit
-    - Each chatroom_send earns +1 credit (up to `max_budget`)
-    - Credits are NOT returned after search completes
+    All agents share a tree of search results and a shared point pool.
+    Each search consumes 1 point and adds a child node to the tree.
 
-    This incentivizes agents to participate in conversation
-    before doing more searches.
+    Refund rules (incentivize exploration over redundancy):
+    - Hanging on a LEAF node (new direction): instant refund of `k` points
+    - Hanging on a NON-LEAF node (already explored): refund after search completes
     """
 
-    def __init__(self, agents: list[str], initial: int = 2, max_budget: int = 5) -> None:
-        self._initial = initial
-        self._max = max_budget
-        self._credits: dict[str, int] = {a: initial for a in agents}
-        self._total_used: dict[str, int] = {a: 0 for a in agents}
+    def __init__(self, agents: list[str], total: int | None = None, refund: int = 1) -> None:
+        self._agents = agents
+        self._total = total if total is not None else len(agents)
+        self._refund = refund
+        self._pool = self._total  # shared point pool
+        self._lock = threading.Lock()
+        # Tree: node 0 = root (no data)
+        self._nodes: list[dict] = [{"id": 0, "query": "", "agent": "", "children": []}]
+        self._next_id = 1
 
-    def can_search(self, agent_name: str) -> bool:
-        """Check if agent has credits remaining."""
-        return self._credits.get(agent_name, 0) > 0
+    @property
+    def pool(self) -> int:
+        return self._pool
 
-    def consume(self, agent_name: str) -> bool:
-        """Consume 1 search credit. Returns False if none left."""
-        if self._credits.get(agent_name, 0) <= 0:
-            return False
-        self._credits[agent_name] -= 1
-        self._total_used[agent_name] = self._total_used.get(agent_name, 0) + 1
+    @property
+    def total(self) -> int:
+        return self._total
+
+    def consume(self) -> bool:
+        """Consume 1 point from shared pool. Returns False if empty."""
+        with self._lock:
+            if self._pool <= 0:
+                return False
+            self._pool -= 1
+            return True
+
+    def _refund_points(self) -> None:
+        """Return k points to shared pool."""
+        with self._lock:
+            self._pool = min(self._pool + self._refund, self._total)
+
+    def is_leaf(self, node_id: int) -> bool:
+        """Check if a node is a leaf (no children)."""
+        if 0 <= node_id < len(self._nodes):
+            return len(self._nodes[node_id]["children"]) == 0
         return True
 
-    def earn(self, agent_name: str) -> None:
-        """Earn +1 credit from chatroom_send (capped at max)."""
-        current = self._credits.get(agent_name, 0)
-        if current < self._max:
-            self._credits[agent_name] = current + 1
+    def add_node(self, agent: str, query: str, parent_id: int = 0) -> int:
+        """Add a search node to the tree. Returns the new node ID."""
+        if parent_id < 0 or parent_id >= len(self._nodes):
+            parent_id = 0
+        new_id = self._next_id
+        self._next_id += 1
+        node = {"id": new_id, "query": query, "agent": agent, "children": []}
+        self._nodes.append(node)
+        self._nodes[parent_id]["children"].append(new_id)
+        return new_id
 
-    def status(self, agent_name: str) -> str:
-        """Return credit status string for agent."""
-        return f"{self._credits.get(agent_name, 0)}/{self._max}"
+    def pre_search(self, agent: str, query: str, parent_id: int = 0) -> tuple[bool, int, bool]:
+        """Before executing search: consume point, check leaf, add node.
 
-    def credits(self, agent_name: str) -> int:
-        return self._credits.get(agent_name, 0)
+        Returns: (ok, node_id, is_leaf_parent)
+        - ok: False if pool empty
+        - node_id: the new node ID
+        - is_leaf_parent: True if parent was a leaf (instant refund)
+        """
+        if not self.consume():
+            return False, -1, False
+        leaf = self.is_leaf(parent_id)
+        node_id = self.add_node(agent, query, parent_id)
+        if leaf:
+            self._refund_points()  # instant refund for exploring new ground
+        return True, node_id, leaf
+
+    def post_search(self, node_id: int, was_leaf: bool) -> None:
+        """After search completes: delayed refund for non-leaf branches."""
+        if not was_leaf:
+            self._refund_points()
+
+    def status(self) -> str:
+        """Return pool status string."""
+        return f"{self._pool}/{self._total}"
+
+    def tree_str(self, max_depth: int = 3) -> str:
+        """Render tree as text for agent display."""
+        lines: list[str] = []
+        self._render(0, "", True, lines, 0, max_depth)
+        return "\n".join(lines) if lines else "(empty)"
+
+    def _render(self, node_id: int, prefix: str, is_last: bool,
+                lines: list[str], depth: int, max_depth: int) -> None:
+        if depth > max_depth:
+            return
+        node = self._nodes[node_id]
+        if node_id == 0:
+            lines.append("search_tree (root)")
+        else:
+            connector = "└── " if is_last else "├── "
+            q_short = node["query"][:40]
+            n_children = len(node["children"])
+            suffix = f" ({n_children}↓)" if n_children > 0 else ""
+            lines.append(f"{prefix}{connector}#{node_id} [{node['agent']}] \"{q_short}\"{suffix}")
+        children = node["children"]
+        for i, child_id in enumerate(children):
+            child_prefix = prefix + ("    " if is_last else "│   ") if node_id != 0 else ""
+            self._render(child_id, child_prefix, i == len(children) - 1,
+                        lines, depth + 1, max_depth)
 
 
 class CachedSearchTool(Tool):
-    """Wrapper around WebSearchTool with cross-agent dedup cache.
+    """Wrapper around WebSearchTool with search-tree resource management.
 
-    All agents in a broadcast round share a single cache dict.
-    If agent B searches the same query agent A already searched,
-    B gets cached results + a hint to try different keywords.
+    All agents share a SearchTree. Each search adds a node to the tree.
+    Agents specify a `parent` node to branch from (default: root).
     """
 
     name = "web_search"
 
-    def __init__(self, original: Tool, agent_name: str, cache: dict, budget: SearchBudget | None = None) -> None:
+    def __init__(self, original: Tool, agent_name: str, cache: dict,
+                 search_tree: SearchTree | None = None) -> None:
         self._original = original
         self._agent_name = agent_name
         self._cache = cache
-        self._budget = budget
+        self._tree = search_tree
 
     @property
     def description(self):
-        return self._original.description
+        base = self._original.description
+        if self._tree:
+            return (
+                f"{base} "
+                "Optional 'parent' param: node ID to branch from in the search tree. "
+                "Default=0 (root, new topic). Set to a node ID to drill deeper into "
+                "an existing search direction. Exploring new branches (leaf nodes) is "
+                "cheaper than re-exploring existing ones."
+            )
+        return base
 
     @property
     def parameters(self):
-        return self._original.parameters
+        params = dict(self._original.parameters)
+        if self._tree:
+            props = dict(params.get("properties", {}))
+            props["parent"] = {
+                "type": "integer",
+                "description": (
+                    "Parent node ID in the search tree to branch from. "
+                    "0 = root (new topic). Use a node ID to drill deeper. "
+                    "Branching from leaf nodes gives instant point refund."
+                ),
+            }
+            params["properties"] = props
+        return params
 
     @staticmethod
     def _normalize_query(q: str) -> str:
@@ -89,25 +177,34 @@ class CachedSearchTool(Tool):
 
     async def execute(self, **kwargs):
         query = kwargs.get("query", "")
+        parent_id = int(kwargs.pop("parent", 0))
         norm_q = self._normalize_query(query)
 
         # Check cache for exact or near-duplicate match
         if norm_q in self._cache:
             cached_result, searcher = self._cache[norm_q]
+            tree_hint = ""
+            if self._tree:
+                tree_hint = f"\n\n[search tree]\n{self._tree.tree_str()}\n[pool: {self._tree.status()}]"
             return (
                 f"[CACHED] {searcher} 已经搜过相同的关键词。结果如下：\n"
                 f"{cached_result}\n\n"
                 f"💡 请使用不同的关键词、角度或语言来搜索，"
-                f"避免重复劳动。"
+                f"避免重复劳动。{tree_hint}"
             )
 
-        # Check search budget
-        if self._budget and not self._budget.consume(self._agent_name):
-            return (
-                f"BLOCKED: search budget exhausted "
-                f"({self._budget.status(self._agent_name)} credits). "
-                f"Use chatroom_send to earn +1 credit, then search again."
+        # Check search tree budget
+        if self._tree:
+            ok, node_id, was_leaf = self._tree.pre_search(
+                self._agent_name, query, parent_id,
             )
+            if not ok:
+                return (
+                    f"BLOCKED: search pool exhausted "
+                    f"({self._tree.status()} points). "
+                    f"Wait for teammates to finish their searches.\n\n"
+                    f"[search tree]\n{self._tree.tree_str()}"
+                )
 
         # Execute real search
         result = await self._original.execute(**kwargs)
@@ -115,9 +212,15 @@ class CachedSearchTool(Tool):
         # Cache the result
         self._cache[norm_q] = (result, self._agent_name)
 
-        # Show remaining credits
-        if self._budget:
-            result += f"\n[search credits: {self._budget.status(self._agent_name)}]"
+        # Post-search: delayed refund for non-leaf branches
+        if self._tree:
+            self._tree.post_search(node_id, was_leaf)
+            refund_note = "⚡instant" if was_leaf else "✓delayed"
+            result += (
+                f"\n[search pool: {self._tree.status()} | "
+                f"node #{node_id} on {'leaf' if was_leaf else 'branch'} → refund {refund_note}]"
+                f"\n[search tree]\n{self._tree.tree_str()}"
+            )
         return result
 
 
@@ -129,11 +232,10 @@ class ChatroomSendTool(Tool):
     user with ``"User"``.
     """
 
-    def __init__(self, mailbox: MailboxHub, agent_name: str = "", pool: ConversationPool | None = None, search_budget: SearchBudget | None = None) -> None:
+    def __init__(self, mailbox: MailboxHub, agent_name: str = "", pool: ConversationPool | None = None) -> None:
         self._mailbox = mailbox
         self._agent_name = agent_name  # Set per-round by the engine
         self._pool = pool
-        self._search_budget = search_budget
         self._last_received_from: str | None = None  # track who we last received from
 
     def set_agent(self, name: str) -> None:
@@ -227,10 +329,6 @@ class ChatroomSendTool(Tool):
                 self._pool.mark_replied(self._agent_name, self._last_received_from)
 
         delivered = self._mailbox.send(self._agent_name, targets, message)
-
-        # Earn +1 search credit for participating in conversation
-        if self._search_budget:
-            self._search_budget.earn(self._agent_name)
 
         avail_hint = ""
         if self._pool:

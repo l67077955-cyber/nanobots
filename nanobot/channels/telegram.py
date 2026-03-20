@@ -2737,13 +2737,13 @@ class TelegramChannel(BaseChannel):
     # ── Groupchat Settings ─────────────────────────────────────
 
     GC_SETTINGS_DEFAULTS = {
-        "search_initial": 2,       # initial search credits per agent
-        "search_max": 5,           # max search credits per agent
+        "search_initial": 1,       # search pool = agents × N
+        "search_refund": 1,        # points refunded per search
         "allocate_timeout": 15,    # seconds before message is dropped
     }
     GC_SETTINGS_LABELS = {
-        "search_initial":   "初始搜索额度",
-        "search_max":       "最大搜索额度",
+        "search_initial":   "搜索点数倍率 (pool = agents × N)",
+        "search_refund":    "每次搜索返还点数",
         "allocate_timeout": "分配超时 (秒)",
     }
 
@@ -2789,7 +2789,9 @@ class TelegramChannel(BaseChannel):
         active = len(self._groupchat_engine.active_agents) if self._groupchat_engine else 0
         if active > 0:
             cap = active * (active - 1)
+            search_pool = active * settings.get("search_initial", 1)
             lines.append(f"\n  对话池: {active} agents × {active - 1} = {cap} threads")
+            lines.append(f"  搜索池: {active} agents × {settings.get('search_initial', 1)} = {search_pool} points")
 
         await update.message.reply_text(
             "\n".join(lines),
