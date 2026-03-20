@@ -113,6 +113,34 @@ class ConversationPool:
         )
         return True
 
+    async def allocate_user(self, recipients: list[str]) -> None:
+        """Allocate slots for a user message — never times out.
+
+        1. Sets _user_priority to block all agent allocations
+        2. Waits (indefinitely) for len(recipients) slots
+        3. Restores _user_priority after allocation
+
+        Agents that call wait() release slots, so space will free up.
+        """
+        self._user_priority.clear()
+        logger.info("ConversationPool: user priority ON — waiting for {} slots", len(recipients))
+
+        n = len(recipients)
+        for _ in range(n):
+            await self._sem.acquire()  # no timeout — blocks until free
+
+        for r in recipients:
+            if r in self._pending:
+                self._pending[r].append("User")
+
+        self._available -= n
+
+        self._user_priority.set()
+        logger.info(
+            "ConversationPool: user allocated {} slots ({} available), priority OFF",
+            n, self._available,
+        )
+
     def release_unread(self, agent_name: str) -> int:
         """Release slots for messages this agent received but didn't reply to.
 

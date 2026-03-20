@@ -441,9 +441,9 @@ async def broadcast_round(
                 if msg == "__SUMMARY__":
                     continue  # skip control messages
 
-                # User messages bypass pool slots (always delivered).
-                # Block agents during delivery via priority flag.
-                pool._user_priority.clear()
+                # User messages block agents and wait for n slots (no timeout).
+                all_agent_names = list(agents)
+                await pool.allocate_user(all_agent_names)
 
                 # Deliver to all agents via mailbox
                 mailbox.create("用户")  # ensure sender mailbox exists
@@ -454,9 +454,6 @@ async def broadcast_round(
                     f"  {_d.thread_bar(pool.used, pool.capacity)}"
                 )
                 logger.info("Broadcast: user interjected: {}", msg[:60])
-
-                # Restore agent access
-                pool._user_priority.set()
 
         user_task = asyncio.create_task(_user_listener())
 
