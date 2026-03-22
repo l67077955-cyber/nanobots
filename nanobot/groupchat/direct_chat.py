@@ -2,10 +2,17 @@
 
 Handles single-agent conversations when exactly one agent is active.
 Manages session setup, message building, streaming, and response handling.
+
+Supports user interjection: after the agent replies, the loop waits
+briefly for new user messages (via engine._direct_chat_queue).  If the
+user "interrupts" before the agent finishes or sends a follow-up right
+after, the agent immediately continues with the new context — similar
+to how broadcast mode's _user_listener works.
 """
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -13,13 +20,19 @@ from loguru import logger
 
 from nanobot.groupchat.prompt_builder import PromptBuilder
 from nanobot.groupchat.streaming import StreamingDisplay
-from nanobot.groupchat.utils import cn_now as _cn_now, log_request
+from nanobot.groupchat.utils import build_tool_log, cn_now as _cn_now, log_request
+
+
+# Maximum follow-up cycles (safety cap to prevent infinite loops)
+_MAX_CYCLES = 6
 
 
 async def direct_chat(engine: Any, user_message: str) -> str | None:
-    """Send message to single active agent (1-on-1 mode).
+    """Send message to single active agent (1-on-1 mode) with interjection.
 
-    Uses proper multi-message format with tool calling.
+    Runs the first reply, then loops waiting for user interjections
+    via ``engine._direct_chat_queue``.  Exits when no interjection
+    arrives within the timeout window.
 
     Args:
         engine: GroupChatEngine instance.
@@ -72,45 +85,87 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
     if instructions:
         messages.append({"role": "system", "content": instructions})
 
-    # ── Streaming ──
-    _header = f"💬 {agent_name}:\n\n"
-    stream = StreamingDisplay(_header, engine._send_and_get_id_fn, engine._edit_fn)
-    _delta_cb = stream.on_delta if stream.enabled else None
-    _reset_cb = stream.on_reset if stream.enabled else None
+    # ── Cycle loop: reply → wait for interjection → reply again ──
+    cycle = 0
+    current_user_msg = user_message
+    last_response: str | None = None
 
-    try:
-        content, tools_used, stats = await engine._chat_with_tools(
-            messages=messages,
-            model=agent["model"],
-            agent_name=agent_name,
-            is_direct=True,
-            on_content_delta=_delta_cb,
-            on_content_reset=_reset_cb,
-        )
-        log_request(engine, agent_name, agent["model"], "direct",
-                    reply_len=len(content), msgs=len(messages),
-                    tools=tools_used,
-                    input_preview=user_message[:200], output=content[:500],
-                    **stats)
-        if content:
-            engine._add_message("用户", user_message)
-            engine._add_message(agent_name, content)
-            await stream.finalize(content, fallback_send=engine._send)
-            if stream.msg_id:
-                return None  # Already sent via streaming
+    while cycle < _MAX_CYCLES:
+        cycle += 1
+
+        # ── Streaming setup ──
+        _header = f"💬 {agent_name}:\n\n"
+        stream = StreamingDisplay(_header, engine._send_and_get_id_fn, engine._edit_fn)
+        _delta_cb = stream.on_delta if stream.enabled else None
+        _reset_cb = stream.on_reset if stream.enabled else None
+
+        try:
+            content, tools_used, stats = await engine._chat_with_tools(
+                messages=messages,
+                model=agent["model"],
+                agent_name=agent_name,
+                is_direct=True,
+                on_content_delta=_delta_cb,
+                on_content_reset=_reset_cb,
+            )
+            log_request(engine, agent_name, agent["model"], "direct",
+                        reply_len=len(content), msgs=len(messages),
+                        tools=tools_used,
+                        input_preview=current_user_msg[:200], output=content[:500],
+                        **stats)
+            if content:
+                engine._add_message("用户", current_user_msg)
+                # Store content with tool call log so model sees its history
+                history_content = content + build_tool_log(stats.get("tool_calls_detail", []))
+                engine._add_message(agent_name, history_content)
+                # Append token usage to displayed reply
+                tok = stats.get("tokens", {})
+                total = tok.get("total", 0)
+                display_content = content
+                if total > 0:
+                    p, c = tok.get("prompt", 0), tok.get("completion", 0)
+                    display_content = f"{content}\n\n`{p}+{c}={total} tok`"
+                await stream.finalize(display_content, fallback_send=engine._send)
+                last_response = content
             else:
-                return f"{_header}{content}"
-        else:
-            if stream.msg_id and engine._edit_fn:
-                try:
-                    await engine._edit_fn(stream.msg_id, f"⚠️ {agent_name} 返回空回复")
-                except Exception:
-                    pass
-                return None
-            return f"⚠️ {agent_name} 返回空回复 (模型可能暂时异常，请重试)"
-    except Exception as e:
-        logger.error("Direct chat with {} failed: {}", agent_name, e)
-        log_request(engine, agent_name, agent["model"], "direct",
-                    msgs=len(messages),
-                    error=str(e))
-        return f"⚠️ {agent_name} 回复失败: {e}"
+                if stream.msg_id and engine._edit_fn:
+                    try:
+                        await engine._edit_fn(stream.msg_id, f"⚠️ {agent_name} 返回空回复")
+                    except Exception:
+                        pass
+                else:
+                    await engine._send(f"⚠️ {agent_name} 返回空回复 (模型可能暂时异常，请重试)")
+                break  # empty reply — stop cycling
+
+        except Exception as e:
+            logger.error("Direct chat with {} failed: {}", agent_name, e)
+            log_request(engine, agent_name, agent["model"], "direct",
+                        msgs=len(messages),
+                        error=str(e))
+            await engine._send(f"⚠️ {agent_name} 回复失败: {e}")
+            break
+
+        # ── Wait for user interjection ──
+        # Drain the queue: pick up any messages queued while agent was talking
+        try:
+            new_msg = await asyncio.wait_for(
+                engine._direct_chat_queue.get(), timeout=1.0,
+            )
+        except asyncio.TimeoutError:
+            # No interjection — normal exit
+            break
+
+        # Got an interjection! Log and continue the cycle.
+        logger.info("Direct chat: interjection received ({} chars), cycle {}", len(new_msg), cycle)
+        await engine._send(f"── 插话 ──")
+
+        current_user_msg = new_msg
+
+        # Inject the agent's previous reply and the new user message
+        # into the messages list so the agent sees full context
+        if content:
+            messages.append({"role": "assistant", "content": content})
+        messages.append({"role": "user", "content": new_msg})
+
+    # Return None — all output already sent via streaming/send
+    return None

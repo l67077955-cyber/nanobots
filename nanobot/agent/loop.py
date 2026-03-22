@@ -195,8 +195,12 @@ class AgentLoop:
         self,
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
-    ) -> tuple[str | None, list[str], list[dict]]:
-        """Run the agent iteration loop."""
+    ) -> tuple[str | None, list[str], list[dict], dict]:
+        """Run the agent iteration loop.
+
+        Returns:
+            (final_content, tools_used, messages, token_usage)
+        """
         from nanobot.agent.tool_loop import tool_loop
 
         # Wire up progress callbacks to match existing on_progress interface
@@ -230,7 +234,7 @@ class AgentLoop:
                 "without completing the task. You can try breaking the task into smaller steps."
             )
 
-        return final_content, result.tools_used, result.messages
+        return final_content, result.tools_used, result.messages, result.token_usage
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
@@ -356,7 +360,7 @@ class AgentLoop:
                 current_message=msg.content, channel=channel, chat_id=chat_id,
                 current_role=current_role,
             )
-            final_content, _, all_msgs = await self._run_agent_loop(messages)
+            final_content, _, all_msgs, _tok = await self._run_agent_loop(messages)
             self._save_turn(session, all_msgs, 1 + len(history))
             self.sessions.save(session)
             self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
@@ -416,12 +420,19 @@ class AgentLoop:
                 channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=meta,
             ))
 
-        final_content, _, all_msgs = await self._run_agent_loop(
+        final_content, _, all_msgs, token_usage = await self._run_agent_loop(
             initial_messages, on_progress=on_progress or _bus_progress,
         )
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
+
+        # Append token usage to the end of the reply
+        total = token_usage.get("total", 0)
+        prompt = token_usage.get("prompt", 0)
+        completion = token_usage.get("completion", 0)
+        if total > 0:
+            final_content = f"{final_content}\n\n`{prompt}+{completion}={total} tok`"
 
         self._save_turn(session, all_msgs, 1 + len(history))
         self.sessions.save(session)
