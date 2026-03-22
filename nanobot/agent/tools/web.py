@@ -75,14 +75,19 @@ class WebSearchTool(Tool):
     """Search the web using configured provider."""
 
     name = "web_search"
-    description = "Search the web. Returns titles, URLs, and snippets."
+    description = "Search the web. Returns titles, URLs, and snippets. Pass multiple queries as a list to search them all in parallel."
     parameters = {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "Search query"},
-            "count": {"type": "integer", "description": "Results (1-10)", "minimum": 1, "maximum": 10},
+            "query": {"type": "string", "description": "Single search query"},
+            "queries": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Multiple search queries to run in parallel (batch mode)",
+            },
+            "count": {"type": "integer", "description": "Results per query (1-10)", "minimum": 1, "maximum": 10},
         },
-        "required": ["query"],
+        "required": [],
     }
 
     def __init__(self, config: WebSearchConfig | None = None, proxy: str | None = None):
@@ -91,7 +96,23 @@ class WebSearchTool(Tool):
         self.config = config if config is not None else WebSearchConfig()
         self.proxy = proxy
 
-    async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
+    async def execute(self, query: str = "", queries: list | None = None,
+                      count: int | None = None, **kwargs: Any) -> str:
+        # Batch mode
+        if queries:
+            all_queries = list(queries)
+            if query and query not in all_queries:
+                all_queries.insert(0, query)
+            tasks = [self._search_one(q, count) for q in all_queries]
+            results = await asyncio.gather(*tasks)
+            parts = [f"=== Query: {q} ===\n{r}" for q, r in zip(all_queries, results)]
+            return "\n\n".join(parts)
+
+        if not query:
+            return "Error: 必须提供 query 或 queries 参数"
+        return await self._search_one(query, count)
+
+    async def _search_one(self, query: str, count: int | None) -> str:
         provider = self.config.provider.strip().lower() or "brave"
         n = min(max(count or self.config.max_results, 1), 10)
 

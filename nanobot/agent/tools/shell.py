@@ -58,6 +58,11 @@ class ExecTool(Tool):
                     "type": "string",
                     "description": "The shell command to execute",
                 },
+                "commands": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Multiple shell commands to execute in parallel (batch mode)",
+                },
                 "working_dir": {
                     "type": "string",
                     "description": "Optional working directory for the command",
@@ -72,13 +77,33 @@ class ExecTool(Tool):
                     "maximum": 600,
                 },
             },
-            "required": ["command"],
+            "required": [],
         }
 
-
     async def execute(
-        self, command: str, working_dir: str | None = None,
+        self, command: str = "", commands: list | None = None,
+        working_dir: str | None = None,
         timeout: int | None = None, **kwargs: Any,
+    ) -> str:
+        # Batch mode: run all commands concurrently
+        if commands:
+            all_cmds = list(commands)
+            if command and command not in all_cmds:
+                all_cmds.insert(0, command)
+            tasks = [self._run_one(cmd, working_dir, timeout) for cmd in all_cmds]
+            results = await asyncio.gather(*tasks)
+            parts = []
+            for cmd, result in zip(all_cmds, results):
+                parts.append(f"=== $ {cmd} ===\n{result}")
+            return "\n\n".join(parts)
+
+        if not command:
+            return "Error: 必须提供 command 或 commands 参数"
+        return await self._run_one(command, working_dir, timeout)
+
+    async def _run_one(
+        self, command: str, working_dir: str | None = None,
+        timeout: int | None = None,
     ) -> str:
         cwd = working_dir or self.working_dir or os.getcwd()
         guard_error = self._guard_command(command, cwd)

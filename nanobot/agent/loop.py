@@ -24,6 +24,7 @@ from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
+from nanobot.groupchat.chatroom_tools import SmartFetchTool
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider
@@ -128,7 +129,8 @@ class AgentLoop:
             path_append=self.exec_config.path_append,
         ))
         self.tools.register(WebSearchTool(config=self.web_search_config, proxy=self.web_proxy))
-        self.tools.register(WebFetchTool(proxy=self.web_proxy))
+        raw_fetch = WebFetchTool(proxy=self.web_proxy)
+        self.tools.register(SmartFetchTool(raw_fetch, provider=self.provider))
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:

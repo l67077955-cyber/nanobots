@@ -17,55 +17,89 @@ from nanobot.groupchat.mailbox import MailboxHub, ConversationPool, SpeakQueue
 
 
 class SearchPool:
-    """Shared search credit pool for broadcast mode.
+    """Per-agent search credit pool for broadcast mode.
 
-    - Each search costs 1 credit (spend)
-    - Every N agent outputs earns 1 credit back (earn_interval)
-    - Pool starts at initial_per_agent × n_agents
+    - Each agent gets individual credits (initial_per_agent)
+    - Each search costs 1 credit from the agent's own quota
+    - Every N outputs by an agent earns 1 credit back for that agent
+    - Leader can transfer credits between agents via transfer()
     """
 
     def __init__(self, agents: list[str], initial_per_agent: int = 2,
                  earn_interval: int = 4) -> None:
         self._agents = agents
-        self._total = initial_per_agent * len(agents)
-        self._pool = self._total
+        self._initial = initial_per_agent
         self._earn_interval = earn_interval
-        self._output_count = 0  # total outputs across all agents
         self._lock = threading.Lock()
+        # Per-agent quotas
+        self._credits: dict[str, int] = {a: initial_per_agent for a in agents}
         self._searches: dict[str, int] = {a: 0 for a in agents}
+        self._outputs: dict[str, int] = {a: 0 for a in agents}
 
     @property
     def pool(self) -> int:
-        return self._pool
+        """Total remaining credits across all agents."""
+        return sum(self._credits.values())
 
     @property
     def total(self) -> int:
-        return self._total
+        return self._initial * len(self._agents)
 
     def spend(self, agent: str) -> bool:
-        """Spend 1 credit for a search. Returns False if pool empty."""
+        """Spend 1 credit from agent's own quota. Returns False if empty."""
         with self._lock:
-            if self._pool <= 0:
+            if self._credits.get(agent, 0) <= 0:
                 return False
-            self._pool -= 1
+            self._credits[agent] -= 1
             self._searches[agent] = self._searches.get(agent, 0) + 1
             return True
 
     def on_output(self, agent: str) -> None:
-        """Record an agent output. Every earn_interval outputs earns +1 credit."""
+        """Record an agent output. Every earn_interval outputs earns +1 credit for that agent."""
         with self._lock:
-            self._output_count += 1
-            if self._output_count % self._earn_interval == 0:
-                self._pool = min(self._pool + 1, self._total)
+            self._outputs[agent] = self._outputs.get(agent, 0) + 1
+            if self._outputs[agent] % self._earn_interval == 0:
+                self._credits[agent] = self._credits.get(agent, 0) + 1
+
+    def transfer(self, from_agent: str, to_agent: str, amount: int) -> tuple[bool, str]:
+        """Transfer credits from one agent to another. Returns (success, message)."""
+        with self._lock:
+            if from_agent not in self._credits:
+                return False, f"Agent '{from_agent}' 不存在"
+            if to_agent not in self._credits:
+                return False, f"Agent '{to_agent}' 不存在"
+            available = self._credits[from_agent]
+            if amount <= 0:
+                return False, "转移数量必须大于0"
+            actual = min(amount, available)
+            if actual == 0:
+                return False, f"{from_agent} 没有可用额度"
+            self._credits[from_agent] -= actual
+            self._credits[to_agent] += actual
+            return True, f"✅ 转移 {actual} 额度: {from_agent}({self._credits[from_agent]}) → {to_agent}({self._credits[to_agent]})"
+
+    def agent_credits(self, agent: str) -> int:
+        """Remaining credits for this agent."""
+        return self._credits.get(agent, 0)
 
     def agent_searches(self, agent: str) -> int:
         """How many searches this agent has done."""
         return self._searches.get(agent, 0)
 
     def status(self) -> str:
-        """Return pool status string."""
-        total_searches = sum(self._searches.values())
-        return f"{self._pool}/{self._total} ({total_searches} searches)"
+        """Return pool status string with per-agent breakdown."""
+        parts = []
+        for a in self._agents:
+            c = self._credits.get(a, 0)
+            s = self._searches.get(a, 0)
+            parts.append(f"{a}:{c}💰({s}搜)")
+        return " | ".join(parts)
+
+    def agent_status(self, agent: str) -> str:
+        """Return status for a single agent."""
+        c = self._credits.get(agent, 0)
+        s = self._searches.get(agent, 0)
+        return f"{c} credits remaining ({s} searches used)"
 
 
 class CachedSearchTool(Tool):
@@ -73,6 +107,7 @@ class CachedSearchTool(Tool):
 
     All agents share a SearchPool and a deduplication cache.
     Each search costs 1 credit from the pool.
+    Supports batch search via the ``queries`` parameter (concurrent execution).
     """
 
     name = "web_search"
@@ -87,28 +122,44 @@ class CachedSearchTool(Tool):
     @property
     def description(self):
         base = self._original.description
+        batch_hint = " Pass multiple queries as a list to search them all in parallel."
         if self._pool:
             return (
-                f"{base} "
-                "Searches cost credits from a shared pool. "
-                "Credits regenerate when agents produce output."
+                f"{base}{batch_hint} "
+                "Each agent has individual search credits. "
+                "Credits regenerate when you produce output."
             )
-        return base
+        return f"{base}{batch_hint}"
 
     @property
     def parameters(self):
-        return self._original.parameters
+        orig = self._original.parameters
+        return {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "description": "Single search query (use 'queries' for batch)",
+                    **{k: v for k, v in orig.get("properties", {}).get("query", {}).items()},
+                },
+                "queries": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Multiple search queries to run in parallel (batch mode)",
+                },
+                "count": orig.get("properties", {}).get("count", {"type": "integer"}),
+            },
+            "required": [],
+        }
 
     @staticmethod
     def _normalize_query(q: str) -> str:
         """Normalize query for cache lookup (lowercase, strip, collapse spaces)."""
         return re.sub(r'\s+', ' ', q.lower().strip())
 
-    async def execute(self, **kwargs):
-        query = kwargs.get("query", "")
+    async def _search_one(self, query: str, count: int | None) -> str:
+        """Search a single query, respecting cache and pool."""
         norm_q = self._normalize_query(query)
 
-        # Check cache for exact or near-duplicate match
         if norm_q in self._cache:
             cached_result, searcher = self._cache[norm_q]
             pool_hint = f"\n\n[search pool: {self._pool.status()}]" if self._pool else ""
@@ -119,25 +170,45 @@ class CachedSearchTool(Tool):
                 f"避免重复劳动。{pool_hint}"
             )
 
-        # Check search pool budget
         if self._pool:
             if not self._pool.spend(self._agent_name):
                 return (
-                    f"BLOCKED: 搜索额度用完了 "
-                    f"({self._pool.status()})。\n"
-                    f"先产出一些分析结果，额度会自动恢复。"
+                    f"BLOCKED: 你的搜索额度用完了 "
+                    f"({self._pool.agent_status(self._agent_name)})。\n"
+                    f"先产出一些分析结果，额度会自动恢复。\n"
+                    f"或请求 Leader 从其他 agent 划拨额度给你。"
                 )
 
-        # Execute real search
+        kwargs: dict = {"query": query}
+        if count is not None:
+            kwargs["count"] = count
         result = await self._original.execute(**kwargs)
-
-        # Cache the result
         self._cache[norm_q] = (result, self._agent_name)
 
-        # Append pool status hint
         if self._pool:
             result += f"\n[search pool: {self._pool.status()}]"
         return result
+
+    async def execute(self, query: str = "", queries: list | None = None,
+                      count: int | None = None, **kwargs):
+        import asyncio as _asyncio
+
+        # Batch mode
+        if queries:
+            all_queries = list(queries)
+            if query and query not in all_queries:
+                all_queries.insert(0, query)
+            tasks = [self._search_one(q, count) for q in all_queries]
+            results = await _asyncio.gather(*tasks)
+            parts = []
+            for q, r in zip(all_queries, results):
+                parts.append(f"=== Query: {q} ===\n{r}")
+            return "\n\n".join(parts)
+
+        # Single mode (original behaviour)
+        if not query:
+            return "Error: 必须提供 query 或 queries 参数"
+        return await self._search_one(query, count)
 
 
 class SmartFetchTool(Tool):
@@ -541,3 +612,216 @@ class YieldTurnTool(Tool):
 
         reason_str = f"（原因: {reason}）" if reason else ""
         return f"✅ 已将发言机会让给 {to}{reason_str}"
+
+
+class ManageAgentTool(Tool):
+    """Leader-only tool: manage agents during broadcast execution.
+
+    Actions:
+        disable  — Remove an agent from the current round
+        enable   — Reactivate a previously disabled agent
+        set_tools — Change an agent's tool permissions for this session
+    """
+
+    def __init__(
+        self,
+        *,
+        exec_agents: list[str],
+        agent_tasks: dict,  # asyncio.Task → name mapping
+        engine: Any,
+        mailbox: Any,
+    ) -> None:
+        self._exec_agents = exec_agents
+        self._agent_tasks = agent_tasks  # {Task: name}
+        self._engine = engine
+        self._mailbox = mailbox
+        self._disabled: set[str] = set()
+
+    @property
+    def name(self) -> str:
+        return "manage_agent"
+
+    @property
+    def description(self) -> str:
+        return (
+            "管理 agent: disable(移除), enable(激活), set_tools(改工具权限)。"
+            "仅当前轮有效。"
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["disable", "enable", "set_tools"],
+                    "description": "操作类型",
+                },
+                "agent": {
+                    "type": "string",
+                    "description": "目标 agent 名字",
+                },
+                "tools": {
+                    "type": "object",
+                    "description": "工具权限 (仅 set_tools 时需要), 如 {\"web_search\": true, \"exec\": false}",
+                },
+            },
+            "required": ["action", "agent"],
+        }
+
+    async def execute(
+        self,
+        action: str = "",
+        agent: str = "",
+        tools: dict | None = None,
+        **kwargs: Any,
+    ) -> str:
+        if not action or not agent:
+            return "Error: 必须指定 action 和 agent"
+
+        if agent not in self._exec_agents:
+            return f"Error: agent '{agent}' 不在当前轮中。可用: {', '.join(self._exec_agents)}"
+
+        if action == "disable":
+            if agent in self._disabled:
+                return f"{agent} 已经被 disable 了"
+            self._disabled.add(agent)
+            # Cancel the agent's task
+            for task_obj, task_name in self._agent_tasks.items():
+                if task_name == agent and not task_obj.done():
+                    task_obj.cancel()
+                    break
+            # Notify remaining active agents
+            active = [a for a in self._exec_agents if a not in self._disabled]
+            if active:
+                self._mailbox.send("系统", active,
+                    f"[系统通知] {agent} 已被 Leader 移除本轮讨论")
+            await self._engine._send(f"⛔ Leader 已移除 {agent}")
+            return f"✅ {agent} 已被 disable，其 task 已取消"
+
+        elif action == "enable":
+            if agent not in self._disabled:
+                return f"{agent} 没有被 disable"
+            self._disabled.discard(agent)
+            # Notify
+            active = [a for a in self._exec_agents if a not in self._disabled]
+            if active:
+                self._mailbox.send("系统", active,
+                    f"[系统通知] {agent} 已被 Leader 重新激活")
+            await self._engine._send(f"✅ Leader 已重新激活 {agent}")
+            return f"✅ {agent} 已被 enable（注意：已取消的 task 不会自动重启）"
+
+        elif action == "set_tools":
+            if not tools or not isinstance(tools, dict):
+                return "Error: set_tools 需要 tools 参数，如 {\"web_search\": true}"
+            cfg = self._engine.registry.get(agent, {})
+            current = cfg.get("tools", {})
+            if isinstance(current, dict):
+                current.update(tools)
+            else:
+                cfg["tools"] = dict(tools)
+            # Notify
+            active = [a for a in self._exec_agents if a not in self._disabled]
+            changes = ", ".join(f"{k}={'开' if v else '关'}" for k, v in tools.items())
+            if active:
+                self._mailbox.send("系统", active,
+                    f"[系统通知] Leader 已修改 {agent} 的工具权限: {changes}")
+            await self._engine._send(f"🔧 Leader 修改 {agent} 权限: {changes}")
+            return f"✅ {agent} 工具权限已更新: {changes}"
+
+        return f"Error: 未知 action '{action}'"
+
+
+class EndDiscussionTool(Tool):
+    """Leader-only tool: end the discussion phase immediately.
+
+    When called, sets an asyncio.Event that the broadcast loop watches.
+    All agent tasks are cancelled and the leader enters the synthesis phase.
+    """
+
+    def __init__(self, *, end_event: Any, engine: Any) -> None:
+        self._end_event = end_event  # asyncio.Event
+        self._engine = engine
+
+    @property
+    def name(self) -> str:
+        return "end_discussion"
+
+    @property
+    def description(self) -> str:
+        return (
+            "结束当前讨论，立即进入总结阶段。"
+            "当你判断信息已经足够、讨论陷入循环、或 agent 表现不佳时使用。"
+            "调用后所有 agent 会被停止，你将进入最终总结。"
+            "参数: reason (可选，结束原因)"
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "结束讨论的原因（可选）",
+                },
+            },
+            "required": [],
+        }
+
+    async def execute(self, reason: str = "", **kwargs: Any) -> str:
+        reason_str = f"（原因: {reason}）" if reason else ""
+        await self._engine._send(f"★ Leader 决定结束讨论{reason_str}")
+        self._end_event.set()
+        return f"✅ 讨论已结束{reason_str}，即将进入总结阶段"
+
+
+class TransferCreditsTool(Tool):
+    """Leader-only tool: transfer search credits between agents."""
+
+    def __init__(self, *, search_pool: SearchPool, engine: Any) -> None:
+        self._pool = search_pool
+        self._engine = engine
+
+    @property
+    def name(self) -> str:
+        return "transfer_credits"
+
+    @property
+    def description(self) -> str:
+        return (
+            "划拨搜索额度：把一个 agent 的搜索额度转给另一个 agent。"
+            "例如把没有搜索工具的 agent 的额度划给有搜索能力的 agent。"
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "from_agent": {
+                    "type": "string",
+                    "description": "从哪个 agent 划出额度",
+                },
+                "to_agent": {
+                    "type": "string",
+                    "description": "划给哪个 agent",
+                },
+                "amount": {
+                    "type": "integer",
+                    "description": "划拨数量（如不确定可填大数，系统会自动取可用最大值）",
+                },
+            },
+            "required": ["from_agent", "to_agent", "amount"],
+        }
+
+    async def execute(self, from_agent: str = "", to_agent: str = "",
+                      amount: int = 0, **kwargs: Any) -> str:
+        if not from_agent or not to_agent:
+            return "Error: 必须指定 from_agent 和 to_agent"
+        success, msg = self._pool.transfer(from_agent, to_agent, amount)
+        if success:
+            await self._engine._send(f"🔄 {msg}")
+            return f"{msg}\n当前额度: {self._pool.status()}"
+        return f"Error: {msg}"
