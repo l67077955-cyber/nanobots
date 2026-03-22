@@ -10,6 +10,7 @@ subclassing, keeping the core loop logic in one place.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time as _time
@@ -291,14 +292,15 @@ async def tool_loop(
                 thinking_blocks=response.thinking_blocks,
             ))
 
-            # Execute each tool call
+            # ── Phase 1: Sequential pre-check (dedup, permission, progress) ──
+            pending: list[tuple] = []  # (tc, args_str, dedup_key)
             for tc in response.tool_calls:
                 result.tools_used.append(tc.name)
 
                 args_str = json.dumps(tc.arguments, ensure_ascii=False)
                 logger.info("tool_loop: {}({})", tc.name, args_str[:200])
 
-                # ── Dedup check BEFORE display (so dupes are silent) ──
+                # Dedup check BEFORE display (so dupes are silent)
                 dedup_key = None
                 if tc.name in _DEDUP_TOOLS:
                     dedup_key = _normalize_dedup_args(tc.name, tc.arguments)
@@ -324,7 +326,6 @@ async def tool_loop(
                             "iteration": iteration,
                             "duplicate": True,
                         })
-                        # Skip on_tool_start — user doesn't see dupes
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tc.id,
@@ -332,7 +333,7 @@ async def tool_loop(
                         })
                         continue
 
-                # ── Permission guard: block unauthorized tool calls ──
+                # Permission guard: block unauthorized tool calls
                 if _allowed_tools is not None and tc.name not in _allowed_tools:
                     tool_result = (
                         f"BLOCKED: 你没有 {tc.name} 的使用权限。"
@@ -349,54 +350,72 @@ async def tool_loop(
                 if on_tool_start:
                     await on_tool_start(tc.name, tc.arguments)
 
-                tc_start = _time.time()
-                tc_error = None
-                tool_result = None
+                pending.append((tc, args_str, dedup_key))
+
+            # ── Phase 2: Parallel execution via asyncio.gather ──
+            async def _exec_one(tc_inner):
+                t0 = _time.time()
                 try:
-                    tool_result = await tool_registry.execute(tc.name, tc.arguments)
+                    res = await tool_registry.execute(tc_inner.name, tc_inner.arguments)
+                    return res, None, round(_time.time() - t0, 2)
                 except Exception as exc:
-                    tc_error = str(exc)
-                    tool_result = f"Error: {exc}"
-                    logger.error("tool_loop: {}() failed: {}", tc.name, tc_error[:200])
-                tc_duration = round(_time.time() - tc_start, 2)
+                    err = str(exc)
+                    logger.error("tool_loop: {}() failed: {}", tc_inner.name, err[:200])
+                    return f"Error: {exc}", err, round(_time.time() - t0, 2)
 
-                # Cache result for dedup
-                if dedup_key is not None and tc_error is None:
-                    if isinstance(tool_result, list):
-                        _seen_calls[dedup_key] = json.dumps(tool_result, ensure_ascii=False)[:result_max_chars]
+            if pending:
+                exec_results = await asyncio.gather(
+                    *(_exec_one(tc) for tc, _, _ in pending),
+                    return_exceptions=True,
+                )
+
+                # ── Phase 3: Sequential post-process ──
+                for (tc, args_str, dedup_key), raw in zip(pending, exec_results):
+                    # Handle unexpected gather exceptions (e.g. BaseException)
+                    if isinstance(raw, BaseException):
+                        tool_result = f"Error: {type(raw).__name__}: {raw}"
+                        tc_error = str(raw)
+                        tc_duration = 0.0
                     else:
-                        _seen_calls[dedup_key] = (tool_result or "")[:result_max_chars]
+                        tool_result, tc_error, tc_duration = raw
 
-                # Record detail with timestamps
-                if isinstance(tool_result, list):
-                    _result_str = json.dumps(tool_result, ensure_ascii=False)
-                else:
-                    _result_str = tool_result or ""
-                result.tool_calls_detail.append({
-                    "name": tc.name,
-                    "args": args_str[:200],
-                    "result_len": len(_result_str),
-                    "result_preview": _result_str[:4000],
-                    "timestamp": _time.strftime("%H:%M:%S"),
-                    "duration": tc_duration,
-                    "success": tc_error is None,
-                    "error": tc_error[:200] if tc_error else None,
-                    "iteration": iteration,
-                })
+                    # Cache result for dedup
+                    if dedup_key is not None and tc_error is None:
+                        if isinstance(tool_result, list):
+                            _seen_calls[dedup_key] = json.dumps(tool_result, ensure_ascii=False)[:result_max_chars]
+                        else:
+                            _seen_calls[dedup_key] = (tool_result or "")[:result_max_chars]
 
-                if on_tool_result:
-                    await on_tool_result(tc.name, tc.id, tool_result)
+                    # Record detail with timestamps
+                    if isinstance(tool_result, list):
+                        _result_str = json.dumps(tool_result, ensure_ascii=False)
+                    else:
+                        _result_str = tool_result or ""
+                    result.tool_calls_detail.append({
+                        "name": tc.name,
+                        "args": args_str[:200],
+                        "result_len": len(_result_str),
+                        "result_preview": _result_str[:4000],
+                        "timestamp": _time.strftime("%H:%M:%S"),
+                        "duration": tc_duration,
+                        "success": tc_error is None,
+                        "error": tc_error[:200] if tc_error else None,
+                        "iteration": iteration,
+                    })
 
-                # Append tool result (truncated for str, passed through for multimodal list)
-                if isinstance(tool_result, list):
-                    tool_content = tool_result
-                else:
-                    tool_content = (tool_result or "")[:result_max_chars]
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": tool_content,
-                })
+                    if on_tool_result:
+                        await on_tool_result(tc.name, tc.id, tool_result)
+
+                    # Append tool result (truncated for str, passed through for multimodal list)
+                    if isinstance(tool_result, list):
+                        tool_content = tool_result
+                    else:
+                        tool_content = (tool_result or "")[:result_max_chars]
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": tool_content,
+                    })
         else:
             # Text response — done
             raw_content = response.content
