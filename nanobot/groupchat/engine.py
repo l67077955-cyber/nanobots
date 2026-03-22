@@ -43,7 +43,6 @@ class GroupChatEngine:
     TOOL_NAMES = [
         "web_search", "web_fetch", "exec",
         "read_file", "write_file", "edit_file", "list_dir",
-        "chatroom_send", "wait",
     ]
 
     def __init__(
@@ -138,10 +137,11 @@ class GroupChatEngine:
         from nanobot.agent.tools.filesystem import (
             ReadFileTool, WriteFileTool, EditFileTool, ListDirTool,
         )
-        from nanobot.groupchat.chatroom_tools import SmartFetchTool
+        from nanobot.groupchat.chatroom_tools import SmartFetchTool, SmartSearchTool
 
         registry = ToolRegistry()
-        registry.register(WebSearchTool(config=self.web_search_config, proxy=self.web_proxy))
+        raw_search = WebSearchTool(config=self.web_search_config, proxy=self.web_proxy)
+        registry.register(SmartSearchTool(raw_search, provider=self.provider))
         # Wrap web_fetch with AI reader — model configurable via agents/reader/
         raw_fetch = WebFetchTool()
         reader_model = self._get_reader_model()
@@ -215,6 +215,10 @@ class GroupChatEngine:
         self._request_log: list[dict[str, Any]] = []
         self._debug_context: bool = False
         self._prompt_order: dict[str, list[str]] = self._prompt_builder._load_prompt_order()
+
+        # Direct chat interjection state (single-agent mode)
+        self._direct_chat_task: asyncio.Task | None = None
+        self._direct_chat_queue: asyncio.Queue[str] = asyncio.Queue()
 
     # ── Public access to PromptBuilder ────────────────────────
 
@@ -614,6 +618,17 @@ class GroupChatEngine:
             force_no_tools=force_no_tools,
         )
 
+    def direct_chat_inject(self, user_message: str) -> bool:
+        """Inject a user interjection into an in-progress direct chat.
+
+        Returns True if injected, False if no direct chat is running.
+        """
+        if self._direct_chat_task and not self._direct_chat_task.done():
+            self._direct_chat_queue.put_nowait(user_message)
+            logger.info("Direct chat: interjection queued ({} chars)", len(user_message))
+            return True
+        return False
+
     async def direct_chat(self, user_message: str) -> str | None:
         """Send message to single active agent — delegates to direct_chat module."""
         from nanobot.groupchat.direct_chat import direct_chat as _direct_chat
@@ -805,15 +820,6 @@ class GroupChatEngine:
             no_stream=no_stream,
             silent=silent,
         )
-
-
-    # ── Parallel Leader Mode (Orchestra) ─────────────────────────────
-
-    async def _orchestra_round(self, speak_order: list[str]) -> None:
-        """Delegate to orchestra module — runs non-leader agents in parallel,
-        then leader synthesizes."""
-        from nanobot.groupchat.orchestra import orchestra_round
-        await orchestra_round(speak_order, self)
 
     async def _generate_summary(self) -> None:
         """Generate discussion summary — delegates to run_loop module."""

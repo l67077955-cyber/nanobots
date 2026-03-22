@@ -211,6 +211,124 @@ class CachedSearchTool(Tool):
         return await self._search_one(query, count)
 
 
+class SmartSearchTool(Tool):
+    """Wrapper around any search tool that summarizes long results via a cheap LLM.
+
+    When search results exceed a character threshold, they are summarized
+    by a cheap model (e.g. gpt-4.1-nano) to reduce context consumption.
+    Short results are passed through as-is.
+    """
+
+    name = "web_search"
+    SUMMARIZE_THRESHOLD = 3000  # chars
+
+    def __init__(self, original: Tool, reader_model: str = "openai/gpt-4.1-nano",
+                 provider: Any = None) -> None:
+        self._original = original
+        self._reader_model = reader_model
+        self._provider = provider
+
+    @property
+    def description(self):
+        return self._original.description
+
+    @property
+    def parameters(self):
+        return self._original.parameters
+
+    async def execute(self, **kwargs) -> str:
+        result = await self._original.execute(**kwargs)
+
+        if len(result) <= self.SUMMARIZE_THRESHOLD:
+            return result
+
+        # Build query context for targeted summarization
+        queries = kwargs.get("queries") or []
+        q = kwargs.get("query", "")
+        if q and q not in queries:
+            queries = [q] + list(queries)
+        query_context = " / ".join(queries) if queries else ""
+
+        # Summarize long results
+        try:
+            summary = await self._summarize(result, query_context)
+            if summary:
+                return summary
+        except Exception as e:
+            from loguru import logger
+            logger.warning("SmartSearch: summarization failed, returning raw: {}", e)
+
+        return result
+
+    async def _summarize(self, raw_results: str, query_context: str = "") -> str | None:
+        """Summarize search results using a cheap LLM."""
+        from loguru import logger
+
+        reader_cfg = SmartFetchTool._load_reader_config()
+        model = reader_cfg.get("model", self._reader_model)
+        provider_name = reader_cfg.get("provider", "openrouter")
+
+        from nanobot.providers.litellm_provider import LiteLLMProvider
+        import json as _json
+
+        api_key, api_base = "", ""
+        try:
+            cfg_path = Path.home() / ".nanobot" / "config.json"
+            if cfg_path.exists():
+                cfg = _json.loads(cfg_path.read_text())
+                pcfg = (cfg.get("providers") or {}).get(provider_name, {}) or {}
+                api_key = pcfg.get("apiKey", "")
+                api_base = pcfg.get("apiBase", "")
+        except Exception:
+            pass
+
+        llm = LiteLLMProvider(
+            default_model=model,
+            api_key=api_key or None,
+            api_base=api_base or None,
+            provider_name=provider_name,
+        )
+
+        # Build context-aware prompt
+        context_hint = ""
+        if query_context:
+            context_hint = (
+                f"用户搜索意图：「{query_context}」\n"
+                "请围绕这个搜索意图提取最相关的信息，忽略无关结果。\n\n"
+            )
+
+        prompt = (
+            "你是搜索结果摘要助手。请将以下搜索结果精炼为简洁的摘要，"
+            "保留所有关键事实、数据、URL链接和结论。"
+            "去掉重复和无关内容，用清晰的中文输出。\n\n"
+            f"{context_hint}"
+            f"--- 搜索结果 ({len(raw_results)}字) ---\n"
+            f"{raw_results[:8000]}\n--- 结束 ---"
+        )
+
+        logger.info("SmartSearch: summarizing {}c via {}/{} (query={})",
+                     len(raw_results), provider_name, model, query_context[:50])
+        response = await llm.chat(
+            [{"role": "user", "content": prompt}],
+            max_tokens=2000,
+            temperature=0.1,
+        )
+        summary = response.content.strip() if response.content else None
+        if summary:
+            usage = response.usage or {}
+            nano_p = usage.get("prompt_tokens", 0)
+            nano_c = usage.get("completion_tokens", 0)
+            nano_t = usage.get("total_tokens", 0)
+            saved = len(raw_results) - len(summary)
+            tok_info = f" ⚡nano {nano_p}+{nano_c}={nano_t}" if nano_t else ""
+            logger.info("SmartSearch: {}c → {}c (nano {}tok)", len(raw_results), len(summary), nano_t)
+            return (
+                f"{summary}\n\n"
+                f"`📦 AI摘要 {len(raw_results)}→{len(summary)}字 (省{saved}字){tok_info}`"
+            )
+        return None
+
+
 class SmartFetchTool(Tool):
     """Wrapper around WebFetchTool that uses a cheap model to extract key content.
 
@@ -233,10 +351,21 @@ class SmartFetchTool(Tool):
 
     @property
     def parameters(self):
-        return self._original.parameters
+        base = self._original.parameters
+        props = dict(base.get("properties", {}))
+        props["focus"] = {
+            "type": "string",
+            "description": (
+                "Optional: specify what to focus on during content extraction. "
+                "E.g. keywords, topics, or specific data you want."
+            ),
+        }
+        return {**base, "properties": props}
 
     async def execute(self, **kwargs) -> str:
         import json as _json
+
+        focus = kwargs.pop("focus", "")
 
         # Step 1: Fetch raw content
         raw_result = await self._original.execute(**kwargs)
@@ -258,8 +387,14 @@ class SmartFetchTool(Tool):
 
         # Step 2: Extract via cheap model
         try:
-            extracted = await self._extract_content(url, raw_text)
+            extracted, nano_usage = await self._extract_content(url, raw_text, focus=focus)
             if extracted:
+                nano_p = nano_usage.get("prompt_tokens", 0)
+                nano_c = nano_usage.get("completion_tokens", 0)
+                nano_t = nano_usage.get("total_tokens", 0)
+                saved = len(raw_text) - len(extracted)
+                tok_info = f" ⚡nano {nano_p}+{nano_c}={nano_t}" if nano_t else ""
+                extracted += f"\n\n`📦 AI提取 {len(raw_text)}→{len(extracted)}字 (省{saved}字){tok_info}`"
                 result_data = {
                     "url": url,
                     "finalUrl": data.get("finalUrl", url),
@@ -279,18 +414,31 @@ class SmartFetchTool(Tool):
         # Fallback: return raw content
         return raw_result
 
-    async def _extract_content(self, url: str, raw_text: str) -> str | None:
-        """Use cheap LLM to extract key content from raw fetched text."""
+    async def _extract_content(self, url: str, raw_text: str,
+                               focus: str = "") -> tuple[str | None, dict]:
+        """Use cheap LLM to extract key content from raw fetched text.
+
+        Returns (extracted_text, usage_dict).
+        """
         from loguru import logger
 
         # Truncate input to avoid excessive token usage
         input_text = raw_text[:self._max_extract_chars]
+
+        # Build context-aware extraction prompt
+        focus_hint = ""
+        if focus:
+            focus_hint = (
+                f"提取重点：「{focus}」\n"
+                "请围绕上述重点提取最相关的内容，其他信息可简略。\n\n"
+            )
 
         prompt = (
             "你是一个网页内容提取助手。请从以下网页内容中提取关键信息，"
             "保留所有重要的事实、数据、日期、链接和结论。"
             "去掉导航菜单、广告、页脚等无关内容。"
             "用简洁清晰的中文输出，保持原文的关键细节。\n\n"
+            f"{focus_hint}"
             f"URL: {url}\n\n"
             f"--- 网页内容 ---\n{input_text}\n--- 结束 ---"
         )
@@ -326,10 +474,12 @@ class SmartFetchTool(Tool):
         logger.info("SmartFetch: extracting {} via {}/{} (input={}c)",
                      url[:60], provider_name, model, len(input_text))
         response = await llm.chat(messages, max_tokens=4000, temperature=0.1)
+        usage = response.usage or {}
         result = response.content.strip() if response.content else None
         if result:
-            logger.info("SmartFetch: extracted {}c from {}c", len(result), len(input_text))
-        return result
+            logger.info("SmartFetch: extracted {}c from {}c (nano {}tok)",
+                        len(result), len(input_text), usage.get("total_tokens", 0))
+        return result, usage
 
     @staticmethod
     def _load_reader_config() -> dict[str, Any]:

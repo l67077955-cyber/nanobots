@@ -1,10 +1,24 @@
 """Centralized display formatting for group chat.
 
 All visual formatting, headers, and status message templates live here.
-Design: clean monochrome Unicode, minimal emoji, professional tone.
+Design: clean Unicode, role-aware badges, compact and readable.
 """
 
 from __future__ import annotations
+
+
+def _shorten_path(path: str, max_parts: int = 2) -> str:
+    """Shorten a filesystem path to the last N components.
+
+    '/root/.nanobot/workspace/memory/MEMORY.md' → 'memory/MEMORY.md'
+    Short paths are returned as-is.
+    """
+    if not path or "/" not in path:
+        return path
+    parts = path.rstrip("/").split("/")
+    if len(parts) <= max_parts:
+        return path
+    return "/".join(parts[-max_parts:])
 
 
 # ── Tool Labels ──────────────────────────────────────────────
@@ -20,6 +34,9 @@ TOOL_LABELS: dict[str, str] = {
     "chatroom_send": "send",
     "wait": "wait",
     "yield_turn": "yield",
+    "manage_agent": "manage",
+    "end_discussion": "end",
+    "transfer_credits": "transfer",
 }
 
 
@@ -31,8 +48,8 @@ def tool_icon(tool_name: str) -> str:
 # ── Badges & Headers ─────────────────────────────────────────
 
 def agent_badge(agent_name: str, leader: str | None) -> str:
-    """Return ' ★' if agent is leader, else ''."""
-    return " ★" if leader == agent_name else ""
+    """Return ' 👑' if agent is leader, else ''."""
+    return " 👑" if leader == agent_name else ""
 
 
 def agent_header(
@@ -46,7 +63,7 @@ def agent_header(
     """Build the display header for an agent's turn.
 
     Examples:
-        '▍Benjamin ★ [1/4]\\n\\n'   (group/serial)
+        '▍Benjamin 👑 [1/4]\\n\\n'   (group/serial)
         '▍Harper [2/4]: '          (broadcast)
     """
     badge = agent_badge(agent_name, leader)
@@ -66,10 +83,13 @@ def thinking_msg(
     idx: int = 0,
     total: int = 0,
 ) -> str:
-    """'◌ Harper (grok-4-1) [2/4]'"""
+    """'👑 Nanobot · grok-4  [1/4]' or '◎ Harper · grok-4-1  [2/4]'"""
+    if leader == agent_name:
+        tag = f"  [{idx}/{total}]" if total > 1 else ""
+        return f"👑 {agent_name} · {model_short}{tag}"
     badge = agent_badge(agent_name, leader)
-    tag = f" [{idx}/{total}]" if total > 1 else ""
-    return f"◌ {agent_name}{badge} · {model_short}{tag}"
+    tag = f"  [{idx}/{total}]" if total > 1 else ""
+    return f"◎ {agent_name}{badge} · {model_short}{tag}"
 
 
 def completion_msg(
@@ -77,15 +97,23 @@ def completion_msg(
     latency: float,
     iterations: int = 1,
     tools_used: list[str] | None = None,
+    leader: str | None = None,
 ) -> str:
-    """'● Harper — 3.2s, tools: search, fetch'"""
+    """'✓ Harper  3.2s · read×2, search' or '👑✓ Nanobot  5.1s · send×3, search×2'"""
     parts = [f"{latency:.1f}s"]
-    if iterations > 1:
-        parts.append(f"{iterations} iter")
     if tools_used:
-        parts.append(f"tools: {', '.join(tools_used)}")
-    detail = ", ".join(parts)
-    return f"● {agent_name} — {detail}" if detail else ""
+        from collections import Counter
+        counts = Counter(TOOL_LABELS.get(t, t) for t in tools_used)
+        tool_parts = [
+            f"{name}×{cnt}" if cnt > 1 else name
+            for name, cnt in counts.items()
+        ]
+        parts.append(", ".join(tool_parts))
+    if iterations > 1:
+        parts.append(f"{iterations}轮")
+    detail = " · ".join(parts)
+    icon = "👑✓" if leader == agent_name else "✓"
+    return f"{icon} {agent_name}  {detail}" if detail else ""
 
 
 def error_msg(agent_name: str, error: str, latency: float = 0) -> str:
@@ -99,19 +127,30 @@ def empty_reply_msg(agent_name: str) -> str:
 
 
 def tool_in_progress_msg(header: str) -> str:
-    return f"{header}– working…"
+    return f"{header}– 🔧 ..."
 
 
 # ── Broadcast-specific ───────────────────────────────────────
 
-def broadcast_start_msg(agents: list[str], timeout: int) -> str:
+def broadcast_start_msg(agents: list[str], timeout: int, leader: str | None = None) -> str:
+    """Render broadcast start banner with role indicators.
+
+    ┏━━ broadcast · 4 agents · 200s ━━┓
+    │ 👑 Nanobot (leader)              │
+    │ 🔹 Lucas  🔹 Benjamin  🔹 Ares  │
+    └──────────────────────────────────┘
+    """
     total = len(agents)
-    names = " · ".join(agents)
-    return (
-        f"━━ Broadcast — {total} agents ━━\n"
-        f"{names}\n"
-        f"timeout {timeout}s"
-    )
+    lines = [f"┏━━ broadcast · {total} agents · {timeout}s ━━┓"]
+    if leader:
+        lines.append(f"│ 👑 {leader}")
+        members = [a for a in agents if a != leader]
+        if members:
+            lines.append(f"│ {'  '.join('🔹 ' + a for a in members)}")
+    else:
+        lines.append(f"│ {'  '.join('🔹 ' + a for a in agents)}")
+    lines.append("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
+    return "\n".join(lines)
 
 
 def broadcast_complete_msg(
@@ -119,10 +158,10 @@ def broadcast_complete_msg(
     total: int,
     comm_count: int = 0,
 ) -> str:
-    msg = f"━━ {completed}/{total} agents done"
+    msg = f"┗━━ done · {completed}/{total}"
     if comm_count > 0:
-        msg += f", {comm_count} messages exchanged"
-    msg += " ━━"
+        msg += f" · {comm_count} msgs"
+    msg += " ━━┛"
     return msg
 
 
@@ -134,6 +173,15 @@ def thread_bar(used: int, capacity: int) -> str:
     filled = "▰" * used
     empty = "▱" * max(capacity - used, 0)
     return f"{filled}{empty} {used}/{capacity}"
+
+
+def search_credits_bar(pool_status: str) -> str:
+    """Format search credits for display.
+
+    Input: 'Nanobot:2💰(0搜) | Lucas:1💰(3搜) | ...'
+    Output: '🔍 Nanobot:2💰(0搜) | Lucas:1💰(3搜) | ...'
+    """
+    return f"🔍 {pool_status}"
 
 
 def search_bar(pool: int, total: int, nodes: int) -> str:
@@ -151,20 +199,20 @@ def chat_chain_summary(
     history: list,
     *,
     max_preview: int = 120,
+    leader: str | None = None,
 ) -> str:
     """Format a readable chat chain from mailbox history.
 
     Output:
-        📜 对话链:
-        1. Harper → All: 我认为应该选纪律委员...
-        2. Ares → Harper: 同意你的观点，但需要...
-        3. Lucas → All: 我有不同看法...
-        4. Benjamin → All: 综合大家意见...
+        ┄ 对话链 ┄
+        1. 👑 Nanobot → Lucas: 请搜索...
+        2. 🔹 Lucas → Nanobot: 搜索结果如下...
+        3. 🔹 Ares → All: 我整理了...
     """
     if not history:
         return ""
 
-    lines = ["📜 对话链:"]
+    lines = ["┄ 对话链 ┄"]
     for i, msg in enumerate(history, 1):
         sender = msg.sender if hasattr(msg, "sender") else str(msg.get("sender", "?"))
         targets = msg.targets if hasattr(msg, "targets") else msg.get("targets", [])
@@ -175,13 +223,14 @@ def chat_chain_summary(
         if len(preview) > max_preview:
             preview = preview[:max_preview] + "…"
 
-        lines.append(f"  {i}. {sender} → {to}: {preview}")
+        icon = "👑" if sender == leader else "🔹"
+        lines.append(f"  {i}. {icon} {sender} → {to}: {preview}")
 
     return "\n".join(lines)
 
 
 def synthesis_start_msg(count: int) -> str:
-    return f"━━ Synthesis — {count} agent(s) ━━"
+    return f"━━ synthesis · {count} agent(s) ━━"
 
 
 def synthesis_agent_msg(
@@ -192,25 +241,27 @@ def synthesis_agent_msg(
     total: int,
 ) -> str:
     label = "synthesizing" if is_leader else "reviewing"
-    return f"◌ {agent_name} {label}… ({model_short}) [{idx + 1}/{total}]"
+    icon = "👑" if is_leader else "◎"
+    return f"{icon} {agent_name} {label}… ({model_short})  [{idx + 1}/{total}]"
 
 
 def tool_call_line(agent_name: str, tool_name: str, short_arg: str = "") -> str:
     """Format a tool call for serial/orchestra mode.
 
-    Returns: '  ▸ Harper · search(Trump news)'
+    Returns: '▸ Nanobot · search(Trump news)'
     """
     label = TOOL_LABELS.get(tool_name, tool_name)
-    return f"  ▸ {agent_name} · {label}({short_arg})"
+    arg = _shorten_path(short_arg) if short_arg else ""
+    return f"▸ {agent_name} · {label}({arg})"
 
 
 def tool_result_line(preview: str, result_len: int) -> str:
     """Format a tool result for inline display.
 
-    Returns: '    └ Results for: Trump… (1234c)'
+    Returns: '↳ Results for: Trump… (1234c)'
     """
     ellipsis = "…" if result_len > 80 else ""
-    return f"    └ {preview}{ellipsis} ({result_len:,}c)"
+    return f"↳ {preview}{ellipsis} ({result_len:,}c)"
 
 
 # ── Tool Activity Display (broadcast mode) ───────────────────
@@ -219,35 +270,47 @@ def tool_activity_msg(
     agent_name: str,
     tool_name: str,
     args: dict,
+    leader: str | None = None,
 ) -> str:
     """Format a tool call for broadcast display.
 
-    Clean one-line format:
-        ▸ Harper · search "Trump latest news"
-        ▸ Lucas  · fetch  reuters.com/world/…
-        ▸ Ben    · exec   python3 analysis.py
+    Leader:     👑▸ Nanobot · search "酒馆战棋"
+    Non-leader: ▸ Lucas · search "Trump latest news"
     """
     label = TOOL_LABELS.get(tool_name, tool_name)
+    prefix = "👑▸" if agent_name == leader else "  ▸"
     if tool_name == "web_search":
         query = args.get("query", "")
-        return f"  ▸ {agent_name} · {label} \"{query}\""
+        return f"{prefix} {agent_name} · {label} \"{query}\""
     elif tool_name == "web_fetch":
         url = (args.get("url", "") or "")
         if len(url) > 65:
             url = url[:65] + "…"
-        return f"  ▸ {agent_name} · {label} {url}"
+        return f"{prefix} {agent_name} · {label} {url}"
     elif tool_name == "exec":
         cmd = (args.get("command", "") or "")[:55]
-        return f"  ▸ {agent_name} · {label} {cmd}"
+        return f"{prefix} {agent_name} · {label} {cmd}"
     elif tool_name == "read_file":
         path = (args.get("path", "") or "").split("/")[-1]
-        return f"  ▸ {agent_name} · {label} {path}"
+        return f"{prefix} {agent_name} · {label} {path}"
     elif tool_name in ("write_file", "edit_file"):
         path = (args.get("path", "") or "").split("/")[-1]
-        return f"  ▸ {agent_name} · {label} {path}"
+        return f"{prefix} {agent_name} · {label} {path}"
     elif tool_name == "list_dir":
         path = args.get("path", "") or "."
-        return f"  ▸ {agent_name} · {label} {path}"
+        return f"{prefix} {agent_name} · {label} {path}"
+    elif tool_name == "transfer_credits":
+        fr = args.get("from_agent", "?")
+        to = args.get("to_agent", "?")
+        amt = args.get("amount", "?")
+        return f"{prefix} {agent_name} · {label} {fr}→{to} ×{amt}"
+    elif tool_name == "manage_agent":
+        action = args.get("action", "?")
+        target = args.get("agent", "?")
+        return f"{prefix} {agent_name} · {label} {action}({target})"
+    elif tool_name == "end_discussion":
+        reason = (args.get("reason", "") or "")[:40]
+        return f"{prefix} {agent_name} · {label} {reason}"
     else:
         short = ""
         if args:
@@ -255,7 +318,7 @@ def tool_activity_msg(
             if isinstance(first, str):
                 short = first[:40]
         suffix = f" {short}" if short else ""
-        return f"  ▸ {agent_name} · {label}{suffix}"
+        return f"{prefix} {agent_name} · {label}{suffix}"
 
 
 def tool_result_brief(
@@ -291,26 +354,32 @@ def chatroom_send_msg(
     message: str,
     *,
     max_len: int = 500,
+    leader: str | None = None,
 ) -> str:
     """Format an inter-agent chatroom_send.
 
-    Visual design:
-        ─── Harper → Lucas ───
-        message content here…
+    Leader command:
+        👑 Nanobot → Lucas ━━
+        请搜索酒馆战棋最新...
+
+    Regular message:
+        ┄ Lucas → Nanobot ┄
+        搜索结果如下...
     """
     if len(message) > max_len:
         message = message[:max_len] + "…"
-    header = f"{sender} → {to}"
-    # Pad dashes to frame the header
-    pad = max(2, (28 - len(header)) // 2)
-    rule = "─" * pad
+    if sender == leader:
+        return (
+            f"👑 {sender} → {to} ━━\n"
+            f"{message}"
+        )
     return (
-        f"{rule} {header} {rule}\n"
+        f"┄ {sender} → {to} ┄\n"
         f"{message}"
     )
 
 
-def chatroom_wait_msg(agent: str, result: str) -> str:
+def chatroom_wait_msg(agent: str, result: str, leader: str | None = None) -> str:
     """Format a wait tool result — short receipt notice only.
 
     The full message content was already shown when chatroom_send fired,
@@ -318,29 +387,25 @@ def chatroom_wait_msg(agent: str, result: str) -> str:
 
         ← Ares received from Harper
     """
-    # Extract sender name from "[sender → target]: ..." format
     import re
     m = re.match(r'\[(\w+)', result)
     sender = m.group(1) if m else "teammate"
-    return f"  ← {agent} received from {sender}"
+    icon = "👑←" if agent == leader else "  ←"
+    return f"{icon} {agent} received from {sender}"
 
 
 def user_interjection_msg(message: str, *, max_len: int = 500) -> str:
     """Format a user interjection during broadcast.
 
-    Uses double-line border to stand out from agent messages:
-        ╔══ USER ══════════════════╗
-        message content here…
-        ╚═════════════════════════╝
+    Clean inline style:
+        ── User ──
+        message content
     """
     if len(message) > max_len:
         message = message[:max_len] + "…"
-    width = max(26, len("USER") + 8)
-    top_pad = width - len(" USER ") - 2
     return (
-        f"╔══ USER {'═' * top_pad}╗\n"
-        f"{message}\n"
-        f"╚{'═' * width}╝"
+        f"── User ──\n"
+        f"{message}"
     )
 
 
@@ -363,3 +428,16 @@ def speak_order_msg(order: list[str], leader: str | None = None) -> str:
         badge = " 👑" if name == leader else ""
         parts.append(f"{name}{badge}")
     return f"🗣 发言顺序: {' → '.join(parts)}"
+
+
+# ── Leader Action Messages ───────────────────────────────────
+
+def leader_end_msg(leader_name: str, reason: str = "") -> str:
+    """Display when leader ends the discussion."""
+    reason_part = f"\n    原因: {reason}" if reason else ""
+    return f"👑 {leader_name} 结束讨论{reason_part}"
+
+
+def leader_transfer_msg(leader_name: str, result: str) -> str:
+    """Display when leader transfers search credits."""
+    return f"👑🔄 {result}"

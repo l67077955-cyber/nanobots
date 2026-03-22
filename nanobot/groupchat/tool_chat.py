@@ -114,17 +114,17 @@ def make_tool_callbacks(
             _tool_msg_id = None
             return
         rlen = len(result)
-        preview = result.strip().replace("\n", " ")[:80]
-        result_line = f"↳ {preview}{'…' if rlen > 80 else ''} ({rlen}字)"
+        preview = result.strip().replace("\n", " ")[:60]
+        result_line = f"↳ {preview}{'…' if rlen > 60 else ''} ({rlen:,}c)"
         if _tool_msg_id and edit_fn and _tool_msg_text:
             try:
                 updated = f"{_tool_msg_text}\n{result_line}"
                 await edit_fn(_tool_msg_id, updated)
             except Exception:
                 if send_fn:
-                    await send_fn(f"   {result_line}")
+                    await send_fn(result_line)
         elif send_fn:
-            await send_fn(f"   {result_line}")
+            await send_fn(result_line)
         _tool_msg_id = None
         _tool_msg_text = ""
 
@@ -195,6 +195,14 @@ async def chat_with_tools(
     sampling = dict(getattr(provider, "sampling_params", {}))
     tool_names = [d.get("function", {}).get("name", "?") for d in (tool_defs or [])]
 
+    # Per-iteration token usage callback
+    async def _on_iter_usage(usage: dict) -> None:
+        total = usage.get("total_tokens", 0)
+        if total > 0 and send_fn:
+            p = usage.get("prompt_tokens", 0)
+            c = usage.get("completion_tokens", 0)
+            await send_fn(f"`⚡ {p}+{c}={total} tok`")
+
     result = await tool_loop(
         provider=provider,
         messages=messages,
@@ -206,6 +214,7 @@ async def chat_with_tools(
         metadata=trace_metadata,
         on_tool_start=on_tool_start_override or default_start,
         on_tool_result=on_tool_result_override or default_result,
+        on_iteration_usage=_on_iter_usage,
         on_content_delta=on_content_delta,
         on_content_reset=on_content_reset,
         clean_response=clean_response,

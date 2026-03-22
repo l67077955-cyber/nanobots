@@ -13,7 +13,7 @@ from loguru import logger
 
 from nanobot.groupchat import display as _d
 from nanobot.groupchat.streaming import StreamingDisplay
-from nanobot.groupchat.utils import log_request
+from nanobot.groupchat.utils import build_tool_log, log_request
 
 
 async def agent_speak(
@@ -131,9 +131,17 @@ async def agent_speak(
 
         # ── Final display ──
         if content:
-            engine._add_message(agent_name, content)
+            history_content = content + build_tool_log(stats.get("tool_calls_detail", []))
+            engine._add_message(agent_name, history_content)
+            # Append token usage to displayed reply
+            tok = stats.get("tokens", {})
+            total = tok.get("total", 0)
+            display_content = content
+            if total > 0:
+                p, c = tok.get("prompt", 0), tok.get("completion", 0)
+                display_content = f"{content}\n\n`📊 {p}+{c}={total} tok`"
             if not silent:
-                await stream.finalize(content, fallback_send=engine._send)
+                await stream.finalize(display_content, fallback_send=engine._send)
         elif not silent:
             await stream.finalize("", fallback_send=engine._send)
             logger.warning("Agent {} returned empty content", agent_name)

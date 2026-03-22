@@ -128,6 +128,7 @@ async def tool_loop(
     # ── Callbacks ──
     on_tool_start: Callable[[str, dict], Awaitable[None]] | None = None,
     on_tool_result: Callable[[str, str, str], Awaitable[None]] | None = None,
+    on_iteration_usage: Callable[[dict], Awaitable[None]] | None = None,
     on_thought: Callable[[str], Awaitable[None]] | None = None,
     on_content_delta: Callable[[str], Awaitable[None]] | None = None,
     on_content_reset: Callable[[], Awaitable[None]] | None = None,
@@ -150,6 +151,11 @@ async def tool_loop(
         tool_defs = tool_registry.get_definitions()
     if not tool_defs:
         tool_defs = None  # provider expects None, not []
+
+    # Second-layer permission: set of allowed tool names for execution guard
+    _allowed_tools: set[str] | None = None
+    if tool_defs is not None:
+        _allowed_tools = {d.get("function", {}).get("name", "") for d in tool_defs}
 
     _build = build_message or build_assistant_message
     _can_stream = on_content_delta and hasattr(provider, "chat_stream")
@@ -253,6 +259,9 @@ async def tool_loop(
         )
 
         if response.has_tool_calls:
+            # Notify per-iteration token usage (before tool execution)
+            if on_iteration_usage and usage:
+                await on_iteration_usage(usage)
             # If content was streamed before tool calls were detected,
             # signal caller to clear the stale partial text from display
             if _can_stream and response.content and on_content_reset:
@@ -322,6 +331,20 @@ async def tool_loop(
                             "content": tool_result[:result_max_chars],
                         })
                         continue
+
+                # ── Permission guard: block unauthorized tool calls ──
+                if _allowed_tools is not None and tc.name not in _allowed_tools:
+                    tool_result = (
+                        f"BLOCKED: 你没有 {tc.name} 的使用权限。"
+                        f"可用工具: {', '.join(sorted(_allowed_tools))}"
+                    )
+                    logger.warning("tool_loop: BLOCKED unauthorized call: {}", tc.name)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": tool_result,
+                    })
+                    continue
 
                 if on_tool_start:
                     await on_tool_start(tc.name, tc.arguments)

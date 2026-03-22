@@ -124,7 +124,7 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
                 display_content = content
                 if total > 0:
                     p, c = tok.get("prompt", 0), tok.get("completion", 0)
-                    display_content = f"{content}\n\n`{p}+{c}={total} tok`"
+                    display_content = f"{content}\n\n`📊 {p}+{c}={total} tok`"
                 await stream.finalize(display_content, fallback_send=engine._send)
                 last_response = content
             else:

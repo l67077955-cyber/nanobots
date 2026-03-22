@@ -683,6 +683,7 @@ class LiteLLMProvider(LLMProvider):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
+            kwargs["parallel_tool_calls"] = True
 
         if metadata:
             kwargs["metadata"] = metadata
@@ -829,6 +830,7 @@ class LiteLLMProvider(LLMProvider):
             messages, tools, model, max_tokens, reasoning_effort, metadata, api_base, api_key,
         )
         kwargs["stream"] = True
+        kwargs["stream_options"] = {"include_usage": True}
 
         t0 = _time.time()
         try:

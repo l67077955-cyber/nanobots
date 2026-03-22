@@ -83,17 +83,10 @@ async def run_loop(engine: Any) -> None:
             engine._round = rounds
 
             # Determine speaking order
-            current_agents = list(engine._active_agents)
-            if engine._leader and engine._leader in current_agents:
-                others = [a for a in current_agents if a != engine._leader]
-                speak_order = others + [engine._leader]
-            else:
-                speak_order = current_agents
+            speak_order = list(engine._active_agents)
 
             # Dispatch to appropriate mode
-            if engine._leader and engine._leader in current_agents and len(others) > 0:
-                await engine._orchestra_round(speak_order)
-            elif engine._mode == "broadcast" and not engine._leader:
+            if engine._mode == "broadcast":
                 from nanobot.groupchat.broadcast import broadcast_round
                 await broadcast_round(speak_order, engine, engine._mailbox)
             else:
@@ -102,7 +95,7 @@ async def run_loop(engine: Any) -> None:
                     if not engine._running or name not in engine._active_agents:
                         break
                     model_short = engine.registry.get(name, {}).get("model", "?").split("/")[-1]
-                    await engine._send(_d.thinking_msg(name, model_short, leader=engine._leader, idx=si+1, total=len(speak_order)))
+                    await engine._send(_d.thinking_msg(name, model_short, idx=si+1, total=len(speak_order)))
                     await asyncio.sleep(engine.config.auto_reply_delay)
                     await engine._agent_speak(name)
 

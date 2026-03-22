@@ -3544,11 +3544,24 @@ class TelegramChannel(BaseChannel):
                 # inject() will lazy-start the loop if not running
                 self._groupchat_engine.inject(content)
             else:
-                # 1 agent: direct chat (synchronous)
-                response = await self._groupchat_engine.direct_chat(content)
-                if response:
-                    await self._gc_send(str_chat_id, response)
-                self._stop_typing(str_chat_id)
+                # 1 agent: direct chat with interjection support
+                engine = self._groupchat_engine
+                if engine.direct_chat_inject(content):
+                    # Agent is mid-response — interjection queued
+                    pass
+                else:
+                    # No active chat — start a background task
+                    async def _run_direct(msg: str, cid: str) -> None:
+                        try:
+                            response = await engine.direct_chat(msg)
+                            if response:
+                                await self._gc_send(cid, response)
+                        finally:
+                            self._stop_typing(cid)
+                            engine._direct_chat_task = None
+                    engine._direct_chat_task = asyncio.create_task(
+                        _run_direct(content, str_chat_id),
+                    )
             return
 
         # Engine exists but no active agents — don't fall through to main loop

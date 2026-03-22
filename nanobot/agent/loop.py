@@ -24,7 +24,7 @@ from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
-from nanobot.groupchat.chatroom_tools import SmartFetchTool
+from nanobot.groupchat.chatroom_tools import SmartFetchTool, SmartSearchTool
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider
@@ -128,7 +128,8 @@ class AgentLoop:
             restrict_to_workspace=self.restrict_to_workspace,
             path_append=self.exec_config.path_append,
         ))
-        self.tools.register(WebSearchTool(config=self.web_search_config, proxy=self.web_proxy))
+        raw_search = WebSearchTool(config=self.web_search_config, proxy=self.web_proxy)
+        self.tools.register(SmartSearchTool(raw_search, provider=self.provider))
         raw_fetch = WebFetchTool(proxy=self.web_proxy)
         self.tools.register(SmartFetchTool(raw_fetch, provider=self.provider))
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
@@ -213,6 +214,14 @@ class AgentLoop:
                 hint = self._tool_hint_single(name, args)
                 await on_progress(hint, tool_hint=True)
 
+        async def _on_iter_usage(usage: dict) -> None:
+            if on_progress:
+                total = usage.get("total_tokens", 0)
+                if total > 0:
+                    p = usage.get("prompt_tokens", 0)
+                    c = usage.get("completion_tokens", 0)
+                    await on_progress(f"`⚡ {p}+{c}={total} tok`")
+
         result = await tool_loop(
             provider=self.provider,
             messages=initial_messages,
@@ -221,6 +230,7 @@ class AgentLoop:
             max_iterations=self.max_iterations,
             on_thought=_on_thought,
             on_tool_start=_on_tool_start,
+            on_iteration_usage=_on_iter_usage,
             build_message=build_assistant_message,
         )
 
@@ -432,7 +442,7 @@ class AgentLoop:
         prompt = token_usage.get("prompt", 0)
         completion = token_usage.get("completion", 0)
         if total > 0:
-            final_content = f"{final_content}\n\n`{prompt}+{completion}={total} tok`"
+            final_content = f"{final_content}\n\n`📊 {prompt}+{completion}={total} tok`"
 
         self._save_turn(session, all_msgs, 1 + len(history))
         self.sessions.save(session)
