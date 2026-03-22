@@ -362,14 +362,21 @@ async def tool_loop(
 
                 # Cache result for dedup
                 if dedup_key is not None and tc_error is None:
-                    _seen_calls[dedup_key] = (tool_result or "")[:result_max_chars]
+                    if isinstance(tool_result, list):
+                        _seen_calls[dedup_key] = json.dumps(tool_result, ensure_ascii=False)[:result_max_chars]
+                    else:
+                        _seen_calls[dedup_key] = (tool_result or "")[:result_max_chars]
 
                 # Record detail with timestamps
+                if isinstance(tool_result, list):
+                    _result_str = json.dumps(tool_result, ensure_ascii=False)
+                else:
+                    _result_str = tool_result or ""
                 result.tool_calls_detail.append({
                     "name": tc.name,
                     "args": args_str[:200],
-                    "result_len": len(tool_result) if tool_result else 0,
-                    "result_preview": (tool_result or "")[:4000],
+                    "result_len": len(_result_str),
+                    "result_preview": _result_str[:4000],
                     "timestamp": _time.strftime("%H:%M:%S"),
                     "duration": tc_duration,
                     "success": tc_error is None,
@@ -380,11 +387,15 @@ async def tool_loop(
                 if on_tool_result:
                     await on_tool_result(tc.name, tc.id, tool_result)
 
-                # Append tool result (truncated)
+                # Append tool result (truncated for str, passed through for multimodal list)
+                if isinstance(tool_result, list):
+                    tool_content = tool_result
+                else:
+                    tool_content = (tool_result or "")[:result_max_chars]
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": (tool_result or "")[:result_max_chars],
+                    "content": tool_content,
                 })
         else:
             # Text response — done
