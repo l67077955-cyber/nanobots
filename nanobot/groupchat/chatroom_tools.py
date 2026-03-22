@@ -320,11 +320,12 @@ class SmartSearchTool(Tool):
             nano_c = usage.get("completion_tokens", 0)
             nano_t = usage.get("total_tokens", 0)
             saved = len(raw_results) - len(summary)
-            tok_info = f" ⚡nano {nano_p}+{nano_c}={nano_t}" if nano_t else ""
-            logger.info("SmartSearch: {}c → {}c (nano {}tok)", len(raw_results), len(summary), nano_t)
+            pct = round(saved / len(raw_results) * 100) if raw_results else 0
+            tok_info = f" | nano in:{nano_p} out:{nano_c} Σ{nano_t}" if nano_t else ""
+            logger.info("SmartSearch: {}c → {}c -{}% (nano {}tok)", len(raw_results), len(summary), pct, nano_t)
             return (
                 f"{summary}\n\n"
-                f"`📦 AI摘要 {len(raw_results)}→{len(summary)}字 (省{saved}字){tok_info}`"
+                f"`[nano:search] {len(raw_results)}→{len(summary)}c -{pct}%{tok_info}`"
             )
         return None
 
@@ -393,9 +394,10 @@ class SmartFetchTool(Tool):
                 nano_c = nano_usage.get("completion_tokens", 0)
                 nano_t = nano_usage.get("total_tokens", 0)
                 saved = len(raw_text) - len(extracted)
-                tok_info = f" ⚡nano {nano_p}+{nano_c}={nano_t}" if nano_t else ""
-                focus_label = f" 🎯{focus[:30]}" if focus else ""
-                extracted += f"\n\n`📦 AI提取 {len(raw_text)}→{len(extracted)}字 (省{saved}字){focus_label}{tok_info}`"
+                pct = round(saved / len(raw_text) * 100) if raw_text else 0
+                tok_info = f" | nano in:{nano_p} out:{nano_c} Σ{nano_t}" if nano_t else ""
+                focus_label = f" focus=\"{focus[:30]}\"" if focus else ""
+                extracted += f"\n\n`[nano:fetch] {len(raw_text)}→{len(extracted)}c -{pct}%{focus_label}{tok_info}`"
                 result_data = {
                     "url": url,
                     "finalUrl": data.get("finalUrl", url),

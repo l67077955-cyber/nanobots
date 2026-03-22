@@ -139,7 +139,7 @@ async def agent_speak(
             display_content = content
             if total > 0:
                 p, c = tok.get("prompt", 0), tok.get("completion", 0)
-                display_content = f"{content}\n\n`📊 {p}+{c}={total} tok`"
+                display_content = f"{content}\n\n`[total] in:{p} out:{c} Σ{total}`"
             if not silent:
                 await stream.finalize(display_content, fallback_send=engine._send)
         elif not silent:

@@ -220,7 +220,7 @@ class AgentLoop:
                 if total > 0:
                     p = usage.get("prompt_tokens", 0)
                     c = usage.get("completion_tokens", 0)
-                    await on_progress(f"`⚡ {p}+{c}={total} tok`")
+                    await on_progress(f"`in:{p} out:{c} Σ{total}`")
 
         result = await tool_loop(
             provider=self.provider,
@@ -442,7 +442,7 @@ class AgentLoop:
         prompt = token_usage.get("prompt", 0)
         completion = token_usage.get("completion", 0)
         if total > 0:
-            final_content = f"{final_content}\n\n`📊 {prompt}+{completion}={total} tok`"
+            final_content = f"{final_content}\n\n`[total] in:{prompt} out:{completion} Σ{total}`"
 
         self._save_turn(session, all_msgs, 1 + len(history))
         self.sessions.save(session)

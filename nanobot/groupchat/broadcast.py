@@ -435,7 +435,7 @@ async def broadcast_round(
                     if total > 0:
                         p = usage.get("prompt_tokens", 0)
                         c = usage.get("completion_tokens", 0)
-                        await engine._send(f"`⚡ {name}: {p}+{c}={total} tok`")
+                        await engine._send(f"`{name} in:{p} out:{c} Σ{total}`")
 
                 result = await tool_loop(
                     provider=engine.provider,
@@ -496,7 +496,7 @@ async def broadcast_round(
                     total_tok = tok.get("total", 0)
                     tok_suffix = ""
                     if total_tok > 0:
-                        tok_suffix = f"\n\n`📊 {tok.get('prompt',0)}+{tok.get('completion',0)}={total_tok} tok`"
+                        tok_suffix = f"\n\n`[total] in:{tok.get('prompt',0)} out:{tok.get('completion',0)} Σ{total_tok}`"
                     await engine._send(_d.chatroom_send_msg(name, "All", content + tok_suffix, max_len=3000, leader=leader_name))
                     logger.info("Broadcast: auto-shared {} findings ({} chars)", name, len(snippet))
 

@@ -201,7 +201,7 @@ async def chat_with_tools(
         if total > 0 and send_fn:
             p = usage.get("prompt_tokens", 0)
             c = usage.get("completion_tokens", 0)
-            await send_fn(f"`⚡ {p}+{c}={total} tok`")
+            await send_fn(f"`in:{p} out:{c} Σ{total}`")
 
     result = await tool_loop(
         provider=provider,
