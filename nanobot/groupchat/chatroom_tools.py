@@ -394,7 +394,8 @@ class SmartFetchTool(Tool):
                 nano_t = nano_usage.get("total_tokens", 0)
                 saved = len(raw_text) - len(extracted)
                 tok_info = f" ⚡nano {nano_p}+{nano_c}={nano_t}" if nano_t else ""
-                extracted += f"\n\n`📦 AI提取 {len(raw_text)}→{len(extracted)}字 (省{saved}字){tok_info}`"
+                focus_label = f" 🎯{focus[:30]}" if focus else ""
+                extracted += f"\n\n`📦 AI提取 {len(raw_text)}→{len(extracted)}字 (省{saved}字){focus_label}{tok_info}`"
                 result_data = {
                     "url": url,
                     "finalUrl": data.get("finalUrl", url),
@@ -471,8 +472,9 @@ class SmartFetchTool(Tool):
             provider_name=provider_name,
         )
 
-        logger.info("SmartFetch: extracting {} via {}/{} (input={}c)",
-                     url[:60], provider_name, model, len(input_text))
+        focus_log = f" focus='{focus[:40]}'" if focus else ""
+        logger.info("SmartFetch: extracting {} via {}/{} (input={}c{})",
+                     url[:60], provider_name, model, len(input_text), focus_log)
         response = await llm.chat(messages, max_tokens=4000, temperature=0.1)
         usage = response.usage or {}
         result = response.content.strip() if response.content else None
