@@ -69,13 +69,16 @@ async def test_prompt_above_threshold_archives_until_next_user_boundary(tmp_path
     loop.sessions.save(session)
 
     token_map = {"u1": 120, "a1": 120, "u2": 120, "a2": 120, "u3": 120}
-    monkeypatch.setattr(memory_module, "estimate_message_tokens", lambda message: token_map[message["content"]])
+    monkeypatch.setattr(memory_module, "estimate_message_tokens", lambda message: token_map.get(message["content"], 10))
 
     await loop.memory_consolidator.maybe_consolidate_by_tokens(session)
 
-    archived_chunk = loop.memory_consolidator.consolidate_messages.await_args.args[0]
-    assert [message["content"] for message in archived_chunk] == ["u1", "a1", "u2", "a2"]
-    assert session.last_consolidated == 4
+    # The first consolidation call should contain the original messages being archived
+    first_call_chunk = loop.memory_consolidator.consolidate_messages.await_args_list[0].args[0]
+    assert [message["content"] for message in first_call_chunk] == ["u1", "a1", "u2", "a2"]
+    # In-place consolidation replaces messages with a summary + remaining
+    assert session.messages[0].get("consolidated") is True
+    assert session.messages[-1]["content"] == "u3"
 
 
 @pytest.mark.asyncio
@@ -111,7 +114,8 @@ async def test_consolidation_loops_until_target_met(tmp_path, monkeypatch) -> No
     await loop.memory_consolidator.maybe_consolidate_by_tokens(session)
 
     assert loop.memory_consolidator.consolidate_messages.await_count == 2
-    assert session.last_consolidated == 6
+    # In-place consolidation replaces messages rather than advancing last_consolidated
+    assert session.messages[0].get("consolidated") is True
 
 
 @pytest.mark.asyncio
@@ -148,7 +152,8 @@ async def test_consolidation_continues_below_trigger_until_half_target(tmp_path,
     await loop.memory_consolidator.maybe_consolidate_by_tokens(session)
 
     assert loop.memory_consolidator.consolidate_messages.await_count == 2
-    assert session.last_consolidated == 6
+    # In-place consolidation replaces messages rather than advancing last_consolidated
+    assert session.messages[0].get("consolidated") is True
 
 
 @pytest.mark.asyncio

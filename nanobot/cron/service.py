@@ -75,6 +75,7 @@ class CronService:
         self._store: CronStore | None = None
         self._last_mtime: float = 0.0
         self._timer_task: asyncio.Task | None = None
+        self._poll_task: asyncio.Task | None = None
         self._running = False
 
     def _load_store(self) -> CronStore:
@@ -199,6 +200,7 @@ class CronService:
         self._recompute_next_runs()
         self._save_store()
         self._arm_timer()
+        self._start_poll()
         logger.info("Cron service started with {} jobs", len(self._store.jobs if self._store else []))
 
     def stop(self) -> None:
@@ -207,6 +209,9 @@ class CronService:
         if self._timer_task:
             self._timer_task.cancel()
             self._timer_task = None
+        if self._poll_task:
+            self._poll_task.cancel()
+            self._poll_task = None
 
     def _recompute_next_runs(self) -> None:
         """Recompute next run times for all enabled jobs."""
@@ -243,6 +248,32 @@ class CronService:
                 await self._on_timer()
 
         self._timer_task = asyncio.create_task(tick())
+
+    def _start_poll(self) -> None:
+        """Start background file-polling loop.
+
+        Checks jobs.json mtime every 5 seconds so externally added jobs
+        (e.g. via cron_cli.py) are picked up even when no timer is armed.
+        """
+        async def _poll_loop():
+            while self._running:
+                await asyncio.sleep(5)
+                if not self._running:
+                    break
+                try:
+                    if self.store_path.exists():
+                        mtime = self.store_path.stat().st_mtime
+                        if mtime != self._last_mtime:
+                            logger.info("Cron: file change detected, reloading")
+                            self._store = None  # force reload
+                            self._load_store()
+                            self._recompute_next_runs()
+                            self._save_store()
+                            self._arm_timer()
+                except Exception as e:
+                    logger.warning("Cron poll error: {}", e)
+
+        self._poll_task = asyncio.create_task(_poll_loop())
 
     async def _on_timer(self) -> None:
         """Handle timer tick - run due jobs."""

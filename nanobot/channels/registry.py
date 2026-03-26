@@ -21,7 +21,7 @@ def discover_channel_names() -> list[str]:
     return [
         name
         for _, name, ispkg in pkgutil.iter_modules(pkg.__path__)
-        if name not in _INTERNAL and not ispkg
+        if name not in _INTERNAL
     ]
 
 

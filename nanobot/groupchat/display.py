@@ -198,33 +198,52 @@ def search_bar(pool: int, total: int, nodes: int) -> str:
 def chat_chain_summary(
     history: list,
     *,
-    max_preview: int = 120,
+    max_preview: int = 100,
     leader: str | None = None,
 ) -> str:
-    """Format a readable chat chain from mailbox history.
+    """Format chat history as a tree grouped by conversation threads.
 
     Output:
-        ┄ 对话链 ┄
-        1. 👑 Nanobot → Lucas: 请搜索...
-        2. 🔹 Lucas → Nanobot: 搜索结果如下...
-        3. 🔹 Ares → All: 我整理了...
+        ┄ 对话链 (8 msgs) ┄
+        👑 Nanobot
+        ├→ Lucas: 请搜索酒馆战棋…
+        │  └← Lucas: 搜索到3条结果…
+        ├→ Ares: 请分析以下数据…
+        │  └← Ares: 分析完成…
+        └→ All: 最终结论…
+        🔹 Harper
+        └→ All: 补充一点…
     """
     if not history:
         return ""
 
-    lines = ["┄ 对话链 ┄"]
-    for i, msg in enumerate(history, 1):
+    # Build per-sender thread groups
+    from collections import OrderedDict
+    threads: OrderedDict[str, list] = OrderedDict()
+    for msg in history:
         sender = msg.sender if hasattr(msg, "sender") else str(msg.get("sender", "?"))
         targets = msg.targets if hasattr(msg, "targets") else msg.get("targets", [])
         content = msg.content if hasattr(msg, "content") else str(msg.get("content", ""))
+        if sender not in threads:
+            threads[sender] = []
+        threads[sender].append((sender, targets, content))
 
-        to = ", ".join(targets) if isinstance(targets, list) else str(targets)
-        preview = content.replace("\n", " ")
-        if len(preview) > max_preview:
-            preview = preview[:max_preview] + "…"
+    # Build tree display
+    lines = [f"┄ 对话链 ({len(history)} msgs) ┄"]
 
+    for sender, msgs in threads.items():
         icon = "👑" if sender == leader else "🔹"
-        lines.append(f"  {i}. {icon} {sender} → {to}: {preview}")
+        lines.append(f"{icon} {sender}")
+
+        for i, (_, targets, content) in enumerate(msgs):
+            to = ", ".join(targets) if isinstance(targets, list) else str(targets)
+            preview = content.replace("\n", " ")
+            if len(preview) > max_preview:
+                preview = preview[:max_preview] + "…"
+
+            is_last = (i == len(msgs) - 1)
+            branch = "└" if is_last else "├"
+            lines.append(f"  {branch}→ {to}: {preview}")
 
     return "\n".join(lines)
 
@@ -258,10 +277,10 @@ def tool_call_line(agent_name: str, tool_name: str, short_arg: str = "") -> str:
 def tool_result_line(preview: str, result_len: int) -> str:
     """Format a tool result for inline display.
 
-    Returns: '↳ Results for: Trump… (1234c)'
+    Returns: '↳ Results for: Trump… (1,234字)'
     """
     ellipsis = "…" if result_len > 80 else ""
-    return f"↳ {preview}{ellipsis} ({result_len:,}c)"
+    return f"↳ {preview}{ellipsis} ({result_len:,}字)"
 
 
 # ── Tool Activity Display (broadcast mode) ───────────────────
@@ -338,12 +357,12 @@ def tool_result_brief(
         count = int(m.group(1)) if m else max(result.count("\n") // 3, 1) if result else 0
         return f"    └ {count} results"
     elif tool_name == "web_fetch":
-        return f"    └ fetched ({rlen:,}c)"
+        return f"    └ fetched ({rlen:,}字)"
     elif tool_name == "exec":
         preview = (result or "").strip().replace("\n", " ")[:55]
         return f"    └ {preview}{'…' if rlen > 55 else ''}"
     else:
-        return f"    └ ({rlen:,}c)"
+        return f"    └ ({rlen:,}字)"
 
 
 # ── Chatroom Communication Display ───────────────────────────

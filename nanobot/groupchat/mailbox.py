@@ -314,7 +314,25 @@ class MailboxHub:
             logger.warning("MailboxHub.wait: no mailbox for {}", agent_name)
             return None
 
-        # Register as waiting
+        # Fast path: if there are already messages queued, return immediately
+        # WITHOUT marking as waiting.  This prevents the all_waiting_event
+        # from firing prematurely when a teammate's message is already in the
+        # queue (e.g. auto-shared output that arrived before we entered wait).
+        if not q.empty():
+            try:
+                msg = q.get_nowait()
+                if not from_agent or msg.sender == from_agent:
+                    logger.info(
+                        "MailboxHub.wait: {} fast-path from {}: {}",
+                        agent_name, msg.sender, msg.content[:80],
+                    )
+                    return msg
+                # Wrong sender — put back and fall through to blocking wait
+                q.put_nowait(msg)
+            except asyncio.QueueEmpty:
+                pass
+
+        # Register as waiting (only if no message was immediately available)
         self._waiting.add(agent_name)
         if self._waiting >= self._active_agents and len(self._active_agents) > 0:
             logger.info("MailboxHub: all {} agents waiting — conversation done",

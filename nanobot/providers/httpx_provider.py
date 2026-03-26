@@ -357,6 +357,18 @@ class HttpxProvider(LLMProvider):
             "total_tokens": usage_raw.get("total_tokens", 0),
         }
 
+        # Extract cost (OpenRouter puts it in top-level or usage fields)
+        cost = None
+        if "cost" in data and data["cost"] is not None:
+            cost = float(data["cost"])
+        if cost is None and "cost" in usage_raw:
+            cost = float(usage_raw["cost"])
+
+        # Extract provider metadata (e.g. OpenRouter generation details)
+        provider_meta = []
+        if "provider_specific_fields" in data:
+            provider_meta.append(data["provider_specific_fields"])
+
         reasoning = msg.get("reasoning_content")
         thinking = msg.get("thinking_blocks")
 
@@ -365,6 +377,9 @@ class HttpxProvider(LLMProvider):
             tool_calls=tool_calls,
             finish_reason=finish_reason,
             usage=usage,
+            cost=cost,
+            cache_tokens=0,
+            provider_meta=provider_meta if provider_meta else None,
             reasoning_content=reasoning,
             thinking_blocks=thinking,
         )
@@ -743,7 +758,10 @@ class HttpxProvider(LLMProvider):
             latency=latency,
         )
 
-        # Yield final LLMResponse
+        # Extract cost from OpenRouter headers (available via httpx response)
+        # The OpenAI SDK doesn't expose response headers in streaming,
+        # so cost will be None for httpx_provider streaming.
+        # Cost is available via litellm_provider which reads _hidden_params.
         yield LLMResponse(
             content=full_content or None,
             tool_calls=parsed_tool_calls,

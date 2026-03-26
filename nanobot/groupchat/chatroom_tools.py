@@ -7,6 +7,7 @@ Also contains ``CachedSearchTool`` with search-tree resource management.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import threading
 from pathlib import Path
@@ -118,6 +119,9 @@ class CachedSearchTool(Tool):
         self._agent_name = agent_name
         self._cache = cache
         self._pool = search_pool
+        # Per-iteration batch tracking: concurrent calls share 1 credit
+        self._batch_lock = asyncio.Lock()
+        self._batch_spent = False
 
     @property
     def description(self):
@@ -156,7 +160,7 @@ class CachedSearchTool(Tool):
         """Normalize query for cache lookup (lowercase, strip, collapse spaces)."""
         return re.sub(r'\s+', ' ', q.lower().strip())
 
-    async def _search_one(self, query: str, count: int | None) -> str:
+    async def _search_one(self, query: str, count: int | None, *, skip_pool: bool = False) -> str:
         """Search a single query, respecting cache and pool."""
         norm_q = self._normalize_query(query)
 
@@ -170,14 +174,19 @@ class CachedSearchTool(Tool):
                 f"避免重复劳动。{pool_hint}"
             )
 
-        if self._pool:
-            if not self._pool.spend(self._agent_name):
-                return (
-                    f"BLOCKED: 你的搜索额度用完了 "
-                    f"({self._pool.agent_status(self._agent_name)})。\n"
-                    f"先产出一些分析结果，额度会自动恢复。\n"
-                    f"或请求 Leader 从其他 agent 划拨额度给你。"
-                )
+        if self._pool and not skip_pool:
+            # Use batch lock: only first concurrent call spends a credit
+            async with self._batch_lock:
+                if not self._batch_spent:
+                    if not self._pool.spend(self._agent_name):
+                        return (
+                            f"BLOCKED: 你的搜索额度用完了 "
+                            f"({self._pool.agent_status(self._agent_name)})。\n"
+                            f"先产出一些分析结果，额度会自动恢复。\n"
+                            f"或请求 Leader 从其他 agent 划拨额度给你。"
+                        )
+                    self._batch_spent = True
+                # Subsequent concurrent calls skip spending
 
         kwargs: dict = {"query": query}
         if count is not None:
@@ -193,12 +202,23 @@ class CachedSearchTool(Tool):
                       count: int | None = None, **kwargs):
         import asyncio as _asyncio
 
-        # Batch mode
+        # Batch mode: spend only 1 credit for the entire batch
         if queries:
             all_queries = list(queries)
             if query and query not in all_queries:
                 all_queries.insert(0, query)
-            tasks = [self._search_one(q, count) for q in all_queries]
+
+            # Spend 1 credit for the whole batch (not per-query)
+            if self._pool:
+                if not self._pool.spend(self._agent_name):
+                    return (
+                        f"BLOCKED: 你的搜索额度用完了 "
+                        f"({self._pool.agent_status(self._agent_name)})。\n"
+                        f"先产出一些分析结果，额度会自动恢复。\n"
+                        f"或请求 Leader 从其他 agent 划拨额度给你。"
+                    )
+
+            tasks = [self._search_one(q, count, skip_pool=True) for q in all_queries]
             results = await _asyncio.gather(*tasks)
             parts = []
             for q, r in zip(all_queries, results):
@@ -208,7 +228,10 @@ class CachedSearchTool(Tool):
         # Single mode (original behaviour)
         if not query:
             return "Error: 必须提供 query 或 queries 参数"
-        return await self._search_one(query, count)
+        result = await self._search_one(query, count)
+        # Reset batch flag after single call completes
+        self._batch_spent = False
+        return result
 
 
 class SmartSearchTool(Tool):
@@ -298,9 +321,14 @@ class SmartSearchTool(Tool):
             )
 
         prompt = (
-            "你是搜索结果摘要助手。请将以下搜索结果精炼为简洁的摘要，"
-            "保留所有关键事实、数据、URL链接和结论。"
-            "去掉重复和无关内容，用清晰的中文输出。\n\n"
+            "你是搜索结果摘要助手。严格遵守以下规则：\n"
+            "1. 只输出搜索结果中 **已有** 的信息，绝对不要添加、推测或编造任何内容。\n"
+            "2. 每条事实必须标注来源编号（如 [1], [2]），对应原始搜索结果的序号。\n"
+            "3. 完整保留所有 URL 链接，不要省略或改写。\n"
+            "4. 关键数据（数字、日期、版本号、人名）必须原文照抄，不得改写。\n"
+            "5. 用与原始结果相同的语言输出（英文结果用英文，中文结果用中文）。\n"
+            "6. 如果信息相互矛盾，保留所有版本并标注各自来源。\n"
+            "7. 去掉重复内容，合并同一来源的信息。\n\n"
             f"{context_hint}"
             f"--- 搜索结果 ({len(raw_results)}字) ---\n"
             f"{raw_results[:8000]}\n--- 结束 ---"
@@ -344,7 +372,7 @@ class SmartFetchTool(Tool):
     )
 
     def __init__(self, original: Tool, reader_model: str = "openai/gpt-4.1-nano",
-                 provider: Any = None, max_extract_chars: int = 30000) -> None:
+                 provider: Any = None, max_extract_chars: int = 12000) -> None:
         self._original = original
         self._reader_model = reader_model
         self._provider = provider  # LiteLLMProvider instance
@@ -437,10 +465,13 @@ class SmartFetchTool(Tool):
             )
 
         prompt = (
-            "你是一个网页内容提取助手。请从以下网页内容中提取关键信息，"
-            "保留所有重要的事实、数据、日期、链接和结论。"
-            "去掉导航菜单、广告、页脚等无关内容。"
-            "用简洁清晰的中文输出，保持原文的关键细节。\n\n"
+            "你是一个网页内容提取助手。严格遵守以下规则：\n"
+            "1. 只提取网页中 **已有** 的信息，绝对不要添加、推测或编造。\n"
+            "2. 关键数据（数字、日期、代码、人名、专有名词）必须原文照抄。\n"
+            "3. 保留所有重要的链接 URL。\n"
+            "4. 去掉导航菜单、广告、页脚、cookie 提示等无关内容。\n"
+            "5. 用与原文相同的语言输出（英文网页用英文，中文网页用中文）。\n"
+            "6. 如果不确定某信息是否重要，保留它。\n\n"
             f"{focus_hint}"
             f"URL: {url}\n\n"
             f"--- 网页内容 ---\n{input_text}\n--- 结束 ---"
@@ -512,6 +543,37 @@ class SmartFetchTool(Tool):
         return {}
 
 
+class LeaderGate:
+    """Enforces leader-gated speaking order.
+
+    Each non-leader agent may send at most 1 message between consecutive
+    leader messages.  When the leader sends a message, all counters reset.
+    """
+
+    def __init__(self, leader_name: str) -> None:
+        self._leader = leader_name
+        # {agent_name: sends_since_leader_spoke}
+        self._counts: dict[str, int] = {}
+
+    def try_send(self, agent_name: str) -> bool:
+        """Return True if the agent is allowed to send."""
+        if agent_name == self._leader:
+            return True
+        return self._counts.get(agent_name, 0) < 1
+
+    def record_send(self, agent_name: str) -> None:
+        """Record that agent sent a message."""
+        if agent_name == self._leader:
+            # Leader spoke — reset everyone's counter
+            for k in self._counts:
+                self._counts[k] = 0
+        else:
+            self._counts[agent_name] = self._counts.get(agent_name, 0) + 1
+
+    @property
+    def leader(self) -> str:
+        return self._leader
+
 class ChatroomSendTool(Tool):
     """Send a message to one or more agents in the group chat.
 
@@ -520,11 +582,15 @@ class ChatroomSendTool(Tool):
     user with ``"User"``.
     """
 
-    def __init__(self, mailbox: MailboxHub, agent_name: str = "", pool: ConversationPool | None = None) -> None:
+    def __init__(self, mailbox: MailboxHub, agent_name: str = "", pool: ConversationPool | None = None,
+                 search_pool: "SearchPool | None" = None,
+                 leader_gate: LeaderGate | None = None) -> None:
         self._mailbox = mailbox
         self._agent_name = agent_name  # Set per-round by the engine
         self._pool = pool
+        self._search_pool = search_pool  # for credit recovery on successful sends
         self._last_received_from: str | None = None  # track who we last received from
+        self._leader_gate = leader_gate
 
     def set_agent(self, name: str) -> None:
         """Set which agent is using this tool instance."""
@@ -594,6 +660,14 @@ class ChatroomSendTool(Tool):
         if not targets:
             return "⚠️ 不支持发送给 User。你的文字回复会自动展示给用户，直接写在回复里即可。"
 
+        # ── Leader gate: non-leader agents limited to 1 message between leader messages ──
+        if self._leader_gate and not self._leader_gate.try_send(self._agent_name):
+            leader = self._leader_gate.leader
+            return (
+                f"⚠️ 你已发过 1 条消息，必须等待 Leader ({leader}) 发言后才能再发。"
+                f"请用 wait() 等待 {leader} 的回复。"
+            )
+
         # Deduplicate: "All" already includes everyone, strip individual names
         if any(t.lower() == "all" for t in targets):
             targets = ["All"]
@@ -618,11 +692,23 @@ class ChatroomSendTool(Tool):
 
         delivered = self._mailbox.send(self._agent_name, targets, message)
 
+        # Record send in leader gate
+        if self._leader_gate:
+            self._leader_gate.record_send(self._agent_name)
+
+        # Count successful sends as "output" for search credit recovery
+        if delivered > 0 and self._search_pool:
+            self._search_pool.on_output(self._agent_name)
+
         avail_hint = ""
         if self._pool:
             avail_hint = f" [{self._pool.used}/{self._pool.capacity} threads]"
+        search_hint = ""
+        if self._search_pool:
+            c = self._search_pool.agent_credits(self._agent_name)
+            search_hint = f" [🔍{c}]"
         target_str = ", ".join(targets)
-        return f"✅ sent to {target_str} ({delivered} delivered){avail_hint}"
+        return f"✅ sent to {target_str} ({delivered} delivered){avail_hint}{search_hint}"
 
 
 class WaitTool(Tool):

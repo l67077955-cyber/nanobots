@@ -142,7 +142,7 @@ async def broadcast_round(
     from nanobot.agent.tools.registry import ToolRegistry
     from nanobot.agent.tools.base import Tool
     from nanobot.groupchat.chatroom_tools import (
-        ChatroomSendTool, WaitTool, CachedSearchTool, SearchPool,
+        ChatroomSendTool, WaitTool, CachedSearchTool, SearchPool, LeaderGate,
     )
 
     agent_tool_registries: dict[str, ToolRegistry] = {}
@@ -154,6 +154,11 @@ async def broadcast_round(
         initial_per_agent=gc_settings["search_initial"],
         earn_interval=gc_settings["search_earn_interval"],
     )
+
+    # ── Shared leader gate (enforces 1-msg-then-wait for non-leaders) ──
+    leader_gate: LeaderGate | None = None
+    if leader_name:
+        leader_gate = LeaderGate(leader_name)
 
     for name in exec_agents:
         # Get per-agent registry (respects workspace_scope), clone and add chatroom tools
@@ -168,7 +173,10 @@ async def broadcast_round(
                 elif tool_name not in ("chatroom_send", "wait"):
                     registry.register(tool)
         # Add chatroom tools (per-agent instances with ConversationPool)
-        send_tool = ChatroomSendTool(mailbox=mailbox, agent_name=name, pool=pool)
+        send_tool = ChatroomSendTool(
+            mailbox=mailbox, agent_name=name, pool=pool,
+            search_pool=search_pool, leader_gate=leader_gate,
+        )
         wait_tool = WaitTool(mailbox=mailbox, agent_name=name, pool=pool)
         wait_tool._send_tool = send_tool
         registry.register(send_tool)
@@ -284,10 +292,14 @@ async def broadcast_round(
                 messages.insert(max(len(messages) - 1, 0), {
                     "role": "system",
                     "content": (
-                        f"[团队协作模式]\n"
-                        f"Leader {leader_name} 会通过 chatroom_send 给你分配任务。\n"
-                        f"先独立思考并开始工作，同时留意 Leader 的指令。\n"
-                        f"完成工作后用 chatroom_send 向 Leader 汇报结果。"
+                        f"[团队协作模式 — 严格发言规则]\n"
+                        f"Leader {leader_name} 会通过 chatroom_send 给你分配任务。\n\n"
+                        f"━━ 发言规则（强制执行）━━\n"
+                        f"1. 你每次只能发送 **1 条消息**，然后必须 wait() 等待 Leader 发言\n"
+                        f"2. Leader 发言后你的配额重置，可以再发 1 条\n"
+                        f"3. 违反此规则的消息会被系统拦截\n"
+                        f"4. 有问题必须向 Leader 提出并等待回复\n\n"
+                        f"正确流程: 做工作 → chatroom_send(结果) → wait() → 收到 Leader 指令 → 继续"
                     ),
                 })
 
@@ -323,6 +335,7 @@ async def broadcast_round(
         # No streaming edits — each event gets its own message.
         # This prevents messages from being swallowed by concurrent edits.
         _tool_lines: list[str] = []
+        _pending_searches: list[str] = []  # Buffer for batching search displays
 
         badge = f" [{agent_idx + 1}/{total}]"
         _header = f"◍ {name}{badge}: "
@@ -331,15 +344,30 @@ async def broadcast_round(
         await engine._send(_d.thinking_msg(name, model_short, leader=leader_name, idx=agent_idx + 1, total=total))
 
 
+        async def _flush_searches() -> None:
+            """Flush buffered search tool lines as one combined message."""
+            if _pending_searches:
+                combined = "\n".join(_pending_searches)
+                await engine._send(combined)
+                _pending_searches.clear()
+
         async def _on_tool_start(tool_name: str, args: dict) -> None:
             if not isinstance(args, dict):
                 args = {}
             # Persist tool_call event to session log
             engine._save_event("tool_call", agent=name, extra={
                 "tool": tool_name,
-                "args": {k: (v[:200] if isinstance(v, str) else v) for k, v in args.items()},
+                "args": {k: (v if isinstance(v, str) else v) for k, v in args.items()},
             })
+            # Full args logging to server log
+            import json as _json_log
+            logger.info(
+                "broadcast [{}] tool_call: {}({})",
+                name, tool_name, _json_log.dumps(args, ensure_ascii=False),
+            )
             if tool_name == "chatroom_send":
+                # Flush any buffered searches before showing chatroom_send
+                await _flush_searches()
                 to = args.get("to", "?")
                 msg_full = (args.get("message", "") or "")
                 to_str = ", ".join(to) if isinstance(to, list) else str(to)
@@ -350,13 +378,29 @@ async def broadcast_round(
                     cost = len(to) if isinstance(to, list) else 1
                 line = f"{name}: chatroom_send({to_str}) [cost={cost}]"
                 _tool_lines.append(line)
-                await engine._send(_d.chatroom_send_msg(name, to_str, msg_full, leader=leader_name))
+                # Build stats suffix: token + latency
+                import time as _t
+                elapsed = _t.time() - _cycle_t0
+                tok_t = _cycle_usage.get("total_tokens", 0)
+                stats_suffix = ""
+                if tok_t > 0:
+                    p = _cycle_usage["prompt_tokens"]
+                    c = _cycle_usage["completion_tokens"]
+                    stats_suffix = f"\n`in:{p} out:{c} Σ{tok_t} · {elapsed:.1f}s`"
+                await engine._send(_d.chatroom_send_msg(name, to_str, msg_full + stats_suffix, leader=leader_name))
             elif tool_name == "wait":
+                await _flush_searches()
                 from_who = args.get("from_agent", "")
                 line = f"{name}: wait({'来自 ' + from_who if from_who else '消息'})"
                 _tool_lines.append(line)
+            elif tool_name in ("web_search", "web_fetch"):
+                # Buffer search tools — will be flushed together
+                line = _d.tool_activity_msg(name, tool_name, args, leader=leader_name)
+                _tool_lines.append(line)
+                _pending_searches.append(line)
             else:
-                # Show tool activity to user
+                # Non-search tool: flush any pending searches first
+                await _flush_searches()
                 line = _d.tool_activity_msg(name, tool_name, args, leader=leader_name)
                 _tool_lines.append(line)
                 await engine._send(line)
@@ -368,6 +412,11 @@ async def broadcast_round(
                 "result_len": len(result) if result else 0,
                 "success": not (result or "").startswith("Error:"),
             })
+            # Full result logging to server log
+            logger.info(
+                "broadcast [{}] tool_result: {} ({}c): {}",
+                name, tool_name, len(result) if result else 0, result,
+            )
             # Thread visualization: show status after chatroom_send
             if tool_name == "chatroom_send" and result:
                 if "BLOCKED:" in result or "threads]" in result:
@@ -383,11 +432,15 @@ async def broadcast_round(
             # Show wait results
             elif tool_name == "wait" and result and not result.startswith("⏰"):
                 await engine._send(_d.chatroom_wait_msg(name, result, leader=leader_name))
-            # Show tool result brief for network/exec tools
-            elif tool_name in ("web_search", "web_fetch", "exec") and result:
+            # Buffer search/fetch results — append to pending batch
+            elif tool_name in ("web_search", "web_fetch") and result:
                 brief = _d.tool_result_brief(name, tool_name, result)
                 if tool_name == "web_search" and search_pool:
-                    brief += f"\n    🔍 {search_pool.status()}"
+                    brief += f"  🔍 {search_pool.status()}"
+                _pending_searches.append(brief)
+            elif tool_name == "exec" and result:
+                await _flush_searches()
+                brief = _d.tool_result_brief(name, tool_name, result)
                 await engine._send(brief)
 
         # ── Determine tool definitions ──
@@ -429,13 +482,13 @@ async def broadcast_round(
         try:
             while cycle < MAX_CYCLES:
                 cycle += 1
+                import time as _t
+                _cycle_t0 = _t.time()
+                _cycle_usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
                 async def _on_iter_usage(usage: dict) -> None:
-                    total = usage.get("total_tokens", 0)
-                    if total > 0:
-                        p = usage.get("prompt_tokens", 0)
-                        c = usage.get("completion_tokens", 0)
-                        await engine._send(f"`{name} in:{p} out:{c} Σ{total}`")
+                    for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                        _cycle_usage[k] += usage.get(k, 0)
 
                 result = await tool_loop(
                     provider=engine.provider,
@@ -463,6 +516,9 @@ async def broadcast_round(
                     result_max_chars=20_000,
                 )
 
+                # Flush any remaining buffered search lines
+                await _flush_searches()
+
                 content = result.content or ""
                 is_error = result.finish_reason == "error"
                 latency = result.latency
@@ -480,23 +536,54 @@ async def broadcast_round(
 
                 # Record final text in history
                 if content:
+                    logger.info(
+                        "broadcast [{}] cycle {} output ({}c): {}",
+                        name, cycle, len(content), content,
+                    )
                     history_content = content + build_tool_log(result.tool_calls_detail)
                     engine._add_message(name, history_content)
                     # Track output for search pool credit recovery
                     search_pool.on_output(name)
 
+                # ── Anti-idle guard: force re-entry if agent did nothing ──
+                # If this is cycle 1 and the agent produced no content and used
+                # no substantive tools (web_search, web_fetch, exec, etc.),
+                # the model is being lazy. Inject a forcing prompt and retry.
+                _substantive_tools = {"web_search", "web_fetch", "exec", "read_file", "write_file"}
+                if cycle == 1 and not content and not (set(result.tools_used or []) & _substantive_tools):
+                    logger.warning(
+                        "Broadcast: {} idle on cycle 1 (no content, tools={}), forcing retry",
+                        name, result.tools_used,
+                    )
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            f"[⚠️ 你（{name}）还没有采取任何行动！]\n"
+                            "你必须立即使用工具（web_search, web_fetch, exec 等）来回答用户的最新问题。\n"
+                            "不要直接从之前的对话中回答 — 用户需要新的搜索结果。\n"
+                            "禁止调用 wait() — 先执行工作再交流。"
+                        ),
+                    })
+                    continue  # skip auto-wait, re-enter tool_loop
+
                 # ── Auto-wait: enter idle state ──
-                # If agent never used chatroom_send, auto-share its findings
+                # If agent never used chatroom_send (across ALL cycles), auto-share its findings
                 # and display to user via chatroom format
-                if content and "chatroom_send" not in (result.tools_used or []):
+                if content and "chatroom_send" not in all_tools_used:
                     snippet = content[:500]
                     mailbox.send(name, ["All"], snippet)
-                    # Append token usage to displayed reply
+                    # Append token + latency to displayed reply
                     tok = result.token_usage
                     total_tok = tok.get("total", 0)
                     tok_suffix = ""
                     if total_tok > 0:
-                        tok_suffix = f"\n\n`[total] in:{tok.get('prompt',0)} out:{tok.get('completion',0)} Σ{total_tok}`"
+                        import time as _t
+                        elapsed = _t.time() - _cycle_t0
+                        cost = result.cost or 0
+                        cache_t = result.cache_tokens or 0
+                        cost_str = f" ${cost:.4f}" if cost else ""
+                        cache_str = f" 🔵{cache_t}" if cache_t else ""
+                        tok_suffix = f"\n`in:{tok.get('prompt',0)} out:{tok.get('completion',0)} Σ{total_tok} · {elapsed:.1f}s{cost_str}{cache_str}`"
                     await engine._send(_d.chatroom_send_msg(name, "All", content + tok_suffix, max_len=3000, leader=leader_name))
                     logger.info("Broadcast: auto-shared {} findings ({} chars)", name, len(snippet))
 
@@ -614,7 +701,17 @@ async def broadcast_round(
 
         # Watch for all-agents-waiting (natural conversation end)
         async def _watch_all_waiting() -> None:
-            await mailbox.all_waiting_event.wait()
+            while True:
+                await mailbox.all_waiting_event.wait()
+                # Grace period: wait 5s and re-check to avoid
+                # premature termination when agents briefly pass
+                # through wait() between processing cycles
+                await asyncio.sleep(5)
+                if mailbox._waiting >= mailbox._active_agents and len(mailbox._active_agents) > 0:
+                    return  # truly all idle
+                # Someone woke up — reset and watch again
+                mailbox._all_waiting.clear()
+                logger.info("Broadcast: idle sentinel reset — agent(s) reactivated")
 
         # Watch for leader end_discussion signal
         async def _watch_leader_end() -> None:
@@ -713,27 +810,43 @@ async def broadcast_round(
     mailbox.clear()
 
     # ═══════════════════════════════════════════════════════════════
-    # Fallback Synthesis: only if leader was interrupted without output
+    # Post-round synthesis: Leader always evaluates; no-leader gets auto-summary
     # ═══════════════════════════════════════════════════════════════
-    leader_had_output = any(name == leader_name and content for name, content, _ in results)
-
-    if leader_name and leader_name in agents and not leader_had_output:
+    if leader_name and leader_name in agents:
         leader_model = engine.registry[leader_name]["model"]
         model_short = leader_model.split("/")[-1]
-        await engine._send(f"★ {leader_name} ({model_short}) · 总结...")
+        await engine._send(f"━━ {leader_name} ({model_short}) · 总结 ━━")
 
-        # Collect agent outputs
+        # Collect all agent outputs (including leader's own in-round output)
         agent_outputs = []
+        leader_own_output = ""
         for name, content, _ in results:
             if content:
-                agent_outputs.append(f"[{name} 的回复]\n{content}")
+                if name == leader_name:
+                    leader_own_output = content
+                else:
+                    agent_outputs.append(f"[{name} 的回复]\n{content}")
+
+        # Also include chatroom messages for richer context
+        chat_msgs = []
+        for msg in mailbox.history:
+            sender = msg.sender if hasattr(msg, "sender") else str(msg.get("sender", "?"))
+            content_text = msg.content if hasattr(msg, "content") else str(msg.get("content", ""))
+            chat_msgs.append(f"[{sender}]: {content_text[:500]}")
 
         synthesis_context = (
             f"[Leader 最终总结]\n"
             f"原始问题: {user_question}\n\n"
-            f"各 agent 结果:\n" + "\n\n".join(agent_outputs) + "\n\n"
-            f"请基于以上结果，给出完整、结构化的最终回答。\n"
-            f"整合所有发现，去重，纠正错误信息。不要简单罗列，要有逻辑和结论。"
+        )
+        if agent_outputs:
+            synthesis_context += f"各 agent 结果:\n" + "\n\n".join(agent_outputs) + "\n\n"
+        if chat_msgs:
+            synthesis_context += f"对话记录:\n" + "\n".join(chat_msgs) + "\n\n"
+        if leader_own_output:
+            synthesis_context += f"你之前的发言:\n{leader_own_output}\n\n"
+        synthesis_context += (
+            "请基于以上所有信息，给出完整、结构化的最终总结。\n"
+            "整合所有发现，评价各 agent 的表现，指出亮点和不足，给出结论。"
         )
 
         try:
@@ -744,6 +857,10 @@ async def broadcast_round(
         except Exception as e:
             logger.error("Leader synthesis failed: {}", e)
             await engine._send(f"✗ {leader_name} 总结失败: {e}")
+    else:
+        # No leader: auto-generate discussion summary
+        from nanobot.groupchat.run_loop import generate_summary
+        await generate_summary(engine)
 
     # ── Restore original settings (session-scoped overrides) ──
     if _original_settings:

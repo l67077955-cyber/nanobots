@@ -20,6 +20,7 @@ from typing import Any, Awaitable, Callable
 from loguru import logger
 
 from nanobot.agent.tools.registry import ToolRegistry
+from nanobot.agent.tools.summarizer import summarize_tool_output
 from nanobot.providers.base import LLMProvider, LLMResponse
 from nanobot.utils.helpers import build_assistant_message
 
@@ -65,6 +66,15 @@ class ToolLoopResult:
 
     status_code: int | None = None
     """HTTP status code on error (e.g. 429, 502)."""
+
+    cost: float = 0.0
+    """Accumulated cost across all LLM calls."""
+
+    cache_tokens: int = 0
+    """Accumulated cached prompt tokens."""
+
+    provider_meta: list[dict[str, Any]] = field(default_factory=list)
+    """Per-iteration provider metadata (model_id, provider, cost, etc.)."""
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -135,7 +145,7 @@ async def tool_loop(
     on_content_reset: Callable[[], Awaitable[None]] | None = None,
     clean_response: Callable[[str], str] | None = None,
     build_message: Callable[..., dict[str, Any]] | None = None,
-    result_max_chars: int = 8000,
+    result_max_chars: int | None = None,
 ) -> ToolLoopResult:
     """Run the LLM → tool → repeat loop.
 
@@ -147,6 +157,14 @@ async def tool_loop(
         When provided, the last LLM call uses streaming; tool-call iterations
         still use ``chat_with_retry()`` (non-streaming).
     """
+
+    # ── Resolve dynamic defaults ──
+    if result_max_chars is None:
+        try:
+            from nanobot.groupchat.history_settings import summarize_threshold
+            result_max_chars = summarize_threshold()
+        except Exception:
+            result_max_chars = 8000
 
     if tool_defs is None:
         tool_defs = tool_registry.get_definitions()
@@ -167,39 +185,64 @@ async def tool_loop(
     response: LLMResponse | None = None
     _seen_calls: dict[str, str] = {}  # "name:args_json" -> cached result
 
+    # Resolve context_window_tokens for pruning (from history_settings or default)
+    try:
+        from nanobot.groupchat.history_settings import get_context_window_tokens
+        _ctx_window = get_context_window_tokens()
+    except Exception:
+        _ctx_window = 200_000
+
     while iteration < max_iterations:
         iteration += 1
 
-        # ── Context breakdown before LLM call (only when debug enabled) ──
-        if metadata and metadata.get("debug_context"):
-            _ctx_total = 0
-            _ctx_parts: list[str] = []
-            for _ci, _cm in enumerate(messages):
-                _role = _cm.get("role", "?")
-                _name = _cm.get("name", "")
-                _content = _cm.get("content") or ""
-                _tc = _cm.get("tool_calls")
-                _tcid = _cm.get("tool_call_id", "")
-                if isinstance(_content, str):
-                    _clen = len(_content)
-                elif isinstance(_content, list):
-                    _clen = sum(len(b.get("text", "")) for b in _content if isinstance(b, dict))
-                else:
-                    _clen = 0
-                _ctx_total += _clen
-                _preview = (_content[:40].replace("\n", " ") if isinstance(_content, str) else "")
-                _extra = ""
-                if _tc:
-                    _names = [t.get("function", {}).get("name", "?") if isinstance(t, dict) else "?" for t in _tc]
-                    _extra = f" tools=[{','.join(_names)}]"
-                if _tcid:
-                    _extra = f" tcid={_tcid[:9]}"
-                _tag = f":{_name}" if _name else ""
-                _ctx_parts.append(f"  [{_ci}] {_role}{_tag} {_clen:,}字{_extra} | {_preview}")
-            logger.info(
-                "tool_loop iter {} context ({}):\n{}\n  ── TOTAL: {:,} chars, {} msgs",
-                iteration, model, "\n".join(_ctx_parts), _ctx_total, len(messages),
-            )
+        # ── Context pruning: trim old tool results to save tokens ──
+        # On iteration 2+, prune old tool results before sending to LLM.
+        # This is a read-only operation — the original messages list is not
+        # mutated, so new tool results continue to be appended correctly.
+        if iteration > 1:
+            from nanobot.agent.context_pruning import prune_messages
+            llm_messages = prune_messages(messages, _ctx_window)
+        else:
+            llm_messages = messages
+
+        # ── Context breakdown before LLM call ──
+        # Always log at DEBUG level; also log at INFO when debug_context is set
+        _ctx_total = 0
+        _ctx_parts: list[str] = []
+        for _ci, _cm in enumerate(llm_messages):
+            _role = _cm.get("role", "?")
+            _name = _cm.get("name", "")
+            _content = _cm.get("content") or ""
+            _tc = _cm.get("tool_calls")
+            _tcid = _cm.get("tool_call_id", "")
+            if isinstance(_content, str):
+                _clen = len(_content)
+            elif isinstance(_content, list):
+                _clen = sum(len(b.get("text", "")) for b in _content if isinstance(b, dict))
+            else:
+                _clen = 0
+            _ctx_total += _clen
+            # Full content for complete logging
+            if isinstance(_content, str):
+                _preview = _content.replace("\n", "\\n")
+            elif isinstance(_content, list):
+                _preview = " ".join(b.get("text", "") for b in _content if isinstance(b, dict)).replace("\n", "\\n")
+            else:
+                _preview = str(_content)
+            _extra = ""
+            if _tc:
+                _names = [t.get("function", {}).get("name", "?") if isinstance(t, dict) else "?" for t in _tc]
+                _extra = f" tools=[{','.join(_names)}]"
+            if _tcid:
+                _extra = f" tcid={_tcid}"
+            _tag = f":{_name}" if _name else ""
+            _ctx_parts.append(f"  [{_ci}] {_role}{_tag} {_clen:,}字{_extra} | {_preview}")
+        _pruned_note = f" (pruned from {len(messages)})" if len(llm_messages) != len(messages) else ""
+        _log_fn = logger.info if (metadata and metadata.get("debug_context")) else logger.debug
+        _log_fn(
+            "tool_loop iter {} context ({}):\n{}\n  ── TOTAL: {:,} chars, {} msgs{}",
+            iteration, model, "\n".join(_ctx_parts), _ctx_total, len(llm_messages), _pruned_note,
+        )
 
         t0 = _time.time()
 
@@ -219,12 +262,12 @@ async def tool_loop(
         # have empty names (Claude streaming bug).
         if _can_stream:
             response = await _stream_call(
-                provider, messages, iter_tool_defs, model, max_tokens, metadata,
+                provider, llm_messages, iter_tool_defs, model, max_tokens, metadata,
                 on_content_delta,
             )
         else:
             response = await provider.chat_with_retry(
-                messages=messages,
+                messages=llm_messages,
                 tools=iter_tool_defs,
                 model=model,
                 max_tokens=max_tokens,
@@ -239,6 +282,11 @@ async def tool_loop(
         result.token_usage["prompt"] += usage.get("prompt_tokens", 0)
         result.token_usage["completion"] += usage.get("completion_tokens", 0)
         result.token_usage["total"] += usage.get("total_tokens", 0)
+        if response.cost:
+            result.cost += response.cost
+        result.cache_tokens += response.cache_tokens
+        if response.provider_meta:
+            result.provider_meta.append(response.provider_meta)
 
         result.call_details.append({
             "iter": iteration,
@@ -252,7 +300,7 @@ async def tool_loop(
             ),
         })
 
-        raw_content = (response.content or "")[:100]
+        raw_content = response.content or ""
         logger.info(
             "tool_loop iter {}: finish={} tools={} content='{}'",
             iteration, response.finish_reason,
@@ -261,8 +309,15 @@ async def tool_loop(
 
         if response.has_tool_calls:
             # Notify per-iteration token usage (before tool execution)
+            # Enrich usage with cost and cache_tokens so display callbacks
+            # can show a complete token suffix.
             if on_iteration_usage and usage:
-                await on_iteration_usage(usage)
+                enriched = dict(usage)
+                if response.cost:
+                    enriched["cost"] = response.cost
+                if response.cache_tokens:
+                    enriched["cache_tokens"] = response.cache_tokens
+                await on_iteration_usage(enriched)
             # If content was streamed before tool calls were detected,
             # signal caller to clear the stale partial text from display
             if _can_stream and response.content and on_content_reset:
@@ -298,7 +353,7 @@ async def tool_loop(
                 result.tools_used.append(tc.name)
 
                 args_str = json.dumps(tc.arguments, ensure_ascii=False)
-                logger.info("tool_loop: {}({})", tc.name, args_str[:200])
+                logger.info("tool_loop: {}({})", tc.name, args_str)
 
                 # Dedup check BEFORE display (so dupes are silent)
                 dedup_key = None
@@ -379,6 +434,16 @@ async def tool_loop(
                     else:
                         tool_result, tc_error, tc_duration = raw
 
+                    # Log full tool result
+                    if isinstance(tool_result, list):
+                        _log_result = json.dumps(tool_result, ensure_ascii=False)
+                    else:
+                        _log_result = tool_result or ""
+                    logger.info(
+                        "tool_loop: {}() result ({}c, {:.2f}s): {}",
+                        tc.name, len(_log_result), tc_duration, _log_result,
+                    )
+
                     # Cache result for dedup
                     if dedup_key is not None and tc_error is None:
                         if isinstance(tool_result, list):
@@ -406,11 +471,24 @@ async def tool_loop(
                     if on_tool_result:
                         await on_tool_result(tc.name, tc.id, tool_result)
 
-                    # Append tool result (truncated for str, passed through for multimodal list)
+                    # Append tool result: AI-summarize large text, pass through multimodal lists
                     if isinstance(tool_result, list):
                         tool_content = tool_result
                     else:
-                        tool_content = (tool_result or "")[:result_max_chars]
+                        raw_str = tool_result or ""
+                        if len(raw_str) > result_max_chars:
+                            try:
+                                raw_str, _ = await summarize_tool_output(
+                                    tc.name, raw_str,
+                                    threshold=result_max_chars,
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "tool_loop: summarize failed for {}(): {}",
+                                    tc.name, exc,
+                                )
+                                raw_str = (tool_result or "")[:result_max_chars]
+                        tool_content = raw_str
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,

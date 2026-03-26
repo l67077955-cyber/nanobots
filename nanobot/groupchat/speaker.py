@@ -121,12 +121,12 @@ async def agent_speak(
         log_request(engine, agent_name, model, "group",
                     reply_len=len(content), msgs=len(messages),
                     tools=tools_used,
-                    input_preview=(engine._history[-2]["content"][:200] if len(engine._history) >= 2 else ""),
-                    output=content[:500], **stats)
+                    input_preview=(engine._history[-2]["content"] if len(engine._history) >= 2 else ""),
+                    output=content, **stats)
         logger.info(
-            "Agent {} result: content_len={} tools={} stream_msg_id={} iters={} latency={}",
+            "Agent {} result: content_len={} tools={} stream_msg_id={} iters={} latency={} content={}",
             agent_name, len(content), tools_used, stream.msg_id,
-            stats.get("iterations"), stats.get("latency"),
+            stats.get("iterations"), stats.get("latency"), content,
         )
 
         # ── Final display ──
@@ -139,7 +139,11 @@ async def agent_speak(
             display_content = content
             if total > 0:
                 p, c = tok.get("prompt", 0), tok.get("completion", 0)
-                display_content = f"{content}\n\n`[total] in:{p} out:{c} Σ{total}`"
+                cost = stats.get("cost", 0) or 0
+                cache_t = stats.get("cache_tokens", 0) or 0
+                cost_str = f" ${cost:.4f}" if cost else ""
+                cache_str = f" 🔵{cache_t}" if cache_t else ""
+                display_content = f"{content}\n\n`in:{p} out:{c} Σ{total}{cost_str}{cache_str}`"
             if not silent:
                 await stream.finalize(display_content, fallback_send=engine._send)
         elif not silent:

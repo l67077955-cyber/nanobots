@@ -256,16 +256,19 @@ class MemoryConsolidator:
         session: Session,
         tokens_to_remove: int,
     ) -> tuple[int, int] | None:
-        """Pick a user-turn boundary that removes enough old prompt tokens."""
-        start = session.last_consolidated
-        if start >= len(session.messages) or tokens_to_remove <= 0:
+        """Pick a user-turn boundary that removes enough old prompt tokens.
+        
+        Scans from the beginning of messages (not from an offset) to find
+        the largest chunk that can be replaced with a summary.
+        """
+        if not session.messages or tokens_to_remove <= 0:
             return None
 
         removed_tokens = 0
         last_boundary: tuple[int, int] | None = None
-        for idx in range(start, len(session.messages)):
+        for idx in range(len(session.messages)):
             message = session.messages[idx]
-            if idx > start and message.get("role") == "user":
+            if idx > 0 and message.get("role") == "user":
                 last_boundary = (idx, removed_tokens)
                 if removed_tokens >= tokens_to_remove:
                     return last_boundary
@@ -275,7 +278,7 @@ class MemoryConsolidator:
 
     def estimate_session_prompt_tokens(self, session: Session) -> tuple[int, str]:
         """Estimate current prompt size for the normal session history view."""
-        history = session.get_history(max_messages=0)
+        history = session.get_history(max_messages=None)
         channel, chat_id = (session.key.split(":", 1) if ":" in session.key else (None, None))
         probe_messages = self._build_messages(
             history=history,
@@ -300,7 +303,11 @@ class MemoryConsolidator:
         return True
 
     async def maybe_consolidate_by_tokens(self, session: Session) -> None:
-        """Loop: archive old messages until prompt fits within half the context window."""
+        """Loop: replace old messages with summaries until prompt fits within half the context window.
+        
+        Unlike the old offset-based approach, this replaces messages in-place with a single
+        summary message, preserving the prefix of the messages list for cache stability.
+        """
         if not session.messages or self.context_window_tokens <= 0:
             return
 
@@ -334,7 +341,7 @@ class MemoryConsolidator:
                     return
 
                 end_idx = boundary[0]
-                chunk = session.messages[session.last_consolidated:end_idx]
+                chunk = session.messages[:end_idx]
                 if not chunk:
                     return
 
@@ -347,11 +354,49 @@ class MemoryConsolidator:
                     source,
                     len(chunk),
                 )
+
+                # Build a brief summary text for the in-place replacement message
+                summary_text = self._build_chunk_summary(chunk)
+
                 if not await self.consolidate_messages(chunk):
                     return
-                session.last_consolidated = end_idx
+
+                # Replace the chunk with a single summary message (in-place, preserves prefix)
+                summary_msg = {
+                    "role": "system",
+                    "content": f"[Consolidated {len(chunk)} messages into memory. Summary: {summary_text}]",
+                    "consolidated": True,
+                    "timestamp": datetime.now().isoformat(),
+                }
+                session.messages = [summary_msg] + session.messages[end_idx:]
                 self.sessions.save(session)
 
                 estimated, source = self.estimate_session_prompt_tokens(session)
                 if estimated <= 0:
                     return
+
+    @staticmethod
+    def _build_chunk_summary(messages: list[dict]) -> str:
+        """Build a brief text summary of a message chunk for in-place replacement."""
+        # Collect user messages and tool names for a compact summary
+        user_msgs = []
+        tools_used = set()
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "user" and content and len(content) > 10:
+                # Truncate long messages
+                user_msgs.append(content[:120] + ("..." if len(content) > 120 else ""))
+            if msg.get("tools_used"):
+                tools_used.update(msg["tools_used"])
+            # Check tool_calls
+            for tc in (msg.get("tool_calls") or []):
+                if isinstance(tc, dict) and tc.get("function", {}).get("name"):
+                    tools_used.add(tc["function"]["name"])
+
+        parts = []
+        if user_msgs:
+            parts.append(f"Topics: {'; '.join(user_msgs[:5])}")
+        if tools_used:
+            parts.append(f"Tools: {', '.join(sorted(tools_used)[:8])}")
+        return " | ".join(parts) if parts else f"{len(messages)} messages processed"

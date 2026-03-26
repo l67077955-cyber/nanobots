@@ -18,7 +18,7 @@ from nanobot.groupchat import display as _d
 # ── Helpers ──────────────────────────────────────────────────
 
 def snapshot_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Create a lightweight snapshot of messages for logging (before tool_loop mutates them)."""
+    """Create a full snapshot of messages for logging (before tool_loop mutates them)."""
     snap: list[dict[str, Any]] = []
     for m in messages:
         entry: dict[str, Any] = {"role": m.get("role", "?")}
@@ -26,16 +26,20 @@ def snapshot_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             entry["name"] = m["name"]
         content = m.get("content", "")
         if isinstance(content, str):
-            entry["content"] = content[:500]
+            entry["content"] = content
             entry["content_len"] = len(content)
         elif isinstance(content, list):
             text_parts = [b.get("text", "") for b in content if isinstance(b, dict)]
             joined = " ".join(text_parts)
-            entry["content"] = joined[:500]
+            entry["content"] = joined
             entry["content_len"] = len(joined)
         else:
-            entry["content"] = str(content)[:500] if content else ""
+            entry["content"] = str(content) if content else ""
             entry["content_len"] = len(str(content)) if content else 0
+        if m.get("tool_calls"):
+            entry["tool_calls"] = m["tool_calls"]
+        if m.get("tool_call_id"):
+            entry["tool_call_id"] = m["tool_call_id"]
         snap.append(entry)
     return snap
 
@@ -57,6 +61,9 @@ def build_stats(result: Any, tool_defs: list | None, tool_names: list[str],
         "max_tokens": max_tokens,
         "status_code": result.status_code,
         "finish_reason": result.finish_reason,
+        "cost": result.cost,
+        "cache_tokens": result.cache_tokens,
+        "provider_meta": result.provider_meta,
     }
 
 
@@ -68,8 +75,14 @@ def make_tool_callbacks(
     send_fn: Callable[[str], Awaitable[None]] | None,
     send_and_get_id_fn: Callable[[str], Awaitable[int | None]] | None,
     edit_fn: Callable[[int, str], Awaitable[None]] | None,
+    iter_usage_ref: dict | None = None,
 ) -> tuple[Callable, Callable]:
     """Create on_tool_start / on_tool_result callbacks for an agent.
+
+    Args:
+        iter_usage_ref: Shared mutable dict updated with per-iteration token
+            usage before tool execution. When provided, a token suffix is
+            appended to the tool result message.
 
     Returns:
         (on_tool_start, on_tool_result) async callbacks.
@@ -86,8 +99,14 @@ def make_tool_callbacks(
         # Persist tool_call event
         save_event("tool_call", agent=agent_name, extra={
             "tool": name,
-            "args": {k: (v[:200] if isinstance(v, str) else v) for k, v in args.items()},
+            "args": dict(args),
         })
+        # Full logging to server log
+        import json as _json_tc
+        logger.info(
+            "tool_chat [{}] tool_call: {}({})",
+            agent_name, name, _json_tc.dumps(args, ensure_ascii=False),
+        )
         short = (
             args.get("command") or args.get("query")
             or args.get("url") or args.get("path") or ""
@@ -110,21 +129,41 @@ def make_tool_callbacks(
             "result_len": len(result) if result else 0,
             "success": not (result or "").startswith("Error:"),
         })
+        # Full result logging to server log
+        logger.info(
+            "tool_chat [{}] tool_result: {} ({}c): {}",
+            agent_name, name, len(result) if result else 0, result,
+        )
         if not result:
             _tool_msg_id = None
             return
         rlen = len(result)
         preview = result.strip().replace("\n", " ")[:60]
-        result_line = f"↳ {preview}{'…' if rlen > 60 else ''} ({rlen:,}c)"
+        result_line = f"↳ {preview}{'…' if rlen > 60 else ''} ({rlen:,}字)"
+
+        # Build token suffix from per-iteration usage if available
+        token_suffix = ""
+        if iter_usage_ref:
+            u = iter_usage_ref
+            p = u.get("prompt_tokens", 0)
+            c = u.get("completion_tokens", 0)
+            total = u.get("total_tokens", 0) or (p + c)
+            cost = u.get("cost")
+            cache_t = u.get("cache_tokens", 0) or u.get("cache_read_input_tokens", 0)
+            cost_str = f" ${cost:.4f}" if cost else ""
+            cache_str = f" 🔵{cache_t}" if cache_t else ""
+            if total:
+                token_suffix = f"\n`in:{p} out:{c} Σ{total}{cost_str}{cache_str}`"
+
         if _tool_msg_id and edit_fn and _tool_msg_text:
             try:
-                updated = f"{_tool_msg_text}\n{result_line}"
+                updated = f"{_tool_msg_text}\n{result_line}{token_suffix}"
                 await edit_fn(_tool_msg_id, updated)
             except Exception:
                 if send_fn:
-                    await send_fn(result_line)
+                    await send_fn(result_line + token_suffix)
         elif send_fn:
-            await send_fn(result_line)
+            await send_fn(result_line + token_suffix)
         _tool_msg_id = None
         _tool_msg_text = ""
 
@@ -180,14 +219,26 @@ async def chat_with_tools(
 
     # Default tool callbacks
     _save_event = save_event or (lambda *a, **kw: None)
+    # Shared mutable dict updated with per-iteration token usage so that
+    # on_tool_result can append a token suffix to the tool call message.
+    _iter_usage_ref: dict = {}
     default_start, default_result = make_tool_callbacks(
         agent_name, _save_event, send_fn, send_and_get_id_fn, edit_fn,
+        iter_usage_ref=_iter_usage_ref,
     )
 
     effective_defs = None if force_no_tools else (tool_defs if tool_defs else None)
+    # Compute context stats for logging
+    _total_chars = sum(
+        len(m.get("content", "")) if isinstance(m.get("content"), str)
+        else sum(len(b.get("text", "")) for b in m.get("content", []) if isinstance(b, dict))
+        if isinstance(m.get("content"), list) else 0
+        for m in messages
+    )
     logger.info(
-        "chat_with_tools: agent={} model={} tool_defs={} is_direct={}",
+        "chat_with_tools: agent={} model={} tool_defs={} is_direct={} msgs={} total_chars={}",
         agent_name, model, len(tool_defs) if tool_defs else 0, is_direct,
+        len(messages), _total_chars,
     )
 
     # Snapshot messages before tool_loop mutates them
@@ -195,13 +246,11 @@ async def chat_with_tools(
     sampling = dict(getattr(provider, "sampling_params", {}))
     tool_names = [d.get("function", {}).get("name", "?") for d in (tool_defs or [])]
 
-    # Per-iteration token usage callback
+    # Per-iteration token usage callback — update shared ref so tool callbacks
+    # can show a token suffix on each tool call message.
     async def _on_iter_usage(usage: dict) -> None:
-        total = usage.get("total_tokens", 0)
-        if total > 0 and send_fn:
-            p = usage.get("prompt_tokens", 0)
-            c = usage.get("completion_tokens", 0)
-            await send_fn(f"`in:{p} out:{c} Σ{total}`")
+        _iter_usage_ref.clear()
+        _iter_usage_ref.update(usage)
 
     result = await tool_loop(
         provider=provider,
@@ -218,9 +267,18 @@ async def chat_with_tools(
         on_content_delta=on_content_delta,
         on_content_reset=on_content_reset,
         clean_response=clean_response,
-        result_max_chars=20_000,
+        result_max_chars=8_000,
     )
 
     content = result.content or ""
     stats = build_stats(result, tool_defs, tool_names, messages_snap, sampling, max_tokens)
+
+    # Log complete result
+    logger.info(
+        "chat_with_tools result: agent={} iters={} latency={:.2f}s "
+        "tokens={} tools_used={} finish={} content={}",
+        agent_name, result.iterations, result.latency,
+        result.token_usage, result.tools_used, result.finish_reason, content,
+    )
+
     return content, result.tools_used, stats

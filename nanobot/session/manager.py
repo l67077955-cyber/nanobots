@@ -21,8 +21,8 @@ class Session:
     Stores messages in JSONL format for easy reading and persistence.
 
     Important: Messages are append-only for LLM cache efficiency.
-    The consolidation process writes summaries to MEMORY.md/HISTORY.md
-    but does NOT modify the messages list or get_history() output.
+    Consolidation replaces old messages with summaries in-place to preserve
+    cache-friendly prefix stability.
     """
 
     key: str  # channel:chat_id
@@ -30,7 +30,7 @@ class Session:
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
-    last_consolidated: int = 0  # Number of messages already consolidated to files
+    last_consolidated: int = 0
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to the session."""
@@ -66,10 +66,10 @@ class Session:
                                     declared.add(str(tc["id"]))
         return start
 
-    def get_history(self, max_messages: int = 500) -> list[dict[str, Any]]:
+    def get_history(self, max_messages: int | None = 500) -> list[dict[str, Any]]:
         """Return unconsolidated messages for LLM input, aligned to a legal tool-call boundary."""
         unconsolidated = self.messages[self.last_consolidated:]
-        sliced = unconsolidated[-max_messages:]
+        sliced = unconsolidated if max_messages is None else unconsolidated[-max_messages:] if max_messages > 0 else []
 
         # Drop leading non-user messages to avoid starting mid-turn when possible.
         for i, message in enumerate(sliced):

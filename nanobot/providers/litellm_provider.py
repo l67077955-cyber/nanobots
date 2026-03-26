@@ -689,13 +689,24 @@ class LiteLLMProvider(LLMProvider):
             kwargs["metadata"] = metadata
 
         if pm_provider_name == "openrouter" or (not pm_provider_name and "openrouter" in (model or "")):
-            kwargs["extra_body"] = {
+            import hashlib
+            # Stable cache key based on system prompt prefix to improve cache hit rate
+            system_text = ""
+            for msg in messages:
+                if msg.get("role") == "system" and isinstance(msg.get("content"), str):
+                    system_text = msg["content"][:2000]
+                    break
+            cache_key = hashlib.md5(system_text.encode()).hexdigest()[:16] if system_text else None
+            extra = {
                 "provider": {
                     "sort": "latency",
                     "order": ["nebius", "mistral", "groq", "fireworks"],
                     "allow_fallbacks": True,
                 }
             }
+            if cache_key:
+                extra["prompt_cache_key"] = f"nanobot-{cache_key}"
+            kwargs["extra_body"] = extra
 
         return kwargs
 
@@ -911,6 +922,9 @@ class LiteLLMProvider(LLMProvider):
         finish_reason = "stop"
         usage: dict[str, int] = {}
         has_tool_calls = False
+        _stream_cost: float | None = None
+        _stream_cache_tokens: int = 0
+        _stream_meta: dict = {}
 
         try:
             async for chunk in response:
@@ -957,6 +971,26 @@ class LiteLLMProvider(LLMProvider):
                         "completion_tokens": getattr(chunk.usage, "completion_tokens", 0) or 0,
                         "total_tokens": getattr(chunk.usage, "total_tokens", 0) or 0,
                     }
+                    # Also extract cache tokens from prompt_tokens_details
+                    ptd = getattr(chunk.usage, "prompt_tokens_details", None)
+                    if ptd:
+                        _stream_cache = getattr(ptd, "cached_tokens", 0) or 0
+                        if _stream_cache:
+                            _stream_cache_tokens = _stream_cache
+
+                # Cost from hidden params (available on last chunk)
+                _chunk_hidden = getattr(chunk, "_hidden_params", None) or {}
+                if _chunk_hidden.get("response_cost") is not None:
+                    _stream_cost = _chunk_hidden["response_cost"]
+                # Also check additional_headers for OpenRouter
+                if not _chunk_hidden.get("response_cost"):
+                    _ah = _chunk_hidden.get("additional_headers", {}) or {}
+                    for hdr, mk in [
+                        ("x-openrouter-provider", "_or_provider"),
+                        ("x-openrouter-generation-id", "_or_gen_id"),
+                    ]:
+                        if _ah.get(hdr) and not _stream_meta.get(mk):
+                            _stream_meta[mk] = _ah[hdr]
         except Exception as e:
             yield LLMResponse(content=f"Error during streaming: {str(e)}", finish_reason="error")
             return
@@ -1021,12 +1055,20 @@ class LiteLLMProvider(LLMProvider):
         # Log the completed stream request
         self._log_stream_request(kwargs, full_content, parsed_tool_calls, finish_reason, usage, _time.time() - t0)
 
+        # Build provider_meta list for logging
+        _provider_meta = []
+        if _stream_meta:
+            _provider_meta.append(_stream_meta)
+
         # Yield the final complete LLMResponse
         yield LLMResponse(
             content=full_content or None,
             tool_calls=parsed_tool_calls,
             finish_reason=finish_reason,
             usage=usage,
+            cost=_stream_cost,
+            cache_tokens=_stream_cache_tokens,
+            provider_meta=_provider_meta if _provider_meta else None,
         )
 
     def _parse_response(self, response: Any) -> LLMResponse:
@@ -1085,6 +1127,60 @@ class LiteLLMProvider(LLMProvider):
                 "total_tokens": response.usage.total_tokens,
             }
 
+        # Extract cost from litellm hidden params
+        _cost = None
+        try:
+            _hidden = getattr(response, "_hidden_params", None) or {}
+            _cost = _hidden.get("response_cost")
+            logger.info("litellm _hidden_params keys: {} cost: {}", list(_hidden.keys()), _cost)
+        except Exception:
+            pass
+
+        # Extract cached tokens from prompt_tokens_details
+        _cache_tokens = 0
+        try:
+            if hasattr(response, "usage") and response.usage:
+                ptd = getattr(response.usage, "prompt_tokens_details", None)
+                if ptd:
+                    _cache_tokens = getattr(ptd, "cached_tokens", 0) or 0
+        except Exception:
+            pass
+
+        # Extract provider metadata (OpenRouter, etc.)
+        _provider_meta: dict[str, Any] = {}
+        try:
+            _hidden = getattr(response, "_hidden_params", None) or {}
+            # Model/provider from response
+            resp_model = getattr(response, "model", None)
+            if resp_model:
+                _provider_meta["model_id"] = resp_model
+            # Additional headers from litellm
+            headers = _hidden.get("additional_headers", {}) or {}
+            for hdr_key, meta_key in [
+                ("x-openrouter-provider", "provider"),
+                ("x-openrouter-generation-id", "generation_id"),
+                ("x-openrouter-latency", "latency_ms"),
+                ("x-openrouter-tokens-per-second", "tps"),
+            ]:
+                val = headers.get(hdr_key)
+                if val:
+                    _provider_meta[meta_key] = val
+            # Cost breakdown
+            if _cost is not None:
+                _provider_meta["final_cost"] = _cost
+            # Reasoning tokens
+            if hasattr(response, "usage") and response.usage:
+                rtd = getattr(response.usage, "completion_tokens_details", None)
+                if rtd:
+                    reasoning = getattr(rtd, "reasoning_tokens", 0) or 0
+                    if reasoning:
+                        _provider_meta["reasoning_tokens"] = reasoning
+            # Cache discount
+            if _cache_tokens and _cost is not None:
+                _provider_meta["cache_tokens"] = _cache_tokens
+        except Exception:
+            pass
+
         reasoning_content = getattr(message, "reasoning_content", None) or None
         thinking_blocks = getattr(message, "thinking_blocks", None) or None
 
@@ -1095,6 +1191,9 @@ class LiteLLMProvider(LLMProvider):
             usage=usage,
             reasoning_content=reasoning_content,
             thinking_blocks=thinking_blocks,
+            cost=_cost,
+            cache_tokens=_cache_tokens,
+            provider_meta=_provider_meta,
         )
 
     def get_default_model(self) -> str:

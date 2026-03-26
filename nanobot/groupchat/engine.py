@@ -52,12 +52,14 @@ class GroupChatEngine:
         workspace: Path,
         web_search_config: Any = None,
         web_proxy: str | None = None,
+        cron_service: Any | None = None,
     ):
         self.config = config
         self.provider = provider
         self.workspace = workspace
         self.web_search_config = web_search_config
         self.web_proxy = web_proxy
+        self._cron_service = cron_service
         self._pm_cache: dict | None = None
         self._mailbox = MailboxHub(on_message=self._on_agent_comm)
         self._prompt_builder = PromptBuilder(config=config, workspace=workspace)
@@ -129,6 +131,8 @@ class GroupChatEngine:
         logger.info("Groupchat: registered {} group tools, {} direct tools",
                     len(self.tools), len(self.direct_tools))
 
+        # CronTool removed — cron is now a pure skill (skills/cron/scripts/cron_cli.py)
+
     def _build_tool_registry(self, ws: Path) -> "ToolRegistry":
         """Build a ToolRegistry scoped to the given workspace path."""
         from nanobot.agent.tools.registry import ToolRegistry
@@ -147,6 +151,8 @@ class GroupChatEngine:
         reader_model = self._get_reader_model()
         registry.register(SmartFetchTool(raw_fetch, reader_model=reader_model, provider=self.provider))
         registry.register(ExecTool(timeout=120, working_dir=str(ws)))
+        from nanobot.agent.tools.process import ProcessTool
+        registry.register(ProcessTool())
         registry.register(ReadFileTool(workspace=ws, allowed_dir=None))
         registry.register(WriteFileTool(workspace=ws, allowed_dir=ws))
         registry.register(EditFileTool(workspace=ws, allowed_dir=ws))
@@ -239,6 +245,16 @@ class GroupChatEngine:
     @property
     def available_agents(self) -> list[str]:
         return list(self.registry.keys())
+
+    def set_tool_context(self, channel: str, chat_id: str) -> None:
+        """Set channel/chat context for cron CLI script via env vars.
+
+        Mirrors AgentLoop._set_tool_context() — called once when the
+        Telegram channel wires its send callback.
+        """
+        import os
+        os.environ["NANOBOT_CHANNEL"] = channel
+        os.environ["NANOBOT_CHAT_ID"] = chat_id
 
     def set_send_fn(self, send_fn: Callable[[str], Awaitable[None]]) -> None:
         """Set the message output callback."""
@@ -718,8 +734,13 @@ class GroupChatEngine:
 
     def _add_message(self, sender: str, content: str) -> None:
         self._history.append({"sender": sender, "content": content})
-        if len(self._history) > self.config.max_history:
-            self._history = self._history[-self.config.max_history:]
+        try:
+            from nanobot.groupchat.history_settings import max_messages
+            limit = max_messages()
+        except Exception:
+            limit = self.config.max_history
+        if len(self._history) > limit:
+            self._history = self._history[-limit:]
         self._state.save_message(sender, content, self._history)
 
     def _save_event(

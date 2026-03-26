@@ -46,6 +46,9 @@ class LLMResponse:
     thinking_blocks: list[dict] | None = None  # Anthropic extended thinking
     status_code: int | None = None  # HTTP status code on error
     retry_log: list[dict[str, Any]] = field(default_factory=list)  # per-attempt records
+    cost: float | None = None  # response cost from provider
+    cache_tokens: int = 0  # cached prompt tokens (from prompt_tokens_details)
+    provider_meta: dict[str, Any] = field(default_factory=dict)  # provider-specific metadata
     
     @property
     def has_tool_calls(self) -> bool:

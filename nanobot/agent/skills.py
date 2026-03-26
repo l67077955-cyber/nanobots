@@ -94,9 +94,24 @@ class SkillsLoader:
             content = self.load_skill(name)
             if content:
                 content = self._strip_frontmatter(content)
+                # Resolve {baseDir} to actual skill directory path
+                base_dir = self._resolve_skill_dir(name)
+                if base_dir:
+                    content = content.replace("{baseDir}", base_dir)
                 parts.append(f"### Skill: {name}\n\n{content}")
 
         return "\n\n---\n\n".join(parts) if parts else ""
+
+    def _resolve_skill_dir(self, name: str) -> str | None:
+        """Get the absolute directory path for a skill."""
+        workspace_skill = self.workspace_skills / name / "SKILL.md"
+        if workspace_skill.exists():
+            return str(self.workspace_skills / name)
+        if self.builtin_skills:
+            builtin_skill = self.builtin_skills / name / "SKILL.md"
+            if builtin_skill.exists():
+                return str(self.builtin_skills / name)
+        return None
 
     def build_skills_summary(self) -> str:
         """

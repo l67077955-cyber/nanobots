@@ -535,7 +535,6 @@ def gateway(
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
-        from nanobot.agent.tools.cron import CronTool
         from nanobot.agent.tools.message import MessageTool
         from nanobot.utils.evaluator import evaluate_response
 
@@ -545,20 +544,12 @@ def gateway(
             f"Scheduled instruction: {job.payload.message}"
         )
 
-        cron_tool = agent.tools.get("cron")
-        cron_token = None
-        if isinstance(cron_tool, CronTool):
-            cron_token = cron_tool.set_cron_context(True)
-        try:
-            response = await agent.process_direct(
-                reminder_note,
-                session_key=f"cron:{job.id}",
-                channel=job.payload.channel or "cli",
-                chat_id=job.payload.to or "direct",
-            )
-        finally:
-            if isinstance(cron_tool, CronTool) and cron_token is not None:
-                cron_tool.reset_cron_context(cron_token)
+        response = await agent.process_direct(
+            reminder_note,
+            session_key=f"cron:{job.id}",
+            channel=job.payload.channel or "cli",
+            chat_id=job.payload.to or "direct",
+        )
 
         message_tool = agent.tools.get("message")
         if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
@@ -570,10 +561,12 @@ def gateway(
             )
             if should_notify:
                 from nanobot.bus.events import OutboundMessage
+                # Tag message with source so user can identify it
+                tagged = f"[cron: {job.id}]\n\n{response}"
                 await bus.publish_outbound(OutboundMessage(
                     channel=job.payload.channel or "cli",
                     chat_id=job.payload.to,
-                    content=response,
+                    content=tagged,
                 ))
         return response
     cron.on_job = on_cron_job
@@ -590,6 +583,7 @@ def gateway(
             workspace=config.workspace_path,
             web_search_config=config.tools.web.search,
             web_proxy=config.tools.web.proxy or None,
+            cron_service=cron,
         )
         # Register the base model as an agent too
         base_model = config.agents.defaults.model or "anthropic/claude-opus-4.5"

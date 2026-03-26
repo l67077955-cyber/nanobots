@@ -21,16 +21,18 @@ from nanobot.groupchat.utils import cn_now as _cn_now
 # ── Constants ─────────────────────────────────────────────────
 
 DEFAULT_PROMPT_ORDER = [
-    "main_prompt", "group_context", "persona",
-    "tool_instructions", "broadcast_hint", "examples",
+    "main_prompt", "group_context", "persona", "memory",
+    "tool_instructions", "skills", "broadcast_hint", "examples",
     "history", "instructions", "leader_prompt", "group_nudge",
 ]
 
-COMPONENT_LABELS = {
+COMPONENT_LABELS: dict[str, str] = {
     "main_prompt": "主提示 (main_prompt)",
     "group_context": "群聊上下文 (group_context)",
     "persona": "人设/SOUL (persona)",
+    "memory": "长期记忆 (memory)",
     "tool_instructions": "工具指令 (tool_instructions)",
+    "skills": "技能列表 (skills)",
     "broadcast_hint": "广播协调 (broadcast_hint)",
     "examples": "示例对话 (examples)",
     "history": "聊天记录 (history)",
@@ -39,12 +41,41 @@ COMPONENT_LABELS = {
     "group_nudge": "群聊规范 (group_nudge)",
 }
 
-GLOBAL_EDITABLE = {
-    "main_prompt", "group_context", "tool_instructions", "broadcast_hint",
-    "examples", "instructions", "leader_prompt", "group_nudge",
+GLOBAL_EDITABLE: set[str] = {
+    "main_prompt", "group_context", "tool_instructions", "skills", "memory",
+    "broadcast_hint", "examples", "instructions", "leader_prompt", "group_nudge",
 }
 AGENT_EDITABLE = {"persona"}
 EDITABLE_COMPONENTS = GLOBAL_EDITABLE | AGENT_EDITABLE
+
+
+def _load_custom_labels() -> dict[str, str]:
+    """Load user-defined custom component labels from disk."""
+    f = Path.home() / ".nanobot" / "custom_prompt_labels.json"
+    if f.exists():
+        try:
+            return json.loads(f.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+def _save_custom_labels(labels: dict[str, str]) -> None:
+    """Persist custom component labels to disk."""
+    f = Path.home() / ".nanobot" / "custom_prompt_labels.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(labels, ensure_ascii=False, indent=2))
+
+
+def _register_custom_labels() -> None:
+    """Load custom labels from disk and merge into module-level dicts."""
+    for key, label in _load_custom_labels().items():
+        COMPONENT_LABELS[key] = label
+        GLOBAL_EDITABLE.add(key)
+
+
+# Auto-register on import so custom components survive restarts
+_register_custom_labels()
 
 
 # ── Template Defaults ─────────────────────────────────────────
@@ -61,48 +92,35 @@ TEMPLATES: dict[str, str] = {
         "[Current date and time: {{datetime}}]"
     ),
     "persona": "[从 SOUL.md 加载 — 在 /editagent 中编辑]",
-    "tool_instructions": (
-        "[工具使用规范]\n\n"
-        "可用工具: exec, read_file, write_file, edit_file, list_dir, "
-        "web_search, web_fetch, chatroom_send, wait\n\n"
-        "## 核心原则\n"
-        "- 有工具就用，禁止说「我没有能力」「我无法搜索」。\n"
-        "- 意图明确就直接执行，不要问「需要我搜索吗？」。\n"
-        "- 每次工具调用后检查结果再决定下一步。\n"
-        "- 工具失败→换方案，不要重复同一调用。\n\n"
-        "## ⚡ 批量调用（重要！）\n"
-        "尽量在一次回复中同时调用多个工具，减少往返次数。\n"
-        "✅ 好: 一次返回 web_search(中文关键词) + web_search(English keywords)\n"
-        "❌ 差: 先搜中文 → 等结果 → 再搜英文 → 等结果\n"
-        "能并行的工具一定要同时调用！\n\n"
-        "## 搜索规范\n"
-        "- 时事/新闻: web_search(query=..., freshness=\"pd\") 或 \"pw\"\n"
-        "- 用户给的URL: web_fetch(url=...) 直接读取\n\n"
-        "## 协作通信协议\n"
-        "chatroom_send(to=\"Harper\", message=\"搜索结果...\")\n"
-        "chatroom_send(to=\"All\", message=\"关键发现...\")\n\n"
-        "### 收到消息后的响应规则（关键！）\n"
-        "收到队友消息时：执行请求 → 用 chatroom_send 回复结果。\n"
-        "禁止：只在最终回复里提到，而不通过 chatroom_send 回复发送者。\n\n"
-        "wait(timeout=30) 等待消息，不要超过60s。"
-    ),
+    "tool_instructions": "",  # Loaded from ~/.nanobot/prompts/tool_instructions.md
     "broadcast_hint": (
         "[广播模式 — 多Agent协作]\n"
         "你是 {{agent_idx}}/{{total}} 号成员，代号 {{agent}}\n"
         "队友: {{teammates}}\n\n"
         "用户请求: {{user_question}}\n\n"
-        "## 你的工具\n"
+        "## 群聊工具\n"
         "- chatroom_send(to, message): 给队友发消息。to 可以是具体名字或 \"All\"\n"
-        "- wait(): 等待队友消息\n\n"
+        "- wait(timeout=30): 等待队友消息，不要超过60s\n\n"
+        "### 协作通信协议\n"
+        "chatroom_send(to=\"Harper\", message=\"搜索结果...\")\n"
+        "chatroom_send(to=\"All\", message=\"关键发现...\")\n\n"
+        "### 收到消息后的响应规则（关键！）\n"
+        "收到队友消息时：执行请求 → 用 chatroom_send 回复结果。\n"
+        "禁止：只在最终回复里提到，而不通过 chatroom_send 回复发送者。\n\n"
         "## 发言顺序\n"
         "系统使用对话资源池控制消息量：每条消息消耗槽位（发All=3，发个人=1）。\n"
         "池满时 chatroom_send 会阻塞，直到有人 wait() 释放槽位。\n\n"
         "## 协作方式\n"
-        "1. 先独立完成你的工作（思考/搜索/分析）\n"
-        "2. 用 chatroom_send 分享你的观点或发现\n"
-        "3. 用 wait() 听队友的消息\n"
-        "4. 自己判断：要回复就 chatroom_send，可以连续发多条，也可以沉默观察后再 wait()\n"
-        "5. 当所有人都在 wait 时，系统会自动结束本轮讨论\n\n"
+        "1. 先独立思考：分析问题 → 明确你能贡献什么 → 制定行动计划\n"
+        "2. 执行工作（搜索/分析/编码），搜索后立即共享关键发现\n"
+        "3. 用 chatroom_send 分享你的观点或发现（带来源 URL）\n"
+        "4. 用 wait() 听队友的消息\n"
+        "5. 基于队友的信息补充分析，避免重复搜索已共享的内容\n"
+        "6. 当所有人都在 wait 时，系统会自动结束本轮讨论\n\n"
+        "## 搜索结果共享（关键！）\n"
+        "- 你的搜索结果对队友也有价值，搜完后用 chatroom_send(to=\"All\") 分享\n"
+        "- 收到队友的搜索结果后直接使用，不要重复搜索同样的内容\n"
+        "- 需要补充时，换不同关键词或角度搜索\n\n"
         "## 限制\n"
         "- 禁止一上来就 wait，必须先做工作再发言\n"
         "- 网络调用（web_search + web_fetch）最多 3 次"
@@ -185,6 +203,24 @@ class PromptBuilder:
         current = set(self.get_agent_prompt_order())
         return [k for k in DEFAULT_PROMPT_ORDER if k not in current]
 
+    @staticmethod
+    def add_custom_component(key: str, label: str) -> str:
+        """Register a user-defined custom component.
+
+        Adds it to COMPONENT_LABELS, GLOBAL_EDITABLE, and persists the label.
+        Does NOT add to the prompt order — caller should do that separately.
+        """
+        if key in COMPONENT_LABELS:
+            return f"❌ 组件 '{key}' 已存在"
+        # Register in module-level dicts
+        COMPONENT_LABELS[key] = label
+        GLOBAL_EDITABLE.add(key)
+        # Persist
+        custom = _load_custom_labels()
+        custom[key] = label
+        _save_custom_labels(custom)
+        return f"✅ 已创建自定义组件: {label}"
+
     # ── Component content ──
 
     def get_prompt_components(
@@ -203,7 +239,7 @@ class PromptBuilder:
                 "label": COMPONENT_LABELS.get(key, key),
                 "content": content,
                 "chars": len(content) if content else 0,
-                "editable": key in EDITABLE_COMPONENTS,
+                "editable": key in GLOBAL_EDITABLE or key in AGENT_EDITABLE,
             })
         return components
 
@@ -227,8 +263,12 @@ class PromptBuilder:
             return f"[Start a new group chat. Group members: {members}]\n[Current date and time: {now}]"
         elif key == "persona":
             return agent.get("prompt", "")
+        elif key == "memory":
+            return self._build_memory_content()
         elif key == "tool_instructions":
-            return ""
+            return self.get_component_template("tool_instructions")
+        elif key == "skills":
+            return self._build_skills_content()
         elif key == "examples":
             return agent.get("examples", "")
         elif key == "history":
@@ -237,15 +277,78 @@ class PromptBuilder:
             return agent.get("instructions", "")
         elif key == "leader_prompt":
             if leader == agent_name:
-                return "[Leader prompt — 自动生成]"
+                return self.get_component_template("leader_prompt") or "[Leader prompt — 自动生成]"
             return ""
         elif key in ("broadcast_hint", "group_nudge"):
+            return self.get_component_template(key)
+        # Custom components or others: check file
+        return self.get_component_template(key)
+
+    def _build_skills_content(self) -> str:
+        """Build the skills section for group chat agents.
+
+        Uses SkillsLoader to generate an XML summary of available skills.
+        Agents can read the full SKILL.md via read_file for progressive loading.
+        """
+        from nanobot.agent.skills import SkillsLoader
+
+        loader = SkillsLoader(self._workspace)
+        summary = loader.build_skills_summary()
+        if not summary:
             return ""
+        return (
+            "[Skills — 可用技能列表]\n\n"
+            "以下技能扩展你的能力。需要时用 read_file 读取对应的 SKILL.md 来使用。\n"
+            "标记 available=\"false\" 的技能需要先安装依赖。\n\n"
+            + summary
+        )
+
+    def _build_memory_content(self) -> str:
+        """Build the long-term memory hint for progressive loading.
+
+        Instead of injecting full MEMORY.md content (which grows over time),
+        provide a brief pointer so the agent can read_file when relevant.
+        Matches the progressive-loading pattern used by skills.
+        """
+        try:
+            from nanobot.agent.memory import MemoryStore
+            store = MemoryStore(self._workspace)
+            content = store.read_long_term()
+            if content and content.strip():
+                # Show first non-empty line as preview
+                preview = ""
+                for line in content.splitlines():
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith("#"):
+                        preview = stripped[:80]
+                        break
+                mem_path = store.memory_file
+                history_path = store.history_file
+                hint = (
+                    "[Long-term Memory — 长期记忆]\n\n"
+                    f"你有持久化记忆文件。用 read_file 查看完整内容：\n"
+                    f"- `{mem_path}` — 长期事实记忆 (MEMORY.md)\n"
+                    f"- `{history_path}` — 时间线日志 (HISTORY.md)\n"
+                )
+                if preview:
+                    hint += f"\n预览: {preview}…"
+                return hint
+        except Exception as e:
+            logger.warning("Failed to load memory hint: {}", e)
         return ""
 
     @staticmethod
     def get_component_template(key: str) -> str:
-        return TEMPLATES.get(key, "")
+        content = TEMPLATES.get(key, "")
+        # For any component, check ~/.nanobot/prompts/{key}.md as file-based override
+        if not content:
+            f = Path.home() / ".nanobot" / "prompts" / f"{key}.md"
+            if f.exists():
+                try:
+                    content = f.read_text().strip()
+                except Exception:
+                    pass
+        return content
 
     # ── Prompt building ──
 
@@ -351,10 +454,16 @@ class PromptBuilder:
         workspace: Path,
         agents_dir: Path | None = None,
     ) -> str:
-        if key not in EDITABLE_COMPONENTS:
+        if key not in GLOBAL_EDITABLE and key not in AGENT_EDITABLE:
             return f"❌ 组件 '{key}' 不可编辑"
 
         if agent_name == "__global__":
+            # Save to ~/.nanobot/prompts/{key}.md
+            prompts_dir = Path.home() / ".nanobot" / "prompts"
+            prompts_dir.mkdir(parents=True, exist_ok=True)
+            md_file = prompts_dir / f"{key}.md"
+            md_file.write_text(content)
+            # Also update prompt_overrides.json for backward compatibility
             overrides_file = Path.home() / ".nanobot" / "prompt_overrides.json"
             overrides: dict = {}
             if overrides_file.exists():
@@ -363,10 +472,9 @@ class PromptBuilder:
                 except Exception:
                     pass
             overrides.setdefault("__global__", {})[key] = content
-            overrides_file.parent.mkdir(parents=True, exist_ok=True)
             overrides_file.write_text(json.dumps(overrides, ensure_ascii=False, indent=2))
             label = COMPONENT_LABELS.get(key, key)
-            return f"✅ 已更新全局模板: {label}\n💡 使用 {{{{agent}}}} 代表 agent 名字"
+            return f"✅ 已更新全局模板: {label}\n📄 已保存到 prompts/{key}.md\n💡 使用 {{{{agent}}}} 代表 agent 名字"
 
         agent = registry.get(agent_name)
         if not agent:

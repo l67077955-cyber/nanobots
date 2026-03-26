@@ -1,57 +1,61 @@
 ---
 name: cron
-description: Schedule reminders and recurring tasks.
+description: Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.
+always: true
 ---
 
-# Cron
+# Cron — Scheduled Tasks
 
-Use the `cron` tool to schedule reminders or recurring tasks.
+Use the CLI script to manage scheduled tasks. The background service picks up changes automatically.
 
-## Three Modes
+## CLI
 
-1. **Reminder** - message is sent directly to user
-2. **Task** - message is a task description, agent executes and sends result
-3. **One-time** - runs once at a specific time, then auto-deletes
-
-## Examples
-
-Fixed reminder:
-```
-cron(action="add", message="Time to take a break!", every_seconds=1200)
+```bash
+python3 {baseDir}/scripts/cron_cli.py <command> [options]
 ```
 
-Dynamic task (agent executes each time):
-```
-cron(action="add", message="Check HKUDS/nanobot GitHub stars and report", every_seconds=600)
+## Add a Job
+
+Recurring (every N seconds):
+```bash
+python3 {baseDir}/scripts/cron_cli.py add --message "Time to take a break!" --every 1200
 ```
 
-One-time scheduled task (compute ISO datetime from current time):
-```
-cron(action="add", message="Remind me about the meeting", at="<ISO datetime>")
-```
-
-Timezone-aware cron:
-```
-cron(action="add", message="Morning standup", cron_expr="0 9 * * 1-5", tz="America/Vancouver")
+Cron expression:
+```bash
+python3 {baseDir}/scripts/cron_cli.py add --message "Morning standup" --cron "0 9 * * 1-5" --tz "America/Vancouver"
 ```
 
-List/remove:
+One-time (compute ISO datetime from current time):
+```bash
+python3 {baseDir}/scripts/cron_cli.py add --message "Remind me about the meeting" --at "<ISO datetime>"
 ```
-cron(action="list")
-cron(action="remove", job_id="abc123")
+
+## List / Remove
+
+```bash
+python3 {baseDir}/scripts/cron_cli.py list
+python3 {baseDir}/scripts/cron_cli.py remove --id abc123
 ```
 
 ## Time Expressions
 
-| User says | Parameters |
-|-----------|------------|
-| every 20 minutes | every_seconds: 1200 |
-| every hour | every_seconds: 3600 |
-| every day at 8am | cron_expr: "0 8 * * *" |
-| weekdays at 5pm | cron_expr: "0 17 * * 1-5" |
-| 9am Vancouver time daily | cron_expr: "0 9 * * *", tz: "America/Vancouver" |
-| at a specific time | at: ISO datetime string (compute from current time) |
+| User says | CLI flags |
+|-----------|-----------|
+| every 20 minutes | `--every 1200` |
+| every hour | `--every 3600` |
+| every day at 8am | `--cron "0 8 * * *"` |
+| weekdays at 5pm | `--cron "0 17 * * 1-5"` |
+| 9am Vancouver time daily | `--cron "0 9 * * *" --tz "America/Vancouver"` |
+| at a specific time | `--at <ISO datetime>` (compute from current time) |
 
 ## Timezone
 
-Use `tz` with `cron_expr` to schedule in a specific IANA timezone. Without `tz`, the server's local timezone is used.
+Use `--tz` with `--cron` to schedule in a specific IANA timezone. Without `--tz`, the server's local timezone is used.
+
+## Important
+
+- When the user says "remind me every N minutes/hours" → use `--every`
+- When the user says "remind me at 9am every day" → use `--cron`
+- When the user says "remind me in 30 minutes" → compute the ISO datetime and use `--at`
+- Do NOT simulate timers yourself — always use this CLI script.

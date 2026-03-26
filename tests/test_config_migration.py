@@ -28,7 +28,7 @@ def test_load_config_keeps_max_tokens_and_warns_on_legacy_memory_window(tmp_path
     config = load_config(config_path)
 
     assert config.agents.defaults.max_tokens == 1234
-    assert config.agents.defaults.context_window_tokens == 65_536
+    assert config.agents.defaults.context_window_tokens == 200_000
     assert config.agents.defaults.should_warn_deprecated_memory_window is True
 
 
@@ -54,7 +54,7 @@ def test_save_config_writes_context_window_tokens_but_not_memory_window(tmp_path
     defaults = saved["agents"]["defaults"]
 
     assert defaults["maxTokens"] == 2222
-    assert defaults["contextWindowTokens"] == 65_536
+    assert defaults["contextWindowTokens"] == 200_000
     assert "memoryWindow" not in defaults
 
 
@@ -85,7 +85,7 @@ def test_onboard_refresh_rewrites_legacy_config_template(tmp_path, monkeypatch) 
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     defaults = saved["agents"]["defaults"]
     assert defaults["maxTokens"] == 3333
-    assert defaults["contextWindowTokens"] == 65_536
+    assert defaults["contextWindowTokens"] == 200_000
     assert "memoryWindow" not in defaults
 
 

@@ -14,9 +14,10 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from nanobot.agent.context import ContextBuilder
+from nanobot.groupchat import history_settings
 from nanobot.agent.memory import MemoryConsolidator
 from nanobot.agent.subagent import SubagentManager
-from nanobot.agent.tools.cron import CronTool
+
 from nanobot.agent.skills import BUILTIN_SKILLS_DIR
 from nanobot.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from nanobot.agent.tools.message import MessageTool
@@ -48,7 +49,7 @@ class AgentLoop:
     5. Sends responses back
     """
 
-    _TOOL_RESULT_MAX_CHARS = 16_000
+    _TOOL_RESULT_MAX_CHARS = 64_000  # default, overridden by history_settings
 
     def __init__(
         self,
@@ -57,7 +58,7 @@ class AgentLoop:
         workspace: Path,
         model: str | None = None,
         max_iterations: int = 40,
-        context_window_tokens: int = 65_536,
+        context_window_tokens: int = 200_000,
         web_search_config: WebSearchConfig | None = None,
         web_proxy: str | None = None,
         exec_config: ExecToolConfig | None = None,
@@ -104,6 +105,9 @@ class AgentLoop:
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
         self._background_tasks: list[asyncio.Task] = []
         self._processing_lock = asyncio.Lock()
+        # Read tool_result_max_chars from history_settings
+        self._tool_result_max_chars = history_settings.get_tool_result_max_chars()
+
         self.memory_consolidator = MemoryConsolidator(
             workspace=workspace,
             provider=provider,
@@ -128,14 +132,15 @@ class AgentLoop:
             restrict_to_workspace=self.restrict_to_workspace,
             path_append=self.exec_config.path_append,
         ))
+        from nanobot.agent.tools.process import ProcessTool
+        self.tools.register(ProcessTool())
         raw_search = WebSearchTool(config=self.web_search_config, proxy=self.web_proxy)
         self.tools.register(SmartSearchTool(raw_search, provider=self.provider))
         raw_fetch = WebFetchTool(proxy=self.web_proxy)
         self.tools.register(SmartFetchTool(raw_fetch, provider=self.provider))
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
-        if self.cron_service:
-            self.tools.register(CronTool(self.cron_service))
+        # CronTool removed — cron is now a pure skill (skills/cron/scripts/cron_cli.py)
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -161,10 +166,14 @@ class AgentLoop:
 
     def _set_tool_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
         """Update context for all tools that need routing info."""
-        for name in ("message", "spawn", "cron"):
+        for name in ("message", "spawn"):
             if tool := self.tools.get(name):
                 if hasattr(tool, "set_context"):
                     tool.set_context(channel, chat_id, *([message_id] if name == "message" else []))
+        # Export routing info as env vars so cron CLI script can read them
+        import os
+        os.environ["NANOBOT_CHANNEL"] = channel
+        os.environ["NANOBOT_CHAT_ID"] = chat_id
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -196,11 +205,11 @@ class AgentLoop:
         self,
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
-    ) -> tuple[str | None, list[str], list[dict], dict]:
+    ) -> tuple[str | None, list[str], list[dict], dict, float | None]:
         """Run the agent iteration loop.
 
         Returns:
-            (final_content, tools_used, messages, token_usage)
+            (final_content, tools_used, messages, token_usage, total_cost)
         """
         from nanobot.agent.tool_loop import tool_loop
 
@@ -215,12 +224,7 @@ class AgentLoop:
                 await on_progress(hint, tool_hint=True)
 
         async def _on_iter_usage(usage: dict) -> None:
-            if on_progress:
-                total = usage.get("total_tokens", 0)
-                if total > 0:
-                    p = usage.get("prompt_tokens", 0)
-                    c = usage.get("completion_tokens", 0)
-                    await on_progress(f"`in:{p} out:{c} Σ{total}`")
+            pass  # Per-iteration stats suppressed; total shown in final reply
 
         result = await tool_loop(
             provider=self.provider,
@@ -235,6 +239,7 @@ class AgentLoop:
         )
 
         final_content = result.content
+        total_cost = result.cost if result.cost else None
         if result.finish_reason == "error":
             # Don't persist error responses — they poison context (#1303).
             pass
@@ -244,7 +249,7 @@ class AgentLoop:
                 "without completing the task. You can try breaking the task into smaller steps."
             )
 
-        return final_content, result.tools_used, result.messages, result.token_usage
+        return final_content, result.tools_used, result.messages, result.token_usage, total_cost
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
@@ -368,7 +373,7 @@ class AgentLoop:
             session = self.sessions.get_or_create(key)
             await self.memory_consolidator.maybe_consolidate_by_tokens(session)
             self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
-            history = session.get_history(max_messages=0)
+            history = session.get_history(max_messages=None)
             # Subagent results should be assistant role, other system messages use user role
             current_role = "assistant" if msg.sender_id == "subagent" else "user"
             messages = self.context.build_messages(
@@ -376,15 +381,14 @@ class AgentLoop:
                 current_message=msg.content, channel=channel, chat_id=chat_id,
                 current_role=current_role,
             )
-            final_content, _, all_msgs, _tok = await self._run_agent_loop(messages)
+            final_content, _, all_msgs, _tok, _cost = await self._run_agent_loop(messages)
             self._save_turn(session, all_msgs, 1 + len(history))
             self.sessions.save(session)
             self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
             return OutboundMessage(channel=channel, chat_id=chat_id,
                                   content=final_content or "Background task completed.")
 
-        preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
-        logger.info("Processing message from {}:{}: {}", msg.channel, msg.sender_id, preview)
+        logger.info("Processing message from {}:{}: {}", msg.channel, msg.sender_id, msg.content)
 
         key = session_key or msg.session_key
         session = self.sessions.get_or_create(key)
@@ -436,19 +440,24 @@ class AgentLoop:
                 channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=meta,
             ))
 
-        final_content, _, all_msgs, token_usage = await self._run_agent_loop(
+        final_content, _, all_msgs, token_usage, total_cost = await self._run_agent_loop(
             initial_messages, on_progress=on_progress or _bus_progress,
         )
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
 
-        # Append token usage to the end of the reply
+        # Append token usage and cost to the end of the reply
         total = token_usage.get("total", 0)
         prompt = token_usage.get("prompt", 0)
         completion = token_usage.get("completion", 0)
+        suffix_parts = []
         if total > 0:
-            final_content = f"{final_content}\n\n`[total] in:{prompt} out:{completion} Σ{total}`"
+            suffix_parts.append(f"in:{prompt} out:{completion} Σ{total}")
+        if total_cost is not None:
+            suffix_parts.append(f"${total_cost:.4f}")
+        if suffix_parts:
+            final_content = f"{final_content}\n\n`[{' | '.join(suffix_parts)}]`"
 
         self._save_turn(session, all_msgs, 1 + len(history))
         self.sessions.save(session)
@@ -457,8 +466,7 @@ class AgentLoop:
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
             return None
 
-        preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
-        logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
+        logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, final_content)
         return OutboundMessage(
             channel=msg.channel, chat_id=msg.chat_id, content=final_content,
             metadata=msg.metadata or {},

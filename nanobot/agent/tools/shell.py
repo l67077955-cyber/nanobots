@@ -76,6 +76,14 @@ class ExecTool(Tool):
                     "minimum": 1,
                     "maximum": 600,
                 },
+                "background": {
+                    "type": "boolean",
+                    "description": (
+                        "Run command in background. Returns immediately with a session ID. "
+                        "Use the process tool (list/poll/kill) to manage the session. "
+                        "Use this for long-running commands (>30s)."
+                    ),
+                },
             },
             "required": [],
         }
@@ -83,8 +91,14 @@ class ExecTool(Tool):
     async def execute(
         self, command: str = "", commands: list | None = None,
         working_dir: str | None = None,
-        timeout: int | None = None, **kwargs: Any,
+        timeout: int | None = None,
+        background: bool = False,
+        **kwargs: Any,
     ) -> str:
+        # Background mode: single command only
+        if background and command:
+            return await self._run_background(command, working_dir)
+
         # Batch mode: run all commands concurrently
         if commands:
             all_cmds = list(commands)
@@ -100,6 +114,52 @@ class ExecTool(Tool):
         if not command:
             return "Error: 必须提供 command 或 commands 参数"
         return await self._run_one(command, working_dir, timeout)
+
+    async def _run_background(self, command: str, working_dir: str | None = None) -> str:
+        """Run a command in background, returning immediately with session info."""
+        from nanobot.agent.tools.process_registry import (
+            ProcessSession, add_session, create_session_id, start_background_readers,
+        )
+
+        cwd = working_dir or self.working_dir or os.getcwd()
+        guard_error = self._guard_command(command, cwd)
+        if guard_error:
+            return guard_error
+
+        env = os.environ.copy()
+        if self.path_append:
+            env["PATH"] = env.get("PATH", "") + os.pathsep + self.path_append
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "/bin/bash", "-c", command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+                env=env,
+            )
+
+            session_id = create_session_id()
+            session = ProcessSession(
+                id=session_id,
+                command=command,
+                pid=process.pid,
+                cwd=cwd,
+                process=process,
+            )
+            add_session(session)
+            await start_background_readers(session)
+
+            return (
+                f"Command running in background (session: {session_id}, pid: {process.pid}).\n"
+                f"Use the process tool to manage:\n"
+                f"  process(action='poll', session_id='{session_id}') — check output\n"
+                f"  process(action='kill', session_id='{session_id}') — terminate\n"
+                f"  process(action='list') — list all background sessions"
+            )
+        except Exception as e:
+            return f"Error starting background command: {e}"
+
 
     async def _run_one(
         self, command: str, working_dir: str | None = None,
@@ -153,7 +213,11 @@ class ExecTool(Tool):
             result = "\n".join(output_parts) if output_parts else "(no output)"
 
             # Head + tail truncation to preserve both start and end of output
-            max_len = self._MAX_OUTPUT
+            try:
+                from nanobot.groupchat.history_settings import exec_max_chars
+                max_len = exec_max_chars()
+            except Exception:
+                max_len = self._MAX_OUTPUT
             if len(result) > max_len:
                 half = max_len // 2
                 result = (

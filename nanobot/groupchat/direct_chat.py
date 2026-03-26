@@ -63,11 +63,55 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
             "models": {agent_name: agent.get("model", "?")},
         })
 
-    # Build messages: system(persona) → [history] → user(new)
+    # Build messages: system(persona) → [memory] → [skills] → [history] → user(new)
     now = _cn_now().strftime("%Y年%m月%d日 %H:%M")
     messages: list[dict[str, str]] = [
         {"role": "system", "content": agent["prompt"] + f"\n\n[Current date and time: {now}]"},
     ]
+
+    # Long-term memory (progressive loading — pointer only, agent reads via read_file)
+    try:
+        from nanobot.agent.memory import MemoryStore
+        store = MemoryStore(engine.workspace)
+        if store.read_long_term().strip():
+            messages.append({"role": "system", "content": (
+                "[Long-term Memory — 长期记忆]\n\n"
+                f"你有持久化记忆文件。用 read_file 查看完整内容：\n"
+                f"- `{store.memory_file}` — 长期事实记忆 (MEMORY.md)\n"
+                f"- `{store.history_file}` — 时间线日志 (HISTORY.md)"
+            )})
+    except Exception:
+        pass  # memory is optional; don't break chat if unavailable
+
+    # Skills (always-on + summary) — mirrors engine._build_agent_prompt()
+    try:
+        from nanobot.agent.skills import SkillsLoader
+        loader = SkillsLoader(engine.workspace)
+        parts: list[str] = []
+        always = loader.get_always_skills()
+        if always:
+            ac = loader.load_skills_for_context(always)
+            if ac:
+                parts.append(ac)
+        summary = loader.build_skills_summary()
+        if summary:
+            parts.append("# Skills\n\nTo use a skill, read its SKILL.md with read_file.\n\n" + summary)
+        if parts:
+            messages.append({"role": "system", "content": "\n\n".join(parts)})
+    except Exception:
+        pass  # skills are optional
+
+    # Tool instructions (load from overrides → file → fallback)
+    tool_hint = ""
+    try:
+        overrides = PromptBuilder._load_prompt_overrides("__global__")
+        tool_hint = overrides.get("tool_instructions", "")
+    except Exception:
+        pass
+    if not tool_hint:
+        tool_hint = PromptBuilder.get_component_template("tool_instructions")
+    if tool_hint:
+        messages.append({"role": "system", "content": tool_hint})
 
     # Few-shot examples
     examples = agent.get("examples", "")
@@ -99,6 +143,18 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
         _delta_cb = stream.on_delta if stream.enabled else None
         _reset_cb = stream.on_reset if stream.enabled else None
 
+        # Log full context before LLM call
+        _dc_total_chars = sum(
+            len(m.get("content", "")) if isinstance(m.get("content"), str)
+            else sum(len(b.get("text", "")) for b in m.get("content", []) if isinstance(b, dict))
+            if isinstance(m.get("content"), list) else 0
+            for m in messages
+        )
+        logger.info(
+            "direct_chat [{}] cycle {} start: msgs={} total_chars={} user_msg={}",
+            agent_name, cycle, len(messages), _dc_total_chars, current_user_msg,
+        )
+
         try:
             content, tools_used, stats = await engine._chat_with_tools(
                 messages=messages,
@@ -111,8 +167,12 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
             log_request(engine, agent_name, agent["model"], "direct",
                         reply_len=len(content), msgs=len(messages),
                         tools=tools_used,
-                        input_preview=current_user_msg[:200], output=content[:500],
+                        input_preview=current_user_msg, output=content,
                         **stats)
+            logger.info(
+                "direct_chat [{}] cycle {} result: content={}",
+                agent_name, cycle, content,
+            )
             if content:
                 engine._add_message("用户", current_user_msg)
                 # Store content with tool call log so model sees its history
@@ -124,7 +184,11 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
                 display_content = content
                 if total > 0:
                     p, c = tok.get("prompt", 0), tok.get("completion", 0)
-                    display_content = f"{content}\n\n`[total] in:{p} out:{c} Σ{total}`"
+                    cost = stats.get("cost", 0) or 0
+                    cache_t = stats.get("cache_tokens", 0) or 0
+                    cost_str = f" ${cost:.4f}" if cost else ""
+                    cache_str = f" 🔵{cache_t}" if cache_t else ""
+                    display_content = f"{content}\n\n`in:{p} out:{c} Σ{total}{cost_str}{cache_str}`"
                 await stream.finalize(display_content, fallback_send=engine._send)
                 last_response = content
             else:
