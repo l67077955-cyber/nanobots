@@ -133,7 +133,9 @@ async def broadcast_round(
 
     # ── ConversationPool: OS-style resource pool ──
     n = len(exec_agents)
-    pool_capacity = max(n * (n - 1), 2)  # at least 2 slots
+    # Pool capacity: from settings or auto-calculated
+    pool_capacity_setting = gc_settings.get("context_pool_capacity", 0)
+    pool_capacity = pool_capacity_setting if pool_capacity_setting > 0 else max(n * (n - 1), 2)
     pool = ConversationPool(capacity=pool_capacity, agents=list(exec_agents))
     pool.ALLOCATE_TIMEOUT = float(gc_settings["allocate_timeout"])
     await engine._send(f"── threads {_d.thread_bar(0, pool_capacity)} ──")
@@ -149,9 +151,12 @@ async def broadcast_round(
 
     # ── Shared search cache + pool ──
     _search_cache: dict[str, tuple[str, str]] = {}
+    # SearchPool: use context_points_per_agent if set, else search_initial
+    points_per_agent = gc_settings.get("context_points_per_agent", 0)
+    search_initial = points_per_agent if points_per_agent > 0 else gc_settings["search_initial"]
     search_pool = SearchPool(
         agents=list(exec_agents),
-        initial_per_agent=gc_settings["search_initial"],
+        initial_per_agent=search_initial,
         earn_interval=gc_settings["search_earn_interval"],
     )
 

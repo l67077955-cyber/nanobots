@@ -61,11 +61,15 @@ class SettingsCommandsMixin:
         "search_initial": 2,           # search pool = agents × N
         "search_earn_interval": 4,     # every N outputs earns +1 credit
         "allocate_timeout": 15,        # seconds before message is dropped
+        "context_pool_capacity": 0,    # 0 = auto (n × (n-1)), >0 = custom capacity
+        "context_points_per_agent": 0, # 0 = disabled, >0 = custom points per agent
     }
     GC_SETTINGS_LABELS = {
-        "search_initial":        "初始搜索额度 (每 agent × N)",
-        "search_earn_interval":  "每 N 次对话返还 1 搜索额度",
-        "allocate_timeout":      "消息分配超时 (秒)",
+        "search_initial":           "初始搜索额度 (每 agent × N)",
+        "search_earn_interval":     "每 N 次对话返还 1 搜索额度",
+        "allocate_timeout":         "消息分配超时 (秒)",
+        "context_pool_capacity":    "对话池容量 (0=自动, >0=自定义)",
+        "context_points_per_agent": "对话池点数 (0=禁用, >0=每agent点数)",
     }
 
     @staticmethod
@@ -109,9 +113,12 @@ class SettingsCommandsMixin:
         # Show pool capacity preview
         active = len(self._groupchat_engine.active_agents) if self._groupchat_engine else 0
         if active > 0:
-            cap = active * (active - 1)
+            pool_points = settings.get("context_pool_capacity", 0)
+            auto_cap = active * (active - 1)
+            cap = pool_points if pool_points > 0 else auto_cap
+            pool_mode = f"手动({pool_points})" if pool_points > 0 else "自动"
             search_pool = active * settings.get("search_initial", 1)
-            lines.append(f"\n  对话池: {active} agents × {active - 1} = {cap} threads")
+            lines.append(f"\n  对话池: {pool_mode} → {cap} threads" + (f" (auto={auto_cap})" if pool_points > 0 else ""))
             lines.append(f"  搜索池: {active} agents × {settings.get('search_initial', 1)} = {search_pool} points")
 
         await update.message.reply_text(
