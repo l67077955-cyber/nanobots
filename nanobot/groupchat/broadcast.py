@@ -1,7 +1,15 @@
 """Broadcast execution mode for group chat.
 
-Runs all agents concurrently with out-of-order display.
-Agents can communicate with each other via chatroom_send/wait tools.
+Orchestrates concurrent agent execution using:
+- ``BroadcastCoordinator``: Setup, run, and synthesize phases
+- ``AgentRunner`` (from agent_runner.py): Per-agent lifecycle management
+- ``MailboxHub`` (from mailbox.py): Inter-agent messaging with failure awareness
+
+Architecture:
+    broadcast_round() → BroadcastCoordinator
+        .setup()      — tools, prompts, pools
+        .run()        — concurrent tasks + sentinels + user listener
+        .synthesize() — leader summary or auto-summary
 """
 
 from __future__ import annotations
@@ -9,30 +17,29 @@ from __future__ import annotations
 import asyncio
 import copy
 import json as _json
+import time as _time
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
+from typing import Any, Awaitable, Protocol, runtime_checkable
 
 from loguru import logger
 
 from nanobot.groupchat import display as _d
+from nanobot.groupchat.agent_runner import AgentRunner, AgentResult, AgentState
 from nanobot.groupchat.mailbox import MailboxHub, ConversationPool
-from nanobot.groupchat.utils import build_tool_log, log_request
+from nanobot.groupchat.utils import log_request
 
+
+# ── Protocol: documents what broadcast needs from the engine ──
 
 @runtime_checkable
 class BroadcastContext(Protocol):
-    """Protocol documenting what broadcast_round needs from the engine.
+    """Protocol documenting what broadcast_round needs from the engine."""
 
-    Replaces the opaque ``Any`` type, making the implicit dependency explicit.
-    """
-
-    # ── Public attributes ──
     registry: dict[str, dict[str, Any]]
-    tools: Any  # ToolRegistry
-    provider: Any  # LLMProvider
-    config: Any  # GroupChatConfig
+    tools: Any
+    provider: Any
+    config: Any
 
-    # ── Private but accessed by broadcast ──
     _round: int
     _leader: str | None
     _debug_context: bool
@@ -40,7 +47,6 @@ class BroadcastContext(Protocol):
     _request_log: list[dict[str, Any]]
     _session_dir: Any
 
-    # ── Methods ──
     def _send(self, text: str) -> Awaitable[None]: ...
     def _save_event(self, event_type: str, *, agent: str = "", content: str = "", extra: dict | None = None) -> None: ...
     def _add_message(self, sender: str, content: str) -> None: ...
@@ -54,6 +60,457 @@ class BroadcastContext(Protocol):
     def prompt_builder(self) -> Any: ...
 
 
+# ── Helper: load groupchat settings ──
+
+def _load_gc_settings() -> dict:
+    """Load groupchat settings from disk with defaults."""
+    defaults = {"search_initial": 2, "search_earn_interval": 4, "allocate_timeout": 15}
+    path = Path.home() / ".nanobot" / "groupchat_settings.json"
+    settings = dict(defaults)
+    if path.exists():
+        try:
+            settings.update(_json.loads(path.read_text()))
+        except Exception:
+            pass
+    return settings
+
+
+def _extract_user_question(history: list[dict[str, str]]) -> str:
+    """Get the most recent user message."""
+    for msg in reversed(history):
+        if msg.get("sender") in ("User", "user", "用户", "系统"):
+            return msg.get("content", "")[:300]
+    return ""
+
+
+# ══════════════════════════════════════════════════════════════════
+# BroadcastCoordinator — the single orchestrator
+# ══════════════════════════════════════════════════════════════════
+
+class BroadcastCoordinator:
+    """Orchestrates a broadcast round: setup → run → synthesize.
+
+    Replaces the previous 880-line broadcast_round function with
+    a structured class that separates concerns into phases.
+    """
+
+    def __init__(
+        self,
+        agents: list[str],
+        engine: BroadcastContext,
+        mailbox: MailboxHub,
+        global_timeout: float = 200.0,
+    ):
+        self.agents = list(agents)
+        self.engine = engine
+        self.mailbox = mailbox
+        self.global_timeout = global_timeout
+
+        # Detect leader
+        self.leader_name = engine._leader if hasattr(engine, '_leader') else None
+        if self.leader_name and self.leader_name not in agents:
+            self.leader_name = None
+
+        self.exec_agents = list(agents)
+        self.non_leader_agents = [a for a in agents if a != self.leader_name] if self.leader_name else list(agents)
+        self.total = len(self.exec_agents)
+
+        # State
+        self.pool: ConversationPool | None = None
+        self.search_pool: Any = None
+        self.leader_gate: Any = None
+        self.leader_end_event = asyncio.Event()
+        self.runners: dict[str, AgentRunner] = {}
+        self.results: list[AgentResult] = []
+        self._original_settings: dict[str, dict] = {}
+        self._agent_tool_registries: dict[str, Any] = {}
+        self._round_t0 = 0.0
+        self._user_question = ""
+        self.gc_settings: dict = {}
+
+    # ── Phase 1: Setup ──────────────────────────────────────────
+
+    def setup(self) -> None:
+        """Initialize pools, tools, prompts, and AgentRunners."""
+        self._round_t0 = _time.time()
+        self.gc_settings = _load_gc_settings()
+        self._user_question = _extract_user_question(self.engine._history)
+
+        # Snapshot settings for restoration
+        if self.leader_name:
+            for name in self.agents:
+                cfg = self.engine.registry.get(name, {})
+                self._original_settings[name] = {
+                    "tools": copy.deepcopy(cfg.get("tools", {})),
+                }
+
+        self._setup_pools()
+        self._setup_tools()
+        self._setup_runners()
+
+    def _setup_pools(self) -> None:
+        """Create ConversationPool and SearchPool."""
+        from nanobot.groupchat.search_tools import SearchPool
+
+        n = len(self.exec_agents)
+        pool_cap_setting = self.gc_settings.get("context_pool_capacity", 0)
+        pool_capacity = pool_cap_setting if pool_cap_setting > 0 else max(n * (n - 1), 2)
+        self.pool = ConversationPool(capacity=pool_capacity, agents=list(self.exec_agents))
+
+        points_per_agent = self.gc_settings.get("context_points_per_agent", 0)
+        search_initial = points_per_agent if points_per_agent > 0 else self.gc_settings["search_initial"]
+        self.search_pool = SearchPool(
+            agents=list(self.exec_agents),
+            initial_per_agent=search_initial,
+            earn_interval=self.gc_settings["search_earn_interval"],
+        )
+
+    def _setup_tools(self) -> None:
+        """Build per-agent tool registries with chatroom tools."""
+        from nanobot.agent.tools.registry import ToolRegistry
+        from nanobot.groupchat.chatroom_tools import ChatroomSendTool, WaitTool
+        from nanobot.groupchat.search_tools import CachedSearchTool
+        from nanobot.groupchat.leader_tools import (
+            LeaderGate, ManageAgentTool, EndDiscussionTool, TransferCreditsTool,
+        )
+
+        _search_cache: dict[str, tuple[str, str]] = {}
+
+        # Leader gate
+        if self.leader_name:
+            self.leader_gate = LeaderGate(self.leader_name)
+
+        for name in self.exec_agents:
+            base_reg = self.engine._get_agent_registry(name)
+            registry = ToolRegistry()
+
+            # Copy existing tools, wrapping web_search with cache
+            for tool_name in base_reg.tool_names:
+                tool = base_reg.get(tool_name)
+                if tool:
+                    if tool_name == "web_search":
+                        registry.register(CachedSearchTool(tool, name, _search_cache, search_pool=self.search_pool))
+                    elif tool_name not in ("chatroom_send", "wait"):
+                        registry.register(tool)
+
+            # Add chatroom tools
+            send_tool = ChatroomSendTool(
+                mailbox=self.mailbox, agent_name=name, pool=self.pool,
+                search_pool=self.search_pool, leader_gate=self.leader_gate,
+            )
+            wait_tool = WaitTool(mailbox=self.mailbox, agent_name=name, pool=self.pool)
+            wait_tool._send_tool = send_tool
+            registry.register(send_tool)
+            registry.register(wait_tool)
+            self._agent_tool_registries[name] = registry
+
+        # Leader-specific tools
+        self._leader_agent_tasks: dict = {}
+        if self.leader_name and self.leader_name in self._agent_tool_registries:
+            manage_tool = ManageAgentTool(
+                exec_agents=self.non_leader_agents,
+                agent_tasks=self._leader_agent_tasks,
+                engine=self.engine,
+                mailbox=self.mailbox,
+            )
+            end_tool = EndDiscussionTool(end_event=self.leader_end_event, engine=self.engine)
+            transfer_tool = TransferCreditsTool(search_pool=self.search_pool, engine=self.engine)
+            self._agent_tool_registries[self.leader_name].register(manage_tool)
+            self._agent_tool_registries[self.leader_name].register(end_tool)
+            self._agent_tool_registries[self.leader_name].register(transfer_tool)
+
+    def _setup_runners(self) -> None:
+        """Create AgentRunner instances with built prompts."""
+        for idx, name in enumerate(self.exec_agents):
+            if name not in self.engine.registry:
+                continue
+
+            agent_cfg = self.engine.registry[name]
+            model = agent_cfg["model"]
+            is_leader = (name == self.leader_name)
+
+            # Build prompt using prompt_builder
+            messages = self.engine.prompt_builder.build_broadcast_prompt(
+                name,
+                engine=self.engine,
+                agents=self.exec_agents,
+                user_question=self._user_question,
+                leader_name=self.leader_name,
+                agent_idx=idx,
+                total=self.total,
+                search_pool=self.search_pool,
+            )
+
+            # Determine tool definitions
+            reg = self._agent_tool_registries[name]
+            tool_defs = self.engine._get_agent_tools(agent_cfg, reg)
+            broadcast_tool_names = ["chatroom_send", "wait"]
+            if is_leader:
+                broadcast_tool_names.extend(["manage_agent", "end_discussion", "transfer_credits"])
+            broadcast_defs = [
+                t.to_schema() for t in [reg.get(tn) for tn in broadcast_tool_names]
+                if t is not None
+            ]
+            if tool_defs:
+                existing_names = {d["function"]["name"] for d in tool_defs}
+                for bd in broadcast_defs:
+                    if bd["function"]["name"] not in existing_names:
+                        tool_defs.append(bd)
+            else:
+                tool_defs = broadcast_defs
+
+            runner = AgentRunner(
+                name, idx, self.total,
+                engine=self.engine,
+                mailbox=self.mailbox,
+                pool=self.pool,
+                tool_registry=reg,
+                tool_defs=tool_defs,
+                messages=messages,
+                model=model,
+                is_leader=is_leader,
+                search_pool=self.search_pool,
+            )
+            self.runners[name] = runner
+
+    # ── Phase 2: Run ────────────────────────────────────────────
+
+    async def run(self) -> None:
+        """Execute all agents concurrently with sentinels and user listener."""
+        # Announce
+        self.engine._save_event("round_start", extra={
+            "round": self.engine._round + 1,
+            "agents": self.agents,
+            "mode": "broadcast",
+            "leader": self.leader_name,
+        })
+        await self.engine._send(_d.broadcast_start_msg(
+            self.agents, int(self.global_timeout), leader=self.leader_name,
+        ))
+        if self.pool:
+            await self.engine._send(f"── threads {_d.thread_bar(0, self.pool.capacity)} ──")
+
+        # Setup mailboxes
+        for name in self.exec_agents:
+            self.mailbox.create(name)
+        self.mailbox.start_round(active_agents=list(self.exec_agents))
+
+        # Launch agent tasks
+        tasks: dict[asyncio.Task, str] = {}
+        for name, runner in self.runners.items():
+            task = asyncio.create_task(runner.run())
+            tasks[task] = name
+
+        # Populate leader's task mapping for ManageAgentTool
+        for task_obj, task_name in tasks.items():
+            if task_name != self.leader_name:
+                self._leader_agent_tasks[task_obj] = task_name
+
+        # Launch sentinels and listener
+        _user_listener_running = True
+
+        async def _user_listener() -> None:
+            while _user_listener_running:
+                try:
+                    msg = await asyncio.wait_for(self.engine._input_queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+                if msg == "__SUMMARY__":
+                    continue
+
+                if self.pool:
+                    await self.pool.allocate_user(list(self.agents))
+                self.mailbox.create("用户")
+                self.mailbox.send("用户", ["All"], msg)
+                self.engine._add_message("用户", msg)
+                pool_bar = _d.thread_bar(self.pool.used, self.pool.capacity) if self.pool else ""
+                await self.engine._send(f"── User ──\n{msg}\n  {pool_bar}")
+                logger.info("Broadcast: user interjected: {}", msg[:60])
+
+        async def _watch_all_waiting() -> None:
+            while True:
+                await self.mailbox.all_waiting_event.wait()
+                # Grace period: wait 5s to avoid premature termination
+                await asyncio.sleep(5)
+                if (self.mailbox._waiting >= self.mailbox._active_agents
+                        and len(self.mailbox._active_agents) > 0):
+                    return  # truly all idle
+                self.mailbox._all_waiting.clear()
+                logger.info("Broadcast: idle sentinel reset — agent(s) reactivated")
+
+        async def _watch_leader_end() -> None:
+            await self.leader_end_event.wait()
+
+        user_task = asyncio.create_task(_user_listener())
+        idle_sentinel = asyncio.create_task(_watch_all_waiting())
+        leader_sentinel = asyncio.create_task(_watch_leader_end())
+        all_tasks = set(tasks.keys()) | {idle_sentinel, leader_sentinel}
+
+        completed = 0
+        try:
+            while not all(t.done() for t in tasks.keys()):
+                done_set, _ = await asyncio.wait(
+                    [t for t in all_tasks if not t.done()],
+                    timeout=self.global_timeout,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if not done_set:
+                    break
+
+                should_break = False
+                for t in done_set:
+                    if t is idle_sentinel:
+                        logger.info("Broadcast: all agents waiting, ending round")
+                        await self.engine._send("━━ all agents idle — round complete ━━")
+                        for task_obj in tasks:
+                            if not task_obj.done():
+                                task_obj.cancel()
+                        should_break = True
+                        break
+                    elif t is leader_sentinel:
+                        logger.info("Broadcast: leader ended discussion")
+                        await self.engine._send("━━ Leader 结束讨论 — entering synthesis ━━")
+                        for task_obj in tasks:
+                            if not task_obj.done():
+                                task_obj.cancel()
+                        should_break = True
+                        break
+                    elif t in tasks:
+                        try:
+                            result = t.result()
+                            completed += 1
+                            self.results.append(result)
+                            logger.info(
+                                "Broadcast: {}/{} done — {} ({})",
+                                completed, self.total, result.name,
+                                f"{len(result.content)} chars" if result.content else "empty",
+                            )
+                        except Exception as e:
+                            completed += 1
+                            logger.error("Broadcast: agent task error: {}", e)
+                            await self.engine._send(f"\u2717 Agent error: {e}")
+
+                if should_break:
+                    break
+
+        except asyncio.TimeoutError:
+            for task, name in tasks.items():
+                if not task.done():
+                    task.cancel()
+                    logger.warning("Broadcast: {} cancelled (global timeout)", name)
+                    await self.engine._send(f"\u23f0 {name} timeout")
+
+        # Cleanup
+        for sentinel in (idle_sentinel, leader_sentinel):
+            if not sentinel.done():
+                sentinel.cancel()
+        _user_listener_running = False
+        if not user_task.done():
+            user_task.cancel()
+        for task_obj in tasks:
+            if not task_obj.done():
+                task_obj.cancel()
+                logger.warning("Broadcast: {} cancelled", tasks[task_obj])
+
+        # Collect any remaining results
+        for task_obj, name in tasks.items():
+            if task_obj.done() and not any(r.name == name for r in self.results):
+                try:
+                    result = task_obj.result()
+                    self.results.append(result)
+                except Exception:
+                    pass
+
+        # Round summary
+        comm_count = len(self.mailbox.history)
+        round_duration = _time.time() - self._round_t0
+        self.engine._save_round_summary(
+            round_num=self.engine._round + 1,
+            agents_responded=len(self.results),
+            comm_count=comm_count,
+            duration=round_duration,
+        )
+        await self.engine._send(_d.broadcast_complete_msg(len(self.results), self.total, comm_count))
+
+        # Chat chain summary
+        chain = _d.chat_chain_summary(self.mailbox.history, leader=self.leader_name)
+        if chain:
+            await self.engine._send(chain)
+
+        self.mailbox.clear()
+
+    # ── Phase 3: Synthesize ─────────────────────────────────────
+
+    async def synthesize(self) -> None:
+        """Post-round synthesis: leader summary or auto-summary."""
+        if self.leader_name and self.leader_name in self.agents:
+            await self._leader_synthesis()
+        else:
+            from nanobot.groupchat.run_loop import generate_summary
+            await generate_summary(self.engine)
+
+        # Restore original settings
+        if self._original_settings:
+            for name, orig in self._original_settings.items():
+                cfg = self.engine.registry.get(name)
+                if cfg and orig.get("tools"):
+                    cfg["tools"] = orig["tools"]
+            logger.info("Broadcast: restored original agent settings")
+
+    async def _leader_synthesis(self) -> None:
+        """Leader evaluates all agent outputs and produces final summary."""
+        leader_model = self.engine.registry[self.leader_name]["model"]
+        model_short = leader_model.split("/")[-1]
+        await self.engine._send(f"━━ {self.leader_name} ({model_short}) · 总结 ━━")
+
+        agent_outputs = []
+        leader_own_output = ""
+        for result in self.results:
+            if result.content:
+                if result.name == self.leader_name:
+                    leader_own_output = result.content
+                else:
+                    agent_outputs.append(f"[{result.name} 的回复]\n{result.content}")
+
+        chat_msgs = []
+        for msg in self.mailbox.history:
+            sender = msg.sender if hasattr(msg, "sender") else str(msg.get("sender", "?"))
+            content_text = msg.content if hasattr(msg, "content") else str(msg.get("content", ""))
+            chat_msgs.append(f"[{sender}]: {content_text[:500]}")
+
+        synthesis_context = f"[Leader 最终总结]\n原始问题: {self._user_question}\n\n"
+        if agent_outputs:
+            synthesis_context += f"各 agent 结果:\n" + "\n\n".join(agent_outputs) + "\n\n"
+        if chat_msgs:
+            synthesis_context += f"对话记录:\n" + "\n".join(chat_msgs) + "\n\n"
+        if leader_own_output:
+            synthesis_context += f"你之前的发言:\n{leader_own_output}\n\n"
+        synthesis_context += (
+            "请基于以上所有信息，给出完整、结构化的最终总结。\n"
+            "整合所有发现，评价各 agent 的表现，指出亮点和不足，给出结论。"
+        )
+
+        try:
+            await self.engine._agent_speak(
+                self.leader_name,
+                synthesis_context=synthesis_context,
+            )
+        except Exception as e:
+            logger.error("Leader synthesis failed: {}", e)
+            await self.engine._send(f"✗ {self.leader_name} 总结失败: {e}")
+
+    # ── Results ─────────────────────────────────────────────────
+
+    def get_results(self) -> list[tuple[str, str | None]]:
+        """Return results in the old (name, content) format."""
+        return [(r.name, r.content) for r in self.results]
+
+
+# ══════════════════════════════════════════════════════════════════
+# Public API — drop-in replacement for the old broadcast_round
+# ══════════════════════════════════════════════════════════════════
+
 async def broadcast_round(
     agents: list[str],
     engine: BroadcastContext,
@@ -62,10 +519,8 @@ async def broadcast_round(
 ) -> list[tuple[str, str | None]]:
     """Run all agents concurrently with out-of-order completion display.
 
-    Each agent:
-    1. Gets its own asyncio.Task
-    2. Can use chatroom_send/wait to talk to other agents
-    3. Results display as each agent finishes (first-done-first-shown)
+    Drop-in replacement for the old 880-line function. Now delegates
+    to BroadcastCoordinator for clean phase separation.
 
     Args:
         agents: List of agent names to run.
@@ -79,801 +534,15 @@ async def broadcast_round(
     if not agents:
         return []
 
-    import time as _time
-    _round_t0 = _time.time()
+    coordinator = BroadcastCoordinator(agents, engine, mailbox, global_timeout)
 
-    # ── Detect leader ──
-    leader_name = engine._leader if hasattr(engine, '_leader') else None
-    if leader_name and leader_name not in agents:
-        leader_name = None
+    # Phase 1: Setup
+    coordinator.setup()
 
-    # ── Session-scoped settings snapshot (restore after round) ──
-    _original_settings: dict[str, dict] = {}
-    if leader_name:
-        for name in agents:
-            cfg = engine.registry.get(name, {})
-            _original_settings[name] = {
-                "tools": copy.deepcopy(cfg.get("tools", {})),
-            }
+    # Phase 2: Run agents concurrently
+    await coordinator.run()
 
-    # All agents participate — leader included as active agent
-    exec_agents = list(agents)
-    non_leader_agents = [a for a in agents if a != leader_name] if leader_name else list(agents)
-    total = len(exec_agents)
+    # Phase 3: Synthesis
+    await coordinator.synthesize()
 
-    # Announce broadcast start
-    engine._save_event("round_start", extra={
-        "round": engine._round + 1,
-        "agents": list(agents),
-        "mode": "broadcast",
-        "leader": leader_name,
-    })
-    await engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout), leader=leader_name))
-
-    # ── Load groupchat settings ──
-    _gc_settings_path = Path.home() / ".nanobot" / "groupchat_settings.json"
-    _gc_defaults = {"search_initial": 2, "search_earn_interval": 4, "allocate_timeout": 15}
-    gc_settings = dict(_gc_defaults)
-    if _gc_settings_path.exists():
-        try:
-            gc_settings.update(_json.loads(_gc_settings_path.read_text()))
-        except Exception:
-            pass
-
-    # ── Extract user question (for hint injection) ──
-    user_question = ""
-    for msg in reversed(engine._history):
-        if msg.get("sender") in ("User", "user", "用户", "系统"):
-            user_question = msg.get("content", "")[:300]
-            break
-
-    # ═══════════════════════════════════════════════════════════════
-    # Agent Execution (broadcast) — leader runs as active agent
-    # ═══════════════════════════════════════════════════════════════
-
-    # ── ConversationPool: OS-style resource pool ──
-    n = len(exec_agents)
-    # Pool capacity: from settings or auto-calculated
-    pool_capacity_setting = gc_settings.get("context_pool_capacity", 0)
-    pool_capacity = pool_capacity_setting if pool_capacity_setting > 0 else max(n * (n - 1), 2)
-    pool = ConversationPool(capacity=pool_capacity, agents=list(exec_agents))
-    pool.ALLOCATE_TIMEOUT = float(gc_settings["allocate_timeout"])
-    await engine._send(f"── threads {_d.thread_bar(0, pool_capacity)} ──")
-
-    # ── Build per-agent tool registries with chatroom tools ──
-    from nanobot.agent.tools.registry import ToolRegistry
-    from nanobot.agent.tools.base import Tool
-    from nanobot.groupchat.chatroom_tools import (
-        ChatroomSendTool, WaitTool, CachedSearchTool, SearchPool, LeaderGate,
-    )
-
-    agent_tool_registries: dict[str, ToolRegistry] = {}
-
-    # ── Shared search cache + pool ──
-    _search_cache: dict[str, tuple[str, str]] = {}
-    # SearchPool: use context_points_per_agent if set, else search_initial
-    points_per_agent = gc_settings.get("context_points_per_agent", 0)
-    search_initial = points_per_agent if points_per_agent > 0 else gc_settings["search_initial"]
-    search_pool = SearchPool(
-        agents=list(exec_agents),
-        initial_per_agent=search_initial,
-        earn_interval=gc_settings["search_earn_interval"],
-    )
-
-    # ── Shared leader gate (enforces 1-msg-then-wait for non-leaders) ──
-    leader_gate: LeaderGate | None = None
-    if leader_name:
-        leader_gate = LeaderGate(leader_name)
-
-    for name in exec_agents:
-        # Get per-agent registry (respects workspace_scope), clone and add chatroom tools
-        base_reg = engine._get_agent_registry(name)
-        registry = ToolRegistry()
-        # Copy existing tools, wrapping web_search with cache
-        for tool_name in base_reg.tool_names:
-            tool = base_reg.get(tool_name)
-            if tool:
-                if tool_name == "web_search":
-                    registry.register(CachedSearchTool(tool, name, _search_cache, search_pool=search_pool))
-                elif tool_name not in ("chatroom_send", "wait"):
-                    registry.register(tool)
-        # Add chatroom tools (per-agent instances with ConversationPool)
-        send_tool = ChatroomSendTool(
-            mailbox=mailbox, agent_name=name, pool=pool,
-            search_pool=search_pool, leader_gate=leader_gate,
-        )
-        wait_tool = WaitTool(mailbox=mailbox, agent_name=name, pool=pool)
-        wait_tool._send_tool = send_tool
-        registry.register(send_tool)
-        registry.register(wait_tool)
-        agent_tool_registries[name] = registry
-
-    # ── Leader-specific tools: manage_agent + end_discussion + transfer_credits ──
-    leader_end_event = asyncio.Event()
-    _leader_agent_tasks: dict = {}  # populated after tasks are created
-    if leader_name and leader_name in agent_tool_registries:
-        from nanobot.groupchat.chatroom_tools import ManageAgentTool, EndDiscussionTool, TransferCreditsTool
-        manage_tool = ManageAgentTool(
-            exec_agents=non_leader_agents,
-            agent_tasks=_leader_agent_tasks,
-            engine=engine,
-            mailbox=mailbox,
-        )
-        end_tool = EndDiscussionTool(end_event=leader_end_event, engine=engine)
-        transfer_tool = TransferCreditsTool(search_pool=search_pool, engine=engine)
-        agent_tool_registries[leader_name].register(manage_tool)
-        agent_tool_registries[leader_name].register(end_tool)
-        agent_tool_registries[leader_name].register(transfer_tool)
-
-    # ── Run each agent as a concurrent task ──
-
-    async def _run_one(
-        name: str,
-        agent_idx: int,
-    ) -> tuple[str, str | None, list[str], dict]:
-        """Run a single agent with streaming display."""
-        if name not in engine.registry:
-            return (name, None, [], {})
-
-        agent_cfg = engine.registry[name]
-        model = agent_cfg["model"]
-        model_short = model.split("/")[-1]
-        messages = engine._build_agent_prompt(name)
-
-        is_leader = (name == leader_name)
-
-        # ── Inject broadcast coordination hint from template ──
-        teammates = [a for a in agents if a != name]
-        # Load from override system (editable via /prompt), fallback to default
-        overrides = engine.prompt_builder._load_prompt_overrides("__global__")
-
-        if is_leader:
-            # ── Leader prompt: active orchestrator ──
-            agent_caps = []
-            for a in non_leader_agents:
-                a_cfg = engine.registry.get(a, {})
-                a_tools = a_cfg.get("tools", {})
-                if isinstance(a_tools, dict):
-                    on = [k for k, v in a_tools.items() if v]
-                elif a_cfg.get("tools_enabled", False) or a_cfg.get("_default"):
-                    on = list(engine.TOOL_NAMES)
-                else:
-                    on = []
-                agent_caps.append(f"  {a}: {', '.join(on) if on else '(无工具)'}")
-
-            leader_hint = (
-                f"[Leader 模式 — 你是团队指挥官 👑]\n"
-                f"你是 {name}，负责分析问题、分配任务、整合结果。\n\n"
-                f"用户请求: {user_question}\n\n"
-                f"## 团队成员及工具能力\n"
-                + "\n".join(agent_caps) + "\n\n"
-                f"## 你的专属工具\n"
-                f"- chatroom_send(to, message): 给队友发任务/指令\n"
-                f"- wait(): 等待队友汇报结果\n"
-                f"- manage_agent(action, agent, ...): 管理队友（disable/enable/set_tools）\n"
-                f"- end_discussion(reason): 结束讨论，进入最终总结\n"
-                f"- transfer_credits(from_agent, to_agent, amount): 划拨搜索额度\n"
-                f"- 你也拥有自己的基础工具（web_search 等），可以自己做部分工作\n\n"
-                f"## 搜索额度管理\n"
-                f"每个 agent 有独立的搜索额度（{search_pool.status()}）。\n"
-                f"没有 web_search 的 agent 的额度闲置，你可以用 transfer_credits 把他们的额度\n"
-                f"划拨给有搜索能力的 agent（包括你自己）。\n\n"
-                f"## 工作流程\n"
-                f"1. 分析问题，决定如何分工\n"
-                f"2. 用 chatroom_send 给队友分配具体任务（写清楚要做什么）\n"
-                f"   ⚠️ 只分配队友有工具能力完成的任务！无 web_search 的队友不要让他搜索\n"
-                f"3. 用 wait() 等待队友回复结果\n"
-                f"4. 根据结果：追加任务 / 纠正方向 / 自己补充搜索\n"
-                f"5. 信息充分后用 end_discussion() 结束讨论\n"
-                f"6. 在你的最终文字回复中，整合所有发现给出完整答案\n\n"
-                f"## 关键规则\n"
-                f"- 发现队友空转或无法完成任务时：果断 end_discussion\n"
-                f"- 可以一次给多个队友同时发任务（并行工作）\n"
-                f"- 你的最终文字回复就是给用户的答案，要完整、结构化\n"
-            )
-            messages.insert(max(len(messages) - 1, 0), {
-                "role": "system",
-                "content": leader_hint,
-            })
-        else:
-            # ── Non-leader: standard broadcast hint + wait for leader ──
-            hint_template = overrides.get("broadcast_hint") or engine.prompt_builder.get_component_template("broadcast_hint")
-            if hint_template:
-                hint = (
-                    hint_template
-                    .replace("{{agent_idx}}", str(agent_idx + 1))
-                    .replace("{{total}}", str(total))
-                    .replace("{{teammates}}", ", ".join(teammates))
-                    .replace("{{agent}}", name)
-                    .replace("{{user_question}}", user_question)
-                )
-                messages.insert(max(len(messages) - 1, 0), {
-                    "role": "system",
-                    "content": hint,
-                })
-
-            # If there's a leader, tell non-leader agents to expect instructions
-            if leader_name:
-                messages.insert(max(len(messages) - 1, 0), {
-                    "role": "system",
-                    "content": (
-                        f"[团队协作模式 — 严格发言规则]\n"
-                        f"Leader {leader_name} 会通过 chatroom_send 给你分配任务。\n\n"
-                        f"━━ 发言规则（强制执行）━━\n"
-                        f"1. 你每次只能发送 **1 条消息**，然后必须 wait() 等待 Leader 发言\n"
-                        f"2. Leader 发言后你的配额重置，可以再发 1 条\n"
-                        f"3. 违反此规则的消息会被系统拦截\n"
-                        f"4. 有问题必须向 Leader 提出并等待回复\n\n"
-                        f"正确流程: 做工作 → chatroom_send(结果) → wait() → 收到 Leader 指令 → 继续"
-                    ),
-                })
-
-        # ── Inject agent permissions context ──
-        perm_lines = []
-        for a in exec_agents:
-            a_cfg = engine.registry.get(a, {})
-            a_tools = a_cfg.get("tools", {})
-            if isinstance(a_tools, dict):
-                on = [k for k, v in a_tools.items() if v]
-            elif a_cfg.get("tools_enabled", False) or a_cfg.get("_default"):
-                on = list(engine.TOOL_NAMES)
-            else:
-                on = []
-            extra = ""
-            if a == name:
-                extra = " ← 你"
-            elif a == leader_name:
-                extra = " 👑Leader"
-            perm_lines.append(f"  {a}: {', '.join(on) if on else '(无工具)'}{extra}")
-        perm_hint = (
-            "[团队工具权限]\n"
-            + "\n".join(perm_lines) + "\n\n"
-            "注意：没有 web_search/web_fetch 权限时，也禁止用 exec 执行 curl/wget 等网络命令。\n"
-            "如需搜索，请通过 chatroom_send 请求有搜索权限的队友帮忙。"
-        )
-        messages.insert(max(len(messages) - 1, 0), {
-            "role": "system",
-            "content": perm_hint,
-        })
-
-        # ── Non-streaming display (broadcast mode) ──
-        # No streaming edits — each event gets its own message.
-        # This prevents messages from being swallowed by concurrent edits.
-        _tool_lines: list[str] = []
-        _pending_searches: list[str] = []  # Buffer for batching search displays
-
-        badge = f" [{agent_idx + 1}/{total}]"
-        _header = f"◍ {name}{badge}: "
-
-        # Send initial status
-        await engine._send(_d.thinking_msg(name, model_short, leader=leader_name, idx=agent_idx + 1, total=total))
-
-
-        async def _flush_searches() -> None:
-            """Flush buffered search tool lines as one combined message."""
-            if _pending_searches:
-                combined = "\n".join(_pending_searches)
-                await engine._send(combined)
-                _pending_searches.clear()
-
-        async def _on_tool_start(tool_name: str, args: dict) -> None:
-            if not isinstance(args, dict):
-                args = {}
-            # Persist tool_call event to session log
-            engine._save_event("tool_call", agent=name, extra={
-                "tool": tool_name,
-                "args": {k: (v if isinstance(v, str) else v) for k, v in args.items()},
-            })
-            # Full args logging to server log
-            import json as _json_log
-            logger.info(
-                "broadcast [{}] tool_call: {}({})",
-                name, tool_name, _json_log.dumps(args, ensure_ascii=False),
-            )
-            if tool_name == "chatroom_send":
-                # Flush any buffered searches before showing chatroom_send
-                await _flush_searches()
-                to = args.get("to", "?")
-                msg_full = (args.get("message", "") or "")
-                to_str = ", ".join(to) if isinstance(to, list) else str(to)
-                # Calculate cost for display
-                if to_str.lower() == "all":
-                    cost = len([a for a in agents if a != name])
-                else:
-                    cost = len(to) if isinstance(to, list) else 1
-                line = f"{name}: chatroom_send({to_str}) [cost={cost}]"
-                _tool_lines.append(line)
-                # Build stats suffix: token + latency
-                import time as _t
-                elapsed = _t.time() - _cycle_t0
-                tok_t = _cycle_usage.get("total_tokens", 0)
-                stats_suffix = ""
-                if tok_t > 0:
-                    p = _cycle_usage["prompt_tokens"]
-                    c = _cycle_usage["completion_tokens"]
-                    stats_suffix = f"\n`in:{p} out:{c} Σ{tok_t} · {elapsed:.1f}s`"
-                await engine._send(_d.chatroom_send_msg(name, to_str, msg_full + stats_suffix, leader=leader_name))
-            elif tool_name == "wait":
-                await _flush_searches()
-                from_who = args.get("from_agent", "")
-                line = f"{name}: wait({'来自 ' + from_who if from_who else '消息'})"
-                _tool_lines.append(line)
-            elif tool_name in ("web_search", "web_fetch"):
-                # Buffer search tools — will be flushed together
-                line = _d.tool_activity_msg(name, tool_name, args, leader=leader_name)
-                _tool_lines.append(line)
-                _pending_searches.append(line)
-            else:
-                # Non-search tool: flush any pending searches first
-                await _flush_searches()
-                line = _d.tool_activity_msg(name, tool_name, args, leader=leader_name)
-                _tool_lines.append(line)
-                await engine._send(line)
-
-        async def _on_tool_result(tool_name: str, tool_call_id: str, result: str) -> None:
-            # Persist tool_result event to session log
-            engine._save_event("tool_result", agent=name, extra={
-                "tool": tool_name,
-                "result_len": len(result) if result else 0,
-                "success": not (result or "").startswith("Error:"),
-            })
-            # Full result logging to server log
-            logger.info(
-                "broadcast [{}] tool_result: {} ({}c): {}",
-                name, tool_name, len(result) if result else 0, result,
-            )
-            # Thread visualization: show status after chatroom_send
-            if tool_name == "chatroom_send" and result:
-                if "BLOCKED:" in result or "threads]" in result:
-                    if "BLOCKED:" in result:
-                        await engine._send(
-                            f"✗ {name} dropped ── "
-                            f"{_d.thread_bar(pool.used, pool.capacity)}"
-                        )
-                    else:
-                        await engine._send(
-                            f"  {_d.thread_bar(pool.used, pool.capacity)}"
-                        )
-            # Show wait results
-            elif tool_name == "wait" and result and not result.startswith("⏰"):
-                await engine._send(_d.chatroom_wait_msg(name, result, leader=leader_name))
-            # Buffer search/fetch results — append to pending batch
-            elif tool_name in ("web_search", "web_fetch") and result:
-                brief = _d.tool_result_brief(name, tool_name, result)
-                if tool_name == "web_search" and search_pool:
-                    brief += f"  🔍 {search_pool.status()}"
-                _pending_searches.append(brief)
-            elif tool_name == "exec" and result:
-                await _flush_searches()
-                brief = _d.tool_result_brief(name, tool_name, result)
-                await engine._send(brief)
-
-        # ── Determine tool definitions ──
-        reg = agent_tool_registries[name]
-        tool_defs = engine._get_agent_tools(agent_cfg, reg)
-        # Always include chatroom + broadcast-specific tools
-        broadcast_tool_names = ["chatroom_send", "wait"]
-        if is_leader:
-            broadcast_tool_names.extend(["manage_agent", "end_discussion", "transfer_credits"])
-        broadcast_defs = [
-            t.to_schema() for t in [
-                reg.get(tn) for tn in broadcast_tool_names
-            ]
-            if t is not None
-        ]
-        if tool_defs:
-            existing_names = {d["function"]["name"] for d in tool_defs}
-            for bd in broadcast_defs:
-                if bd["function"]["name"] not in existing_names:
-                    tool_defs.append(bd)
-        else:
-            tool_defs = broadcast_defs
-
-        # No streaming callbacks — broadcast uses non-streaming mode
-        # ── Run tool-loop + auto-wait cycle ──
-        # After tool_loop finishes, agent automatically enters wait().
-        # If a teammate message arrives, inject it and re-run tool_loop.
-        # Only exits when cancelled (all-agents-wait) or on error.
-        from nanobot.agent.tool_loop import tool_loop
-
-        all_tools_used: list[str] = []
-        total_iterations = 0
-        total_latency = 0.0
-        cycle = 0
-        # Leader needs more cycles (chatroom_send/wait loops)
-        MAX_CYCLES = 6 if is_leader else 4
-        agent_max_iters = 12 if is_leader else 8
-
-        try:
-            while cycle < MAX_CYCLES:
-                cycle += 1
-                import time as _t
-                _cycle_t0 = _t.time()
-                _cycle_usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-
-                async def _on_iter_usage(usage: dict) -> None:
-                    for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
-                        _cycle_usage[k] += usage.get(k, 0)
-
-                result = await tool_loop(
-                    provider=engine.provider,
-                    messages=messages,
-                    tool_registry=reg,
-                    model=model,
-                    max_tokens=engine.config.max_tokens,
-                    max_iterations=agent_max_iters,
-                    tool_defs=tool_defs if tool_defs else None,
-                    metadata={
-                        "trace_name": f"broadcast_{name}_c{cycle}",
-                        "trace_user_id": "groupchat",
-                        "tags": [name, "broadcast"],
-                        "generation_name": f"{name}_broadcast",
-                        "debug_context": engine._debug_context,
-                        "log_agent": name,
-                        "log_mode": "broadcast",
-                    },
-                    on_tool_start=_on_tool_start,
-                    on_tool_result=_on_tool_result,
-                    on_iteration_usage=_on_iter_usage,
-                    on_content_delta=None,
-                    on_content_reset=None,
-                    clean_response=lambda c: engine._clean_response(c, name),
-                    result_max_chars=20_000,
-                )
-
-                # Flush any remaining buffered search lines
-                await _flush_searches()
-
-                content = result.content or ""
-                is_error = result.finish_reason == "error"
-                latency = result.latency
-                total_latency += latency
-                total_iterations += result.iterations
-                all_tools_used.extend(result.tools_used or [])
-
-                if is_error:
-                    err_short = content[:150] if content else "Unknown error"
-                    await engine._send(f"  ✗ {name} failed ({latency:.1f}s): {err_short}")
-                    log_request(engine, name, model, "broadcast",
-                                error=err_short, iterations=total_iterations,
-                                latency=total_latency)
-                    return (name, None, [], {})
-
-                # Record final text in history
-                if content:
-                    logger.info(
-                        "broadcast [{}] cycle {} output ({}c): {}",
-                        name, cycle, len(content), content,
-                    )
-                    history_content = content + build_tool_log(result.tool_calls_detail)
-                    engine._add_message(name, history_content)
-                    # Track output for search pool credit recovery
-                    search_pool.on_output(name)
-
-                # ── Anti-idle guard: force re-entry if agent did nothing ──
-                # If this is cycle 1 and the agent produced no content and used
-                # no substantive tools (web_search, web_fetch, exec, etc.),
-                # the model is being lazy. Inject a forcing prompt and retry.
-                _substantive_tools = {"web_search", "web_fetch", "exec", "read_file", "write_file"}
-                if cycle == 1 and not content and not (set(result.tools_used or []) & _substantive_tools):
-                    logger.warning(
-                        "Broadcast: {} idle on cycle 1 (no content, tools={}), forcing retry",
-                        name, result.tools_used,
-                    )
-                    messages.append({
-                        "role": "system",
-                        "content": (
-                            f"[⚠️ 你（{name}）还没有采取任何行动！]\n"
-                            "你必须立即使用工具（web_search, web_fetch, exec 等）来回答用户的最新问题。\n"
-                            "不要直接从之前的对话中回答 — 用户需要新的搜索结果。\n"
-                            "禁止调用 wait() — 先执行工作再交流。"
-                        ),
-                    })
-                    continue  # skip auto-wait, re-enter tool_loop
-
-                # ── Auto-wait: enter idle state ──
-                # If agent never used chatroom_send (across ALL cycles), auto-share its findings
-                # and display to user via chatroom format
-                if content and "chatroom_send" not in all_tools_used:
-                    snippet = content[:500]
-                    mailbox.send(name, ["All"], snippet)
-                    # Append token + latency to displayed reply
-                    tok = result.token_usage
-                    total_tok = tok.get("total", 0)
-                    tok_suffix = ""
-                    if total_tok > 0:
-                        import time as _t
-                        elapsed = _t.time() - _cycle_t0
-                        cost = result.cost or 0
-                        cache_t = result.cache_tokens or 0
-                        cost_str = f" ${cost:.4f}" if cost else ""
-                        cache_str = f" 🔵{cache_t}" if cache_t else ""
-                        tok_suffix = f"\n`in:{tok.get('prompt',0)} out:{tok.get('completion',0)} Σ{total_tok} · {elapsed:.1f}s{cost_str}{cache_str}`"
-                    await engine._send(_d.chatroom_send_msg(name, "All", content + tok_suffix, max_len=3000, leader=leader_name))
-                    logger.info("Broadcast: auto-shared {} findings ({} chars)", name, len(snippet))
-
-                # Now wait for teammate messages
-                logger.info("Broadcast: {} entering auto-wait (cycle {})", name, cycle)
-                # Release unread pool slots before waiting (mirrors WaitTool behavior)
-                # Without this, slots consumed by messages sent TO this agent are never
-                # freed, causing pool exhaustion and blocking other agents' replies.
-                if pool:
-                    pool.release_unread(name)
-                msg = await mailbox.wait(name, timeout=60)
-
-                if msg is None:
-                    # Timeout — no one talking to us, we're done
-                    logger.info("Broadcast: {} auto-wait timeout, exiting", name)
-                    break
-
-                # Got a message! Inject it and re-run tool_loop
-                logger.info("Broadcast: {} reactivated by {}: {}", name, msg.sender, msg.content[:60])
-                await engine._send(_d.chatroom_wait_msg(name, str(msg), leader=leader_name))
-                # Inject agent's own previous output so LLM knows what it already said
-                if content:
-                    messages.append({
-                        "role": "assistant",
-                        "content": content,
-                    })
-                # Anti-repeat injection: remind agent not to repeat itself
-                messages.append({
-                    "role": "system",
-                    "content": (
-                        f"[提醒] 你（{name}）已经发表过上述观点。"
-                        f"针对队友的新消息做出回应或补充新观点，不要重复已说的内容。"
-                    ),
-                })
-                # Then inject the received teammate message
-                messages.append({
-                    "role": "user",
-                    "content": f"[队友消息] {msg}",
-                })
-
-            # ── Final completion ──
-            comp = _d.completion_msg(name, round(total_latency, 1), total_iterations, all_tools_used, leader=leader_name)
-            if comp:
-                await engine._send(comp)
-
-            log_request(engine, name, model, "broadcast",
-                        reply_len=len(content) if content else 0,
-                        tools=all_tools_used, iterations=total_iterations,
-                        latency=round(total_latency, 1))
-            return (name, content, all_tools_used, {})
-
-        except asyncio.CancelledError:
-            # Cancelled by sentinel (all-agents-waiting) — normal exit
-            comp = _d.completion_msg(name, round(total_latency, 1), total_iterations, all_tools_used, leader=leader_name)
-            if comp:
-                await engine._send(comp)
-            return (name, content if 'content' in dir() else "", all_tools_used, {})
-
-        except Exception as e:
-            logger.error("Broadcast: {} failed: {}", name, e)
-            await engine._send(f"  ✗ {name} error: {e}")
-            log_request(engine, name, model, "broadcast",
-                        error=str(e))
-            return (name, None, [], {})
-        finally:
-            # Defensive: release any remaining pool slots held by this agent
-            # (e.g. if cancelled or errored before auto-wait could release them)
-            if pool:
-                pool.release_unread(name)
-            mailbox.mark_agent_done(name)
-
-    # ── Launch all agents (including leader) concurrently ──
-    for name in exec_agents:
-        mailbox.create(name)
-    mailbox.start_round(active_agents=list(exec_agents))
-
-    tasks = {}
-    for idx, name in enumerate(exec_agents):
-        tasks[asyncio.create_task(_run_one(name, idx))] = name
-
-    # Populate _leader_agent_tasks so ManageAgentTool can cancel non-leader tasks
-    for task_obj, task_name in tasks.items():
-        if task_name != leader_name:
-            _leader_agent_tasks[task_obj] = task_name
-
-    results: list[tuple[str, str | None, list[str]]] = []
-    completed = 0
-
-    try:
-        # ── User interjection listener ──
-        _user_listener_running = True
-
-        async def _user_listener() -> None:
-            while _user_listener_running:
-                try:
-                    msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
-                except asyncio.TimeoutError:
-                    continue
-                if msg == "__SUMMARY__":
-                    continue
-
-                all_agent_names = list(agents)
-                await pool.allocate_user(all_agent_names)
-
-                mailbox.create("用户")
-                mailbox.send("用户", ["All"], msg)
-                engine._add_message("用户", msg)
-                await engine._send(
-                    f"── User ──\n{msg}\n"
-                    f"  {_d.thread_bar(pool.used, pool.capacity)}"
-                )
-                logger.info("Broadcast: user interjected: {}", msg[:60])
-
-        user_task = asyncio.create_task(_user_listener())
-
-        # Watch for all-agents-waiting (natural conversation end)
-        async def _watch_all_waiting() -> None:
-            while True:
-                await mailbox.all_waiting_event.wait()
-                # Grace period: wait 5s and re-check to avoid
-                # premature termination when agents briefly pass
-                # through wait() between processing cycles
-                await asyncio.sleep(5)
-                if mailbox._waiting >= mailbox._active_agents and len(mailbox._active_agents) > 0:
-                    return  # truly all idle
-                # Someone woke up — reset and watch again
-                mailbox._all_waiting.clear()
-                logger.info("Broadcast: idle sentinel reset — agent(s) reactivated")
-
-        # Watch for leader end_discussion signal
-        async def _watch_leader_end() -> None:
-            await leader_end_event.wait()
-
-        sentinel = asyncio.create_task(_watch_all_waiting())
-        leader_end_sentinel = asyncio.create_task(_watch_leader_end())
-        all_tasks = set(tasks.keys()) | {sentinel, leader_end_sentinel}
-
-        while not all(t.done() for t in tasks.keys()):
-            done_set, _ = await asyncio.wait(
-                [t for t in all_tasks if not t.done()],
-                timeout=global_timeout,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            if not done_set:
-                break
-
-            for t in done_set:
-                if t is sentinel:
-                    logger.info("Broadcast: all agents waiting, ending round")
-                    await engine._send("━━ all agents idle — round complete ━━")
-                    for task_obj in tasks:
-                        if not task_obj.done():
-                            task_obj.cancel()
-                    break
-                elif t is leader_end_sentinel:
-                    logger.info("Broadcast: leader ended discussion")
-                    await engine._send("━━ Leader 结束讨论 — entering synthesis ━━")
-                    for task_obj in tasks:
-                        if not task_obj.done():
-                            task_obj.cancel()
-                    break
-                elif t in tasks:
-                    try:
-                        name, content, tools_used_list, *_ = t.result()
-                        completed += 1
-                        results.append((name, content, tools_used_list or []))
-                        logger.info(
-                            "Broadcast: {}/{} done — {} ({})",
-                            completed, total, name,
-                            f"{len(content)} chars" if content else "empty",
-                        )
-                    except Exception as e:
-                        completed += 1
-                        logger.error("Broadcast: agent task error: {}", e)
-                        await engine._send(f"\u2717 Agent error: {e}")
-            else:
-                continue
-            break
-
-        # Cancel sentinels if still running
-        if not sentinel.done():
-            sentinel.cancel()
-        if not leader_end_sentinel.done():
-            leader_end_sentinel.cancel()
-
-        # Stop user listener
-        _user_listener_running = False
-        if not user_task.done():
-            user_task.cancel()
-
-        # Cancel any remaining agent tasks
-        for task_obj in tasks:
-            if not task_obj.done():
-                name = tasks[task_obj]
-                task_obj.cancel()
-                logger.warning("Broadcast: {} cancelled", name)
-    except asyncio.TimeoutError:
-        for task, name in tasks.items():
-            if not task.done():
-                task.cancel()
-                logger.warning("Broadcast: {} cancelled (global timeout)", name)
-                await engine._send(f"\u23f0 {name} timeout")
-
-    # (auto-share logic is now inside _run_one's auto-wait cycle)
-
-    # ── Round summary ──
-    comm_count = len(mailbox.history)
-    round_duration = _time.time() - _round_t0
-    engine._save_round_summary(
-        round_num=engine._round + 1,
-        agents_responded=completed,
-        comm_count=comm_count,
-        duration=round_duration,
-    )
-    await engine._send(_d.broadcast_complete_msg(completed, total, comm_count))
-
-    # Output chat chain summary
-    chain = _d.chat_chain_summary(mailbox.history, leader=leader_name)
-    if chain:
-        await engine._send(chain)
-
-    # Clean up queues (history preserved for synthesis & test harness)
-    mailbox.clear()
-
-    # ═══════════════════════════════════════════════════════════════
-    # Post-round synthesis: Leader always evaluates; no-leader gets auto-summary
-    # ═══════════════════════════════════════════════════════════════
-    if leader_name and leader_name in agents:
-        leader_model = engine.registry[leader_name]["model"]
-        model_short = leader_model.split("/")[-1]
-        await engine._send(f"━━ {leader_name} ({model_short}) · 总结 ━━")
-
-        # Collect all agent outputs (including leader's own in-round output)
-        agent_outputs = []
-        leader_own_output = ""
-        for name, content, _ in results:
-            if content:
-                if name == leader_name:
-                    leader_own_output = content
-                else:
-                    agent_outputs.append(f"[{name} 的回复]\n{content}")
-
-        # Also include chatroom messages for richer context
-        chat_msgs = []
-        for msg in mailbox.history:
-            sender = msg.sender if hasattr(msg, "sender") else str(msg.get("sender", "?"))
-            content_text = msg.content if hasattr(msg, "content") else str(msg.get("content", ""))
-            chat_msgs.append(f"[{sender}]: {content_text[:500]}")
-
-        synthesis_context = (
-            f"[Leader 最终总结]\n"
-            f"原始问题: {user_question}\n\n"
-        )
-        if agent_outputs:
-            synthesis_context += f"各 agent 结果:\n" + "\n\n".join(agent_outputs) + "\n\n"
-        if chat_msgs:
-            synthesis_context += f"对话记录:\n" + "\n".join(chat_msgs) + "\n\n"
-        if leader_own_output:
-            synthesis_context += f"你之前的发言:\n{leader_own_output}\n\n"
-        synthesis_context += (
-            "请基于以上所有信息，给出完整、结构化的最终总结。\n"
-            "整合所有发现，评价各 agent 的表现，指出亮点和不足，给出结论。"
-        )
-
-        try:
-            await engine._agent_speak(
-                leader_name,
-                synthesis_context=synthesis_context,
-            )
-        except Exception as e:
-            logger.error("Leader synthesis failed: {}", e)
-            await engine._send(f"✗ {leader_name} 总结失败: {e}")
-    else:
-        # No leader: auto-generate discussion summary
-        from nanobot.groupchat.run_loop import generate_summary
-        await generate_summary(engine)
-
-    # ── Restore original settings (session-scoped overrides) ──
-    if _original_settings:
-        for name, orig in _original_settings.items():
-            cfg = engine.registry.get(name)
-            if cfg and orig.get("tools"):
-                cfg["tools"] = orig["tools"]
-        logger.info("Broadcast: restored original agent settings")
-
-    return [(name, content) for name, content, _ in results]
-
+    return coordinator.get_results()

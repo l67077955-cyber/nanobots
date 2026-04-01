@@ -141,7 +141,7 @@ class GroupChatEngine:
         from nanobot.agent.tools.filesystem import (
             ReadFileTool, WriteFileTool, EditFileTool, ListDirTool,
         )
-        from nanobot.groupchat.chatroom_tools import SmartFetchTool, SmartSearchTool
+        from nanobot.groupchat.search_tools import SmartFetchTool, SmartSearchTool
 
         registry = ToolRegistry()
         raw_search = WebSearchTool(config=self.web_search_config, proxy=self.web_proxy)

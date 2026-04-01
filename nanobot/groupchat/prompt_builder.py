@@ -443,6 +443,180 @@ class PromptBuilder:
                 pass
         return {}
 
+    # ── Broadcast prompt building ──
+
+    def build_broadcast_prompt(
+        self,
+        agent_name: str,
+        *,
+        engine: Any,
+        agents: list[str],
+        user_question: str,
+        leader_name: str | None = None,
+        agent_idx: int = 0,
+        total: int = 0,
+        search_pool: Any = None,
+    ) -> list[dict[str, Any]]:
+        """Build the full prompt for an agent in broadcast mode.
+
+        Centralizes prompt construction that was previously inlined
+        in broadcast.py's _run_one closure (lines 225-337).
+        """
+        messages = engine._build_agent_prompt(agent_name)
+        is_leader = (agent_name == leader_name)
+        teammates = [a for a in agents if a != agent_name]
+        exec_agents = agents
+
+        overrides = self._load_prompt_overrides("__global__")
+
+        if is_leader:
+            hint = self.build_leader_hint(
+                agent_name, agents, user_question,
+                engine=engine, search_pool=search_pool,
+            )
+            messages.insert(max(len(messages) - 1, 0), {
+                "role": "system",
+                "content": hint,
+            })
+        else:
+            # Standard broadcast hint
+            hint_template = overrides.get("broadcast_hint") or self.get_component_template("broadcast_hint")
+            if hint_template:
+                hint = (
+                    hint_template
+                    .replace("{{agent_idx}}", str(agent_idx + 1))
+                    .replace("{{total}}", str(total))
+                    .replace("{{teammates}}", ", ".join(teammates))
+                    .replace("{{agent}}", agent_name)
+                    .replace("{{user_question}}", user_question)
+                )
+                messages.insert(max(len(messages) - 1, 0), {
+                    "role": "system",
+                    "content": hint,
+                })
+
+            # Leader-gated instructions for non-leader agents
+            if leader_name:
+                messages.insert(max(len(messages) - 1, 0), {
+                    "role": "system",
+                    "content": self.build_worker_hint(leader_name),
+                })
+
+        # Permission context for all agents
+        perm_hint = self.build_permission_hint(
+            agent_name, exec_agents, engine=engine,
+            leader_name=leader_name,
+        )
+        messages.insert(max(len(messages) - 1, 0), {
+            "role": "system",
+            "content": perm_hint,
+        })
+
+        return messages
+
+    def build_leader_hint(
+        self,
+        leader_name: str,
+        agents: list[str],
+        user_question: str,
+        *,
+        engine: Any,
+        search_pool: Any = None,
+    ) -> str:
+        """Build the leader agent's system prompt."""
+        non_leader_agents = [a for a in agents if a != leader_name]
+        agent_caps = []
+        for a in non_leader_agents:
+            a_cfg = engine.registry.get(a, {})
+            a_tools = a_cfg.get("tools", {})
+            if isinstance(a_tools, dict):
+                on = [k for k, v in a_tools.items() if v]
+            elif a_cfg.get("tools_enabled", False) or a_cfg.get("_default"):
+                on = list(engine.TOOL_NAMES)
+            else:
+                on = []
+            agent_caps.append(f"  {a}: {', '.join(on) if on else '(无工具)'}")
+
+        search_status = search_pool.status() if search_pool else "N/A"
+
+        return (
+            f"[Leader 模式 — 你是团队指挥官 👑]\n"
+            f"你是 {leader_name}，负责分析问题、分配任务、整合结果。\n\n"
+            f"用户请求: {user_question}\n\n"
+            f"## 团队成员及工具能力\n"
+            + "\n".join(agent_caps) + "\n\n"
+            f"## 你的专属工具\n"
+            f"- chatroom_send(to, message): 给队友发任务/指令\n"
+            f"- wait(): 等待队友汇报结果\n"
+            f"- manage_agent(action, agent, ...): 管理队友（disable/enable/set_tools）\n"
+            f"- end_discussion(reason): 结束讨论，进入最终总结\n"
+            f"- transfer_credits(from_agent, to_agent, amount): 划拨搜索额度\n"
+            f"- 你也拥有自己的基础工具（web_search 等），可以自己做部分工作\n\n"
+            f"## 搜索额度管理\n"
+            f"每个 agent 有独立的搜索额度（{search_status}）。\n"
+            f"没有 web_search 的 agent 的额度闲置，你可以用 transfer_credits 把他们的额度\n"
+            f"划拨给有搜索能力的 agent（包括你自己）。\n\n"
+            f"## 工作流程\n"
+            f"1. 分析问题，决定如何分工\n"
+            f"2. 用 chatroom_send 给队友分配具体任务（写清楚要做什么）\n"
+            f"   ⚠️ 只分配队友有工具能力完成的任务！无 web_search 的队友不要让他搜索\n"
+            f"3. 用 wait() 等待队友回复结果\n"
+            f"4. 根据结果：追加任务 / 纠正方向 / 自己补充搜索\n"
+            f"5. 信息充分后用 end_discussion() 结束讨论\n"
+            f"6. 在你的最终文字回复中，整合所有发现给出完整答案\n\n"
+            f"## 关键规则\n"
+            f"- 发现队友空转或无法完成任务时：果断 end_discussion\n"
+            f"- 可以一次给多个队友同时发任务（并行工作）\n"
+            f"- 你的最终文字回复就是给用户的答案，要完整、结构化\n"
+        )
+
+    @staticmethod
+    def build_worker_hint(leader_name: str) -> str:
+        """Build the worker agent's leader-following instructions."""
+        return (
+            f"[团队协作模式 — 严格发言规则]\n"
+            f"Leader {leader_name} 会通过 chatroom_send 给你分配任务。\n\n"
+            f"━━ 发言规则（强制执行）━━\n"
+            f"1. 你每次只能发送 **1 条消息**，然后必须 wait() 等待 Leader 发言\n"
+            f"2. Leader 发言后你的配额重置，可以再发 1 条\n"
+            f"3. 违反此规则的消息会被系统拦截\n"
+            f"4. 有问题必须向 Leader 提出并等待回复\n\n"
+            f"正确流程: 做工作 → chatroom_send(结果) → wait() → 收到 Leader 指令 → 继续"
+        )
+
+    @staticmethod
+    def build_permission_hint(
+        agent_name: str,
+        exec_agents: list[str],
+        *,
+        engine: Any,
+        leader_name: str | None = None,
+    ) -> str:
+        """Build the tool permission context for an agent."""
+        perm_lines = []
+        for a in exec_agents:
+            a_cfg = engine.registry.get(a, {})
+            a_tools = a_cfg.get("tools", {})
+            if isinstance(a_tools, dict):
+                on = [k for k, v in a_tools.items() if v]
+            elif a_cfg.get("tools_enabled", False) or a_cfg.get("_default"):
+                on = list(engine.TOOL_NAMES)
+            else:
+                on = []
+            extra = ""
+            if a == agent_name:
+                extra = " ← 你"
+            elif a == leader_name:
+                extra = " 👑Leader"
+            perm_lines.append(f"  {a}: {', '.join(on) if on else '(无工具)'}{extra}")
+
+        return (
+            "[团队工具权限]\n"
+            + "\n".join(perm_lines) + "\n\n"
+            "注意：没有 web_search/web_fetch 权限时，也禁止用 exec 执行 curl/wget 等网络命令。\n"
+            "如需搜索，请通过 chatroom_send 请求有搜索权限的队友帮忙。"
+        )
+
     # ── Component updates ──
 
     def update_prompt_component(

@@ -2,6 +2,9 @@
 
 Provides an async message-passing hub so agents can send messages
 to each other (or broadcast to all) and wait for replies.
+
+Also provides ``MessageThrottle`` — a simple per-agent message counter
+that replaces the complex semaphore-based ConversationPool.
 """
 
 from __future__ import annotations
@@ -28,167 +31,104 @@ class AgentMessage:
         return f"[{self.sender} → {to}]: {self.content}"
 
 
-class ConversationPool:
-    """OS-style resource pool for conversation chain management.
+class MessageThrottle:
+    """Simple per-agent message counter replacing ConversationPool.
 
-    Controls message volume by treating conversation chains as a limited
-    resource. Each message consumes slots proportional to its recipient
-    count, naturally penalizing All-broadcasts.
-
-    - Pool capacity = agent_count × 3 (configurable)
-    - chatroom_send(to="All") with 3 other agents → costs 3 slots
-    - chatroom_send(to="Harper") → costs 1 slot
-    - When recipient calls wait() without replying → releases 1 slot
-    - When pool is empty → chatroom_send blocks until slots freed
+    Tracks how many messages each agent has sent and enforces a hard limit.
+    No semaphores, no pending tracking, no user priority — just counting.
     """
 
-    ALLOCATE_TIMEOUT = 15.0  # max seconds to wait for slots
+    def __init__(self, max_per_agent: int = 10, max_total: int = 30) -> None:
+        self._max_per_agent = max_per_agent
+        self._max_total = max_total
+        self._counts: dict[str, int] = {}
+        self._total = 0
 
-    def __init__(self, capacity: int, agents: list[str] | None = None) -> None:
-        self._capacity = capacity
-        self._available = capacity
-        self._sem = asyncio.Semaphore(capacity)
-        self._agents = agents or []
-        # Track pending replies: {recipient: [sender1, sender2, ...]}
-        # When recipient wait()s without replying, these are released
-        self._pending: dict[str, list[str]] = {a: [] for a in self._agents}
-        # User priority: when cleared, agents are blocked from allocating
-        self._user_priority = asyncio.Event()
-        self._user_priority.set()  # default: no user priority, agents can proceed
-
-    async def allocate(self, sender: str, recipients: list[str]) -> bool:
-        """Allocate slots for a message. Blocks if pool exhausted.
-
-        Costs len(recipients) slots. One slot per recipient.
-        Returns True if allocated, False if timeout (pool full too long).
-
-        When user priority is active, agents are immediately rejected.
-        """
-        # Agent: if user has priority, fail immediately
-        if not self._user_priority.is_set():
-            logger.info(
-                "ConversationPool: {} rejected — user priority active",
-                sender,
-            )
+    def can_send(self, agent: str) -> bool:
+        """Check if agent is allowed to send."""
+        if self._total >= self._max_total:
             return False
+        return self._counts.get(agent, 0) < self._max_per_agent
 
-        n = len(recipients)
+    def record_send(self, agent: str, recipient_count: int = 1) -> None:
+        """Record a sent message."""
+        self._counts[agent] = self._counts.get(agent, 0) + 1
+        self._total += 1
 
-        # Check real available slots (user force-alloc may have drained them)
-        if self._available < n:
-            logger.warning(
-                "ConversationPool: {} rejected — not enough slots "
-                "({} needed, {} available)",
-                sender, n, self._available,
-            )
-            return False
-
-        acquired = 0
-        try:
-            for _ in range(n):
-                await asyncio.wait_for(
-                    self._sem.acquire(), timeout=self.ALLOCATE_TIMEOUT,
-                )
-                acquired += 1
-                # Re-check: user priority may have been set while waiting
-                if not self._user_priority.is_set():
-                    for _ in range(acquired):
-                        self._sem.release()
-                    logger.info(
-                        "ConversationPool: {} interrupted — user priority",
-                        sender,
-                    )
-                    return False
-        except asyncio.TimeoutError:
-            # Release any partially acquired slots
-            for _ in range(acquired):
-                self._sem.release()
-            logger.warning(
-                "ConversationPool: {} failed to allocate {} slots "
-                "(acquired {}, pool full)",
-                sender, n, acquired,
-            )
-            return False
-
-        # Record pending replies for each recipient
-        for r in recipients:
-            if r in self._pending:
-                self._pending[r].append(sender)
-
-        self._available -= n
-
-        logger.debug(
-            "ConversationPool: {} → {} ({} slots used, {} available)",
-            sender, recipients, n, self._available,
-        )
-        return True
-
-    async def allocate_user(self, recipients: list[str]) -> None:
-        """Force-allocate slots for a user message — never blocked.
-
-        User messages go directly into the pool, even if it exceeds
-        capacity. Agents still follow normal wait/timeout/drop logic.
-        _user_priority blocks agents during delivery.
-        """
-        self._user_priority.clear()
-        n = len(recipients)
-        logger.info("ConversationPool: user force-allocate {} slots", n)
-
-        for r in recipients:
-            if r in self._pending:
-                self._pending[r].append("User")
-
-        self._available -= n  # can go negative (over capacity)
-
-        self._user_priority.set()
-        logger.info(
-            "ConversationPool: user allocated {} slots ({} available), priority OFF",
-            n, self._available,
-        )
-
-    def release_unread(self, agent_name: str) -> int:
-        """Release slots for messages this agent received but didn't reply to.
-
-        Called when agent calls wait() or finishes a cycle.
-        Returns number of slots released.
-        """
-        pending = self._pending.get(agent_name, [])
-        released = len(pending)
-        for _ in range(released):
-            self._sem.release()
-        self._pending[agent_name] = []
-        self._available += released
-        if released > 0:
-            logger.debug(
-                "ConversationPool: {} released {} unread slots ({} available)",
-                agent_name, released, self._available,
-            )
-        return released
-
-    def mark_replied(self, agent_name: str, to_sender: str) -> None:
-        """Mark that agent replied to a message from to_sender.
-
-        The slot stays consumed (active conversation continues).
-        Only removes one pending entry (one reply per received message).
-        """
-        pending = self._pending.get(agent_name, [])
-        if to_sender in pending:
-            pending.remove(to_sender)
+    def reset(self) -> None:
+        """Reset all counters."""
+        self._counts.clear()
+        self._total = 0
 
     @property
-    def available(self) -> int:
-        """Number of available slots (clamped to >= 0)."""
-        return max(0, self._available)
+    def used(self) -> int:
+        """Total messages sent."""
+        return self._total
 
     @property
     def capacity(self) -> int:
-        """Total pool capacity."""
+        """Maximum total messages."""
+        return self._max_total
+
+    @property
+    def available(self) -> int:
+        return max(0, self._max_total - self._total)
+
+
+# ── Legacy aliases for backward compatibility ──────────────────
+# Some imports still reference these names; they delegate to MessageThrottle.
+
+class ConversationPool:
+    """Legacy wrapper — delegates to MessageThrottle for backward compat.
+
+    The old semaphore-based pool is replaced with simple counting.
+    Maintains the same public API surface used by broadcast.py and chatroom_tools.
+    """
+
+    ALLOCATE_TIMEOUT = 15.0
+
+    def __init__(self, capacity: int, agents: list[str] | None = None) -> None:
+        self._capacity = capacity
+        self._agents = agents or []
+        self._throttle = MessageThrottle(
+            max_per_agent=max(capacity // max(len(self._agents), 1), 5),
+            max_total=capacity,
+        )
+
+    async def allocate(self, sender: str, recipients: list[str]) -> bool:
+        """Check if sender can send. No blocking — immediate yes/no."""
+        if not self._throttle.can_send(sender):
+            logger.warning(
+                "ConversationPool: {} rejected — throttle limit reached",
+                sender,
+            )
+            return False
+        self._throttle.record_send(sender, len(recipients))
+        return True
+
+    async def allocate_user(self, recipients: list[str]) -> None:
+        """User messages always go through — just record."""
+        self._throttle._total += 1
+
+    def release_unread(self, agent_name: str) -> int:
+        """No-op in simplified model. Returns 0."""
+        return 0
+
+    def mark_replied(self, agent_name: str, to_sender: str) -> None:
+        """No-op in simplified model."""
+        pass
+
+    @property
+    def available(self) -> int:
+        return self._throttle.available
+
+    @property
+    def capacity(self) -> int:
         return self._capacity
 
     @property
     def used(self) -> int:
-        """Number of used slots (clamped to capacity)."""
-        return min(self._capacity, self._capacity - self._available)
+        return self._throttle.used
 
 
 # Keep SpeakQueue as alias for backward compat (referenced in imports)
@@ -197,6 +137,9 @@ SpeakQueue = ConversationPool
 
 class MailboxHub:
     """Central message router with per-agent async queues.
+
+    Supports failure awareness: when an agent fails, all agents waiting
+    for it receive an immediate notification instead of timing out.
 
     Usage::
 
@@ -227,6 +170,8 @@ class MailboxHub:
         self._all_waiting = asyncio.Event()
         # Track which agents are still active (not finished their tool_loop)
         self._active_agents: set[str] = set()
+        # Track failed agents
+        self._failed_agents: dict[str, str] = {}  # name → error message
 
     def create(self, agent_name: str) -> None:
         """Create a mailbox for an agent (idempotent)."""
@@ -245,21 +190,13 @@ class MailboxHub:
         self._history.clear()
         self._waiting.clear()
         self._all_waiting.clear()
+        self._failed_agents.clear()
         self._active_agents = set(active_agents) if active_agents else set(self._queues.keys())
         self._global_start = _time.time()
         logger.debug("MailboxHub: round started, {} agents", len(self._queues))
 
     def send(self, sender: str, targets: list[str], content: str) -> int:
-        """Send a message to target agents. Returns number delivered.
-
-        Args:
-            sender: Name of the sending agent.
-            targets: List of agent names, or ``["All"]`` for broadcast.
-            content: Message content.
-
-        Returns:
-            Number of mailboxes the message was delivered to.
-        """
+        """Send a message to target agents. Returns number delivered."""
         msg = AgentMessage(sender=sender, content=content, targets=targets)
         self._history.append(msg)
 
@@ -301,6 +238,8 @@ class MailboxHub:
     ) -> AgentMessage | None:
         """Wait for a message in the agent's mailbox.
 
+        Terminates early if the waited-for agent has failed.
+
         Args:
             agent_name: The waiting agent's name.
             timeout: Max seconds to wait (hard cap: 120s per call).
@@ -314,10 +253,21 @@ class MailboxHub:
             logger.warning("MailboxHub.wait: no mailbox for {}", agent_name)
             return None
 
+        # Early exit: if waiting for a specific agent that already failed
+        if from_agent and from_agent in self._failed_agents:
+            error = self._failed_agents[from_agent]
+            logger.info(
+                "MailboxHub.wait: {} — target {} already failed: {}",
+                agent_name, from_agent, error,
+            )
+            return AgentMessage(
+                sender="系统",
+                content=f"[{from_agent} 已断线: {error}]",
+                targets=[agent_name],
+            )
+
         # Fast path: if there are already messages queued, return immediately
-        # WITHOUT marking as waiting.  This prevents the all_waiting_event
-        # from firing prematurely when a teammate's message is already in the
-        # queue (e.g. auto-shared output that arrived before we entered wait).
+        # WITHOUT marking as waiting.
         if not q.empty():
             try:
                 msg = q.get_nowait()
@@ -365,7 +315,9 @@ class MailboxHub:
                     msg = await asyncio.wait_for(q.get(), timeout=remaining)
                     # Filter by sender if requested
                     if from_agent and msg.sender != from_agent:
-                        continue
+                        # Accept system messages (failure notifications) regardless of filter
+                        if msg.sender != "系统":
+                            continue
                     logger.info(
                         "MailboxHub.wait: {} received from {}: {}",
                         agent_name, msg.sender, msg.content[:80],
@@ -379,6 +331,43 @@ class MailboxHub:
                     return None
         finally:
             self._waiting.discard(agent_name)
+
+    def mark_agent_done(self, agent_name: str) -> None:
+        """Mark an agent as finished (no longer active)."""
+        self._active_agents.discard(agent_name)
+        self._waiting.discard(agent_name)
+        # Re-check: if remaining active agents are all waiting
+        if self._active_agents and self._waiting >= self._active_agents:
+            self._all_waiting.set()
+
+    def mark_agent_failed(self, agent_name: str, error: str) -> None:
+        """Mark an agent as failed and notify all waiting agents.
+
+        This is the key improvement: agents waiting for the failed agent
+        receive an immediate system notification instead of timing out.
+        """
+        self._failed_agents[agent_name] = error
+        self._active_agents.discard(agent_name)
+        self._waiting.discard(agent_name)
+
+        # Inject failure notification into ALL other agents' queues
+        fail_msg = AgentMessage(
+            sender="系统",
+            content=f"[{agent_name} 已断线: {error}。请独立完成任务，不要等待该 agent。]",
+            targets=list(self._active_agents),
+        )
+        for name, q in self._queues.items():
+            if name != agent_name and name in self._active_agents:
+                q.put_nowait(fail_msg)
+
+        logger.info(
+            "MailboxHub: {} marked as FAILED (error={}), notified {} agents",
+            agent_name, error[:80], len(self._active_agents),
+        )
+
+        # Re-check all-waiting (fewer active agents now)
+        if self._active_agents and self._waiting >= self._active_agents:
+            self._all_waiting.set()
 
     def clear(self) -> None:
         """Clear message queues but preserve history for later reading."""
@@ -409,10 +398,7 @@ class MailboxHub:
         """Event that fires when all active agents are simultaneously waiting."""
         return self._all_waiting
 
-    def mark_agent_done(self, agent_name: str) -> None:
-        """Mark an agent as finished (no longer active)."""
-        self._active_agents.discard(agent_name)
-        self._waiting.discard(agent_name)
-        # Re-check: if remaining active agents are all waiting
-        if self._active_agents and self._waiting >= self._active_agents:
-            self._all_waiting.set()
+    @property
+    def active_agent_count(self) -> int:
+        """Number of actively running agents."""
+        return len(self._active_agents)
