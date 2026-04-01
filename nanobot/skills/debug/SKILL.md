@@ -1,7 +1,7 @@
 ---
 name: debug
 description: "Diagnose system issues: check logs, process status, cron jobs, connectivity. Use when something isn't working or user asks to debug."
-always: true
+always: false
 ---
 
 # Debug — 系统诊断 & 实时推送

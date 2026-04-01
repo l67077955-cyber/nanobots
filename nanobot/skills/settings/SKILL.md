@@ -1,7 +1,7 @@
 ---
 name: settings
 description: "Manage providers, models, and system settings. Use when adding API providers, registering models, or checking configuration."
-always: true
+always: false
 ---
 
 # Settings — 提供商与模型管理

@@ -22,6 +22,29 @@ from nanobot.groupchat.prompt_builder import (
 class SettingsCommandsMixin:
     """Mixin providing settings commands."""
 
+    @staticmethod
+    def _sync_hyperparams_from_disk(provider) -> bool:
+        """Reload hyperparams.json into provider.sampling_params if file exists.
+        Returns True if params were synced from disk."""
+        if not provider:
+            return False
+        params = getattr(provider, 'sampling_params', None)
+        if not params:
+            return False
+        hp_path = Path.home() / ".nanobot" / "hyperparams.json"
+        if not hp_path.exists():
+            return False
+        try:
+            saved = json.loads(hp_path.read_text())
+            if isinstance(saved, dict) and saved:
+                params.clear()
+                params.update(saved)
+                logger.info("Synced hyperparams from disk: {}", list(saved.keys()))
+                return True
+        except Exception as e:
+            logger.warning("Failed to sync hyperparams from disk: {}", e)
+        return False
+
     async def _on_hyperparams(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """View or edit sampling parameters with interactive buttons."""
         if not update.message or not update.effective_user:
@@ -35,6 +58,9 @@ class SettingsCommandsMixin:
         if not params:
             await update.message.reply_text("⚠️ 无法获取超参数（provider 不可用）")
             return
+
+        # Sync from disk so external file edits are reflected
+        self._sync_hyperparams_from_disk(provider)
 
         await self._send_hyperparams_keyboard(str(update.message.chat_id), params)
 

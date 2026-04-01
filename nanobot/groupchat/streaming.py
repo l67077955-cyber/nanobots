@@ -51,11 +51,6 @@ class StreamingDisplay:
         """Whether streaming is possible (both send and edit callbacks set)."""
         return bool(self._send_and_get_id and self._edit)
 
-    @property
-    def buffer_text(self) -> str:
-        """Current accumulated text in the buffer."""
-        return "".join(self._buffer)
-
     async def on_delta(self, delta: str) -> None:
         """Content delta callback — accumulate and periodically edit."""
         self._buffer.append(delta)

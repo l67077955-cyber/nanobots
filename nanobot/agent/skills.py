@@ -205,13 +205,22 @@ class SkillsLoader:
         meta = self.get_skill_metadata(name) or {}
         return self._parse_nanobot_metadata(meta.get("metadata", ""))
 
+    @staticmethod
+    def _is_truthy(val) -> bool:
+        """Convert a value to bool, handling string 'true'/'false' from YAML."""
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str):
+            return val.lower() in ("true", "1", "yes")
+        return bool(val)
+
     def get_always_skills(self) -> list[str]:
         """Get skills marked as always=true that meet requirements."""
         result = []
         for s in self.list_skills(filter_unavailable=True):
             meta = self.get_skill_metadata(s["name"]) or {}
             skill_meta = self._parse_nanobot_metadata(meta.get("metadata", ""))
-            if skill_meta.get("always") or meta.get("always"):
+            if self._is_truthy(skill_meta.get("always")) or self._is_truthy(meta.get("always")):
                 result.append(s["name"])
         return result
 

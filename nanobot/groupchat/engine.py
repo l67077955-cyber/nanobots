@@ -1,15 +1,34 @@
-"""Async group chat engine for multi-agent discussions.
+"""engine.py — 群聊核心引擎（GroupChatEngine）。
 
-Supports fluid agent management:
-- Agent registry: all available agents (loaded from config/directory)
-- Active participants: agents currently in the conversation
-- Seamlessly transitions between 1-on-1 and group chat as agents are added/removed
+这是整个群聊系统的中心枢纽，管理 agent 注册表、对话历史、消息分发。
+
+╔══════════════════════════════════════════════════════════════╗
+║  文件关系图（谁调用谁）:                                      ║
+║                                                              ║
+║  engine.py (本文件)                                          ║
+║    ├─ run_loop.py     → 主循环，等待用户输入后调用 broadcast  ║
+║    ├─ broadcast.py    → 广播模式协调器，管理 agent 任务       ║
+║    ├─ agent_runner.py → 单个 agent 的 tool_loop 执行器       ║
+║    ├─ prompt_builder.py → 构建 agent 的 prompt/messages       ║
+║    ├─ state_bus.py    → state.yaml 读写（leader 控制面板）   ║
+║    ├─ mailbox.py      → agent 间消息传递                     ║
+║    ├─ speaker.py      → 单 agent 发言逻辑（1v1模式用）       ║
+║    ├─ display.py      → 所有显示格式化函数                   ║
+║    ├─ chatroom_tools.py → chatroom_send/wait 工具定义        ║
+║    └─ search_tools.py → SmartSearch/SmartFetch 工具包装      ║
+╚══════════════════════════════════════════════════════════════╝
+
+⚠️ agent 修改本文件时注意：
+    1. registry 是 dict[str, dict] — 每个 agent 的配置（model, prompt, tools 等）
+    2. _active_agents 是 list[str] — 当前参与群聊的 agent 名单
+    3. _history 是 list[dict] — 格式 {"sender": "xxx", "content": "xxx"}
+    4. _send() 是显示消息给用户的唯一通道，sender 参数用于禁言检查
+    5. _leader 是 leader agent 名字（str | None）
 """
 
 from __future__ import annotations
 
 import asyncio
-import random
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -212,6 +231,7 @@ class GroupChatEngine:
         self._task: asyncio.Task | None = None
         self._running = False
         self._input_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._muted_agents: set[str] = set()  #禁言列表
         self._send_fn: Callable[[str], Awaitable[None]] | None = None
         self._edit_fn: Callable[[int, str], Awaitable[None]] | None = None
         self._on_round_done: Callable[[], Awaitable[None]] | None = None
@@ -527,30 +547,6 @@ class GroupChatEngine:
 
     # ── Tool-augmented chat (matching AgentLoop._run_agent_loop) ───
 
-    # Search intent keywords — only pass tools when user message matches
-    _SEARCH_KEYWORDS = {
-        # Chinese
-        "搜索", "搜一下", "查一下", "查找", "查询", "找一下",
-        "新闻", "最新", "今天", "今日", "实时", "热点",
-        "帮我查", "帮我搜", "帮我找", "上网",
-        # English
-        "search", "look up", "find", "google", "news",
-        "latest", "recent", "today", "current",
-    }
-
-    @staticmethod
-    def _has_search_intent(messages: list[dict[str, Any]]) -> bool:
-        """Check if the latest user message has search intent."""
-        # Find the last user message
-        for msg in reversed(messages):
-            if msg.get("role") == "user":
-                text = msg.get("content", "").lower()
-                for kw in GroupChatEngine._SEARCH_KEYWORDS:
-                    if kw in text:
-                        return True
-                return False
-        return False
-
     def _get_agent_tools(self, agent_cfg: dict, registry) -> list:
         """Get filtered tool definitions based on agent's per-tool config.
 
@@ -627,7 +623,7 @@ class GroupChatEngine:
             on_content_reset=on_content_reset,
             on_tool_start_override=on_tool_start_override,
             on_tool_result_override=on_tool_result_override,
-            save_event=self._save_event,
+            save_event=None,
             send_fn=self._send_fn,
             send_and_get_id_fn=self._send_and_get_id_fn,
             edit_fn=self._edit_fn,
@@ -697,14 +693,14 @@ class GroupChatEngine:
         self._session_dir = sessions_dir / f"gc-{timestamp}"
         self._session_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write session metadata to structured log
-        self._save_event("session_start", extra={
-            "agents": list(self._active_agents),
-            "mode": self._mode,
-            "topic": self._topic,
-            "leader": self._leader,
-            "models": {n: self.registry.get(n, {}).get("model", "?") for n in self._active_agents},
-        })
+        # Initialize FileStateBus — single state.yaml per session
+        # The broadcast coordinator creates its own bus for broadcast rounds;
+        # this one supplies the persistence layer for conversation sync.
+        from nanobot.groupchat.state_bus import FileStateBus
+        self._state_bus = FileStateBus(self._session_dir)
+        self._state.state_bus = self._state_bus
+
+        # Session metadata is now in state.yaml (written by broadcast.setup)
 
         self._task = asyncio.create_task(self._run_loop())
         logger.info("Group chat loop started with {}", self._active_agents)
@@ -716,12 +712,32 @@ class GroupChatEngine:
             self._task.cancel()
         self._task = None
 
-    async def _send(self, text: str) -> None:
+    async def _send(self, text: str, *, sender: str = "") -> None:
+        #禁言检查：被禁言的agent不展示消息
+        if sender and sender in self._muted_agents:
+            logger.debug("Groupchat: {} is muted, skipping display", sender)
+            return
         if self._send_fn:
             try:
                 await self._send_fn(text)
             except Exception as e:
                 logger.error("Groupchat send failed: {}", e)
+
+    # ── Mute / Unmute ──────────────────────────────────────────
+
+    def mute_agent(self, name: str) -> None:
+        """Mute an agent — their messages will not be displayed to the user."""
+        self._muted_agents.add(name)
+        logger.info("Groupchat: {} muted", name)
+
+    def unmute_agent(self, name: str) -> None:
+        """Unmute an agent — restore message display."""
+        self._muted_agents.discard(name)
+        logger.info("Groupchat: {} unmuted", name)
+
+    def is_muted(self, name: str) -> bool:
+        """Check if an agent is currently muted."""
+        return name in self._muted_agents
 
     @property
     def _session_dir(self) -> Path | None:
@@ -743,53 +759,15 @@ class GroupChatEngine:
             self._history = self._history[-limit:]
         self._state.save_message(sender, content, self._history)
 
-    def _save_event(
-        self,
-        event_type: str,
-        *,
-        agent: str = "",
-        content: str = "",
-        extra: dict[str, Any] | None = None,
-    ) -> None:
-        """Delegate to persistence layer."""
-        self._state.save_event(event_type, agent=agent, content=content, extra=extra)
-
-    def _save_round_summary(
-        self,
-        round_num: int,
-        agents_responded: int,
-        comm_count: int = 0,
-        duration: float = 0.0,
-    ) -> None:
-        """Delegate to persistence layer."""
-        self._state.save_round_summary(round_num, agents_responded, comm_count, duration)
-
     def _on_agent_comm(self, sender: str, targets: list[str], content: str) -> None:
-        """Callback from MailboxHub.send() — persist agent communication."""
-        self._state.save_event("agent_comm", agent=sender, content=content, extra={
-            "targets": targets,
-        })
+        """Callback from MailboxHub.send() — deliver to state_bus."""
+        if hasattr(self, '_state_bus') and self._state_bus:
+            try:
+                self._state_bus.deliver_message(sender, targets, content, all_agents=self._active_agents)
+            except Exception:
+                pass
 
-    def _format_history(self) -> str:
-        return "\n\n".join(f"[{m['sender']}]: {m['content']}" for m in self._history)
 
-    def _pick_next_speaker(self, last_content: str = "") -> str:
-        names = self._active_agents
-        # @mentions
-        for name in names:
-            if f"@{name}" in last_content or f"@{name.lower()}" in last_content:
-                return name
-        # Implicit mentions
-        mentioned = [n for n in names if n.lower() in last_content.lower()
-                     and (not self._history or self._history[-1]["sender"] != n)]
-        if mentioned:
-            return random.choice(mentioned)
-        # Avoid repeat
-        candidates = list(names)
-        if self._history:
-            last_speaker = self._history[-1]["sender"]
-            candidates = [n for n in candidates if n != last_speaker]
-        return random.choice(candidates) if candidates else random.choice(names)
 
     def _build_agent_prompt(self, agent_name: str) -> list[dict[str, Any]]:
         """Build prompt — delegates to PromptBuilder, with skills injected."""
@@ -841,11 +819,6 @@ class GroupChatEngine:
             no_stream=no_stream,
             silent=silent,
         )
-
-    async def _generate_summary(self) -> None:
-        """Generate discussion summary — delegates to run_loop module."""
-        from nanobot.groupchat.run_loop import generate_summary
-        await generate_summary(self)
 
     async def _run_loop(self) -> None:
         """Main group chat loop — delegates to run_loop module."""

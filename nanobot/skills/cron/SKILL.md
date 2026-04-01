@@ -1,7 +1,7 @@
 ---
 name: cron
 description: Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.
-always: true
+always: false
 ---
 
 # Cron — Scheduled Tasks

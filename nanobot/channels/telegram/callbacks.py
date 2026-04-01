@@ -648,8 +648,10 @@ class CallbacksMixin:
                 hp_path = Path.home() / ".nanobot" / "hyperparams.json"
                 try:
                     hp_path.write_text(json.dumps(params, indent=2))
-                except Exception:
-                    pass
+                    logger.info("Persisted hyperparams (del {}) to {}", key, hp_path)
+                except Exception as e:
+                    logger.error("Failed to persist hyperparams: {}", e)
+                    await self._gc_send(chat_id, f"⚠️ 参数已生效但持久化失败: {e}")
                 await query.edit_message_text(f"🗑 已删除 {key}")
                 await self._send_hyperparams_keyboard(chat_id, params)
 
@@ -1579,8 +1581,10 @@ class CallbacksMixin:
                 hp_path = Path.home() / ".nanobot" / "hyperparams.json"
                 try:
                     hp_path.write_text(json.dumps(params, indent=2))
-                except Exception:
-                    pass
+                    logger.info("Persisted hyperparams (set {}={}) to {}", hp_key, value, hp_path)
+                except Exception as e:
+                    logger.error("Failed to persist hyperparams: {}", e)
+                    await self._gc_send(chat_id, f"⚠️ 参数已生效但持久化失败: {e}")
                 if old_val is not None:
                     await self._gc_send(chat_id, f"✅ {hp_key}: {old_val} → {value}\n即时生效，已持久化")
                 else:
@@ -1757,7 +1761,6 @@ class CallbacksMixin:
                 soul_dir.mkdir(parents=True, exist_ok=True)
                 (soul_dir / "SOUL.md").write_text(prompt)
                 config_path = soul_dir.parent / "config.json"
-                import json
                 config_path.write_text(json.dumps({"model": model}, indent=2))
                 preview = prompt[:80] + "..." if len(prompt) > 80 else prompt
                 await self._gc_send(chat_id, f"✅ Agent {name} 已创建!\n模型: {model}\n人设: {preview}")
@@ -1810,7 +1813,6 @@ class CallbacksMixin:
             new_model = content.strip()
             engine.registry[agent_name]["model"] = new_model
             # Persist to disk
-            import json
             from pathlib import Path as _P
             agent_entry = engine.registry[agent_name]
             if agent_entry.get("_default"):

@@ -1,140 +1,43 @@
-"""Search and content extraction tools for group chat.
+"""search_tools.py — 搜索和内容提取工具包装。
 
-Contains:
-- ``SearchPool``: Per-agent search credit management
-- ``CachedSearchTool``: Search with dedup cache + credit system
-- ``SmartSearchTool``: Summarize long search results via cheap LLM
-- ``SmartFetchTool``: AI-powered URL content extraction
+工具：
+    CachedSearchTool  — 带去重缓存的搜索（⚠️ 已不在 broadcast 中使用，保留兼容）
+    SmartSearchTool   — 用廉价 LLM 总结长搜索结果
+    SmartFetchTool    — AI 驱动的 URL 内容提取
+
+注意：broadcast.py 已不再使用 CachedSearchTool（每个 agent 独立搜索）。
+SmartSearch/SmartFetch 仍可在 agent 的 base tool registry 中配置。
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
-import threading
 from pathlib import Path
 from typing import Any
 
 from nanobot.agent.tools.base import Tool
 
 
-class SearchPool:
-    """Per-agent search credit pool for broadcast mode.
-
-    - Each agent gets individual credits (initial_per_agent)
-    - Each search costs 1 credit from the agent's own quota
-    - Every N outputs by an agent earns 1 credit back for that agent
-    - Leader can transfer credits between agents via transfer()
-    """
-
-    def __init__(self, agents: list[str], initial_per_agent: int = 2,
-                 earn_interval: int = 4) -> None:
-        self._agents = agents
-        self._initial = initial_per_agent
-        self._earn_interval = earn_interval
-        self._lock = threading.Lock()
-        # Per-agent quotas
-        self._credits: dict[str, int] = {a: initial_per_agent for a in agents}
-        self._searches: dict[str, int] = {a: 0 for a in agents}
-        self._outputs: dict[str, int] = {a: 0 for a in agents}
-
-    @property
-    def pool(self) -> int:
-        """Total remaining credits across all agents."""
-        return sum(self._credits.values())
-
-    @property
-    def total(self) -> int:
-        return self._initial * len(self._agents)
-
-    def spend(self, agent: str) -> bool:
-        """Spend 1 credit from agent's own quota. Returns False if empty."""
-        with self._lock:
-            if self._credits.get(agent, 0) <= 0:
-                return False
-            self._credits[agent] -= 1
-            self._searches[agent] = self._searches.get(agent, 0) + 1
-            return True
-
-    def on_output(self, agent: str) -> None:
-        """Record an agent output. Every earn_interval outputs earns +1 credit for that agent."""
-        with self._lock:
-            self._outputs[agent] = self._outputs.get(agent, 0) + 1
-            if self._outputs[agent] % self._earn_interval == 0:
-                self._credits[agent] = self._credits.get(agent, 0) + 1
-
-    def transfer(self, from_agent: str, to_agent: str, amount: int) -> tuple[bool, str]:
-        """Transfer credits from one agent to another. Returns (success, message)."""
-        with self._lock:
-            if from_agent not in self._credits:
-                return False, f"Agent '{from_agent}' 不存在"
-            if to_agent not in self._credits:
-                return False, f"Agent '{to_agent}' 不存在"
-            available = self._credits[from_agent]
-            if amount <= 0:
-                return False, "转移数量必须大于0"
-            actual = min(amount, available)
-            if actual == 0:
-                return False, f"{from_agent} 没有可用额度"
-            self._credits[from_agent] -= actual
-            self._credits[to_agent] += actual
-            return True, f"✅ 转移 {actual} 额度: {from_agent}({self._credits[from_agent]}) → {to_agent}({self._credits[to_agent]})"
-
-    def agent_credits(self, agent: str) -> int:
-        """Remaining credits for this agent."""
-        return self._credits.get(agent, 0)
-
-    def agent_searches(self, agent: str) -> int:
-        """How many searches this agent has done."""
-        return self._searches.get(agent, 0)
-
-    def status(self) -> str:
-        """Return pool status string with per-agent breakdown."""
-        parts = []
-        for a in self._agents:
-            c = self._credits.get(a, 0)
-            s = self._searches.get(a, 0)
-            parts.append(f"{a}:{c}💰({s}搜)")
-        return " | ".join(parts)
-
-    def agent_status(self, agent: str) -> str:
-        """Return status for a single agent."""
-        c = self._credits.get(agent, 0)
-        s = self._searches.get(agent, 0)
-        return f"{c} credits remaining ({s} searches used)"
-
-
 class CachedSearchTool(Tool):
-    """Wrapper around WebSearchTool with search-pool resource management.
+    """Wrapper around WebSearchTool with deduplication cache.
 
-    All agents share a SearchPool and a deduplication cache.
-    Each search costs 1 credit from the pool.
+    All agents share a cache so duplicate queries return cached results.
     Supports batch search via the ``queries`` parameter (concurrent execution).
+    No credit limits — resource management is handled by leader via state.yaml.
     """
 
     name = "web_search"
 
-    def __init__(self, original: Tool, agent_name: str, cache: dict,
-                 search_pool: SearchPool | None = None) -> None:
+    def __init__(self, original: Tool, agent_name: str, cache: dict) -> None:
         self._original = original
         self._agent_name = agent_name
         self._cache = cache
-        self._pool = search_pool
-        # Per-iteration batch tracking: concurrent calls share 1 credit
-        self._batch_lock = asyncio.Lock()
-        self._batch_spent = False
 
     @property
     def description(self):
         base = self._original.description
-        batch_hint = " Pass multiple queries as a list to search them all in parallel."
-        if self._pool:
-            return (
-                f"{base}{batch_hint} "
-                "Each agent has individual search credits. "
-                "Credits regenerate when you produce output."
-            )
-        return f"{base}{batch_hint}"
+        return f"{base} Pass multiple queries as a list to search them all in parallel."
 
     @property
     def parameters(self):
@@ -161,78 +64,47 @@ class CachedSearchTool(Tool):
         """Normalize query for cache lookup (lowercase, strip, collapse spaces)."""
         return re.sub(r'\s+', ' ', q.lower().strip())
 
-    async def _search_one(self, query: str, count: int | None, *, skip_pool: bool = False) -> str:
-        """Search a single query, respecting cache and pool."""
+    async def _search_one(self, query: str, count: int | None) -> str:
+        """Search a single query, respecting cache."""
         norm_q = self._normalize_query(query)
 
         if norm_q in self._cache:
             cached_result, searcher = self._cache[norm_q]
-            pool_hint = f"\n\n[search pool: {self._pool.status()}]" if self._pool else ""
             return (
                 f"[CACHED] {searcher} 已经搜过相同的关键词。结果如下：\n"
                 f"{cached_result}\n\n"
                 f"💡 请使用不同的关键词、角度或语言来搜索，"
-                f"避免重复劳动。{pool_hint}"
+                f"避免重复劳动。"
             )
-
-        if self._pool and not skip_pool:
-            # Use batch lock: only first concurrent call spends a credit
-            async with self._batch_lock:
-                if not self._batch_spent:
-                    if not self._pool.spend(self._agent_name):
-                        return (
-                            f"BLOCKED: 你的搜索额度用完了 "
-                            f"({self._pool.agent_status(self._agent_name)})。\n"
-                            f"先产出一些分析结果，额度会自动恢复。\n"
-                            f"或请求 Leader 从其他 agent 划拨额度给你。"
-                        )
-                    self._batch_spent = True
-                # Subsequent concurrent calls skip spending
 
         kwargs: dict = {"query": query}
         if count is not None:
             kwargs["count"] = count
         result = await self._original.execute(**kwargs)
         self._cache[norm_q] = (result, self._agent_name)
-
-        if self._pool:
-            result += f"\n[search pool: {self._pool.status()}]"
         return result
 
     async def execute(self, query: str = "", queries: list | None = None,
                       count: int | None = None, **kwargs):
         import asyncio as _asyncio
 
-        # Batch mode: spend only 1 credit for the entire batch
+        # Batch mode
         if queries:
             all_queries = list(queries)
             if query and query not in all_queries:
                 all_queries.insert(0, query)
 
-            # Spend 1 credit for the whole batch (not per-query)
-            if self._pool:
-                if not self._pool.spend(self._agent_name):
-                    return (
-                        f"BLOCKED: 你的搜索额度用完了 "
-                        f"({self._pool.agent_status(self._agent_name)})。\n"
-                        f"先产出一些分析结果，额度会自动恢复。\n"
-                        f"或请求 Leader 从其他 agent 划拨额度给你。"
-                    )
-
-            tasks = [self._search_one(q, count, skip_pool=True) for q in all_queries]
+            tasks = [self._search_one(q, count) for q in all_queries]
             results = await _asyncio.gather(*tasks)
             parts = []
             for q, r in zip(all_queries, results):
                 parts.append(f"=== Query: {q} ===\n{r}")
             return "\n\n".join(parts)
 
-        # Single mode (original behaviour)
+        # Single mode
         if not query:
             return "Error: 必须提供 query 或 queries 参数"
-        result = await self._search_one(query, count)
-        # Reset batch flag after single call completes
-        self._batch_spent = False
-        return result
+        return await self._search_one(query, count)
 
 
 class SmartSearchTool(Tool):
@@ -313,7 +185,6 @@ class SmartSearchTool(Tool):
             provider_name=provider_name,
         )
 
-        # Build context-aware prompt
         context_hint = ""
         if query_context:
             context_hint = (
@@ -376,7 +247,7 @@ class SmartFetchTool(Tool):
                  provider: Any = None, max_extract_chars: int = 12000) -> None:
         self._original = original
         self._reader_model = reader_model
-        self._provider = provider  # LiteLLMProvider instance
+        self._provider = provider
         self._max_extract_chars = max_extract_chars
 
     @property
@@ -396,26 +267,22 @@ class SmartFetchTool(Tool):
         import json as _json
 
         focus = kwargs.pop("focus", "")
-
-        # Step 1: Fetch raw content
         raw_result = await self._original.execute(**kwargs)
 
-        # Parse the JSON result from WebFetchTool
         try:
             data = _json.loads(raw_result)
         except (ValueError, TypeError):
-            return raw_result  # Not JSON, return as-is
+            return raw_result
 
         if "error" in data:
-            return raw_result  # Error response, pass through
+            return raw_result
 
         raw_text = data.get("text", "")
         url = data.get("url", kwargs.get("url", ""))
 
         if not raw_text or len(raw_text) < 50:
-            return raw_result  # Too short to process
+            return raw_result
 
-        # Step 2: Extract via cheap model
         try:
             extracted, nano_usage = await self._extract_content(url, raw_text, focus=focus)
             if extracted:
@@ -425,7 +292,7 @@ class SmartFetchTool(Tool):
                 saved = len(raw_text) - len(extracted)
                 pct = round(saved / len(raw_text) * 100) if raw_text else 0
                 tok_info = f" | nano in:{nano_p} out:{nano_c} Σ{nano_t}" if nano_t else ""
-                focus_label = f" focus=\"{focus[:30]}\"" if focus else ""
+                focus_label = f' focus="{focus[:30]}"' if focus else ""
                 extracted += f"\n\n`[nano:fetch] {len(raw_text)}→{len(extracted)}c -{pct}%{focus_label}{tok_info}`"
                 result_data = {
                     "url": url,
@@ -443,7 +310,6 @@ class SmartFetchTool(Tool):
             from loguru import logger
             logger.warning("SmartFetch: AI extraction failed for {}: {}", url, e)
 
-        # Fallback: return raw content
         return raw_result
 
     async def _extract_content(self, url: str, raw_text: str,
@@ -451,10 +317,8 @@ class SmartFetchTool(Tool):
         """Use cheap LLM to extract key content from raw fetched text."""
         from loguru import logger
 
-        # Truncate input to avoid excessive token usage
         input_text = raw_text[:self._max_extract_chars]
 
-        # Build context-aware extraction prompt
         focus_hint = ""
         if focus:
             focus_hint = (
@@ -477,14 +341,12 @@ class SmartFetchTool(Tool):
 
         messages = [{"role": "user", "content": prompt}]
 
-        # Build a LiteLLMProvider from reader agent config
         reader_cfg = self._load_reader_config()
         model = reader_cfg.get("model", self._reader_model)
         provider_name = reader_cfg.get("provider", "openrouter")
 
         from nanobot.providers.litellm_provider import LiteLLMProvider
         import json as _json
-        # Read provider credentials from nanobot config
         api_key, api_base = "", ""
         try:
             cfg_path = Path.home() / ".nanobot" / "config.json"

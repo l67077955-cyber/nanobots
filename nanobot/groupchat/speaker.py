@@ -1,8 +1,12 @@
-"""Agent speaking logic for group chat.
+"""speaker.py — 单 agent 发言逻辑（主要用于 1v1 模式和手动触发）。
 
-Handles a single agent's turn: prompt building, synthesis context injection,
-debug context logging, streaming display, tool calling, error handling,
-and message history management.
+当 engine._agent_speak() 被调用时，本文件处理：
+    1. 构建 agent 的 prompt（通过 engine._build_agent_prompt）
+    2. 调用 tool_loop 执行
+    3. 流式显示响应
+    4. 记录到历史
+
+注意：广播模式（broadcast）使用 agent_runner.py 而不是这个文件。
 """
 
 from __future__ import annotations

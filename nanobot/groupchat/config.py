@@ -28,4 +28,5 @@ class GroupChatConfig(Base):
     max_history: int = 50
     auto_reply_delay: int = 0  # seconds between agent turns
     max_tokens: int = 3000  # max tokens per agent response (match SillyTavern)
+    idle_wait_timeout: int = 0  # seconds to wait for messages after work (0 = no auto-rest, stays alive until MAX_CYCLES)
 

@@ -1,7 +1,15 @@
-"""Main group chat event loop and summary generation.
+"""run_loop.py — 群聊主循环入口。
 
-Contains the core run loop that processes user input and dispatches
-to serial, broadcast, or orchestra modes, plus the summary generator.
+用户发消息 → run_loop 接收 → 调用 broadcast_round() → agent 执行 → 返回结果。
+
+流程：
+    1. 等待用户输入（engine._input_queue）
+    2. 记录到 engine._history
+    3. 调用 broadcast_round(speak_order, engine, mailbox)
+    4. broadcast 内部：leader 启动 → 控制 agent → 汇总结果
+    5. 循环，直到 max_rounds 或 engine._running = False
+
+⚠️ 不要改 broadcast_round 的调用方式 — 它的签名是公共 API。
 """
 
 from __future__ import annotations
@@ -10,8 +18,6 @@ import asyncio
 from typing import Any
 
 from loguru import logger
-
-from nanobot.groupchat import display as _d
 
 
 async def generate_summary(engine: Any) -> None:
@@ -27,8 +33,12 @@ async def generate_summary(engine: Any) -> None:
                 {"role": "system", "content": "你是一个讨论总结专家。"},
                 {"role": "user", "content": (
                     f"话题：{engine._topic}\n\n"
-                    f"群聊记录：\n{engine._format_history()}\n\n"
-                    "请输出简洁总结：1)核心观点 2)分歧点 3)初步结论"
+                    "群聊记录：\n"
+                    + "\n\n".join(
+                        f"[{m['sender']}]: {m['content']}"
+                        for m in engine._history
+                    )
+                    + "\n\n请输出简洁总结：1)核心观点 2)分歧点 3)初步结论"
                 )},
             ],
             model=model,
@@ -85,19 +95,10 @@ async def run_loop(engine: Any) -> None:
             # Determine speaking order
             speak_order = list(engine._active_agents)
 
-            # Dispatch to appropriate mode
-            if engine._mode == "broadcast":
-                from nanobot.groupchat.broadcast import broadcast_round
-                await broadcast_round(speak_order, engine, engine._mailbox)
-            else:
-                # Serial mode
-                for si, name in enumerate(speak_order):
-                    if not engine._running or name not in engine._active_agents:
-                        break
-                    model_short = engine.registry.get(name, {}).get("model", "?").split("/")[-1]
-                    await engine._send(_d.thinking_msg(name, model_short, idx=si+1, total=len(speak_order)))
-                    await asyncio.sleep(engine.config.auto_reply_delay)
-                    await engine._agent_speak(name)
+            # Dispatch to broadcast mode
+            from nanobot.groupchat.broadcast import broadcast_round
+            await broadcast_round(speak_order, engine, engine._mailbox)
+
 
             # Signal round complete
             if engine._on_round_done:

@@ -1,13 +1,17 @@
-"""AgentRunner — manages a single agent's lifecycle in broadcast mode.
+"""AgentRunner — 单个 agent 在广播模式下的生命周期管理。
 
-Encapsulates the tool_loop → auto-wait → reactivation cycle that was
-previously a 200-line closure inside broadcast_round.
+架构：
+    AgentRunner.run()
+     ├─ tool_loop()      → 执行一轮 LLM + 工具调用
+     ├─ mailbox.wait()   → 等待 leader/队友消息（30s 轮询）
+     ├─ state_bus check  → 检查 leader 是否发了 stop 命令
+     └─ 循环直到 MAX_CYCLES 或被 cancel
 
-Each AgentRunner has:
-- Explicit state tracking (PENDING → RUNNING → WAITING → DONE/FAILED)
-- Display callbacks for tool activity
-- Token/latency accounting
-- Clean error handling with failure propagation via MailboxHub
+⚠️ 关键约束（agent 修改代码时注意）：
+    1. tool_loop() 的参数签名必须完全匹配 nanobot.agent.tool_loop.tool_loop()
+    2. state_bus 的方法名（set_agent_activity, update_agent 等）不可改
+    3. mailbox.wait() 返回 None 表示超时，返回 Message 表示有消息
+    4. _on_tool_start / _on_tool_result 是 tool_loop 的回调，签名不可改
 """
 
 from __future__ import annotations
@@ -17,27 +21,28 @@ import json as _json
 import time as _time
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from loguru import logger
 
 from nanobot.groupchat import display as _d
-from nanobot.groupchat.mailbox import MailboxHub, ConversationPool
+from nanobot.groupchat.mailbox import MailboxHub
+from nanobot.groupchat.streaming import StreamingDisplay
 from nanobot.groupchat.utils import build_tool_log, log_request
 
 
+# ── 数据类型 ──────────────────────────────────────────────────
+
 class AgentState(Enum):
-    """Agent lifecycle states."""
     PENDING = auto()
     RUNNING = auto()
     WAITING = auto()
-    DONE = auto()
-    FAILED = auto()
+    DONE    = auto()
+    FAILED  = auto()
 
 
 @dataclass
 class AgentResult:
-    """Result from a completed AgentRunner."""
     name: str
     content: str | None = None
     tools_used: list[str] = field(default_factory=list)
@@ -47,14 +52,13 @@ class AgentResult:
     iterations: int = 0
 
 
-class AgentRunner:
-    """Manages a single agent's execution in broadcast mode.
+# ── AgentRunner ───────────────────────────────────────────────
 
-    Lifecycle:
-        1. run() starts the tool_loop
-        2. After tool_loop finishes, enters auto-wait (mailbox.wait)
-        3. If a message arrives, injects it and re-runs tool_loop
-        4. Repeats until MAX_CYCLES reached or cancelled
+class AgentRunner:
+    """单个 agent 的执行器。
+
+    生命周期: PENDING → RUNNING → (tool_loop) → WAITING → (收到消息?) → RUNNING → ... → DONE
+    退出条件: MAX_CYCLES 耗尽 / leader 发 stop 命令 / 被 cancel / 出错
     """
 
     def __init__(
@@ -63,57 +67,61 @@ class AgentRunner:
         agent_idx: int,
         total_agents: int,
         *,
-        engine: Any,
-        mailbox: MailboxHub,
-        pool: ConversationPool | None,
-        tool_registry: Any,
+        engine: Any,           # GroupChatEngine 实例
+        mailbox: MailboxHub,   # 消息总线
+        pool: Any = None,      # 已弃用，保留参数兼容
+        tool_registry: Any,    # ToolRegistry 实例
         tool_defs: list[dict] | None,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, Any]],  # 初始 prompt（leader 可定制）
         model: str,
         is_leader: bool = False,
-        search_pool: Any = None,
+        state_bus: Any = None,           # FileStateBus 用于状态同步
+        idle_wait_timeout: int = 3,      # 保留参数兼容，实际用 30s 等 leader 命令
     ):
         self.name = name
         self._idx = agent_idx
         self._total = total_agents
         self._engine = engine
         self._mailbox = mailbox
-        self._pool = pool
         self._registry = tool_registry
         self._tool_defs = tool_defs
         self._messages = messages
         self._model = model
         self._is_leader = is_leader
-        self._search_pool = search_pool
+        self._state_bus = state_bus
+        self._idle_wait_timeout = idle_wait_timeout
 
-        # State
+        # 运行状态
         self.state = AgentState.PENDING
         self.content: str = ""
         self.all_tools_used: list[str] = []
         self.total_iterations = 0
         self.total_latency = 0.0
 
-        # Per-cycle tracking (for display callbacks)
+        # 每轮 token 计数（用于显示）
         self._cycle_t0 = 0.0
         self._cycle_usage: dict[str, int] = {}
 
-        # Display buffers
-        self._tool_lines: list[str] = []
+        # 搜索结果缓冲（合并显示避免刷屏）
         self._pending_searches: list[str] = []
 
-        # Cycle limits
+        # 循环上限：leader 多给几轮
         self.MAX_CYCLES = 6 if is_leader else 4
         self._max_iters = 12 if is_leader else 8
 
+    # ── 主循环 ────────────────────────────────────────────────
+
     async def run(self) -> AgentResult:
-        """Main execution loop: tool_loop → auto-wait → repeat."""
+        """主执行循环：tool_loop → 等待消息 → 注入 → 重新执行。"""
         if self.name not in self._engine.registry:
             return AgentResult(name=self.name, state=AgentState.FAILED, error="Not in registry")
 
-        model_short = self._model.split("/")[-1]
         self.state = AgentState.RUNNING
+        if self._state_bus:
+            self._state_bus.set_agent_activity(self.name, "thinking")
 
-        # Send initial thinking status
+        # 显示 "正在思考..."
+        model_short = self._model.split("/")[-1]
         await self._engine._send(_d.thinking_msg(
             self.name, model_short,
             leader=self._engine._leader,
@@ -127,13 +135,31 @@ class AgentRunner:
             while cycle < self.MAX_CYCLES:
                 cycle += 1
                 self.state = AgentState.RUNNING
+                if self._state_bus:
+                    self._state_bus.set_agent_activity(self.name, "thinking", cycle=cycle)
                 self._cycle_t0 = _time.time()
                 self._cycle_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
-                async def _on_iter_usage(usage: dict) -> None:
+                # token 计数回调
+                async def _on_usage(usage: dict) -> None:
                     for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
                         self._cycle_usage[k] += usage.get(k, 0)
 
+                # Leader 流式显示：让用户实时看到 leader 的推理/分析
+                if self._is_leader and self._engine._send_and_get_id_fn and self._engine._edit_fn:
+                    _stream = StreamingDisplay(
+                        f"👑 {self.name} ━━━━━━━━\n\n",
+                        self._engine._send_and_get_id_fn,
+                        self._engine._edit_fn,
+                    )
+                    _on_delta = _stream.on_delta
+                    _on_reset = _stream.on_reset
+                else:
+                    _stream = None
+                    _on_delta = None
+                    _on_reset = None
+
+                # ⚠️ 不可修改 — 参数必须完全匹配 tool_loop() 签名
                 result = await tool_loop(
                     provider=self._engine.provider,
                     messages=self._messages,
@@ -153,257 +179,192 @@ class AgentRunner:
                     },
                     on_tool_start=self._on_tool_start,
                     on_tool_result=self._on_tool_result,
-                    on_iteration_usage=_on_iter_usage,
-                    on_content_delta=None,
-                    on_content_reset=None,
+                    on_iteration_usage=_on_usage,
+                    on_content_delta=_on_delta,
+                    on_content_reset=_on_reset,
                     clean_response=lambda c: self._engine._clean_response(c, self.name),
                     result_max_chars=20_000,
                 )
 
-                # Flush any remaining buffered search lines
+                # 刷新搜索缓冲
                 await self._flush_searches()
 
+                # 处理结果
                 self.content = result.content or ""
-                is_error = result.finish_reason == "error"
                 self.total_latency += result.latency
                 self.total_iterations += result.iterations
                 self.all_tools_used.extend(result.tools_used or [])
 
-                if is_error:
-                    err_short = self.content[:150] if self.content else "Unknown error"
-                    await self._engine._send(f"  ✗ {self.name} failed ({result.latency:.1f}s): {err_short}")
-                    log_request(self._engine, self.name, self._model, "broadcast",
-                                error=err_short, iterations=self.total_iterations,
-                                latency=self.total_latency)
+                # 同步到 state.yaml
+                if self._state_bus:
+                    self._state_bus.update_agent(
+                        self.name,
+                        content_preview=(self.content[:200] if self.content else ""),
+                        latency=round(self.total_latency, 2),
+                        iterations=self.total_iterations,
+                    )
+
+                # Leader 流式完成 — finalize streaming message
+                if _stream and self.content:
+                    await _stream.finalize(
+                        self.content,
+                        fallback_send=self._engine._send,
+                        max_len=4096,
+                    )
+                elif _stream:
+                    # 流式消息存在但无文本 content（纯工具调用轮）→ 清理
+                    if _stream.msg_id and self._engine._edit_fn:
+                        try:
+                            await self._engine._edit_fn(_stream.msg_id, f"👑 {self.name} ━━ (工具执行中)")
+                        except Exception:
+                            pass
+
+                # 错误 → 立即退出
+                if result.finish_reason == "error":
+                    err = self.content[:150] if self.content else "Unknown error"
+                    await self._engine._send(f"  ✗ {self.name} failed: {err}", sender=self.name)
                     self.state = AgentState.FAILED
-                    return AgentResult(
-                        name=self.name, state=AgentState.FAILED,
-                        error=err_short, latency=self.total_latency,
-                    )
+                    if self._state_bus:
+                        self._state_bus.set_agent_activity(self.name, "idle")
+                    return AgentResult(name=self.name, state=AgentState.FAILED, error=err, latency=self.total_latency)
 
-                # Record final text in history
+                # 记录到对话历史
                 if self.content:
-                    logger.info(
-                        "broadcast [{}] cycle {} output ({}c): {}",
-                        self.name, cycle, len(self.content), self.content,
-                    )
-                    history_content = self.content + build_tool_log(result.tool_calls_detail)
-                    self._engine._add_message(self.name, history_content)
-                    if self._search_pool:
-                        self._search_pool.on_output(self.name)
+                    self._engine._add_message(self.name, self.content + build_tool_log(result.tool_calls_detail))
 
-                # Anti-idle guard
-                _substantive_tools = {"web_search", "web_fetch", "exec", "read_file", "write_file"}
-                if cycle == 1 and not self.content and not (set(result.tools_used or []) & _substantive_tools):
-                    logger.warning(
-                        "Broadcast: {} idle on cycle 1 (no content, tools={}), forcing retry",
-                        self.name, result.tools_used,
-                    )
+                # 防空转：第一轮没产出 → 强制重试
+                _work_tools = {"web_search", "web_fetch", "exec", "read_file", "write_file"}
+                if cycle == 1 and not self.content and not (set(result.tools_used or []) & _work_tools):
                     self._messages.append({
                         "role": "system",
-                        "content": (
-                            f"[⚠️ 你（{self.name}）还没有采取任何行动！]\n"
-                            "你必须立即使用工具（web_search, web_fetch, exec 等）来回答用户的最新问题。\n"
-                            "不要直接从之前的对话中回答 — 用户需要新的搜索结果。\n"
-                            "禁止调用 wait() — 先执行工作再交流。"
-                        ),
+                        "content": f"[⚠️ 你（{self.name}）还没有采取任何行动！] 请立即使用工具开始工作。",
                     })
                     continue
 
-                # ── Auto-share if agent never used chatroom_send ──
-                if self.content and "chatroom_send" not in self.all_tools_used:
-                    snippet = self.content[:500]
-                    self._mailbox.send(self.name, ["All"], snippet)
-                    tok = result.token_usage
-                    total_tok = tok.get("total", 0)
-                    tok_suffix = ""
-                    if total_tok > 0:
-                        elapsed = _time.time() - self._cycle_t0
-                        cost = result.cost or 0
-                        cache_t = result.cache_tokens or 0
-                        cost_str = f" ${cost:.4f}" if cost else ""
-                        cache_str = f" 🔵{cache_t}" if cache_t else ""
-                        tok_suffix = f"\n`in:{tok.get('prompt',0)} out:{tok.get('completion',0)} Σ{total_tok} · {elapsed:.1f}s{cost_str}{cache_str}`"
-                    await self._engine._send(_d.chatroom_send_msg(
-                        self.name, "All", self.content + tok_suffix,
-                        max_len=3000, leader=self._engine._leader,
-                    ))
-
-                # ── Quick mailbox drain: check for pending messages ──
-                # No blocking wait — just check if teammates sent us
-                # something while we were working. If yes, inject and re-run.
+                # ⚠️ 不可修改 — Leader 控制的生命周期循环
+                # Agent 不自行决定退出，等待 leader 的 stop/end_round 命令。
                 if cycle < self.MAX_CYCLES:
-                    if self._pool:
-                        self._pool.release_unread(self.name)
+                    if self._state_bus:
+                        self._state_bus.set_agent_activity(self.name, "idle")
 
-                    # Non-blocking: grab whatever is in the queue right now
-                    msg = await self._mailbox.wait(self.name, timeout=3)
+                    # 等待消息（30s 轮询）
+                    msg = await self._mailbox.wait(self.name, timeout=30)
 
-                    if msg is None:
-                        # Nothing pending — this agent is done
-                        logger.info("Broadcast: {} finished (cycle {}, no pending messages)", self.name, cycle)
-                        break
+                    if msg is not None:
+                        # 收到消息 → 注入上下文，重新执行
+                        self.state = AgentState.RUNNING
+                        if self._state_bus:
+                            self._state_bus.set_agent_activity(self.name, "thinking")
+                        await self._engine._send(
+                            _d.chatroom_wait_msg(self.name, str(msg), leader=self._engine._leader),
+                            sender=self.name,
+                        )
+                        if self.content:
+                            self._messages.append({"role": "assistant", "content": self.content})
+                        self._messages.append({"role": "system", "content": f"[提醒] 你（{self.name}）已发表过观点。针对新消息回应，不要重复。"})
+                        self._messages.append({"role": "user", "content": f"[队友消息] {msg}"})
+                        continue
 
-                    # Got a message — inject and re-run
-                    self.state = AgentState.RUNNING
-                    logger.info("Broadcast: {} got pending msg from {}: {}", self.name, msg.sender, msg.content[:60])
-                    await self._engine._send(_d.chatroom_wait_msg(self.name, str(msg), leader=self._engine._leader))
+                    # 没消息 → 检查 leader 是否发了 stop 命令
+                    if self._state_bus:
+                        try:
+                            st = self._state_bus._read_all().get("agents", {}).get(self.name, {}).get("state", "")
+                            if st in ("removed", "stopped"):
+                                break
+                        except Exception:
+                            pass
 
-                    # Inject context for next cycle
-                    if self.content:
-                        self._messages.append({"role": "assistant", "content": self.content})
-                    self._messages.append({
-                        "role": "system",
-                        "content": (
-                            f"[提醒] 你（{self.name}）已经发表过上述观点。"
-                            f"针对队友的新消息做出回应或补充新观点，不要重复已说的内容。"
-                        ),
-                    })
-                    self._messages.append({
-                        "role": "user",
-                        "content": f"[队友消息] {msg}",
-                    })
+                    continue  # 继续等待 — leader 控制生命周期
 
-            # ── Final completion ──
+            # ── 正常完成 ──
             self.state = AgentState.DONE
-            comp = _d.completion_msg(
-                self.name, round(self.total_latency, 1),
-                self.total_iterations, self.all_tools_used,
-                leader=self._engine._leader,
-            )
-            if comp:
-                await self._engine._send(comp)
-
-            log_request(self._engine, self.name, self._model, "broadcast",
-                        reply_len=len(self.content) if self.content else 0,
-                        tools=self.all_tools_used, iterations=self.total_iterations,
-                        latency=round(self.total_latency, 1))
-
-            return AgentResult(
-                name=self.name, content=self.content,
-                tools_used=self.all_tools_used, state=AgentState.DONE,
-                latency=self.total_latency, iterations=self.total_iterations,
-            )
+            if self._state_bus:
+                self._state_bus.set_agent_activity(self.name, "idle")
 
         except asyncio.CancelledError:
-            self.state = AgentState.DONE
-            comp = _d.completion_msg(
-                self.name, round(self.total_latency, 1),
-                self.total_iterations, self.all_tools_used,
-                leader=self._engine._leader,
-            )
-            if comp:
-                await self._engine._send(comp)
-            return AgentResult(
-                name=self.name, content=self.content or "",
-                tools_used=self.all_tools_used, state=AgentState.DONE,
-                latency=self.total_latency,
-            )
-
+            self.state = AgentState.DONE  # cancel 也视为正常完成
         except Exception as e:
             self.state = AgentState.FAILED
-            logger.error("Broadcast: {} failed: {}", self.name, e)
+            logger.error("AgentRunner {}: {}", self.name, e)
             await self._engine._send(f"  ✗ {self.name} error: {e}")
-            log_request(self._engine, self.name, self._model, "broadcast", error=str(e))
-            return AgentResult(
-                name=self.name, state=AgentState.FAILED,
-                error=str(e), latency=self.total_latency,
-            )
 
-        finally:
-            if self._pool:
-                self._pool.release_unread(self.name)
-            if self.state == AgentState.FAILED:
-                error_msg = f"LLM error" if not self.content else self.content[:100]
-                self._mailbox.mark_agent_failed(self.name, error_msg)
-            else:
-                self._mailbox.mark_agent_done(self.name)
+        # 显示完成消息
+        comp = _d.completion_msg(self.name, round(self.total_latency, 1),
+                                 self.total_iterations, self.all_tools_used,
+                                 leader=self._engine._leader)
+        if comp:
+            await self._engine._send(comp)
 
-    # ── Display callbacks ──────────────────────────────────────
+        # 标记 mailbox 状态
+        if self.state == AgentState.FAILED:
+            self._mailbox.mark_agent_failed(self.name, self.content[:100] if self.content else "error")
+        else:
+            self._mailbox.mark_agent_done(self.name)
+
+        return AgentResult(
+            name=self.name, content=self.content,
+            tools_used=self.all_tools_used, state=self.state,
+            latency=self.total_latency, iterations=self.total_iterations,
+            error=self.content[:150] if self.state == AgentState.FAILED else None,
+        )
+
+    # ── 显示回调 ──────────────────────────────────────────────
 
     async def _flush_searches(self) -> None:
-        """Flush buffered search tool lines as one combined message."""
+        """合并显示缓冲的搜索结果。"""
         if self._pending_searches:
-            combined = "\n".join(self._pending_searches)
-            await self._engine._send(combined)
+            await self._engine._send("\n".join(self._pending_searches))
             self._pending_searches.clear()
 
     async def _on_tool_start(self, tool_name: str, args: dict) -> None:
+        """⚠️ 签名不可改 — tool_loop 回调。"""
         if not isinstance(args, dict):
             args = {}
-        # Persist tool_call event
-        self._engine._save_event("tool_call", agent=self.name, extra={
-            "tool": tool_name,
-            "args": {k: (v if isinstance(v, str) else v) for k, v in args.items()},
-        })
-        logger.info(
-            "broadcast [{}] tool_call: {}({})",
-            self.name, tool_name, _json.dumps(args, ensure_ascii=False),
-        )
+        self._last_tool_args = args
+
+        # 记录到 state.yaml
+        if self._state_bus:
+            self._state_bus.append_tool_start(self.name, tool_name, args)
 
         leader = self._engine._leader
+
         if tool_name == "chatroom_send":
             await self._flush_searches()
             to = args.get("to", "?")
-            msg_full = (args.get("message", "") or "")
+            msg = args.get("message", "")
             to_str = ", ".join(to) if isinstance(to, list) else str(to)
-            cost = len([a for a in [self.name] if False])  # placeholder
-            if to_str.lower() == "all":
-                cost = self._total - 1
-            else:
-                cost = len(to) if isinstance(to, list) else 1
-            self._tool_lines.append(f"{self.name}: chatroom_send({to_str}) [cost={cost}]")
-            # Build stats suffix
-            elapsed = _time.time() - self._cycle_t0
-            tok_t = self._cycle_usage.get("total_tokens", 0)
-            stats_suffix = ""
-            if tok_t > 0:
-                p = self._cycle_usage["prompt_tokens"]
-                c = self._cycle_usage["completion_tokens"]
-                stats_suffix = f"\n`in:{p} out:{c} Σ{tok_t} · {elapsed:.1f}s`"
-            await self._engine._send(_d.chatroom_send_msg(self.name, to_str, msg_full + stats_suffix, leader=leader))
+            # 附加 token 统计
+            tok = self._cycle_usage.get("total_tokens", 0)
+            stats = ""
+            if tok > 0:
+                p, c = self._cycle_usage["prompt_tokens"], self._cycle_usage["completion_tokens"]
+                stats = f"\n`in:{p} out:{c} Σ{tok} · {_time.time() - self._cycle_t0:.1f}s`"
+            await self._engine._send(
+                _d.chatroom_send_msg(self.name, to_str, msg + stats, leader=leader),
+                sender=self.name,
+            )
         elif tool_name == "wait":
             await self._flush_searches()
-            from_who = args.get("from_agent", "")
-            self._tool_lines.append(f"{self.name}: wait({'来自 ' + from_who if from_who else '消息'})")
         elif tool_name in ("web_search", "web_fetch"):
-            line = _d.tool_activity_msg(self.name, tool_name, args, leader=leader)
-            self._tool_lines.append(line)
-            self._pending_searches.append(line)
+            self._pending_searches.append(_d.tool_activity_msg(self.name, tool_name, args, leader=leader))
         else:
             await self._flush_searches()
-            line = _d.tool_activity_msg(self.name, tool_name, args, leader=leader)
-            self._tool_lines.append(line)
-            await self._engine._send(line)
+            await self._engine._send(
+                _d.tool_activity_msg(self.name, tool_name, args, leader=leader),
+                sender=self.name,
+            )
 
     async def _on_tool_result(self, tool_name: str, tool_call_id: str, result: str) -> None:
-        self._engine._save_event("tool_result", agent=self.name, extra={
-            "tool": tool_name,
-            "result_len": len(result) if result else 0,
-            "success": not (result or "").startswith("Error:"),
-        })
-        logger.info(
-            "broadcast [{}] tool_result: {} ({}c): {}",
-            self.name, tool_name, len(result) if result else 0, result,
-        )
+        """⚠️ 签名不可改 — tool_loop 回调。"""
+        if self._state_bus:
+            ok = not (result or "").startswith("Error:")
+            self._state_bus.complete_tool(self.name, tool_name, len(result) if result else 0, ok, (result[:200] if result else ""))
 
-        leader = self._engine._leader
-        if tool_name == "chatroom_send" and result:
-            if "BLOCKED:" in result or "threads]" in result:
-                if "BLOCKED:" in result:
-                    pool_bar = _d.thread_bar(self._pool.used, self._pool.capacity) if self._pool else ""
-                    await self._engine._send(f"✗ {self.name} dropped ── {pool_bar}")
-                else:
-                    if self._pool:
-                        await self._engine._send(f"  {_d.thread_bar(self._pool.used, self._pool.capacity)}")
-        elif tool_name == "wait" and result and not result.startswith("⏰"):
-            await self._engine._send(_d.chatroom_wait_msg(self.name, result, leader=leader))
+        # 显示特定工具结果
+        if tool_name == "wait" and result and not result.startswith("⏰"):
+            await self._engine._send(_d.chatroom_wait_msg(self.name, result, leader=self._engine._leader))
         elif tool_name in ("web_search", "web_fetch") and result:
-            brief = _d.tool_result_brief(self.name, tool_name, result)
-            if tool_name == "web_search" and self._search_pool:
-                brief += f"  🔍 {self._search_pool.status()}"
-            self._pending_searches.append(brief)
+            self._pending_searches.append(_d.tool_result_brief(self.name, tool_name, result))
         elif tool_name == "exec" and result:
             await self._flush_searches()
-            brief = _d.tool_result_brief(self.name, tool_name, result)
-            await self._engine._send(brief)
+            await self._engine._send(_d.tool_result_brief(self.name, tool_name, result))

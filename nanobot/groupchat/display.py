@@ -1,7 +1,17 @@
-"""Centralized display formatting for group chat.
+"""display.py — 所有群聊显示格式化函数（纯格式化，无业务逻辑）。
 
-All visual formatting, headers, and status message templates live here.
-Design: clean Unicode, role-aware badges, compact and readable.
+所有发给用户看的消息格式都在这里定义。其他文件通过 import display as _d 调用。
+
+函数分类：
+    agent_badge / agent_header    — agent 名称 + 图标
+    thinking_msg / completion_msg — 状态提示（开始思考、完成）
+    broadcast_start/complete_msg  — 广播轮次的开始/结束横幅
+    tool_activity_msg             — 工具调用显示（搜索、读文件等）
+    tool_result_brief             — 工具结果摘要
+    chatroom_send_msg             — agent 间消息显示
+    chatroom_wait_msg             — 等待消息回执
+
+⚠️ 这里是纯格式化 — 不要在这里加业务逻辑。
 """
 
 from __future__ import annotations
@@ -39,10 +49,6 @@ TOOL_LABELS: dict[str, str] = {
     "transfer_credits": "transfer",
 }
 
-
-def tool_icon(tool_name: str) -> str:
-    """Return label for a tool (kept for backward compat with engine.py)."""
-    return TOOL_LABELS.get(tool_name, tool_name)
 
 
 # ── Badges & Headers ─────────────────────────────────────────
@@ -122,9 +128,6 @@ def error_msg(agent_name: str, error: str, latency: float = 0) -> str:
     return f"✗ {agent_name} failed: {error}"
 
 
-def empty_reply_msg(agent_name: str) -> str:
-    return f"✗ {agent_name}: empty reply"
-
 
 def tool_in_progress_msg(header: str) -> str:
     return f"{header}– 🔧 ..."
@@ -165,103 +168,8 @@ def broadcast_complete_msg(
     return msg
 
 
-def thread_bar(used: int, capacity: int) -> str:
-    """Render pool status as a visual thread bar.
-
-    Example: '▰▰▰▱▱▱▱▱▱▱▱▱ 3/12'
-    """
-    filled = "▰" * used
-    empty = "▱" * max(capacity - used, 0)
-    return f"{filled}{empty} {used}/{capacity}"
 
 
-def search_credits_bar(pool_status: str) -> str:
-    """Format search credits for display.
-
-    Input: 'Nanobot:2💰(0搜) | Lucas:1💰(3搜) | ...'
-    Output: '🔍 Nanobot:2💰(0搜) | Lucas:1💰(3搜) | ...'
-    """
-    return f"🔍 {pool_status}"
-
-
-def search_bar(pool: int, total: int, nodes: int) -> str:
-    """Render search tree status as compact bar.
-
-    Example: '🔍 ▰▰▱▱ 2/4 · 3 nodes'
-    """
-    used = total - pool
-    filled = "▰" * used
-    empty = "▱" * max(pool, 0)
-    return f"🔍 {filled}{empty} {used}/{total} · {nodes} nodes"
-
-
-def chat_chain_summary(
-    history: list,
-    *,
-    max_preview: int = 100,
-    leader: str | None = None,
-) -> str:
-    """Format chat history as a tree grouped by conversation threads.
-
-    Output:
-        ┄ 对话链 (8 msgs) ┄
-        👑 Nanobot
-        ├→ Lucas: 请搜索酒馆战棋…
-        │  └← Lucas: 搜索到3条结果…
-        ├→ Ares: 请分析以下数据…
-        │  └← Ares: 分析完成…
-        └→ All: 最终结论…
-        🔹 Harper
-        └→ All: 补充一点…
-    """
-    if not history:
-        return ""
-
-    # Build per-sender thread groups
-    from collections import OrderedDict
-    threads: OrderedDict[str, list] = OrderedDict()
-    for msg in history:
-        sender = msg.sender if hasattr(msg, "sender") else str(msg.get("sender", "?"))
-        targets = msg.targets if hasattr(msg, "targets") else msg.get("targets", [])
-        content = msg.content if hasattr(msg, "content") else str(msg.get("content", ""))
-        if sender not in threads:
-            threads[sender] = []
-        threads[sender].append((sender, targets, content))
-
-    # Build tree display
-    lines = [f"┄ 对话链 ({len(history)} msgs) ┄"]
-
-    for sender, msgs in threads.items():
-        icon = "👑" if sender == leader else "🔹"
-        lines.append(f"{icon} {sender}")
-
-        for i, (_, targets, content) in enumerate(msgs):
-            to = ", ".join(targets) if isinstance(targets, list) else str(targets)
-            preview = content.replace("\n", " ")
-            if len(preview) > max_preview:
-                preview = preview[:max_preview] + "…"
-
-            is_last = (i == len(msgs) - 1)
-            branch = "└" if is_last else "├"
-            lines.append(f"  {branch}→ {to}: {preview}")
-
-    return "\n".join(lines)
-
-
-def synthesis_start_msg(count: int) -> str:
-    return f"━━ synthesis · {count} agent(s) ━━"
-
-
-def synthesis_agent_msg(
-    agent_name: str,
-    model_short: str,
-    is_leader: bool,
-    idx: int,
-    total: int,
-) -> str:
-    label = "synthesizing" if is_leader else "reviewing"
-    icon = "👑" if is_leader else "◎"
-    return f"{icon} {agent_name} {label}… ({model_short})  [{idx + 1}/{total}]"
 
 
 def tool_call_line(agent_name: str, tool_name: str, short_arg: str = "") -> str:
@@ -272,16 +180,6 @@ def tool_call_line(agent_name: str, tool_name: str, short_arg: str = "") -> str:
     label = TOOL_LABELS.get(tool_name, tool_name)
     arg = _shorten_path(short_arg) if short_arg else ""
     return f"▸ {agent_name} · {label}({arg})"
-
-
-def tool_result_line(preview: str, result_len: int) -> str:
-    """Format a tool result for inline display.
-
-    Returns: '↳ Results for: Trump… (1,234字)'
-    """
-    ellipsis = "…" if result_len > 80 else ""
-    return f"↳ {preview}{ellipsis} ({result_len:,}字)"
-
 
 # ── Tool Activity Display (broadcast mode) ───────────────────
 
@@ -365,6 +263,31 @@ def tool_result_brief(
         return f"    └ ({rlen:,}字)"
 
 
+# ── Leader Update Display ────────────────────────────────────
+
+def leader_update_msg(
+    leader_name: str,
+    content: str,
+    *,
+    max_len: int = 800,
+) -> str:
+    """Format leader reasoning/analysis for user display.
+
+    Shows the leader's thinking with a distinct visual banner:
+
+        👑 Kirk ━━━━━━━━
+        收到 Verifier 报告，分析结论如下...
+        ━━━━━━━━━━━━━━━
+    """
+    if len(content) > max_len:
+        content = content[:max_len] + "…"
+    return (
+        f"👑 {leader_name} ━━━━━━━━\n"
+        f"{content}\n"
+        f"━━━━━━━━━━━━━━━"
+    )
+
+
 # ── Chatroom Communication Display ───────────────────────────
 
 def chatroom_send_msg(
@@ -412,51 +335,3 @@ def chatroom_wait_msg(agent: str, result: str, leader: str | None = None) -> str
     icon = "👑←" if agent == leader else "  ←"
     return f"{icon} {agent} received from {sender}"
 
-
-def user_interjection_msg(message: str, *, max_len: int = 500) -> str:
-    """Format a user interjection during broadcast.
-
-    Clean inline style:
-        ── User ──
-        message content
-    """
-    if len(message) > max_len:
-        message = message[:max_len] + "…"
-    return (
-        f"── User ──\n"
-        f"{message}"
-    )
-
-
-def yield_turn_msg(from_agent: str, to_agent: str, reason: str = "") -> str:
-    """Format a yield-turn event.
-
-        ↻ Harper yield → Lucas (原因: ...)
-    """
-    suffix = f" ({reason})" if reason else ""
-    return f"  ↻ {from_agent} yield → {to_agent}{suffix}"
-
-
-def speak_order_msg(order: list[str], leader: str | None = None) -> str:
-    """Format the current speaking order.
-
-        🗣 发言顺序: Ares → Lucas → Harper → Benjamin 👑
-    """
-    parts = []
-    for name in order:
-        badge = " 👑" if name == leader else ""
-        parts.append(f"{name}{badge}")
-    return f"🗣 发言顺序: {' → '.join(parts)}"
-
-
-# ── Leader Action Messages ───────────────────────────────────
-
-def leader_end_msg(leader_name: str, reason: str = "") -> str:
-    """Display when leader ends the discussion."""
-    reason_part = f"\n    原因: {reason}" if reason else ""
-    return f"👑 {leader_name} 结束讨论{reason_part}"
-
-
-def leader_transfer_msg(leader_name: str, result: str) -> str:
-    """Display when leader transfers search credits."""
-    return f"👑🔄 {result}"

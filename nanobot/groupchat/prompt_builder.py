@@ -1,10 +1,20 @@
-"""Prompt construction for group chat agents.
+"""prompt_builder.py — Agent 的 prompt/messages 构建器。
 
-Extracts all prompt-related logic from GroupChatEngine:
-- Component ordering and management
-- Template expansion
-- Per-agent and global overrides
-- History → messages conversion
+这个文件把 agent 的系统提示、对话历史、角色提示组装成 tool_loop 需要的 messages 列表。
+
+核心方法：
+    build_broadcast_prompt()  — 构建广播模式下 agent 的完整 messages
+    build_leader_hint()       — 构建 leader 的控制指令文档（⚠️ 内容很重要）
+    build_worker_hint()       — 构建普通 agent 的角色提示
+
+数据流：
+    broadcast.py → _build_runner() → prompt_builder.build_broadcast_prompt()
+      → [system_prompt, history_messages, role_hint] → 传给 tool_loop
+
+⚠️ agent 修改本文件时注意：
+    1. build_leader_hint() 中的 control command 文档必须与 broadcast.py 的实际命令一致
+    2. messages 格式必须是 [{"role": "system"|"user"|"assistant", "content": "..."}]
+    3. 不要删除 state.yaml 的路径注入 — leader 需要知道文件路径才能 read_file
 """
 
 from __future__ import annotations
@@ -99,30 +109,25 @@ TEMPLATES: dict[str, str] = {
         "队友: {{teammates}}\n\n"
         "用户请求: {{user_question}}\n\n"
         "## 群聊工具\n"
-        "- chatroom_send(to, message): 给队友发消息。to 可以是具体名字或 \"All\"\n"
-        "- wait(timeout=30): 等待队友消息，不要超过60s\n\n"
+        "- chatroom_send(to, message): 给队友发消息。to 可以是具体名字或 \"All\"\n\n"
         "### 协作通信协议\n"
         "chatroom_send(to=\"Harper\", message=\"搜索结果...\")\n"
         "chatroom_send(to=\"All\", message=\"关键发现...\")\n\n"
         "### 收到消息后的响应规则（关键！）\n"
         "收到队友消息时：执行请求 → 用 chatroom_send 回复结果。\n"
         "禁止：只在最终回复里提到，而不通过 chatroom_send 回复发送者。\n\n"
-        "## 发言顺序\n"
-        "系统使用对话资源池控制消息量：每条消息消耗槽位（发All=3，发个人=1）。\n"
-        "池满时 chatroom_send 会阻塞，直到有人 wait() 释放槽位。\n\n"
         "## 协作方式\n"
         "1. 先独立思考：分析问题 → 明确你能贡献什么 → 制定行动计划\n"
         "2. 执行工作（搜索/分析/编码），搜索后立即共享关键发现\n"
         "3. 用 chatroom_send 分享你的观点或发现（带来源 URL）\n"
-        "4. 用 wait() 听队友的消息\n"
-        "5. 基于队友的信息补充分析，避免重复搜索已共享的内容\n"
-        "6. 当所有人都在 wait 时，系统会自动结束本轮讨论\n\n"
+        "4. 基于队友的信息补充分析，避免重复搜索已共享的内容\n"
+        "5. 工作完成后直接在最终文字回复中给出结果\n\n"
         "## 搜索结果共享（关键！）\n"
         "- 你的搜索结果对队友也有价值，搜完后用 chatroom_send(to=\"All\") 分享\n"
         "- 收到队友的搜索结果后直接使用，不要重复搜索同样的内容\n"
         "- 需要补充时，换不同关键词或角度搜索\n\n"
         "## 限制\n"
-        "- 禁止一上来就 wait，必须先做工作再发言\n"
+        "- 必须先做工作再发言，不要空转\n"
         "- 网络调用（web_search + web_fetch）最多 3 次"
     ),
     "examples": "",
@@ -361,8 +366,14 @@ class PromptBuilder:
         history: list[dict[str, str]],
         leader: str | None = None,
         round_num: int = 0,
+        context_exclude: list[int] | None = None,
     ) -> list[dict[str, Any]]:
-        """Build the full prompt messages list for an agent turn."""
+        """Build the full prompt messages list for an agent turn.
+
+        Args:
+            context_exclude: List of conversation seq numbers to hide from this agent.
+                             Controlled by leader via state.yaml agents.X.context_exclude.
+        """
         agent = registry[agent_name]
         order = self.get_agent_prompt_order()
 
@@ -384,7 +395,9 @@ class PromptBuilder:
         messages: list[dict[str, Any]] = []
         for key in order:
             if key == "history":
-                messages.extend(self.history_to_messages(history, agent_name))
+                messages.extend(self.history_to_messages(
+                    history, agent_name, context_exclude=context_exclude,
+                ))
                 continue
             if key == "leader_prompt" and leader != agent_name:
                 continue
@@ -408,10 +421,20 @@ class PromptBuilder:
     def history_to_messages(
         history: list[dict[str, str]],
         current_agent: str = "",
+        context_exclude: list[int] | None = None,
     ) -> list[dict[str, Any]]:
-        """Convert history dicts into LLM API messages."""
+        """Convert history dicts into LLM API messages.
+
+        Args:
+            context_exclude: List of conversation seq numbers (1-indexed) to skip.
+                             Leader controls this via state.yaml agents.X.context_exclude.
+        """
+        exclude_set = set(context_exclude or [])
         msgs: list[dict[str, Any]] = []
-        for m in history:
+        for i, m in enumerate(history):
+            seq = i + 1  # seq is 1-indexed
+            if seq in exclude_set:
+                continue  # Leader blocked this message for this agent
             sender = m["sender"]
             content = m["content"]
             if sender == "用户":
@@ -455,24 +478,27 @@ class PromptBuilder:
         leader_name: str | None = None,
         agent_idx: int = 0,
         total: int = 0,
-        search_pool: Any = None,
     ) -> list[dict[str, Any]]:
         """Build the full prompt for an agent in broadcast mode.
 
-        Centralizes prompt construction that was previously inlined
-        in broadcast.py's _run_one closure (lines 225-337).
+        Reads context_exclude from state_bus to filter conversation history.
         """
-        messages = engine._build_agent_prompt(agent_name)
+        # Read context_exclude from state_bus
+        context_exclude: list[int] | None = None
+        if hasattr(engine, '_state_bus') and engine._state_bus:
+            ctrl = engine._state_bus.get_agent_control(agent_name)
+            context_exclude = ctrl.get("context_exclude") or None
+
+        messages = engine._build_agent_prompt(agent_name, context_exclude=context_exclude)
         is_leader = (agent_name == leader_name)
         teammates = [a for a in agents if a != agent_name]
-        exec_agents = agents
 
         overrides = self._load_prompt_overrides("__global__")
 
         if is_leader:
             hint = self.build_leader_hint(
                 agent_name, agents, user_question,
-                engine=engine, search_pool=search_pool,
+                engine=engine,
             )
             messages.insert(max(len(messages) - 1, 0), {
                 "role": "system",
@@ -504,7 +530,7 @@ class PromptBuilder:
 
         # Permission context for all agents
         perm_hint = self.build_permission_hint(
-            agent_name, exec_agents, engine=engine,
+            agent_name, agents, engine=engine,
             leader_name=leader_name,
         )
         messages.insert(max(len(messages) - 1, 0), {
@@ -521,9 +547,12 @@ class PromptBuilder:
         user_question: str,
         *,
         engine: Any,
-        search_pool: Any = None,
     ) -> str:
-        """Build the leader agent's system prompt."""
+        """Build the leader agent's system prompt.
+
+        Explains the pure variable-driven control via state.yaml.
+        Leader directly modifies variables — no commands, no functions.
+        """
         non_leader_agents = [a for a in agents if a != leader_name]
         agent_caps = []
         for a in non_leader_agents:
@@ -537,51 +566,72 @@ class PromptBuilder:
                 on = []
             agent_caps.append(f"  {a}: {', '.join(on) if on else '(无工具)'}")
 
-        search_status = search_pool.status() if search_pool else "N/A"
+        # Get state.yaml path
+        state_path = "~/.nanobot/collab-sessions/<session>/state.yaml"
+        if hasattr(engine, '_state_bus') and engine._state_bus:
+            state_path = str(engine._state_bus.path)
+        elif hasattr(engine, '_session_dir') and engine._session_dir:
+            state_path = str(engine._session_dir / "state.yaml")
 
         return (
             f"[Leader 模式 — 你是团队指挥官 👑]\n"
-            f"你是 {leader_name}，负责分析问题、分配任务、整合结果。\n\n"
+            f"你是 {leader_name}，负责分析问题、分配任务、整合结果。\n"
+            f"只有你会自动启动，其他 agent 需要你通过修改 state.yaml 来唤起。\n\n"
             f"用户请求: {user_question}\n\n"
             f"## 团队成员及工具能力\n"
             + "\n".join(agent_caps) + "\n\n"
-            f"## 你的专属工具\n"
-            f"- chatroom_send(to, message): 给队友发任务/指令\n"
-            f"- wait(): 等待队友汇报结果\n"
-            f"- manage_agent(action, agent, ...): 管理队友（disable/enable/set_tools）\n"
-            f"- end_discussion(reason): 结束讨论，进入最终总结\n"
-            f"- transfer_credits(from_agent, to_agent, amount): 划拨搜索额度\n"
-            f"- 你也拥有自己的基础工具（web_search 等），可以自己做部分工作\n\n"
-            f"## 搜索额度管理\n"
-            f"每个 agent 有独立的搜索额度（{search_status}）。\n"
-            f"没有 web_search 的 agent 的额度闲置，你可以用 transfer_credits 把他们的额度\n"
-            f"划拨给有搜索能力的 agent（包括你自己）。\n\n"
+            f"## 控制面板 — 纯变量驱动\n"
+            f"所有状态存储在: `{state_path}`\n"
+            f"你通过 `read_file` 查看状态，通过 `edit_file` 修改变量来控制一切。\n\n"
+            f"### 变量控制一览\n"
+            f"| 你想做的事 | 怎么改 state.yaml |\n"
+            f"|---|---|\n"
+            f"| 启动 agent | 在 agents: 下新增一个 block，设 state: running |\n"
+            f"| 暂停 agent | 改 agents.X.state: paused |\n"
+            f"| 移除 agent | 删掉整个 agent block |\n"
+            f"| 禁言 agent | 改 agents.X.muted: true |\n"
+            f"| 屏蔽某条上下文 | 往 agents.X.context_exclude 加 seq 编号 |\n"
+            f"| 控制回复对象 | 改 agents.X.reply_to (All/具体名/null) |\n"
+            f"| 监视进度 | 读 agents.X.activity / current_tool / toolchain |\n"
+            f"| 重排对话 | 直接编辑 conversation 数组 |\n"
+            f"| 存自定义数据 | 写入 leader_data |\n"
+            f"| **结束群聊** | **改 session.status: done** |\n\n"
+            f"### agent block 模板\n"
+            f"```yaml\n"
+            f"agents:\n"
+            f"  {non_leader_agents[0] if non_leader_agents else 'AgentName'}:\n"
+            f"    state: running        # running | paused\n"
+            f"    reply_to: All         # All | \"AgentName\" | null\n"
+            f"    context_exclude: []   # 不让 agent 看到的 seq 编号\n"
+            f"    muted: false\n"
+            f"```\n\n"
+            f"## 你的工具\n"
+            f"- chatroom_send(to, message): 给队友发消息\n"
+            f"- wait(timeout, from_agent): 等待队友回复\n"
+            f"- read_file / edit_file: 查看和修改 state.yaml\n"
+            f"- 基础工具（web_search 等）\n\n"
             f"## 工作流程\n"
             f"1. 分析问题，决定如何分工\n"
-            f"2. 用 chatroom_send 给队友分配具体任务（写清楚要做什么）\n"
-            f"   ⚠️ 只分配队友有工具能力完成的任务！无 web_search 的队友不要让他搜索\n"
-            f"3. 用 wait() 等待队友回复结果\n"
-            f"4. 根据结果：追加任务 / 纠正方向 / 自己补充搜索\n"
-            f"5. 信息充分后用 end_discussion() 结束讨论\n"
-            f"6. 在你的最终文字回复中，整合所有发现给出完整答案\n\n"
-            f"## 关键规则\n"
-            f"- 发现队友空转或无法完成任务时：果断 end_discussion\n"
-            f"- 可以一次给多个队友同时发任务（并行工作）\n"
-            f"- 你的最终文字回复就是给用户的答案，要完整、结构化\n"
+            f"2. edit_file state.yaml 新增 agent block 来唤起需要的 agent\n"
+            f"   ⚠️ 只分配队友有工具能力完成的任务！\n"
+            f"3. 自己也同步开展工作（搜索、分析）\n"
+            f"4. read_file state.yaml 查看 agent 进度（activity/toolchain）\n"
+            f"5. 信息充分后，在最终文字回复中整合所有发现给出完整答案\n"
         )
+
 
     @staticmethod
     def build_worker_hint(leader_name: str) -> str:
         """Build the worker agent's leader-following instructions."""
         return (
-            f"[团队协作模式 — 严格发言规则]\n"
+            f"[团队协作模式]\n"
             f"Leader {leader_name} 会通过 chatroom_send 给你分配任务。\n\n"
-            f"━━ 发言规则（强制执行）━━\n"
-            f"1. 你每次只能发送 **1 条消息**，然后必须 wait() 等待 Leader 发言\n"
-            f"2. Leader 发言后你的配额重置，可以再发 1 条\n"
-            f"3. 违反此规则的消息会被系统拦截\n"
-            f"4. 有问题必须向 Leader 提出并等待回复\n\n"
-            f"正确流程: 做工作 → chatroom_send(结果) → wait() → 收到 Leader 指令 → 继续"
+            f"━━ 工作流程 ━━\n"
+            f"1. 收到任务后立即开展工作（搜索、分析、编码等）\n"
+            f"2. 用 chatroom_send 向 Leader 汇报结果\n"
+            f"3. 如果有后续任务会通过消息通知你\n"
+            f"4. 完成所有工作后，在最终文字回复中给出完整结果\n\n"
+            f"正确流程: 收到任务 → 做工作 → chatroom_send(结果) → 完成"
         )
 
     @staticmethod

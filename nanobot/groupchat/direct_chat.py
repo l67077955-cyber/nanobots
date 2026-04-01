@@ -55,13 +55,6 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
         sessions_dir.mkdir(parents=True, exist_ok=True)
         engine._session_dir = sessions_dir / f"gc-{timestamp}"
         engine._session_dir.mkdir(parents=True, exist_ok=True)
-        engine._save_event("session_start", extra={
-            "agents": [agent_name],
-            "mode": "direct",
-            "topic": engine._topic or "",
-            "leader": None,
-            "models": {agent_name: agent.get("model", "?")},
-        })
 
     # Build messages: system(persona) → [memory] → [skills] → [history] → user(new)
     now = _cn_now().strftime("%Y年%m月%d日 %H:%M")

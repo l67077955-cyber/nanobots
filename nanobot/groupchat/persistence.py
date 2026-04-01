@@ -5,7 +5,9 @@ Manages all file I/O for group chat state:
 - Leader selection
 - Chat mode (serial/broadcast)
 - Named agent groups
-- Session event logging
+- Message sync to state.yaml
+
+注意：不再写 session.jsonl。所有事件记录都在 state.yaml 中。
 """
 
 from __future__ import annotations
@@ -15,8 +17,6 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
-
-from nanobot.groupchat.utils import cn_now as _cn_now
 
 
 _NANOBOT_DIR = Path.home() / ".nanobot"
@@ -30,13 +30,13 @@ class GroupChatState:
     - ``leader.txt``          — current leader name (or absent)
     - ``chat_mode.txt``       — "serial" | "broadcast"
     - ``groups.json``         — saved named groups
-    - ``collab-sessions/``    — per-session event logs
     """
 
     def __init__(self, registry: dict[str, Any], default_mode: str = "serial") -> None:
         self._registry = registry
         self._default_mode = default_mode
         self._session_dir: Path | None = None
+        self.state_bus: Any | None = None  # FileStateBus reference
 
     # ── Active Agents ────────────────────────────────────────
 
@@ -129,7 +129,7 @@ class GroupChatState:
         self._groups_file.parent.mkdir(parents=True, exist_ok=True)
         self._groups_file.write_text(json.dumps(groups, ensure_ascii=False, indent=2))
 
-    # ── Session Events ───────────────────────────────────────
+    # ── Session ──────────────────────────────────────────────
 
     @property
     def session_dir(self) -> Path | None:
@@ -139,64 +139,10 @@ class GroupChatState:
     def session_dir(self, value: Path | None) -> None:
         self._session_dir = value
 
-    def create_session(self) -> Path:
-        """Create a new session directory and return its path."""
-        timestamp = _cn_now().strftime("%Y%m%d-%H%M%S")
-        sessions_dir = _NANOBOT_DIR / "collab-sessions"
-        sessions_dir.mkdir(parents=True, exist_ok=True)
-        self._session_dir = sessions_dir / f"gc-{timestamp}"
-        self._session_dir.mkdir(parents=True, exist_ok=True)
-        return self._session_dir
-
-    def save_event(
-        self,
-        event_type: str,
-        *,
-        agent: str = "",
-        content: str = "",
-        extra: dict[str, Any] | None = None,
-    ) -> None:
-        """Append a structured event to session.jsonl.
-
-        Event types: session_start, round_start, round_end, message,
-                     tool_call, tool_result, agent_comm, system.
-        """
-        if not self._session_dir:
-            return
-        record: dict[str, Any] = {
-            "type": event_type,
-            "ts": _cn_now().isoformat(),
-        }
-        if agent:
-            record["agent"] = agent
-        if content:
-            record["content"] = content
-        if extra:
-            record.update(extra)
-        try:
-            with open(self._session_dir / "session.jsonl", "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-        except Exception as e:
-            logger.debug("save_event failed: {}", e)
-
-    def save_round_summary(
-        self,
-        round_num: int,
-        agents_responded: int,
-        comm_count: int = 0,
-        duration: float = 0.0,
-    ) -> None:
-        """Write a round_end event summarizing the round."""
-        self.save_event("round_end", extra={
-            "round": round_num,
-            "agents_responded": agents_responded,
-            "comm_count": comm_count,
-            "duration": round(duration, 2),
-        })
-
     def save_message(self, sender: str, content: str, history: list[dict[str, str]]) -> None:
-        """Log a message to session chat_log.txt and session.jsonl."""
-        if self._session_dir:
-            with open(self._session_dir / "chat_log.txt", "a") as f:
-                f.write(f"[{sender}]: {content}\n---\n")
-        self.save_event("message", agent=sender, content=content)
+        """Sync a message to state.yaml conversation chain."""
+        if self.state_bus:
+            try:
+                self.state_bus.append_conversation(sender, content)
+            except Exception:
+                pass
