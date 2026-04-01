@@ -168,7 +168,7 @@ class BroadcastCoordinator:
     def _setup_tools(self) -> None:
         """Build per-agent tool registries with chatroom tools."""
         from nanobot.agent.tools.registry import ToolRegistry
-        from nanobot.groupchat.chatroom_tools import ChatroomSendTool, WaitTool
+        from nanobot.groupchat.chatroom_tools import ChatroomSendTool
         from nanobot.groupchat.search_tools import CachedSearchTool
         from nanobot.groupchat.leader_tools import (
             LeaderGate, ManageAgentTool, EndDiscussionTool, TransferCreditsTool,
@@ -193,15 +193,12 @@ class BroadcastCoordinator:
                     elif tool_name not in ("chatroom_send", "wait"):
                         registry.register(tool)
 
-            # Add chatroom tools
+            # Add chatroom_send only (no wait tool — agents finish naturally)
             send_tool = ChatroomSendTool(
                 mailbox=self.mailbox, agent_name=name, pool=self.pool,
                 search_pool=self.search_pool, leader_gate=self.leader_gate,
             )
-            wait_tool = WaitTool(mailbox=self.mailbox, agent_name=name, pool=self.pool)
-            wait_tool._send_tool = send_tool
             registry.register(send_tool)
-            registry.register(wait_tool)
             self._agent_tool_registries[name] = registry
 
         # Leader-specific tools
@@ -244,7 +241,7 @@ class BroadcastCoordinator:
             # Determine tool definitions
             reg = self._agent_tool_registries[name]
             tool_defs = self.engine._get_agent_tools(agent_cfg, reg)
-            broadcast_tool_names = ["chatroom_send", "wait"]
+            broadcast_tool_names = ["chatroom_send"]
             if is_leader:
                 broadcast_tool_names.extend(["manage_agent", "end_discussion", "transfer_credits"])
             broadcast_defs = [
@@ -327,48 +324,35 @@ class BroadcastCoordinator:
                 await self.engine._send(f"── User ──\n{msg}\n  {pool_bar}")
                 logger.info("Broadcast: user interjected: {}", msg[:60])
 
-        async def _watch_all_waiting() -> None:
-            while True:
-                await self.mailbox.all_waiting_event.wait()
-                # Grace period: wait 5s to avoid premature termination
-                await asyncio.sleep(5)
-                if (self.mailbox._waiting >= self.mailbox._active_agents
-                        and len(self.mailbox._active_agents) > 0):
-                    return  # truly all idle
-                self.mailbox._all_waiting.clear()
-                logger.info("Broadcast: idle sentinel reset — agent(s) reactivated")
-
         async def _watch_leader_end() -> None:
             await self.leader_end_event.wait()
 
         user_task = asyncio.create_task(_user_listener())
-        idle_sentinel = asyncio.create_task(_watch_all_waiting())
         leader_sentinel = asyncio.create_task(_watch_leader_end())
-        all_tasks = set(tasks.keys()) | {idle_sentinel, leader_sentinel}
+        # Only monitor agent tasks + leader sentinel (no idle sentinel, no timeout)
+        all_monitored = set(tasks.keys()) | {leader_sentinel}
 
         completed = 0
+        SAFETY_LIMIT = 600  # absolute ceiling to prevent infinite loops
         try:
             while not all(t.done() for t in tasks.keys()):
                 done_set, _ = await asyncio.wait(
-                    [t for t in all_tasks if not t.done()],
-                    timeout=self.global_timeout,
+                    [t for t in all_monitored if not t.done()],
+                    timeout=SAFETY_LIMIT,
                     return_when=asyncio.FIRST_COMPLETED,
                 )
 
                 if not done_set:
+                    # Safety limit reached
+                    logger.warning("Broadcast: safety limit {}s reached", SAFETY_LIMIT)
+                    for task_obj in tasks:
+                        if not task_obj.done():
+                            task_obj.cancel()
                     break
 
                 should_break = False
                 for t in done_set:
-                    if t is idle_sentinel:
-                        logger.info("Broadcast: all agents waiting, ending round")
-                        await self.engine._send("━━ all agents idle — round complete ━━")
-                        for task_obj in tasks:
-                            if not task_obj.done():
-                                task_obj.cancel()
-                        should_break = True
-                        break
-                    elif t is leader_sentinel:
+                    if t is leader_sentinel:
                         logger.info("Broadcast: leader ended discussion")
                         await self.engine._send("━━ Leader 结束讨论 — entering synthesis ━━")
                         for task_obj in tasks:
@@ -394,17 +378,12 @@ class BroadcastCoordinator:
                 if should_break:
                     break
 
-        except asyncio.TimeoutError:
-            for task, name in tasks.items():
-                if not task.done():
-                    task.cancel()
-                    logger.warning("Broadcast: {} cancelled (global timeout)", name)
-                    await self.engine._send(f"\u23f0 {name} timeout")
+        except Exception as e:
+            logger.error("Broadcast: run loop error: {}", e)
 
         # Cleanup
-        for sentinel in (idle_sentinel, leader_sentinel):
-            if not sentinel.done():
-                sentinel.cancel()
+        if not leader_sentinel.done():
+            leader_sentinel.cancel()
         _user_listener_running = False
         if not user_task.done():
             user_task.cancel()

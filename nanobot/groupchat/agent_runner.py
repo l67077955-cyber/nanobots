@@ -229,36 +229,40 @@ class AgentRunner:
                         max_len=3000, leader=self._engine._leader,
                     ))
 
-                # ── Auto-wait: enter idle state ──
-                self.state = AgentState.WAITING
-                logger.info("Broadcast: {} entering auto-wait (cycle {})", self.name, cycle)
-                if self._pool:
-                    self._pool.release_unread(self.name)
-                msg = await self._mailbox.wait(self.name, timeout=60)
+                # ── Quick mailbox drain: check for pending messages ──
+                # No blocking wait — just check if teammates sent us
+                # something while we were working. If yes, inject and re-run.
+                if cycle < self.MAX_CYCLES:
+                    if self._pool:
+                        self._pool.release_unread(self.name)
 
-                if msg is None:
-                    logger.info("Broadcast: {} auto-wait timeout, exiting", self.name)
-                    break
+                    # Non-blocking: grab whatever is in the queue right now
+                    msg = await self._mailbox.wait(self.name, timeout=3)
 
-                # Got a message — reactivate
-                self.state = AgentState.RUNNING
-                logger.info("Broadcast: {} reactivated by {}: {}", self.name, msg.sender, msg.content[:60])
-                await self._engine._send(_d.chatroom_wait_msg(self.name, str(msg), leader=self._engine._leader))
+                    if msg is None:
+                        # Nothing pending — this agent is done
+                        logger.info("Broadcast: {} finished (cycle {}, no pending messages)", self.name, cycle)
+                        break
 
-                # Inject context for next cycle
-                if self.content:
-                    self._messages.append({"role": "assistant", "content": self.content})
-                self._messages.append({
-                    "role": "system",
-                    "content": (
-                        f"[提醒] 你（{self.name}）已经发表过上述观点。"
-                        f"针对队友的新消息做出回应或补充新观点，不要重复已说的内容。"
-                    ),
-                })
-                self._messages.append({
-                    "role": "user",
-                    "content": f"[队友消息] {msg}",
-                })
+                    # Got a message — inject and re-run
+                    self.state = AgentState.RUNNING
+                    logger.info("Broadcast: {} got pending msg from {}: {}", self.name, msg.sender, msg.content[:60])
+                    await self._engine._send(_d.chatroom_wait_msg(self.name, str(msg), leader=self._engine._leader))
+
+                    # Inject context for next cycle
+                    if self.content:
+                        self._messages.append({"role": "assistant", "content": self.content})
+                    self._messages.append({
+                        "role": "system",
+                        "content": (
+                            f"[提醒] 你（{self.name}）已经发表过上述观点。"
+                            f"针对队友的新消息做出回应或补充新观点，不要重复已说的内容。"
+                        ),
+                    })
+                    self._messages.append({
+                        "role": "user",
+                        "content": f"[队友消息] {msg}",
+                    })
 
             # ── Final completion ──
             self.state = AgentState.DONE
@@ -309,7 +313,6 @@ class AgentRunner:
         finally:
             if self._pool:
                 self._pool.release_unread(self.name)
-            # Use mark_agent_failed for errors, mark_agent_done for normal completion
             if self.state == AgentState.FAILED:
                 error_msg = f"LLM error" if not self.content else self.content[:100]
                 self._mailbox.mark_agent_failed(self.name, error_msg)
