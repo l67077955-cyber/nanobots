@@ -189,15 +189,8 @@ class AgentRunner:
                 # 刷新搜索缓冲
                 await self._flush_searches()
 
-                # 早停机制 (Early Stop)：防空转死循环
-                # 如果当前循环输出和上一轮完全一样且没有使用任何工具，说明陷入了无上下文更新的复读，应当立即终止
-                new_content = result.content or ""
-                if cycle > 1 and not result.tools_used and new_content == self.content:
-                    logger.info("AgentRunner {}: early stop triggered (no tools + identical content)", self.name)
-                    break
-
                 # 处理结果
-                self.content = new_content
+                self.content = result.content or ""
                 self.total_latency += result.latency
                 self.total_iterations += result.iterations
                 self.all_tools_used.extend(result.tools_used or [])
