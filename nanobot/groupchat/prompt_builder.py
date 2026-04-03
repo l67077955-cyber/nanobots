@@ -309,38 +309,91 @@ class PromptBuilder:
         )
 
     def _build_memory_content(self) -> str:
-        """Build the long-term memory hint for progressive loading.
+        """Build the memory system prompt (Claude Code memdir-inspired).
 
-        Instead of injecting full MEMORY.md content (which grows over time),
-        provide a brief pointer so the agent can read_file when relevant.
-        Matches the progressive-loading pattern used by skills.
+        Injects:
+        1. MEMORY.md index content (always loaded, ≤200 lines)
+        2. Memory file manifest (filename + description + type)
+        3. Usage guide (how to read/write/search memories)
+        4. Memory type taxonomy
         """
         try:
             from nanobot.agent.memory import MemoryStore
             store = MemoryStore(self._workspace)
-            content = store.read_long_term()
-            if content and content.strip():
-                # Show first non-empty line as preview
-                preview = ""
-                for line in content.splitlines():
-                    stripped = line.strip()
-                    if stripped and not stripped.startswith("#"):
-                        preview = stripped[:80]
-                        break
-                mem_path = store.memory_file
-                history_path = store.history_file
-                hint = (
-                    "[Long-term Memory — 长期记忆]\n\n"
-                    f"你有持久化记忆文件。用 read_file 查看完整内容：\n"
-                    f"- `{mem_path}` — 长期事实记忆 (MEMORY.md)\n"
-                    f"- `{history_path}` — 时间线日志 (HISTORY.md)\n"
-                )
-                if preview:
-                    hint += f"\n预览: {preview}…"
-                return hint
+
+            parts: list[str] = []
+            parts.append("# 持久化记忆系统")
+            parts.append("")
+            parts.append(f"你有一个基于文件的记忆系统，位于 `{store.memory_dir}/`。")
+            parts.append("记忆按主题拆分为独立文件，每个文件带 YAML frontmatter（name, description, type）。")
+            parts.append("")
+
+            # ── Section 1: Memory index (MEMORY.md content) ──
+            index_content = store.read_long_term()
+            memory_index = store.build_memory_index()
+
+            if index_content and index_content.strip():
+                parts.append("## MEMORY.md（长期索引）")
+                parts.append("")
+                # Truncate to prevent context explosion
+                lines = index_content.strip().split("\n")
+                if len(lines) > store.MAX_INDEX_LINES:
+                    parts.append("\n".join(lines[:store.MAX_INDEX_LINES]))
+                    parts.append(f"\n> ⚠️ 索引已截断（{len(lines)} 行，上限 {store.MAX_INDEX_LINES}）")
+                else:
+                    parts.append(index_content.strip())
+                parts.append("")
+
+            # ── Section 2: Memory file manifest ──
+            if memory_index:
+                parts.append("## 记忆文件清单")
+                parts.append("")
+                parts.append(memory_index)
+                parts.append("")
+
+            # ── Section 3: Usage guide ──
+            parts.append("## 记忆操作")
+            parts.append("")
+            parts.append("### 读取记忆")
+            parts.append(f"用 `read_file` 读取具体记忆文件（路径: `{store.memory_dir}/文件名.md`）")
+            parts.append("")
+            parts.append("### 搜索记忆")
+            parts.append(f"用 `exec` 搜索: `grep -rn \"关键词\" {store.memory_dir}/ --include=\"*.md\"`")
+            parts.append("")
+            parts.append("### 保存新记忆")
+            parts.append(f"用 `write_file` 创建新文件（路径: `{store.memory_dir}/文件名.md`），格式:")
+            parts.append("```markdown")
+            parts.append("---")
+            parts.append("name: 记忆标题")
+            parts.append("description: 一行描述（用于索引和检索）")
+            parts.append("type: user|feedback|project|reference")
+            parts.append("---")
+            parts.append("")
+            parts.append("具体内容...")
+            parts.append("```")
+            parts.append("")
+            parts.append("### 记忆类型")
+            parts.append("- **user** — 用户画像（角色、偏好、技能）")
+            parts.append("- **feedback** — 行为反馈（纠正和确认）")
+            parts.append("- **project** — 项目上下文（进度、Bug、决策）")
+            parts.append("- **reference** — 外部引用（工具位置、链接）")
+            parts.append("")
+            parts.append("### 更新索引")
+            parts.append(f"保存新记忆后，在 `{store.memory_file}` 中添加一行索引:")
+            parts.append("`- [标题](文件名.md) — 一行描述`")
+            parts.append("")
+
+            # ── Section 4: Time log ──
+            if store.history_file.exists():
+                parts.append("### 时间线日志")
+                parts.append(f"追加式日志: `{store.history_file}`")
+                parts.append("")
+
+            return "\n".join(parts)
         except Exception as e:
-            logger.warning("Failed to load memory hint: {}", e)
-        return ""
+            logger.warning("Failed to build memory content: {}", e)
+            return ""
+
 
     @staticmethod
     def get_component_template(key: str) -> str:
