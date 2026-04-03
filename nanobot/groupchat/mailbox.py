@@ -174,6 +174,10 @@ class MailboxHub:
             logger.info("MailboxHub: all {} agents waiting — conversation done",
                         len(self._active_agents))
             self._all_waiting.set()
+            # All agents idle — no one will send new messages. Exit immediately
+            # to let agent_runner check state_bus and break out.
+            self._waiting.discard(agent_name)
+            return None
 
         # Enforce hard limits
         timeout = min(timeout, 120.0)

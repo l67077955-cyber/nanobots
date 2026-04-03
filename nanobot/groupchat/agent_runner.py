@@ -283,6 +283,12 @@ class AgentRunner:
                         except Exception:
                             pass
 
+                    # All agents idle — no one will produce new messages.
+                    # Break out to avoid tight-looping.
+                    if self._mailbox._all_waiting.is_set():
+                        logger.info("AgentRunner {}: all agents idle, exiting", self.name)
+                        break
+
                     continue  # 继续等待 — leader 控制生命周期
 
             # ── 正常完成 ──
