@@ -402,12 +402,22 @@ class AgentRunner:
                     if len(self._mailbox._active_agents) > 1:
                         continue
 
-                    # 队友全死/只剩 Leader：唤醒 Leader，让它作为唯一活口进行关停总结
-                    # 如果上一次也是因为这个原因发送过系统提示，并且 Leader 没有真正操作，避免重发刷屏
+                    # 队友全死/只剩 Leader：
+                    # 如果上一次也是因为这个原因发送过系统提示，并且 Leader 做过总结了
+                    # → 进入"待命模式"：继续等用户消息，但设 120s 超時自动退出
                     if self._messages and "[系统] 所有队友均已完成" in str(self._messages[-1].get("content", "")):
-                        logger.info("AgentRunner {}: 已经发过关停总结提示，但 Leader 没反应，强制退出", self.name)
-                        outer_break = True
-                        break
+                        # 已发过关停总结提示 → 不再触发 tool_loop，改为静默等用户
+                        if not hasattr(self, '_standby_start'):
+                            self._standby_start = _time.time()
+                            logger.info("AgentRunner {}: 进入待命模式，等待用户后续输入 (120s)", self.name)
+
+                        elapsed = _time.time() - self._standby_start
+                        if elapsed > 120:
+                            logger.info("AgentRunner {}: 待命超时 ({:.0f}s)，自动退出", self.name, elapsed)
+                            outer_break = True
+                            break
+                        # 继续等，30s 后再检查
+                        continue
 
                     if self.content:
                         self._messages.append({"role": "assistant", "content": self.content})
