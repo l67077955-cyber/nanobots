@@ -769,8 +769,12 @@ class GroupChatEngine:
 
 
 
-    def _build_agent_prompt(self, agent_name: str) -> list[dict[str, Any]]:
-        """Build prompt — delegates to PromptBuilder, with skills injected."""
+    def _build_agent_prompt(self, agent_name: str, context_exclude: list[int] | None = None) -> list[dict[str, Any]]:
+        """Build prompt — delegates to PromptBuilder, with skills injected.
+
+        Args:
+            context_exclude: Conversation seq numbers to hide from this agent.
+        """
         messages = self._prompt_builder.build_agent_prompt(
             agent_name,
             registry=self.registry,
@@ -778,6 +782,7 @@ class GroupChatEngine:
             history=self._history,
             leader=self._leader,
             round_num=self._round,
+            context_exclude=context_exclude,
         )
 
         # Inject skills (always-on content + summary of available skills)

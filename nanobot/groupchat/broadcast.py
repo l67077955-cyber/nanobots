@@ -320,11 +320,19 @@ class BroadcastCoordinator:
 
         if change_type == "agent_added":
             # Leader 新增了一个 agent block → 启动 agent
-            name = change["name"]
-            if name not in self.engine.registry:
+            raw_name = change["name"]
+            # Case-insensitive registry lookup (leader 可能写 "nanobot" 而注册表是 "Nanobot")
+            resolved = self.engine._resolve_agent_name(raw_name)
+            if not resolved:
+                logger.warning("agent_added: '{}' not in registry, skipping", raw_name)
                 return
+            name = resolved
             if self._is_running(name):
                 return
+            # 加入 engine._active_agents（如果还不在的话）
+            if name not in self.engine._active_agents:
+                self.engine._active_agents.append(name)
+                self.engine._state.save_active(self.engine._active_agents)
             # 新增到 exec_agents
             if name not in self.exec_agents:
                 self.exec_agents.append(name)
@@ -339,13 +347,15 @@ class BroadcastCoordinator:
 
         elif change_type == "agent_removed":
             # Leader 删掉了 agent block → 取消并移除
-            name = change["name"]
+            raw_name = change["name"]
+            name = self.engine._resolve_agent_name(raw_name) or raw_name
             self._cancel_task(name)
             self.engine.remove_agent(name)
             await self.engine._send(f"🚫 {name} removed (by state change)")
 
         elif change_type == "state_changed":
-            name = change["name"]
+            raw_name = change["name"]
+            name = self.engine._resolve_agent_name(raw_name) or raw_name
             new_state = change.get("new", "")
             if new_state == "paused":
                 # Leader 暂停了 agent
@@ -364,7 +374,8 @@ class BroadcastCoordinator:
                             await self.engine._send(f"▶ {name} resumed (by state change)")
 
         elif change_type == "muted_changed":
-            name = change["name"]
+            raw_name = change["name"]
+            name = self.engine._resolve_agent_name(raw_name) or raw_name
             muted = change.get("muted", False)
             if muted:
                 self.engine.mute_agent(name)
@@ -383,6 +394,14 @@ class BroadcastCoordinator:
                     for m in conv
                 ]
                 await self.engine._send(f"🔄 History rewritten ({len(conv)} msgs)")
+
+        elif change_type == "session_ended":
+            # Leader 设置 session.status: done → 结束群聊
+            await self.engine._send("🔚 Leader 结束群聊 (session.status: done)")
+            for t in self._agent_tasks:
+                if not t.done():
+                    t.cancel()
+            self.leader_end_event.set()
 
     # ── 内部工具方法 ────────────────────────────────────────
 

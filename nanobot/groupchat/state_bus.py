@@ -389,12 +389,19 @@ class FileStateBus:
                 state_changed  — agent.state 从 running → paused 或反之
                 muted_changed  — agent.muted 变化
                 conversation_rewritten — leader 重写了 conversation
+                session_ended  — leader 设置 session.status: done
         """
         current = self._read_all()
         prev_agents = set(self._prev_snapshot.get("agents", {}).keys())
         curr_agents = set(current.get("agents", {}).keys())
 
         changes: list[dict[str, Any]] = []
+
+        # Session status 变化
+        prev_status = self._prev_snapshot.get("session", {}).get("status", "running")
+        curr_status = current.get("session", {}).get("status", "running")
+        if prev_status != curr_status and curr_status == "done":
+            changes.append({"type": "session_ended"})
 
         # 新增 agent
         for name in curr_agents - prev_agents:

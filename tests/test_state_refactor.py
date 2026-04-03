@@ -718,6 +718,7 @@ class TestBroadcastChanges:
         engine.mute_agent = MagicMock()
         engine.unmute_agent = MagicMock()
         engine.remove_agent = MagicMock(return_value="removed")
+        engine._resolve_agent_name = MagicMock(side_effect=lambda n: n)
         return engine
 
     @pytest.mark.asyncio
@@ -832,3 +833,292 @@ class TestImports:
         import nanobot.groupchat.state_models as sm
         assert not hasattr(sm, 'ControlCommand')
         assert not hasattr(sm, 'ControlSection')
+
+
+# ══════════════════════════════════════════════════════════════════
+# 7. Context Exclude — leader 屏蔽特定上下文
+# ══════════════════════════════════════════════════════════════════
+
+
+class TestContextExclude:
+    """Test context_exclude filtering in history_to_messages."""
+
+    def test_basic_filtering(self):
+        """Messages with excluded seq numbers should be removed."""
+        from nanobot.groupchat.prompt_builder import PromptBuilder
+        history = [
+            {"sender": "用户", "content": "msg1"},
+            {"sender": "Kirk", "content": "msg2"},
+            {"sender": "用户", "content": "msg3"},
+            {"sender": "Harper", "content": "msg4"},
+        ]
+        msgs = PromptBuilder.history_to_messages(
+            history, "Harper", context_exclude=[2, 4]
+        )
+        assert len(msgs) == 2
+        assert msgs[0]["content"] == "msg1"
+        assert msgs[1]["content"] == "msg3"
+
+    def test_empty_exclude_passes_all(self):
+        """Empty context_exclude should pass all messages."""
+        from nanobot.groupchat.prompt_builder import PromptBuilder
+        history = [
+            {"sender": "用户", "content": "msg1"},
+            {"sender": "Kirk", "content": "msg2"},
+        ]
+        msgs = PromptBuilder.history_to_messages(
+            history, "Harper", context_exclude=[]
+        )
+        assert len(msgs) == 2
+
+    def test_none_exclude_passes_all(self):
+        """None context_exclude should pass all messages."""
+        from nanobot.groupchat.prompt_builder import PromptBuilder
+        history = [
+            {"sender": "用户", "content": "msg1"},
+            {"sender": "Kirk", "content": "msg2"},
+        ]
+        msgs = PromptBuilder.history_to_messages(
+            history, "Harper", context_exclude=None
+        )
+        assert len(msgs) == 2
+
+    def test_exclude_all_messages(self):
+        """Excluding all messages should return empty list."""
+        from nanobot.groupchat.prompt_builder import PromptBuilder
+        history = [
+            {"sender": "用户", "content": "msg1"},
+            {"sender": "Kirk", "content": "msg2"},
+        ]
+        msgs = PromptBuilder.history_to_messages(
+            history, "Harper", context_exclude=[1, 2]
+        )
+        assert len(msgs) == 0
+
+    def test_exclude_nonexistent_seq(self):
+        """Excluding a seq that doesn't exist should be harmless."""
+        from nanobot.groupchat.prompt_builder import PromptBuilder
+        history = [
+            {"sender": "用户", "content": "msg1"},
+        ]
+        msgs = PromptBuilder.history_to_messages(
+            history, "Harper", context_exclude=[99, 100]
+        )
+        assert len(msgs) == 1
+
+    def test_exclude_preserves_roles(self):
+        """Excluded messages should not affect remaining message roles."""
+        from nanobot.groupchat.prompt_builder import PromptBuilder
+        history = [
+            {"sender": "用户", "content": "q1"},
+            {"sender": "系统", "content": "sys note"},
+            {"sender": "Kirk", "content": "answer"},
+            {"sender": "用户", "content": "q2"},
+        ]
+        msgs = PromptBuilder.history_to_messages(
+            history, "Harper", context_exclude=[2, 3]
+        )
+        assert len(msgs) == 2
+        assert msgs[0]["role"] == "user"
+        assert msgs[0]["content"] == "q1"
+        assert msgs[1]["role"] == "user"
+        assert msgs[1]["content"] == "q2"
+
+    def test_exclude_stored_in_state_bus(self, state_bus):
+        """context_exclude in state.yaml should be readable via get_agent_control."""
+        state_bus.init_session(
+            leader="Kirk", topic="t", round_num=1, active_agents=["Kirk", "Harper"],
+        )
+        snap = state_bus.snapshot()
+        snap["agents"]["Harper"]["context_exclude"] = [1, 3, 5]
+        state_bus._write_all(snap)
+
+        ctrl = state_bus.get_agent_control("Harper")
+        assert ctrl["context_exclude"] == [1, 3, 5]
+
+
+# ══════════════════════════════════════════════════════════════════
+# 8. Reply-To Enforcement — leader 控制回复对象
+# ══════════════════════════════════════════════════════════════════
+
+
+class TestReplyToEnforcement:
+    """Test reply_to enforcement in ChatroomSendTool."""
+
+    @pytest.fixture
+    def mock_mailbox_with_bus(self, state_bus):
+        mailbox = MagicMock()
+        mailbox._state_bus = state_bus
+        mailbox.send = MagicMock(return_value=1)
+        return mailbox
+
+    @pytest.mark.asyncio
+    async def test_reply_to_restricts_target(self, mock_mailbox_with_bus, state_bus):
+        """If reply_to is set to a specific agent, target should be overridden."""
+        from nanobot.groupchat.chatroom_tools import ChatroomSendTool
+        state_bus.init_session(
+            leader="Kirk", topic="t", round_num=1,
+            active_agents=["Kirk", "Harper", "Verifier"],
+        )
+        snap = state_bus.snapshot()
+        snap["agents"]["Harper"]["reply_to"] = "Kirk"
+        state_bus._write_all(snap)
+
+        tool = ChatroomSendTool(mock_mailbox_with_bus, agent_name="Harper")
+        result = await tool.execute(to="Verifier", message="hello")
+
+        call_args = mock_mailbox_with_bus.send.call_args
+        assert call_args[0][1] == ["Kirk"]
+
+    @pytest.mark.asyncio
+    async def test_reply_to_all_allows_any(self, mock_mailbox_with_bus, state_bus):
+        """If reply_to is 'All', target should not be restricted."""
+        from nanobot.groupchat.chatroom_tools import ChatroomSendTool
+        state_bus.init_session(
+            leader="Kirk", topic="t", round_num=1, active_agents=["Kirk", "Harper"],
+        )
+        tool = ChatroomSendTool(mock_mailbox_with_bus, agent_name="Harper")
+        result = await tool.execute(to="Kirk", message="hello")
+
+        call_args = mock_mailbox_with_bus.send.call_args
+        assert call_args[0][1] == ["Kirk"]
+
+    @pytest.mark.asyncio
+    async def test_reply_to_none_allows_any(self, mock_mailbox_with_bus, state_bus):
+        """If reply_to is None, target should not be restricted."""
+        from nanobot.groupchat.chatroom_tools import ChatroomSendTool
+        state_bus.init_session(
+            leader="Kirk", topic="t", round_num=1, active_agents=["Kirk", "Harper"],
+        )
+        snap = state_bus.snapshot()
+        snap["agents"]["Harper"]["reply_to"] = None
+        state_bus._write_all(snap)
+
+        tool = ChatroomSendTool(mock_mailbox_with_bus, agent_name="Harper")
+        result = await tool.execute(to="Kirk", message="hello")
+
+        call_args = mock_mailbox_with_bus.send.call_args
+        assert call_args[0][1] == ["Kirk"]
+
+    @pytest.mark.asyncio
+    async def test_no_state_bus_no_crash(self):
+        """ChatroomSendTool should work fine without state_bus."""
+        from nanobot.groupchat.chatroom_tools import ChatroomSendTool
+        mailbox = MagicMock()
+        mailbox.send = MagicMock(return_value=1)
+        del mailbox._state_bus
+
+        tool = ChatroomSendTool(mailbox, agent_name="Harper")
+        result = await tool.execute(to="Kirk", message="hello")
+        assert "✅" in result
+
+
+# ══════════════════════════════════════════════════════════════════
+# 9. Session End — leader 结束群聊
+# ══════════════════════════════════════════════════════════════════
+
+
+class TestSessionEnd:
+    """Test leader ending the round via session.status: done."""
+
+    def test_session_status_model(self):
+        """SessionMeta should accept status field."""
+        from nanobot.groupchat.state_models import SessionMeta
+        s = SessionMeta(id="gc-test", status="done")
+        assert s.status == "done"
+
+    def test_session_status_invalid_rejected(self):
+        """Invalid session status should be rejected."""
+        from nanobot.groupchat.state_models import SessionMeta
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            SessionMeta(id="gc-test", status="aborted")
+
+    def test_session_status_default_running(self):
+        """Default session status should be 'running'."""
+        from nanobot.groupchat.state_models import SessionMeta
+        s = SessionMeta(id="gc-test")
+        assert s.status == "running"
+
+    def test_poll_changes_session_ended(self, state_bus):
+        """poll_changes should detect session.status: done."""
+        state_bus.init_session(
+            leader="Kirk", topic="t", round_num=1, active_agents=["Kirk"],
+        )
+        snap = state_bus.snapshot()
+        snap["session"]["status"] = "done"
+        state_bus._write_all(snap)
+
+        changes = state_bus.poll_changes()
+        ended = [c for c in changes if c["type"] == "session_ended"]
+        assert len(ended) == 1
+
+    def test_poll_changes_no_false_positive(self, state_bus):
+        """poll_changes should NOT emit session_ended when status stays running."""
+        state_bus.init_session(
+            leader="Kirk", topic="t", round_num=1, active_agents=["Kirk"],
+        )
+        changes = state_bus.poll_changes()
+        ended = [c for c in changes if c["type"] == "session_ended"]
+        assert len(ended) == 0
+
+    @pytest.mark.asyncio
+    async def test_broadcast_handle_session_ended(self):
+        """_handle_change for session_ended should cancel tasks and set leader_end_event."""
+        from nanobot.groupchat.broadcast import BroadcastCoordinator
+        engine = MagicMock()
+        engine._leader = "Kirk"
+        engine._send = AsyncMock()
+        engine._active_agents = ["Kirk"]
+        engine.registry = {"Kirk": {"model": "test", "prompt": "test"}}
+
+        coord = BroadcastCoordinator(["Kirk"], engine, MagicMock())
+        coord.state_bus = MagicMock()
+
+        mock_task_running = MagicMock()
+        mock_task_running.done.return_value = False
+        mock_task_done = MagicMock()
+        mock_task_done.done.return_value = True
+        coord._agent_tasks = {mock_task_running: "Kirk", mock_task_done: "Harper"}
+
+        await coord._handle_change({"type": "session_ended"})
+
+        mock_task_running.cancel.assert_called_once()
+        mock_task_done.cancel.assert_not_called()
+        assert coord.leader_end_event.is_set()
+
+    def test_agent_runner_detects_paused(self, state_bus):
+        """Agent runner should detect state: paused from state.yaml."""
+        state_bus.init_session(
+            leader="Kirk", topic="t", round_num=1, active_agents=["Kirk", "Harper"],
+        )
+        snap = state_bus.snapshot()
+        snap["agents"]["Harper"]["state"] = "paused"
+        state_bus._write_all(snap)
+
+        data = state_bus._read_all()
+        assert data["agents"]["Harper"]["state"] == "paused"
+
+    def test_agent_runner_detects_block_deleted(self, state_bus):
+        """Agent runner should detect deleted agent block."""
+        state_bus.init_session(
+            leader="Kirk", topic="t", round_num=1, active_agents=["Kirk", "Harper"],
+        )
+        snap = state_bus.snapshot()
+        del snap["agents"]["Harper"]
+        state_bus._write_all(snap)
+
+        data = state_bus._read_all()
+        assert "Harper" not in data.get("agents", {})
+
+    def test_agent_runner_detects_session_done(self, state_bus):
+        """Agent runner should detect session.status: done."""
+        state_bus.init_session(
+            leader="Kirk", topic="t", round_num=1, active_agents=["Kirk"],
+        )
+        snap = state_bus.snapshot()
+        snap["session"]["status"] = "done"
+        state_bus._write_all(snap)
+
+        data = state_bus._read_all()
+        assert data["session"]["status"] == "done"

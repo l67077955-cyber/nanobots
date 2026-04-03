@@ -101,6 +101,17 @@ class ChatroomSendTool(Tool):
         if not targets:
             return "⚠️ 不支持发送给 User。你的文字回复会自动展示给用户，直接写在回复里即可。"
 
+        # ── reply_to 约束 — leader 通过 state.yaml 控制回复对象 ──
+        if hasattr(self._mailbox, '_state_bus') and self._mailbox._state_bus:
+            try:
+                ctrl = self._mailbox._state_bus.get_agent_control(self._agent_name)
+                reply_to = ctrl.get("reply_to")
+                if reply_to and reply_to not in ("All", "all", None):
+                    # Agent is restricted to replying to a specific target
+                    targets = [reply_to]
+            except Exception:
+                pass
+
         # Deduplicate: "All" already includes everyone
         if any(t.lower() == "all" for t in targets):
             targets = ["All"]

@@ -265,11 +265,20 @@ class AgentRunner:
                         self._messages.append({"role": "user", "content": f"[队友消息] {msg}"})
                         continue
 
-                    # 没消息 → 检查 leader 是否发了 stop 命令
+                    # 没消息 → 检查 leader 是否修改了控制变量
                     if self._state_bus:
                         try:
-                            st = self._state_bus._read_all().get("agents", {}).get(self.name, {}).get("state", "")
-                            if st in ("removed", "stopped"):
+                            data = self._state_bus._read_all()
+                            # Agent block 被 leader 删掉 → 退出
+                            if self.name not in data.get("agents", {}):
+                                break
+                            # state 被改为 paused → 退出
+                            st = data["agents"][self.name].get("state", "")
+                            if st == "paused":
+                                break
+                            # session.status 被改为 done → leader 结束群聊
+                            session_status = data.get("session", {}).get("status", "")
+                            if session_status == "done":
                                 break
                         except Exception:
                             pass
