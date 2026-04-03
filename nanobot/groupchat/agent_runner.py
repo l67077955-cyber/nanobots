@@ -131,6 +131,7 @@ class AgentRunner:
         from nanobot.agent.tool_loop import tool_loop
 
         cycle = 0
+        _prev_content = ""  # 用于检测 leader 重复输出
         try:
             while cycle < self.MAX_CYCLES:
                 cycle += 1
@@ -203,6 +204,26 @@ class AgentRunner:
                         latency=round(self.total_latency, 2),
                         iterations=self.total_iterations,
                     )
+
+                # ── Leader 重复输出检测 — 在 finalize 前拦截 ──
+                # Leader 免于 Fix C（需要保持存活等 agent 消息），
+                # 但如果产出与上轮完全相同且没有工具调用 → 明确卡住了，必须退出
+                _is_dup = (
+                    self._is_leader and cycle > 1
+                    and not bool(result.tools_used)
+                    and self.content and _prev_content
+                    and self.content.strip() == _prev_content.strip()
+                )
+                if _is_dup:
+                    # 清理流式消息（用户已看到部分流式内容，替换为简短标记）
+                    if _stream and _stream.msg_id and self._engine._edit_fn:
+                        try:
+                            await self._engine._edit_fn(_stream.msg_id, f"👑 {self.name} ━━ ✓")
+                        except Exception:
+                            pass
+                    logger.info("AgentRunner {}: cycle {} leader重复输出, 提前退出", self.name, cycle)
+                    break
+                _prev_content = self.content
 
                 # Leader 流式完成 — finalize streaming message
                 if _stream and self.content:
