@@ -239,9 +239,17 @@ class AgentRunner:
                 # ── Leader 重复输出检测 — 在 finalize 前拦截 ──
                 # Leader 免于 Fix C（需要保持存活等 agent 消息），
                 # 但如果产出与上轮完全相同且没有工具调用 → 明确卡住了，必须退出
+                _has_real_tools = False
+                for t_detail in result.tool_calls_detail:
+                    if t_detail.get("iteration") == cycle or not t_detail.get("duplicate", False):
+                        # Wait, tool_calls_detail contains EVERYTHING from the tool_loop.
+                        # It's better to just check if there are any non-duplicate tools.
+                        if not t_detail.get("duplicate", False):
+                            _has_real_tools = True
+                            
                 _is_dup = (
                     self._is_leader and cycle > 1
-                    and not bool(result.tools_used)
+                    and not _has_real_tools
                     and self.content and _prev_content
                     and self.content.strip() == _prev_content.strip()
                 )
@@ -389,6 +397,12 @@ class AgentRunner:
                         continue
 
                     # 队友全死/只剩 Leader：唤醒 Leader，让它作为唯一活口进行关停总结
+                    # 如果上一次也是因为这个原因发送过系统提示，并且 Leader 没有真正操作，避免重发刷屏
+                    if self._messages and "[系统] 所有队友均已完成" in str(self._messages[-1].get("content", "")):
+                        logger.info("AgentRunner {}: 已经发过关停总结提示，但 Leader 没反应，强制退出", self.name)
+                        outer_break = True
+                        break
+
                     if self.content:
                         self._messages.append({"role": "assistant", "content": self.content})
                     self._messages.append({
