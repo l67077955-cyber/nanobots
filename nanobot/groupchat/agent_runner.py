@@ -234,8 +234,9 @@ class AgentRunner:
 
                 # ── [Fix B+C] Early stop: 无工具调用 + 无消息 → 退出 ──
                 # C: tool_loop 结束后没有工具调用（LLM 认为做完了），且不是第一轮 → 退出
+                # ⚠️ Leader 不适用 — Leader 需要保持存活等待其他 agent 的结果
                 _has_tools = bool(result.tools_used)
-                if not _has_tools and cycle > 1:
+                if not _has_tools and cycle > 1 and not self._is_leader:
                     logger.info("AgentRunner {}: cycle {} 无工具调用，提前退出 (方案C)", self.name, cycle)
                     break
 
