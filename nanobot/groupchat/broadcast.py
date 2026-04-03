@@ -291,7 +291,7 @@ class BroadcastCoordinator:
         await self.engine._send(_d.broadcast_complete_msg(len(self.results), self.total, len(self.mailbox.history)))
         self.mailbox.clear()
         if self.state_bus:
-            self.state_bus.update_session(round=self.engine._round + 1)
+            self.state_bus.update_session(round=self.engine._round)
 
     # ── Phase 3: Synthesize ─────────────────────────────────
 
@@ -389,11 +389,23 @@ class BroadcastCoordinator:
             if self.state_bus:
                 data = self.state_bus.snapshot()
                 conv = data.get("conversation", [])
-                self.engine._history = [
+                
+                new_history = [
                     {"sender": m.get("sender", "系统"), "content": str(m.get("content", ""))}
                     for m in conv
                 ]
-                await self.engine._send(f"🔄 History rewritten ({len(conv)} msgs)")
+                
+                # Protect recent user input that might be lingering in memory but missing from the Leader's rewrite snapshot
+                if self.engine._history:
+                    # Look at the last few messages in memory
+                    for msg in self.engine._history[-3:]:
+                        if msg["sender"] == "用户":
+                            # If this exact user message isn't in the rewritten log, append it to prevent loss
+                            if not any(cm["sender"] == "用户" and cm["content"] == msg["content"] for cm in new_history):
+                                new_history.append(msg)
+                                
+                self.engine._history = new_history
+                await self.engine._send(f"🔄 History rewritten ({len(conv)} msgs + local recovery)")
 
         elif change_type == "session_ended":
             # Leader 设置 session.status: done → 结束群聊
