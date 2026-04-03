@@ -290,21 +290,7 @@ async def run_group_test(
     await asyncio.sleep(0.5)
 
     # Inject the question
-    if len(engine._active_agents) == 1:
-        # Direct chat — use direct_chat
-        resp = await asyncio.wait_for(
-            engine.direct_chat(test_case["question"]),
-            timeout=timeout_secs,
-        )
-        engine.stop()
-        return {
-            "chat_log": resp or "",
-            "captured": [resp or ""],
-            "n_agents": 1,
-            "n_messages": 1,
-        }
-    else:
-        engine.inject(test_case["question"])
+    engine.inject(test_case["question"])
 
     # Wait until each agent has spoken at least `rounds_per_agent` times
     # or timeout is hit.
