@@ -131,13 +131,56 @@ class AgentRunner:
         from nanobot.agent.tool_loop import tool_loop
 
         cycle = 0
-        _prev_content = ""  # 用于检测 leader 重复输出
+        _prev_content = ""
         try:
-            while cycle < self.MAX_CYCLES:
+            # === [新机制] 非 Leader 初始化：强制死等 Leader 的差遣，不自说自话跑第一轮 ===
+            if not self._is_leader:
+                self.state = AgentState.WAITING
+                if self._state_bus:
+                    self._state_bus.set_agent_activity(self.name, "idle")
+
+                while True:
+                    msg = await self._mailbox.wait(self.name, timeout=30)
+                    if msg is not None:
+                        msgs = [msg]
+                        while True:
+                            next_msg = await self._mailbox.wait(self.name, timeout=0.01)
+                            if next_msg: msgs.append(next_msg)
+                            else: break
+                        combined = "\n\n".join([f"[{m.sender}]: {m.content}" for m in msgs])
+                        await self._engine._send(_d.chatroom_wait_msg(self.name, f"收到 {len(msgs)} 条指挥信息", leader=self._engine._leader), sender=self.name)
+                        self._messages.append({"role": "user", "content": f"[收到 Leader 指令]\n{combined}"})
+                        break
+
+                    # 检查是否由于总路线清理导致自身被注销
+                    if self._state_bus:
+                        try:
+                            data = self._state_bus._read_all()
+                            if self.name not in data.get("agents", {}): return AgentResult(name=self.name, state=AgentState.DONE)
+                            if data.get("session", {}).get("status", "") == "done": return AgentResult(name=self.name, state=AgentState.DONE)
+                        except: pass
+
+            # === [新机制] 无尽循环：去除 MAX_CYCLES，转而用 session.status = done 来跳出 ===
+            while True:
                 cycle += 1
                 self.state = AgentState.RUNNING
                 if self._state_bus:
                     self._state_bus.set_agent_activity(self.name, "thinking", cycle=cycle)
+                    
+                # ── Leader 动态上下文注入机制 ──
+                if self._is_leader and self._state_bus:
+                    try:
+                        latest_state = self._state_bus._file.read_text("utf-8")
+                        # 上下文修剪：剥离上次循环塞入的陈旧系统状态块，避免记忆爆炸！
+                        self._messages = [m for m in self._messages if not (m["role"] == "system" and "[当前系统全局状态]" in m["content"])]
+                        
+                        self._messages.append({
+                            "role": "system",
+                            "content": f"[当前系统全局状态 state.yaml]\n```yaml\n{latest_state}\n```\n(分析该上下文后制定规划或推进任务)"
+                        })
+                    except Exception:
+                        pass
+                
                 self._cycle_t0 = _time.time()
                 self._cycle_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
