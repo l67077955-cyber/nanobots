@@ -279,18 +279,40 @@ class AgentRunner:
                     msg = await self._mailbox.wait(self.name, timeout=30)
 
                     if msg is not None:
-                        # 收到消息 → 注入上下文，重新执行
+                        # 收到消息 → 尝试排空邮箱，合并所有挂起的消息
+                        msgs = [msg]
+                        while True:
+                            next_msg = await self._mailbox.wait(self.name, timeout=0.01)
+                            if next_msg:
+                                msgs.append(next_msg)
+                            else:
+                                break
+
                         self.state = AgentState.RUNNING
                         if self._state_bus:
                             self._state_bus.set_agent_activity(self.name, "thinking")
-                        await self._engine._send(
-                            _d.chatroom_wait_msg(self.name, str(msg), leader=self._engine._leader),
-                            sender=self.name,
-                        )
-                        if self.content:
-                            self._messages.append({"role": "assistant", "content": self.content})
-                        self._messages.append({"role": "system", "content": f"[提醒] 你（{self.name}）已发表过观点。针对新消息回应，不要重复。"})
-                        self._messages.append({"role": "user", "content": f"[队友消息] {msg}"})
+                            
+                        # 如果是多个消息，统一合并提示
+                        if len(msgs) == 1:
+                            await self._engine._send(
+                                _d.chatroom_wait_msg(self.name, str(msgs[0]), leader=self._engine._leader),
+                                sender=self.name,
+                            )
+                            if self.content:
+                                self._messages.append({"role": "assistant", "content": self.content})
+                            self._messages.append({"role": "system", "content": f"[提醒] 你（{self.name}）已发表过观点。针对新消息回应，不要重复。"})
+                            self._messages.append({"role": "user", "content": f"[队友消息] {msgs[0]}"})
+                        else:
+                            combined_text = "\n\n".join([f"[{m.sender}]: {m.content}" for m in msgs])
+                            await self._engine._send(
+                                _d.chatroom_wait_msg(self.name, f"合并处理 {len(msgs)} 条新消息", leader=self._engine._leader),
+                                sender=self.name,
+                            )
+                            if self.content:
+                                self._messages.append({"role": "assistant", "content": self.content})
+                            self._messages.append({"role": "system", "content": f"[提醒] 你（{self.name}）同时收到多条消息，请针对最新上下文合并分析，统一给出回应，不要一一分开回复。"})
+                            self._messages.append({"role": "user", "content": f"[多名队友消息集合]\n{combined_text}"})
+                            
                         continue
 
                     # 没消息 → 检查 leader 是否修改了控制变量
