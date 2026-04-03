@@ -393,11 +393,6 @@ class GroupChatEngine:
         # If below 1 agent, stop group loop
         if len(self._active_agents) < 1 and self._running:
             self._stop_group_loop()
-            if self._active_agents:
-                return (
-                    f"✅ {matched} 已离开\n"
-                    f"💬 回到与 {self._active_agents[0]} 的对话模式"
-                )
             return f"✅ {matched} 已离开，无活跃 agent"
 
         return f"✅ {matched} 已离开\n👥 当前成员: {', '.join(self._active_agents)}"

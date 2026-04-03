@@ -2,8 +2,8 @@
 
 Provides a reusable `StreamingDisplay` class that encapsulates the common
 pattern of building streaming messages, throttling edits, and handling
-the final message update. Eliminates duplication across direct_chat,
-_agent_speak, and orchestra._run_agent_grok.
+the final message update. Eliminates duplication across broadcast
+and orchestra modules.
 """
 
 from __future__ import annotations

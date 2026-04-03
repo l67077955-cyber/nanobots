@@ -122,7 +122,7 @@ def log_request(
     """Append a structured entry to engine._request_log.
 
     Centralizes the common request logging pattern used by speaker,
-    direct_chat, broadcast, and orchestra modules.
+    broadcast, and orchestra modules.
     """
     entry: dict[str, Any] = {
         "agent": agent,
