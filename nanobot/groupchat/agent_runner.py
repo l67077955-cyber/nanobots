@@ -354,6 +354,21 @@ class AgentRunner:
         else:
             self._mailbox.mark_agent_done(self.name)
 
+        # ── 通知 Leader: agent 完成 ──────────────────────────────
+        # 解决 bug: Leader 的 mailbox.wait() 在 agent 完成后仍然
+        # 阻塞 30s 才超时，导致 Leader 不知道 agent 已完成。
+        # 现在通过 mailbox.send 立即唤醒 Leader。
+        if not self._is_leader and self._engine._leader:
+            leader = self._engine._leader
+            tool_names = list(dict.fromkeys(self.all_tools_used))  # 去重保序
+            tool_str = "×".join(tool_names) if tool_names else "no tools"
+            status = "✗ failed" if self.state == AgentState.FAILED else "✓"
+            notify = f"[系统] {self.name} 已完成 ({status} {round(self.total_latency, 1)}s · {tool_str} · {self.total_iterations}轮)"
+            try:
+                self._mailbox.send(self.name, [leader], notify)
+            except Exception:
+                pass  # 通知失败不影响主流程
+
         return AgentResult(
             name=self.name, content=self.content,
             tools_used=self.all_tools_used, state=self.state,
