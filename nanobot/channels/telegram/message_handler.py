@@ -136,29 +136,9 @@ class MessageHandlerMixin:
         # Route to active agents if any
         if self._groupchat_engine and self._groupchat_engine.active_agents:
             self._ensure_gc_send(str_chat_id)
-            if len(self._groupchat_engine.active_agents) >= 2:
-                # 2+ agents: inject message into group chat
-                # inject() will lazy-start the loop if not running
-                self._groupchat_engine.inject(content)
-            else:
-                # 1 agent: direct chat with interjection support
-                engine = self._groupchat_engine
-                if engine.direct_chat_inject(content):
-                    # Agent is mid-response — interjection queued
-                    pass
-                else:
-                    # No active chat — start a background task
-                    async def _run_direct(msg: str, cid: str) -> None:
-                        try:
-                            response = await engine.direct_chat(msg)
-                            if response:
-                                await self._gc_send(cid, response)
-                        finally:
-                            self._stop_typing(cid)
-                            engine._direct_chat_task = None
-                    engine._direct_chat_task = asyncio.create_task(
-                        _run_direct(content, str_chat_id),
-                    )
+            # 1+ agents: inject message into group chat
+            # inject() will lazy-start the loop if not running
+            self._groupchat_engine.inject(content)
             return
 
         # Engine exists but no active agents — don't fall through to main loop

@@ -242,9 +242,7 @@ class GroupChatEngine:
         self._debug_context: bool = False
         self._prompt_order: dict[str, list[str]] = self._prompt_builder._load_prompt_order()
 
-        # Direct chat interjection state (single-agent mode)
-        self._direct_chat_task: asyncio.Task | None = None
-        self._direct_chat_queue: asyncio.Queue[str] = asyncio.Queue()
+        # Obsolete: direct chat is now handled natively by broadcast loop with 1 agent
 
     # ── Public access to PromptBuilder ────────────────────────
 
@@ -369,8 +367,8 @@ class GroupChatEngine:
         logger.info("Groupchat: added agent {}, active={}", matched, self._active_agents)
 
         # Don't auto-start loop here — inject() will lazy-start
-        # when user sends the first message with 2+ agents.
-        if len(self._active_agents) >= 2:
+        # when user sends the first message with 1+ agents.
+        if len(self._active_agents) >= 1:
             return (
                 f"✅ {matched} 加入对话！\n"
                 f"👥 当前成员: {', '.join(self._active_agents)}\n"
@@ -392,8 +390,8 @@ class GroupChatEngine:
         self._state.save_active(self._active_agents)
         logger.info("Groupchat: removed agent {}, active={}", matched, self._active_agents)
 
-        # If below 2 agents, stop group loop
-        if len(self._active_agents) < 2 and self._running:
+        # If below 1 agent, stop group loop
+        if len(self._active_agents) < 1 and self._running:
             self._stop_group_loop()
             if self._active_agents:
                 return (
@@ -494,8 +492,8 @@ class GroupChatEngine:
         self._active_agents = valid
         self._state.save_active(self._active_agents)
 
-        # Start group loop if 2+ agents
-        if len(self._active_agents) >= 2:
+        # Start group loop if 1+ agents
+        if len(self._active_agents) >= 1:
             self._start_group_loop()
 
         self._current_group_name = name
@@ -630,26 +628,12 @@ class GroupChatEngine:
             force_no_tools=force_no_tools,
         )
 
-    def direct_chat_inject(self, user_message: str) -> bool:
-        """Inject a user interjection into an in-progress direct chat.
-
-        Returns True if injected, False if no direct chat is running.
-        """
-        if self._direct_chat_task and not self._direct_chat_task.done():
-            self._direct_chat_queue.put_nowait(user_message)
-            logger.info("Direct chat: interjection queued ({} chars)", len(user_message))
-            return True
-        return False
-
-    async def direct_chat(self, user_message: str) -> str | None:
-        """Send message to single active agent — delegates to direct_chat module."""
-        from nanobot.groupchat.direct_chat import direct_chat as _direct_chat
-        return await _direct_chat(self, user_message)
+    # Obsolete direct_chat methods removed
 
     def inject(self, message: str) -> None:
         """Inject a user message into the group chat."""
-        # Lazy start: if 2+ agents and loop not running, start it now
-        if not self._running and len(self._active_agents) >= 2:
+        # Lazy start: if 1+ agents and loop not running, start it now
+        if not self._running and len(self._active_agents) >= 1:
             self._start_group_loop()
         if self._running:
             self._input_queue.put_nowait(message)
