@@ -192,8 +192,19 @@ class MailboxHub:
                 remaining = deadline - _time.time()
                 if remaining <= 0:
                     return None
-                try:
-                    msg = await asyncio.wait_for(q.get(), timeout=remaining)
+                    
+                get_task = asyncio.create_task(q.get())
+                all_wait_task = asyncio.create_task(self._all_waiting.wait())
+                
+                done, pending = await asyncio.wait(
+                    [get_task, all_wait_task],
+                    timeout=remaining,
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+                
+                if get_task in done:
+                    all_wait_task.cancel()
+                    msg = get_task.result()
                     if from_agent and msg.sender != from_agent:
                         if msg.sender != "系统":
                             continue
@@ -204,10 +215,16 @@ class MailboxHub:
                         except Exception:
                             pass
                     return msg
-                except asyncio.TimeoutError:
-                    return None
+                else:
+                    get_task.cancel()
+                    if all_wait_task in done:
+                        # 全员等待中 (Deadlock) 或仅剩自己在等 → 提前打断无意义的超时死等
+                        return None
+                    return None  # timeout
         finally:
             self._waiting.discard(agent_name)
+            if len(self._waiting) < len(self._active_agents):
+                self._all_waiting.clear()
 
     def mark_agent_done(self, agent_name: str) -> None:
         """Mark an agent as finished (no longer active)."""
