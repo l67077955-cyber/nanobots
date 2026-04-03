@@ -232,6 +232,13 @@ class AgentRunner:
                 if self.content:
                     self._engine._add_message(self.name, self.content + build_tool_log(result.tool_calls_detail))
 
+                # ── [Fix B+C] Early stop: 无工具调用 + 无消息 → 退出 ──
+                # C: tool_loop 结束后没有工具调用（LLM 认为做完了），且不是第一轮 → 退出
+                _has_tools = bool(result.tools_used)
+                if not _has_tools and cycle > 1:
+                    logger.info("AgentRunner {}: cycle {} 无工具调用，提前退出 (方案C)", self.name, cycle)
+                    break
+
                 # 防空转：第一轮没产出 → 强制重试
                 _work_tools = {"web_search", "web_fetch", "exec", "read_file", "write_file"}
                 if cycle == 1 and not self.content and not (set(result.tools_used or []) & _work_tools):
@@ -241,8 +248,7 @@ class AgentRunner:
                     })
                     continue
 
-                # ⚠️ 不可修改 — Leader 控制的生命周期循环
-                # Agent 不自行决定退出，等待 leader 的 stop/end_round 命令。
+                # Leader/Agent 等待消息或检查控制变量
                 if cycle < self.MAX_CYCLES:
                     if self._state_bus:
                         self._state_bus.set_agent_activity(self.name, "idle")
@@ -283,7 +289,23 @@ class AgentRunner:
                         except Exception:
                             pass
 
-                    continue  # 继续等待 — leader 控制生命周期
+                    # [Fix B] 没消息 + 没状态变化 → 退出
+                    # 旧逻辑: continue（盲跑 tool_loop 导致重复输出 bug）
+                    # 新逻辑: 非 Leader 直接退出；Leader 注入自身输出后继续一轮
+                    if self._is_leader:
+                        # Leader 可能需要多轮自主工作（分析→发消息→整合），
+                        # 注入上一轮输出作为上下文，避免 LLM 看到完全相同的 prompt
+                        if self.content:
+                            self._messages.append({"role": "assistant", "content": self.content})
+                        self._messages.append({
+                            "role": "system",
+                            "content": f"[系统] 你（{self.name}）上一轮已完成输出，没有收到新消息。"
+                                       f"如果你认为任务已完成，直接结束即可，不要再重复相同内容。",
+                        })
+                        continue
+                    else:
+                        logger.info("AgentRunner {}: cycle {} 无新消息，提前退出 (方案B)", self.name, cycle)
+                        break
 
             # ── 正常完成 ──
             self.state = AgentState.DONE
