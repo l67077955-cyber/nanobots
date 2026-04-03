@@ -275,81 +275,91 @@ class AgentRunner:
                     if self._state_bus:
                         self._state_bus.set_agent_activity(self.name, "idle")
 
-                    # 等待消息（30s 轮询）
-                    msg = await self._mailbox.wait(self.name, timeout=30)
-
-                    if msg is not None:
-                        # 收到消息 → 尝试排空邮箱，合并所有挂起的消息
-                        msgs = [msg]
-                        while True:
-                            next_msg = await self._mailbox.wait(self.name, timeout=0.01)
-                            if next_msg:
-                                msgs.append(next_msg)
-                            else:
-                                break
-
-                        self.state = AgentState.RUNNING
+                    # 在进入下一轮 tool_loop 之前，必须拿到让下一轮有意义的输入（队友消息 或 所有队友都已完成）
+                    while True:
                         if self._state_bus:
-                            self._state_bus.set_agent_activity(self.name, "thinking")
-                            
-                        # 如果是多个消息，统一合并提示
-                        if len(msgs) == 1:
-                            await self._engine._send(
-                                _d.chatroom_wait_msg(self.name, str(msgs[0]), leader=self._engine._leader),
-                                sender=self.name,
-                            )
-                            if self.content:
-                                self._messages.append({"role": "assistant", "content": self.content})
-                            self._messages.append({"role": "system", "content": f"[提醒] 你（{self.name}）已发表过观点。针对新消息回应，不要重复。"})
-                            self._messages.append({"role": "user", "content": f"[队友消息] {msgs[0]}"})
-                        else:
-                            combined_text = "\n\n".join([f"[{m.sender}]: {m.content}" for m in msgs])
-                            await self._engine._send(
-                                _d.chatroom_wait_msg(self.name, f"合并处理 {len(msgs)} 条新消息", leader=self._engine._leader),
-                                sender=self.name,
-                            )
-                            if self.content:
-                                self._messages.append({"role": "assistant", "content": self.content})
-                            self._messages.append({"role": "system", "content": f"[提醒] 你（{self.name}）同时收到多条消息，请针对最新上下文合并分析，统一给出回应，不要一一分开回复。"})
-                            self._messages.append({"role": "user", "content": f"[多名队友消息集合]\n{combined_text}"})
-                            
-                        continue
+                            self._state_bus.set_agent_activity(self.name, "idle")
 
-                    # 没消息 → 检查 leader 是否修改了控制变量
-                    if self._state_bus:
-                        try:
-                            data = self._state_bus._read_all()
-                            # Agent block 被 leader 删掉 → 退出
-                            if self.name not in data.get("agents", {}):
-                                break
-                            # state 被改为 paused → 退出
-                            st = data["agents"][self.name].get("state", "")
-                            if st == "paused":
-                                break
-                            # session.status 被改为 done → leader 结束群聊
-                            session_status = data.get("session", {}).get("status", "")
-                            if session_status == "done":
-                                break
-                        except Exception:
-                            pass
+                        # 等待消息（30s 轮询）
+                        msg = await self._mailbox.wait(self.name, timeout=30)
 
-                    # [Fix B] 没消息 + 没状态变化 → 退出
-                    # 旧逻辑: continue（盲跑 tool_loop 导致重复输出 bug）
-                    # 新逻辑: 非 Leader 直接退出；Leader 注入自身输出后继续一轮
-                    if self._is_leader:
-                        # Leader 可能需要多轮自主工作（分析→发消息→整合），
-                        # 注入上一轮输出作为上下文，避免 LLM 看到完全相同的 prompt
+                        if msg is not None:
+                            # 收到消息 → 尝试排空邮箱，合并所有挂起的消息
+                            msgs = [msg]
+                            while True:
+                                next_msg = await self._mailbox.wait(self.name, timeout=0.01)
+                                if next_msg:
+                                    msgs.append(next_msg)
+                                else:
+                                    break
+
+                            self.state = AgentState.RUNNING
+                            if self._state_bus:
+                                self._state_bus.set_agent_activity(self.name, "thinking")
+                                
+                            # 如果是多个消息，统一合并提示
+                            if len(msgs) == 1:
+                                await self._engine._send(
+                                    _d.chatroom_wait_msg(self.name, str(msgs[0]), leader=self._engine._leader),
+                                    sender=self.name,
+                                )
+                                if self.content:
+                                    self._messages.append({"role": "assistant", "content": self.content})
+                                self._messages.append({"role": "system", "content": f"[提醒] 你（{self.name}）已发表过观点。针对新消息回应，不要重复。"})
+                                self._messages.append({"role": "user", "content": f"[队友消息] {msgs[0]}"})
+                            else:
+                                combined_text = "\n\n".join([f"[{m.sender}]: {m.content}" for m in msgs])
+                                await self._engine._send(
+                                    _d.chatroom_wait_msg(self.name, f"合并处理 {len(msgs)} 条新消息", leader=self._engine._leader),
+                                    sender=self.name,
+                                )
+                                if self.content:
+                                    self._messages.append({"role": "assistant", "content": self.content})
+                                self._messages.append({"role": "system", "content": f"[提醒] 你（{self.name}）同时收到多条消息，请针对最新上下文合并分析，统一给出回应，不要一一分开回复。"})
+                                self._messages.append({"role": "user", "content": f"[多名队友消息集合]\n{combined_text}"})
+                                
+                            break  # 跳出内部 wait 循环，进入下一周期的 tool_loop
+
+                        # 没消息（超时或死锁打断）→ 检查控制变量
+                        should_exit = False
+                        if self._state_bus:
+                            try:
+                                data = self._state_bus._read_all()
+                                if self.name not in data.get("agents", {}):
+                                    should_exit = True
+                                elif data["agents"][self.name].get("state", "") == "paused":
+                                    should_exit = True
+                                elif data.get("session", {}).get("status", "") == "done":
+                                    should_exit = True
+                            except Exception:
+                                pass
+
+                        if should_exit:
+                            cycle = self.MAX_CYCLES  # Hack 破除外层循环
+                            break
+
+                        # [Fix B] 没消息 + 没状态变化 → 退出
+                        # 非 Leader 直接退出
+                        if not self._is_leader:
+                            logger.info("AgentRunner {}: cycle {} 无新消息，提前退出 (方案B)", self.name, cycle)
+                            cycle = self.MAX_CYCLES
+                            break
+
+                        # 是 Leader：
+                        # 如果还有活着的队友，说明此时只是一次普通的 30s 等待超时，队友还在算。
+                        # 我们保持安静继续等，绝对不去触发 tool_loop 让 Leader 说废话！
+                        if len(self._mailbox._active_agents) > 1:
+                            continue
+
+                        # 队友全死/只剩 Leader：唤醒 Leader，让它作为唯一活口进行关停总结
                         if self.content:
                             self._messages.append({"role": "assistant", "content": self.content})
                         self._messages.append({
                             "role": "system",
-                            "content": f"[系统] 你（{self.name}）上一轮已完成输出，没有收到新消息。"
-                                       f"如果你认为任务已完成，直接结束即可，不要再重复相同内容。",
+                            "content": f"[系统] 所有队友均已完成工作，当前没有新消息。"
+                                       f"请执行最后的总结。如果你认为主任务已完成，请使用工具将 session_status 改为 done 以结束讨论；如果无话可说，请直接结束，不要生成重复或多余的客套话。"
                         })
-                        continue
-                    else:
-                        logger.info("AgentRunner {}: cycle {} 无新消息，提前退出 (方案B)", self.name, cycle)
-                        break
+                        break  # 跳出内部 wait 循环，进入最后一次 tool_loop
 
             # ── 正常完成 ──
             self.state = AgentState.DONE
