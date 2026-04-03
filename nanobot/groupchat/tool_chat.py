@@ -227,7 +227,7 @@ async def chat_with_tools(
         iter_usage_ref=_iter_usage_ref,
     )
 
-    effective_defs = None if force_no_tools else (tool_defs if tool_defs else None)
+    effective_defs = None if force_no_tools else tool_defs
     # Compute context stats for logging
     _total_chars = sum(
         len(m.get("content", "")) if isinstance(m.get("content"), str)

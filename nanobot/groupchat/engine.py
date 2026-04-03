@@ -664,6 +664,15 @@ class GroupChatEngine:
         self._stop_group_loop()
         self._active_agents.clear()
         self._state.save_active(self._active_agents)
+        
+        if hasattr(self, '_state_bus') and self._state_bus:
+            try:
+                def mutate_stop(data):
+                    if "session" in data:
+                        data["session"]["status"] = "stopped"
+                self._state_bus._update(mutate_stop)
+            except Exception as e:
+                logger.warning("Failed to mark session as stopped: {}", e)
 
     # ── Internal ─────────────────────────────────────────────
 
@@ -686,12 +695,34 @@ class GroupChatEngine:
         if not self._topic:
             self._topic = "自由讨论"
 
-        # Session directory
-        timestamp = _cn_now().strftime("%Y%m%d-%H%M%S")
+        # Auto-resume the most recent active session
         sessions_dir = Path.home() / ".nanobot" / "collab-sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
-        self._session_dir = sessions_dir / f"gc-{timestamp}"
-        self._session_dir.mkdir(parents=True, exist_ok=True)
+        
+        self._session_dir = None
+        try:
+            # Sort sessions by modified time, latest first
+            all_sessions = sorted(sessions_dir.glob("gc-*/state.yaml"), key=lambda p: p.stat().st_mtime, reverse=True)
+            for state_file in all_sessions:
+                import yaml
+                try:
+                    with open(state_file, 'r', encoding='utf-8') as f:
+                        data = yaml.safe_load(f)
+                    if data and "session" in data:
+                        status = data["session"].get("status", "unknown")
+                        if status == "running":
+                            self._session_dir = state_file.parent
+                            logger.info("Groupchat: resuming active session {}", self._session_dir.name)
+                            break
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning("Error checking active sessions: {}", e)
+
+        if not self._session_dir:
+            timestamp = _cn_now().strftime("%Y%m%d-%H%M%S")
+            self._session_dir = sessions_dir / f"gc-{timestamp}"
+            self._session_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize FileStateBus — single state.yaml per session
         # The broadcast coordinator creates its own bus for broadcast rounds;

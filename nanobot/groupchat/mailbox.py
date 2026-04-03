@@ -102,6 +102,12 @@ class MailboxHub:
 
     def send(self, sender: str, targets: list[str], content: str) -> int:
         """Send a message to target agents. Returns number delivered."""
+        now = _time.time()
+        for past_msg in reversed(self._history[-5:]):
+            if past_msg.sender == sender and past_msg.content == content and (now - past_msg.timestamp) < 3.0:
+                logger.debug("MailboxHub: discarded duplicate message from {} (idempotency)", sender)
+                return 0
+
         msg = AgentMessage(sender=sender, content=content, targets=targets)
         self._history.append(msg)
 
