@@ -167,19 +167,7 @@ class AgentRunner:
                 if self._state_bus:
                     self._state_bus.set_agent_activity(self.name, "thinking", cycle=cycle)
                     
-                # ── Leader 动态上下文注入机制 ──
-                if self._is_leader and self._state_bus:
-                    try:
-                        latest_state = self._state_bus._file.read_text("utf-8")
-                        # 上下文修剪：剥离上次循环塞入的陈旧系统状态块，避免记忆爆炸！
-                        self._messages = [m for m in self._messages if not (m["role"] == "system" and "[当前系统全局状态]" in m["content"])]
-                        
-                        self._messages.append({
-                            "role": "system",
-                            "content": f"[当前系统全局状态 state.yaml]\n```yaml\n{latest_state}\n```\n(分析该上下文后制定规划或推进任务)"
-                        })
-                    except Exception:
-                        pass
+                # ── Leader 完全基于自主工具流，不在此处强行修改上下文 ──
                 
                 self._cycle_t0 = _time.time()
                 self._cycle_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
