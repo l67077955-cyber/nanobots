@@ -98,6 +98,9 @@ class AgentRunner:
         self.total_iterations = 0
         self.total_latency = 0.0
 
+        # 当前活跃的流式显示器（用于 CancelledError 清理）
+        self._active_stream: StreamingDisplay | None = None
+
         # 每轮 token 计数（用于显示）
         self._cycle_t0 = 0.0
         self._cycle_usage: dict[str, int] = {}
@@ -190,6 +193,8 @@ class AgentRunner:
                     _stream = None
                     _on_delta = None
                     _on_reset = None
+                # 保存引用以便 CancelledError 时清理
+                self._active_stream = _stream
 
                 # ⚠️ 不可修改 — 参数必须完全匹配 tool_loop() 签名
                 result = await tool_loop(
@@ -284,6 +289,7 @@ class AgentRunner:
                                 await self._engine._edit_fn(_stream.msg_id, f"👑 {self.name} ━━ (工具执行中)")
                             except Exception:
                                 pass
+                    self._active_stream = None  # finalize 成功，清除引用
 
                 # 错误 → 立即退出
                 if result.finish_reason == "error":
@@ -413,6 +419,19 @@ class AgentRunner:
                     break  # 跳出内部 wait 循环，进入最后一次 tool_loop
 
                 if outer_break:
+                    # 清理挂起的流式消息（防止 ▍ 残留）
+                    if _stream and _stream.msg_id and self._engine._edit_fn:
+                        try:
+                            suffix = f"👑 {self.name} ━━ ✓"
+                            if self.content:
+                                # 输出已有内容的完整版本
+                                final = f"👑 {self.name} ━━━━━━━━\n\n{self.content}"[:4096]
+                                await self._engine._edit_fn(_stream.msg_id, final)
+                            else:
+                                await self._engine._edit_fn(_stream.msg_id, suffix)
+                        except Exception:
+                            pass
+                    self._active_stream = None
                     break
 
             # ── 正常完成 ──
@@ -422,6 +441,24 @@ class AgentRunner:
 
         except asyncio.CancelledError:
             self.state = AgentState.DONE  # cancel 也视为正常完成
+            # ── 清理被中断的流式消息（防止 ▍ 光标残留）──
+            _cs = self._active_stream
+            if _cs and _cs.msg_id and self._engine._edit_fn:
+                try:
+                    if self.content:
+                        final = f"👑 {self.name} ━━━━━━━━\n\n{self.content}"[:4096]
+                        import asyncio as _aio
+                        _aio.get_event_loop().create_task(
+                            self._engine._edit_fn(_cs.msg_id, final)
+                        )
+                    else:
+                        import asyncio as _aio
+                        _aio.get_event_loop().create_task(
+                            self._engine._edit_fn(_cs.msg_id, f"👑 {self.name} ━━ ✓")
+                        )
+                except Exception:
+                    pass
+            self._active_stream = None
         except Exception as e:
             self.state = AgentState.FAILED
             logger.error("AgentRunner {}: {}", self.name, e)

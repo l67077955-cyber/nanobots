@@ -258,9 +258,24 @@ class BroadcastCoordinator:
                 for t in done_set:
                     if t is leader_sentinel:
                         await self.engine._send("━━ Leader 结束讨论 — entering synthesis ━━")
-                        for t2 in self._agent_tasks:
+                        # Cancel 非 Leader tasks
+                        leader_task_ref = None
+                        for t2, name2 in self._agent_tasks.items():
+                            if name2 == self.leader_name:
+                                leader_task_ref = t2
+                                continue
                             if not t2.done():
                                 t2.cancel()
+                        # 给 Leader task 一个缓冲时间完成当前流式输出
+                        if leader_task_ref and not leader_task_ref.done():
+                            try:
+                                await asyncio.wait_for(asyncio.shield(leader_task_ref), timeout=5.0)
+                            except (asyncio.TimeoutError, asyncio.CancelledError):
+                                if not leader_task_ref.done():
+                                    leader_task_ref.cancel()
+                            except Exception:
+                                if not leader_task_ref.done():
+                                    leader_task_ref.cancel()
                         break
                     elif t in self._agent_tasks:
                         try:
@@ -409,8 +424,15 @@ class BroadcastCoordinator:
 
         elif change_type == "session_ended":
             # Leader 设置 session.status: done → 结束群聊
+            # ⚠️ 不 cancel Leader 自己的 task — 让它完成当前的流式输出后
+            #    通过等待循环中的 session.status 检查（L377）自然退出。
+            #    粗暴 cancel 会导致 Leader 的流式消息停留在 ▍ 状态。
             await self.engine._send("🔚 Leader 结束群聊 (session.status: done)")
-            for t in self._agent_tasks:
+            leader_task = None
+            for t, name in self._agent_tasks.items():
+                if name == self.leader_name:
+                    leader_task = t
+                    continue
                 if not t.done():
                     t.cancel()
             self.leader_end_event.set()
