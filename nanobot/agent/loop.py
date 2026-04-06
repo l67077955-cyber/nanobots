@@ -395,7 +395,7 @@ class AgentLoop:
 
         # Slash commands
         cmd = msg.content.strip().lower()
-        if cmd == "/new":
+        if cmd in ("/new", "/clear"):
             snapshot = session.messages[session.last_consolidated:]
             session.clear()
             self.sessions.save(session)
@@ -404,12 +404,14 @@ class AgentLoop:
             if snapshot:
                 self._schedule_background(self.memory_consolidator.archive_messages(snapshot))
 
+            action_text = "Context cleared" if cmd == "/clear" else "New session started"
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
-                                  content="New session started.")
+                                  content=f"{action_text}.")
         if cmd == "/help":
             lines = [
                 "🐈 nanobot commands:",
                 "/new — Start a new conversation",
+                "/clear — Clear conversation history",
                 "/stop — Stop the current task",
                 "/restart — Restart the bot",
                 "/help — Show available commands",

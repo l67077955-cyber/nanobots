@@ -64,6 +64,7 @@ class TelegramChannel(
 
     BOT_COMMANDS = [
         BotCommand("new", "Start a new conversation"),
+        BotCommand("clear", "Clear conversation history"),
         BotCommand("stop", "Stop the current task"),
         BotCommand("agents", "List available agents"),
         BotCommand("addagent", "Add agent to chat"),
@@ -177,6 +178,7 @@ class TelegramChannel(
         # Add command handlers
         self._app.add_handler(CommandHandler("start", self._on_start))
         self._app.add_handler(CommandHandler("new", self._forward_command))
+        self._app.add_handler(CommandHandler("clear", self._forward_command))
         self._app.add_handler(CommandHandler("stop", self._forward_command))
         self._app.add_handler(CommandHandler("help", self._on_help))
         # Agent management commands
@@ -437,6 +439,7 @@ class TelegramChannel(
         await update.message.reply_text(
             "🐈 nanobot commands:\n"
             "/new — 新对话\n"
+            "/clear — 清空上下文\n"
             "/stop — 停止当前任务\n\n"
             "🎭 Agent 管理:\n"
             "/agents — 查看所有 agent\n"
@@ -477,7 +480,7 @@ class TelegramChannel(
 
     # ── Forward command ──
     async def _forward_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Forward /new and /stop as inbound messages."""
+        """Forward /new, /clear and /stop as inbound messages."""
         if not update.message or not update.effective_user:
             return
         sender = self._sender_id(update.effective_user)

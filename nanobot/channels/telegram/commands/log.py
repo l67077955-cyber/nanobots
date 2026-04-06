@@ -289,12 +289,13 @@ class LogCommandsMixin:
         user = update.effective_user
         self._remember_thread_context(message)
 
-        # Clear interactive state on /new or /stop
+        # Clear interactive state on /new, /clear, or /stop
         cmd = (message.text or "").strip().split()[0].lower() if message.text else ""
-        if cmd in ("/new", "/stop"):
+        if cmd in ("/new", "/clear", "/stop"):
             str_chat_id = str(message.chat_id)
             self._edit_state.pop(str_chat_id, None)
-            if cmd == "/new" and self._groupchat_engine:
+            # If /new or /clear, also reset the conversation pool's unread status if it exists
+            if cmd in ("/new", "/clear") and self._groupchat_engine:
                 self._groupchat_engine.reset()
                 # Auto-add default agent so user can chat immediately
                 if "Nanobot" in self._groupchat_engine.registry:
