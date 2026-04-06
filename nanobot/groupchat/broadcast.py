@@ -578,11 +578,13 @@ async def broadcast_round(
                     continue  # skip auto-wait, re-enter tool_loop
 
                 # ── Auto-wait: enter idle state ──
-                # If agent never used chatroom_send (across ALL cycles), auto-share its findings
-                # and display to user via chatroom format
-                if content and "chatroom_send" not in all_tools_used:
+                # Display the agent's final text for this cycle so it's not swallowed.
+                if content:
                     snippet = content[:500]
-                    mailbox.send(name, ["All"], snippet)
+                    # If this agent hasn't used chatroom_send in this cycle, inject it into the mailbox so others can see it.
+                    if not result.tools_used or "chatroom_send" not in result.tools_used:
+                        mailbox.send(name, ["All"], snippet)
+
                     # Append token + latency to displayed reply
                     tok = result.token_usage
                     total_tok = tok.get("total", 0)
@@ -595,8 +597,13 @@ async def broadcast_round(
                         cost_str = f" ${cost:.4f}" if cost else ""
                         cache_str = f" 🔵{cache_t}" if cache_t else ""
                         tok_suffix = f"\n`in:{tok.get('prompt',0)} out:{tok.get('completion',0)} Σ{total_tok} · {elapsed:.1f}s{cost_str}{cache_str}`"
-                    await engine._send(_d.chatroom_send_msg(name, "All", content + tok_suffix, max_len=3000, leader=leader_name))
-                    logger.info("Broadcast: auto-shared {} findings ({} chars)", name, len(snippet))
+                    
+                    target_label = "Broadcast" if (not result.tools_used or "chatroom_send" not in result.tools_used) else "Self/Final"
+                    if is_leader:
+                        target_label = "最终答复"
+                        
+                    await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
+                    logger.info("Broadcast: displayed {} cycle {} output ({} chars)", name, cycle, len(content))
 
                 # Now wait for teammate messages
                 logger.info("Broadcast: {} entering auto-wait (cycle {})", name, cycle)
