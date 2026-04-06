@@ -107,8 +107,7 @@ async def run_loop(engine: Any) -> None:
                     pass
 
         if engine._running:
-            await engine._send("🔚 群聊结束！正在生成总结...")
-            await generate_summary(engine)
+            await engine._send("🔚 群聊结束！")
 
     except asyncio.CancelledError:
         pass

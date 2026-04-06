@@ -537,6 +537,12 @@ async def broadcast_round(
                     log_request(engine, name, model, "broadcast",
                                 error=err_short, iterations=total_iterations,
                                 latency=total_latency)
+                    
+                    # Broadcast the error to other agents to prevent them from waiting forever
+                    error_msg = f"⚠️ [System Alert] I encountered a fatal error and my process has crashed. Error details:\n{err_short}"
+                    engine._add_message(name, error_msg)
+                    mailbox.send(name, ["All"], error_msg)
+                    
                     return (name, None, [], {})
 
                 # Record final text in history
@@ -746,7 +752,7 @@ async def broadcast_round(
                     break
                 elif t is leader_end_sentinel:
                     logger.info("Broadcast: leader ended discussion")
-                    # await engine._send("━━ Leader 结束讨论 — entering synthesis ━━")
+                    await engine._send("━━ Leader 结束讨论 — entering synthesis ━━")
                     for task_obj in tasks:
                         if not task_obj.done():
                             task_obj.cancel()
@@ -813,59 +819,6 @@ async def broadcast_round(
 
     # Clean up queues (history preserved for synthesis & test harness)
     mailbox.clear()
-
-    # ═══════════════════════════════════════════════════════════════
-    # Post-round synthesis: Leader always evaluates; no-leader gets auto-summary
-    # ═══════════════════════════════════════════════════════════════
-    if leader_name and leader_name in agents:
-        leader_model = engine.registry[leader_name]["model"]
-        model_short = leader_model.split("/")[-1]
-        # await engine._send(f"━━ {leader_name} ({model_short}) · 总结 ━━")
-
-        # Collect all agent outputs (including leader's own in-round output)
-        agent_outputs = []
-        leader_own_output = ""
-        for name, content, _ in results:
-            if content:
-                if name == leader_name:
-                    leader_own_output = content
-                else:
-                    agent_outputs.append(f"[{name} 的回复]\n{content}")
-
-        # Also include chatroom messages for richer context
-        chat_msgs = []
-        for msg in mailbox.history:
-            sender = msg.sender if hasattr(msg, "sender") else str(msg.get("sender", "?"))
-            content_text = msg.content if hasattr(msg, "content") else str(msg.get("content", ""))
-            chat_msgs.append(f"[{sender}]: {content_text[:500]}")
-
-        synthesis_context = (
-            f"[Leader 最终总结]\n"
-            f"原始问题: {user_question}\n\n"
-        )
-        if agent_outputs:
-            synthesis_context += f"各 agent 结果:\n" + "\n\n".join(agent_outputs) + "\n\n"
-        if chat_msgs:
-            synthesis_context += f"对话记录:\n" + "\n".join(chat_msgs) + "\n\n"
-        if leader_own_output:
-            synthesis_context += f"你之前的发言:\n{leader_own_output}\n\n"
-        synthesis_context += (
-            "请基于以上所有信息，给出完整、结构化的最终总结。\n"
-            "整合所有发现，评价各 agent 的表现，指出亮点和不足，给出结论。"
-        )
-
-        try:
-            await engine._agent_speak(
-                leader_name,
-                synthesis_context=synthesis_context,
-            )
-        except Exception as e:
-            logger.error("Leader synthesis failed: {}", e)
-            await engine._send(f"✗ {leader_name} 总结失败: {e}")
-    else:
-        # No leader: auto-generate discussion summary
-        from nanobot.groupchat.run_loop import generate_summary
-        await generate_summary(engine)
 
     # ── Restore original settings (session-scoped overrides) ──
     if _original_settings:
