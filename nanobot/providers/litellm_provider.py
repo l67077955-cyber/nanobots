@@ -486,7 +486,13 @@ class LiteLLMProvider(LLMProvider):
 
         def _make(prov_name: str, info: dict, raw_model: str) -> dict:
             if prov_name in self._NATIVE_PROVIDERS:
-                return {"api_base": None, "api_key": None, "model": None, "provider_name": prov_name}
+                api_base = (info.get("url") or "").rstrip("/")
+                return {
+                    "api_base": api_base if api_base else None,
+                    "api_key": info.get("apiKey") or None,
+                    "model": None,
+                    "provider_name": prov_name,
+                }
             # Custom provider (API distributor):
             # - Add openai/ prefix so LiteLLM uses OpenAI SDK
             # - Keep URL as-is (e.g. https://xxx/v1) because LiteLLM
@@ -597,11 +603,11 @@ class LiteLLMProvider(LLMProvider):
         pm_provider_name = None
         if not api_base and not api_key:
             resolved = self._resolve_pm_overrides(original_model)
-            if resolved["api_base"]:
+            if resolved["api_base"] or resolved["api_key"] or resolved["model"]:
                 pm_api_base = resolved["api_base"]
                 pm_api_key = resolved["api_key"]
-                pm_resolved = True
                 if resolved["model"]:
+                    pm_resolved = True
                     original_model = resolved["model"]
                     logger.debug("PM override: {} → {} via {}", model, original_model, pm_api_base)
             pm_provider_name = resolved.get("provider_name")

@@ -22,6 +22,29 @@ from nanobot.groupchat.prompt_builder import (
 class SettingsCommandsMixin:
     """Mixin providing settings commands."""
 
+    @staticmethod
+    def _sync_hyperparams_from_disk(provider) -> bool:
+        """Reload hyperparams.json into provider.sampling_params if file exists.
+        Returns True if params were synced from disk."""
+        if not provider:
+            return False
+        params = getattr(provider, 'sampling_params', None)
+        if not params:
+            return False
+        hp_path = Path.home() / ".nanobot" / "hyperparams.json"
+        if not hp_path.exists():
+            return False
+        try:
+            saved = json.loads(hp_path.read_text())
+            if isinstance(saved, dict) and saved:
+                params.clear()
+                params.update(saved)
+                logger.info("Synced hyperparams from disk: {}", list(saved.keys()))
+                return True
+        except Exception as e:
+            logger.warning("Failed to sync hyperparams from disk: {}", e)
+        return False
+
     async def _on_hyperparams(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """View or edit sampling parameters with interactive buttons."""
         if not update.message or not update.effective_user:
@@ -35,6 +58,9 @@ class SettingsCommandsMixin:
         if not params:
             await update.message.reply_text("⚠️ 无法获取超参数（provider 不可用）")
             return
+
+        # Sync from disk so external file edits are reflected
+        self._sync_hyperparams_from_disk(provider)
 
         await self._send_hyperparams_keyboard(str(update.message.chat_id), params)
 
@@ -140,39 +166,54 @@ class SettingsCommandsMixin:
         await update.message.reply_text("⏹ 所有 agent 已移除")
 
     async def _on_restart(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Hard restart: save state, spawn new process, terminate current."""
+        """Hard restart: save notification info, then replace the current process."""
         if not update.message or not update.effective_user:
             return
         if not self.is_allowed(self._sender_id(update.effective_user)):
             return
         import json as _json
-        import subprocess
-        import sys
         import time as _time
 
         chat_id = str(update.message.chat_id)
         ts = _time.strftime("%H:%M:%S")
 
-        # Save restart notification info
+        # Save restart notification info (read by start() after reboot)
         Path("/tmp/nanobot_restart.json").write_text(
             _json.dumps({"chat_id": chat_id, "ts": ts})
         )
 
         await update.message.reply_text(f"🔄 正在重启...\n请求时间: {ts}")
 
-        # Spawn new process
-        subprocess.Popen(
-            ["nanobot", "gateway"],
-            cwd=str(Path.home() / ".nanobot"),
-            start_new_session=True,
-            stdout=open("/tmp/nanobot.log", "w"),
-            stderr=subprocess.STDOUT,
-        )
+        async def _do_restart():
+            await asyncio.sleep(1)
+            # Determine the correct command to restart
+            # Use sys.executable to ensure we use the same Python interpreter
+            # Reconstruct argv: if 'gateway' is in original args, keep it
+            argv = sys.argv[:]
+            if not any("gateway" in a for a in argv):
+                # Running via entry point (e.g. /usr/local/bin/nanobot gateway)
+                # sys.argv[0] is the script path
+                argv = [sys.argv[0], "gateway"]
 
-        # Give new process a moment to start, then exit
-        await asyncio.sleep(1)
-        import os
-        os._exit(0)
+            logger.info("Restart: execv {} {}", sys.executable, [sys.executable] + argv)
+
+            try:
+                # os.execv replaces the current process in-place
+                # All env vars, file descriptors are inherited automatically
+                os.execv(sys.executable, [sys.executable] + argv)
+            except Exception as e:
+                # Fallback: spawn new process and exit
+                logger.warning("execv failed ({}), falling back to Popen", e)
+                import subprocess
+                subprocess.Popen(
+                    [sys.executable, "-m", "nanobot", "gateway"],
+                    start_new_session=True,
+                    stdout=open("/tmp/nanobot.log", "w"),
+                    stderr=subprocess.STDOUT,
+                )
+                os._exit(0)
+
+        asyncio.create_task(_do_restart())
 
     async def _on_debug(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show comprehensive internal state for debugging."""
