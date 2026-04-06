@@ -746,7 +746,7 @@ async def broadcast_round(
                     break
                 elif t is leader_end_sentinel:
                     logger.info("Broadcast: leader ended discussion")
-                    await engine._send("━━ Leader 结束讨论 — entering synthesis ━━")
+                    # await engine._send("━━ Leader 结束讨论 — entering synthesis ━━")
                     for task_obj in tasks:
                         if not task_obj.done():
                             task_obj.cancel()
@@ -807,9 +807,9 @@ async def broadcast_round(
     await engine._send(_d.broadcast_complete_msg(completed, total, comm_count))
 
     # Output chat chain summary
-    chain = _d.chat_chain_summary(mailbox.history, leader=leader_name)
-    if chain:
-        await engine._send(chain)
+    # chain = _d.chat_chain_summary(mailbox.history, leader=leader_name)
+    # if chain:
+    #     await engine._send(chain)
 
     # Clean up queues (history preserved for synthesis & test harness)
     mailbox.clear()
@@ -820,7 +820,7 @@ async def broadcast_round(
     if leader_name and leader_name in agents:
         leader_model = engine.registry[leader_name]["model"]
         model_short = leader_model.split("/")[-1]
-        await engine._send(f"━━ {leader_name} ({model_short}) · 总结 ━━")
+        # await engine._send(f"━━ {leader_name} ({model_short}) · 总结 ━━")
 
         # Collect all agent outputs (including leader's own in-round output)
         agent_outputs = []
