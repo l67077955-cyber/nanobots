@@ -269,7 +269,15 @@ async def broadcast_round(
                 f"## 你的专属工具\n"
                 f"- chatroom_send(to, message): 给队友发任务/指令\n"
                 f"- wait(): 等待队友汇报结果\n"
-                f"- manage_agent(action, agent, ...): 管理队友（disable/enable/set_tools）\n"
+                f"- manage_agent(action, agent, ...): 管理队友\n"
+                f"    • disable: 踢出并取消该 agent 的任务\n"
+                f"    • restart: 将已踢出的 agent 拉回并重新启动（最常用）\n"
+                f"    • enable: 仅标记为激活（不重启任务）\n"
+                f"    • set_tools: 修改 agent 的工具权限（如 {{\"web_search\": true}}）\n"
+                f"    • set_status: 向 agent 注入一条状态消息（修改其下次循环的指令）\n"
+                f"- clear_context(agent, keep_last, reason): 清理 agent 的上下文历史\n"
+                f"    • 从共享历史移除该 agent 的消息，让其重置思路\n"
+                f"    • keep_last=N 可保留最近 N 条不删\n"
                 f"- end_discussion(reason): 结束讨论，进入最终总结\n"
                 f"- transfer_credits(from_agent, to_agent, amount): 划拨搜索额度\n"
                 f"- 你也拥有自己的基础工具（web_search 等），可以自己做部分工作\n\n"
@@ -473,7 +481,7 @@ async def broadcast_round(
         # Always include chatroom + broadcast-specific tools
         broadcast_tool_names = ["chatroom_send", "wait"]
         if is_leader:
-            broadcast_tool_names.extend(["manage_agent", "end_discussion", "transfer_credits"])
+            broadcast_tool_names.extend(["manage_agent", "end_discussion", "transfer_credits", "clear_context"])
         broadcast_defs = [
             t.to_schema() for t in [
                 reg.get(tn) for tn in broadcast_tool_names
