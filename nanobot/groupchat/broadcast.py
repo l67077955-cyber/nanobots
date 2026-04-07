@@ -795,6 +795,63 @@ async def broadcast_round(
 
         user_task = asyncio.create_task(_user_listener())
 
+        # ── Mid-round agent join listener ──
+        # Drains engine._pending_join_queue so agents added via /add during
+        # an active round are spawned immediately rather than waiting for next round.
+        _join_listener_running = True
+
+        async def _join_listener() -> None:
+            nonlocal total
+            while _join_listener_running:
+                try:
+                    new_name = await asyncio.wait_for(
+                        engine._pending_join_queue.get(), timeout=1.0
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                # Skip if already running (duplicate notification) or engine stopped
+                if new_name in {tasks[t] for t in tasks} or not engine._running:
+                    continue
+                # Build tool registry for the new agent
+                base_reg = engine._get_agent_registry(new_name)
+                from nanobot.agent.tools.registry import ToolRegistry
+                from nanobot.groupchat.chatroom_tools import (
+                    ChatroomSendTool, WaitTool, CachedSearchTool,
+                )
+                new_reg = ToolRegistry()
+                for tool_name in base_reg.tool_names:
+                    tool = base_reg.get(tool_name)
+                    if tool:
+                        if tool_name == "web_search":
+                            new_reg.register(CachedSearchTool(tool, new_name, _search_cache, search_pool=search_pool))
+                        elif tool_name not in ("chatroom_send", "wait"):
+                            new_reg.register(tool)
+                send_tool = ChatroomSendTool(
+                    mailbox=mailbox, agent_name=new_name, pool=pool,
+                    search_pool=search_pool, leader_gate=leader_gate,
+                )
+                wait_tool = WaitTool(mailbox=mailbox, agent_name=new_name, pool=pool)
+                wait_tool._send_tool = send_tool
+                new_reg.register(send_tool)
+                new_reg.register(wait_tool)
+                agent_tool_registries[new_name] = new_reg
+                search_pool.add_agent(new_name, initial=search_pool._initial_per_agent)
+                mailbox.create(new_name)
+                mailbox.add_active_agent(new_name)
+                idx = total
+                total += 1
+                new_task = asyncio.create_task(_run_one(new_name, idx))
+                tasks[new_task] = new_name
+                all_tasks.add(new_task)
+                engine._broadcast_tasks[new_name] = new_task
+                await engine._send(
+                    f"✅ {new_name} 加入当前讨论\n"
+                    f"👥 当前成员: {', '.join(engine._active_agents)}"
+                )
+                logger.info("Broadcast: dynamically spawned {} (idx={})", new_name, idx)
+
+        join_task = asyncio.create_task(_join_listener())
+
         # Watch for all-agents-waiting (natural conversation end)
         async def _watch_all_waiting() -> None:
             while True:
