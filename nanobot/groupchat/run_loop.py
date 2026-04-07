@@ -59,7 +59,7 @@ async def run_loop(engine: Any) -> None:
             engine._add_message("系统", f"话题：{engine._topic}")
 
         rounds = 0
-        while engine._running and rounds < engine.config.max_rounds:
+        while engine._running:
             rounds += 1
 
             # Wait for user input (block until user sends something)
@@ -108,9 +108,6 @@ async def run_loop(engine: Any) -> None:
                     await engine._on_round_done()
                 except Exception:
                     pass
-
-        if engine._running:
-            await engine._send("🔚 群聊结束！")
 
     except asyncio.CancelledError:
         pass
