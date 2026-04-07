@@ -698,66 +698,11 @@ async def broadcast_round(
                     await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
                     logger.info("Broadcast: displayed {} cycle {} output ({} chars)", name, cycle, len(content))
 
-                # If leader called end_discussion this cycle, run a mandatory memory
-                # consolidation pass before exiting, then break.
+                # If leader called end_discussion this cycle, exit immediately.
                 # Continuing into auto-wait would trigger the all-waiting sentinel,
                 # which would re-nudge the leader and cause a repeated end_discussion loop.
                 if is_leader and "end_discussion" in (result.tools_used or []):
-                    logger.info("Broadcast: leader {} called end_discussion, running memory consolidation", name)
-                    # Only file-access tools are allowed — no chatroom/management tools.
-                    _file_tool_names = {"write_file", "edit_file", "read_file", "list_dir"}
-                    _memory_tool_defs = [
-                        d for d in tool_defs
-                        if d.get("function", {}).get("name") in _file_tool_names
-                    ]
-                    if _memory_tool_defs:
-                        messages.append({
-                            "role": "system",
-                            "content": (
-                                "[强制记忆写入 — 禁止跳过]\n"
-                                "讨论已结束。在退出之前，你必须立即完成记忆更新：\n"
-                                "1. 将本次对话的问题内容、主要结论、重要流程写入 memory/ 文件（HOT 或 WARM 层）\n"
-                                "2. 如有必要，更新 MEMORY.md 的摘要索引\n"
-                                "3. 清理已过时的 HOT 记忆条目\n"
-                                "只允许使用文件工具（read_file/write_file/edit_file/list_dir）。\n"
-                                "完成后输出一行：'✅ 记忆已更新' 即可退出。"
-                            ),
-                        })
-                        try:
-                            mem_result = await tool_loop(
-                                provider=engine.provider,
-                                messages=messages,
-                                tool_registry=reg,
-                                model=model,
-                                max_tokens=engine.config.max_tokens,
-                                max_iterations=6,
-                                tool_defs=_memory_tool_defs,
-                                metadata={
-                                    "trace_name": f"memory_consolidation_{name}",
-                                    "log_agent": name,
-                                    "log_mode": "memory",
-                                },
-                                on_tool_start=_on_tool_start,
-                                on_tool_result=_on_tool_result,
-                                on_iteration_usage=_on_iter_usage,
-                                on_content_delta=None,
-                                on_content_reset=None,
-                                clean_response=lambda c: engine._clean_response(c, name),
-                                result_max_chars=20_000,
-                            )
-                            if mem_result.content:
-                                engine._add_message(name, f"[记忆更新] {mem_result.content}")
-                                await engine._send(
-                                    _d.chatroom_send_msg(name, "Memory", mem_result.content, leader=leader_name)
-                                )
-                            logger.info(
-                                "Broadcast: leader {} memory consolidation done (tools={})",
-                                name, mem_result.tools_used,
-                            )
-                        except Exception as _mem_err:
-                            logger.error("Broadcast: leader {} memory consolidation failed: {}", name, _mem_err)
-                    else:
-                        logger.info("Broadcast: leader {} has no file tools, skipping memory consolidation", name)
+                    logger.info("Broadcast: leader {} called end_discussion, exiting cycle loop", name)
                     break
 
                 # Now wait for teammate messages
