@@ -188,10 +188,21 @@ class HttpxProvider(LLMProvider):
     def _apply_cache_control(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
-        """Return copies with cache_control injected for Anthropic."""
+        """Return copies with cache_control injected for Anthropic.
+
+        Anthropic (and Azure) support at most 4 cache_control breakpoints total.
+        tools gets 1 breakpoint, leaving at most 3 for system messages.
+        We mark only the last N system messages to stay within this limit.
+        """
+        _MAX_CACHE_BLOCKS = 4
+        sys_quota = _MAX_CACHE_BLOCKS - (1 if tools else 0)
+
+        sys_indices = [i for i, m in enumerate(messages) if m.get("role") == "system"]
+        cacheable = set(sys_indices[-sys_quota:]) if sys_quota > 0 else set()
+
         new_messages = []
-        for msg in messages:
-            if msg.get("role") == "system":
+        for i, msg in enumerate(messages):
+            if i in cacheable:
                 content = msg["content"]
                 if isinstance(content, str):
                     new_content = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
