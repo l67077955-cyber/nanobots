@@ -26,6 +26,43 @@ from .formatting import TELEGRAM_MAX_MESSAGE_LEN
 class CallbacksMixin:
     """Mixin providing inline keyboard callback handling."""
 
+    @staticmethod
+    def _sort_models_newest_first(model_ids: list[str]) -> list[str]:
+        """Sort model IDs newest-to-oldest by extracting YYYYMMDD dates; reverse-alphabetical fallback."""
+        def _key(mid: str) -> tuple:
+            m = re.search(r'(20\d{6})', mid)
+            return (int(m.group(1)) if m else 0, mid)
+        return sorted(model_ids, key=_key, reverse=True)
+
+    @staticmethod
+    def _build_model_buttons_2col(
+        model_ids: list[str],
+        prov: str,
+        existing: set[str],
+        strip_prefix: str | None = None,
+    ) -> list[list]:
+        """Build 2-column inline keyboard buttons for a model list.
+
+        Already-added models are listed in text only (no button).
+        strip_prefix: if given, remove 'prefix/' from display label.
+        """
+        buttons: list[list] = []
+        row: list = []
+        for mid in model_ids:
+            if mid in existing:
+                continue  # shown in text, no button
+            cb = f"ep_addm:{prov}:{mid}"
+            if len(cb.encode()) > 64:
+                continue
+            label = mid[len(strip_prefix) + 1:] if strip_prefix and mid.startswith(f"{strip_prefix}/") else mid
+            row.append(InlineKeyboardButton(f"+ {label}", callback_data=cb))
+            if len(row) == 2:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+        return buttons
+
     async def _on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle InlineKeyboard button presses."""
         query = update.callback_query
@@ -1172,21 +1209,21 @@ class CallbacksMixin:
             pm = self._load_pm()
             existing = set(pm.get("models", {}).get(prov, []))
 
+            filtered = self._sort_models_newest_first(filtered)
             total_pages = max(1, (len(filtered) + per_page - 1) // per_page)
             page = min(page, total_pages - 1)
             start = page * per_page
             page_items = filtered[start:start + per_page]
 
             lines = [f"📋 {prov} / {prefix} ({len(filtered)}) [第{page+1}/{total_pages}页]:\n"]
-            buttons = []
             for mid in page_items:
                 if mid in existing:
                     lines.append(f"  ✅ {mid}")
                 else:
                     lines.append(f"  ⚪️ {mid}")
-                    cb = f"ep_addm:{prov}:{mid}"
-                    if len(cb.encode()) <= 64:
-                        buttons.append([InlineKeyboardButton(f"+ {mid}", callback_data=cb)])
+            buttons = self._build_model_buttons_2col(
+                page_items, prov, existing, strip_prefix=prefix,
+            )
             # Navigation
             nav = []
             if page > 0:
@@ -1251,16 +1288,15 @@ class CallbacksMixin:
             # Rebuild from cache — stay in same prefix filter
             prefix = model_id.split("/")[0] if "/" in model_id else "other"
             filtered = [m for m in all_models if m.startswith(f"{prefix}/") or (prefix == "other" and "/" not in m)]
+            filtered = self._sort_models_newest_first(filtered)
             lines = [f"📋 {prov} / {prefix} ({len(filtered)}):\n"]
-            buttons = []
-            for mid in filtered[:30]:
+            page_items = filtered[:30]
+            for mid in page_items:
                 if mid in existing:
                     lines.append(f"  ✅ {mid}")
                 else:
                     lines.append(f"  ⚪️ {mid}")
-                    cb = f"ep_addm:{prov}:{mid}"
-                    if len(cb.encode()) <= 64:
-                        buttons.append([InlineKeyboardButton(f"+ {mid}", callback_data=cb)])
+            buttons = self._build_model_buttons_2col(page_items, prov, existing, strip_prefix=prefix)
             if len(filtered) > 30:
                 lines.append(f"  ... 和 {len(filtered) - 30} 个更多")
             buttons.append([InlineKeyboardButton("⬅️ 返回厂商列表", callback_data=f"ep_models:{prov}")])
@@ -1480,16 +1516,15 @@ class CallbacksMixin:
 
             pm = self._load_pm()
             existing = set(pm.get("models", {}).get(prov, []))
+            filtered = self._sort_models_newest_first(filtered)
             lines = [f"🔍 搜索 \"{content.strip()}\" ({len(filtered)} 结果):\n"]
-            buttons = []
-            for mid in filtered[:25]:
+            page_items = filtered[:25]
+            for mid in page_items:
                 if mid in existing:
                     lines.append(f"  ✅ {mid}")
                 else:
                     lines.append(f"  ⚪️ {mid}")
-                    cb = f"ep_addm:{prov}:{mid}"
-                    if len(cb.encode()) <= 64:
-                        buttons.append([InlineKeyboardButton(f"+ {mid}", callback_data=cb)])
+            buttons = self._build_model_buttons_2col(page_items, prov, existing)
             if len(filtered) > 25:
                 lines.append(f"  ... 和 {len(filtered) - 25} 个更多")
             if not filtered:
