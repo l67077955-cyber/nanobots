@@ -294,8 +294,10 @@ async def broadcast_round(
                 f"   ⚠️ 只分配队友有工具能力完成的任务！无 web_search 的队友不要让他搜索\n"
                 f"3. 用 wait() 等待队友回复结果\n"
                 f"4. 根据结果：追加任务 / 纠正方向 / 自己补充搜索\n"
-                f"5. 信息充分后用 end_discussion() 结束讨论\n"
-                f"6. 在你的最终文字回复中，整合所有发现给出完整答案\n\n"
+                f"5. 信息充分后，先完成以下两步，再调用 end_discussion()：\n"
+                f"   a. 在最终文字回复中整合所有发现，给出完整答案\n"
+                f"   b. 用 write_file/edit_file 将本次对话的问题、结论、重要信息写入 memory/ 文件\n"
+                f"6. 完成记忆写入后，调用 end_discussion() 结束任务\n\n"
                 f"## 关键规则\n"
                 f"- 发现队友空转或无法完成任务时：果断 end_discussion\n"
                 f"- 可以一次给多个队友同时发任务（并行工作）\n"
@@ -304,6 +306,7 @@ async def broadcast_round(
                 f"  end_discussion 一旦触发无法撤销，之后再说'我来搜索'只是文字，不会执行。\n"
                 f"- ⚠️ 原假设被否证时，不要立即结束。应转向：'那么最近的可验证链条是什么？'\n"
                 f"  继续搜索直到能给出正面结论（即使度数更高），而不是仅报告'不成立'。\n"
+                f"- ⚠️ 禁止在未写记忆的情况下调用 end_discussion。写记忆 → end_discussion 是强制顺序。\n"
             )
             messages.insert(max(len(messages) - 1, 0), {
                 "role": "system",

@@ -267,7 +267,13 @@ class PromptBuilder:
         elif key == "persona":
             return agent.get("prompt", "")
         elif key == "memory":
-            return self._build_memory_content()
+            # First: user-defined instructions from ~/.nanobot/prompts/memory.md
+            user_instr = self.get_component_template("memory")
+            # Then: live file-pointer hint (paths to actual memory files)
+            pointer = self._build_memory_content()
+            if user_instr and pointer:
+                return f"{user_instr}\n\n{pointer}"
+            return user_instr or pointer
         elif key == "tool_instructions":
             return self.get_component_template("tool_instructions")
         elif key == "skills":
