@@ -639,7 +639,7 @@ async def broadcast_round(
                     
                     target_label = "Broadcast" if (not result.tools_used or "chatroom_send" not in result.tools_used) else "Self/Final"
                     if is_leader:
-                        target_label = "最终答复"
+                        target_label = f"进展 [{cycle}]"
                         
                     await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
                     logger.info("Broadcast: displayed {} cycle {} output ({} chars)", name, cycle, len(content))
@@ -838,6 +838,21 @@ async def broadcast_round(
                 name = tasks[task_obj]
                 task_obj.cancel()
                 logger.warning("Broadcast: {} cancelled", name)
+
+        # _run_one catches CancelledError and returns normally, so cancelled tasks
+        # still have results. Collect them before computing the round summary.
+        pending_cleanup = [t for t in tasks if not t.done()]
+        if pending_cleanup:
+            done_late, _ = await asyncio.wait(pending_cleanup, timeout=15)
+            for t in done_late:
+                if t in tasks:
+                    try:
+                        n, c, tools_l, *_ = t.result()
+                        if c:
+                            completed += 1
+                            results.append((n, c, tools_l or []))
+                    except Exception:
+                        pass
     except asyncio.TimeoutError:
         for task, name in tasks.items():
             if not task.done():
