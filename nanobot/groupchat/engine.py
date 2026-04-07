@@ -211,6 +211,9 @@ class GroupChatEngine:
         # Runtime state (ephemeral, not persisted)
         self._task: asyncio.Task | None = None
         self._running = False
+        # Broadcast round: per-agent tasks registered by broadcast_round()
+        # so remove_agent() can cancel an in-flight agent mid-round.
+        self._broadcast_tasks: dict[str, asyncio.Task] = {}
         self._input_queue: asyncio.Queue[str] = asyncio.Queue()
         self._send_fn: Callable[[str], Awaitable[None]] | None = None
         self._edit_fn: Callable[[int, str], Awaitable[None]] | None = None
@@ -377,6 +380,15 @@ class GroupChatEngine:
         self._active_agents.remove(matched)
         self._state.save_active(self._active_agents)
         logger.info("Groupchat: removed agent {}, active={}", matched, self._active_agents)
+
+        # Cancel any in-flight broadcast task for this agent and notify the mailbox.
+        # Without this, a removed agent keeps running in the background and its
+        # stale output appears after the round ends.
+        task = self._broadcast_tasks.pop(matched, None)
+        if task and not task.done():
+            task.cancel()
+            logger.info("Groupchat: cancelled broadcast task for {}", matched)
+        self._mailbox.mark_agent_done(matched)
 
         # If below 2 agents, stop group loop
         if len(self._active_agents) < 2 and self._running:

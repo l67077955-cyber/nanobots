@@ -34,6 +34,13 @@ def clean_response(content: str, agent_name: str, all_agent_names: list[str]) ->
                     break
 
     # 3. Strip fake/hallucinated tool calls in text
+    # Qwen/NIM style: <|tool_calls_section_begin|>...<|tool_calls_section_end|>
+    content = re.sub(
+        r"<\|tool_calls_section_begin\|>[\s\S]*?<\|tool_calls_section_end\|>",
+        "", content,
+    )
+    # Also strip any stray <|...|> model delimiters
+    content = re.sub(r"<\|[a-z_]+\|>", "", content)
     # Bracket style: [Start search for ...], [Check ...], [调用 exec({...})], etc.
     content = re.sub(r"\[(?:Start |Check |Search |Look up |Fetch |查|搜|调用\s*\w+)[^\]]*\]", "", content)
     # XML style: <function_calls>...</function_calls>, <web_search>...</web_search>, etc.

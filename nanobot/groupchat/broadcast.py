@@ -721,6 +721,12 @@ async def broadcast_round(
     for idx, name in enumerate(exec_agents):
         tasks[asyncio.create_task(_run_one(name, idx))] = name
 
+    # Register tasks on the engine so remove_agent() can cancel them mid-round
+    if hasattr(engine, '_broadcast_tasks'):
+        engine._broadcast_tasks.clear()
+        for task_obj, task_name in tasks.items():
+            engine._broadcast_tasks[task_name] = task_obj
+
     # Populate _leader_agent_tasks so ManageAgentTool can cancel non-leader tasks
     for task_obj, task_name in tasks.items():
         if task_name != leader_name:
@@ -901,6 +907,10 @@ async def broadcast_round(
 
     # Clean up queues (history preserved for synthesis & test harness)
     mailbox.clear()
+
+    # Clear broadcast task registry on the engine
+    if hasattr(engine, '_broadcast_tasks'):
+        engine._broadcast_tasks.clear()
 
     # ── Restore original settings (session-scoped overrides) ──
     if _original_settings:
