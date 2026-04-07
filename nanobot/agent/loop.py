@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from nanobot.agent.context import ContextBuilder
+from nanobot.groupchat import display as _display
 from nanobot.groupchat import history_settings
 from nanobot.agent.memory import MemoryConsolidator
 from nanobot.agent.subagent import SubagentManager
@@ -453,13 +454,9 @@ class AgentLoop:
         total = token_usage.get("total", 0)
         prompt = token_usage.get("prompt", 0)
         completion = token_usage.get("completion", 0)
-        suffix_parts = []
         if total > 0:
-            suffix_parts.append(f"in:{prompt} out:{completion} Σ{total}")
-        if total_cost is not None:
-            suffix_parts.append(f"${total_cost:.4f}")
-        if suffix_parts:
-            final_content = f"{final_content}\n\n`[{' | '.join(suffix_parts)}]`"
+            stat_line = _display.format_token_stats(prompt, completion, cost=total_cost)
+            final_content = f"{final_content}\n\n{stat_line}"
 
         self._save_turn(session, all_msgs, 1 + len(history))
         self.sessions.save(session)

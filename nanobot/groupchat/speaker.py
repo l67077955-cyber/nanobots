@@ -141,9 +141,8 @@ async def agent_speak(
                 p, c = tok.get("prompt", 0), tok.get("completion", 0)
                 cost = stats.get("cost", 0) or 0
                 cache_t = stats.get("cache_tokens", 0) or 0
-                cost_str = f" ${cost:.4f}" if cost else ""
-                cache_str = f" 🔵{cache_t}" if cache_t else ""
-                display_content = f"{content}\n\n`in:{p} out:{c} Σ{total}{cost_str}{cache_str}`"
+                stat_line = _d.format_token_stats(p, c, cost=cost, cache_tokens=cache_t)
+                display_content = f"{content}\n\n{stat_line}"
             if not silent:
                 await stream.finalize(display_content, fallback_send=engine._send)
         elif not silent:

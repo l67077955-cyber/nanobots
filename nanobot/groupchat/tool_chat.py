@@ -150,10 +150,8 @@ def make_tool_callbacks(
             total = u.get("total_tokens", 0) or (p + c)
             cost = u.get("cost")
             cache_t = u.get("cache_tokens", 0) or u.get("cache_read_input_tokens", 0)
-            cost_str = f" ${cost:.4f}" if cost else ""
-            cache_str = f" 🔵{cache_t}" if cache_t else ""
             if total:
-                token_suffix = f"\n`in:{p} out:{c} Σ{total}{cost_str}{cache_str}`"
+                token_suffix = "\n" + _d.format_token_stats(p, c, cost=cost, cache_tokens=cache_t)
 
         if _tool_msg_id and edit_fn and _tool_msg_text:
             try:

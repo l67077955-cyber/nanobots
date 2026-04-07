@@ -425,7 +425,7 @@ async def broadcast_round(
                 if tok_t > 0:
                     p = _cycle_usage["prompt_tokens"]
                     c = _cycle_usage["completion_tokens"]
-                    stats_suffix = f"\n`in:{p} out:{c} Σ{tok_t} · {elapsed:.1f}s`"
+                    stats_suffix = "\n" + _d.format_token_stats(p, c, elapsed=elapsed)
                 await engine._send(_d.chatroom_send_msg(name, to_str, msg_full + stats_suffix, leader=leader_name))
             elif tool_name == "wait":
                 await _flush_searches()
@@ -651,9 +651,10 @@ async def broadcast_round(
                         elapsed = _t.time() - _cycle_t0
                         cost = result.cost or 0
                         cache_t = result.cache_tokens or 0
-                        cost_str = f" ${cost:.4f}" if cost else ""
-                        cache_str = f" 🔵{cache_t}" if cache_t else ""
-                        tok_suffix = f"\n`in:{tok.get('prompt',0)} out:{tok.get('completion',0)} Σ{total_tok} · {elapsed:.1f}s{cost_str}{cache_str}`"
+                        tok_suffix = "\n" + _d.format_token_stats(
+                            tok.get("prompt", 0), tok.get("completion", 0),
+                            elapsed=elapsed, cost=cost, cache_tokens=cache_t,
+                        )
                     
                     target_label = "Broadcast" if (not result.tools_used or "chatroom_send" not in result.tools_used) else "Self/Final"
                     if is_leader:
