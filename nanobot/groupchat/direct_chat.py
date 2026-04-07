@@ -187,7 +187,8 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
                     p, c = tok.get("prompt", 0), tok.get("completion", 0)
                     cost = stats.get("cost", 0) or 0
                     cache_t = stats.get("cache_tokens", 0) or 0
-                    stat_line = _d.format_token_stats(p, c, cost=cost, cache_tokens=cache_t)
+                    reasoning_t = (stats.get("provider_meta") or {}).get("reasoning_tokens", 0) or 0
+                    stat_line = _d.format_token_stats(p, c, cost=cost, cache_tokens=cache_t, reasoning_tokens=reasoning_t)
                     display_content = f"{content}\n\n{stat_line}"
                 await stream.finalize(display_content, fallback_send=engine._send)
                 last_response = content

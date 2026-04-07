@@ -13,13 +13,20 @@ def format_token_stats(
     elapsed: float | None = None,
     cost: float | None = None,
     cache_tokens: int = 0,
+    reasoning_tokens: int = 0,
 ) -> str:
     """Format token usage into a compact, human-readable status line.
 
     Returns a backtick-wrapped string for Telegram monospace rendering.
     Example: `提示:46,902 回复:68 · 9.9s $0.034 💾缓存:23,305`
+    With reasoning: `提示:21,811 回复:36+💭56 · 9.8s $0.0265 💾缓存:42`
     """
-    parts = [f"提示:{prompt:,} 回复:{completion:,}"]
+    if reasoning_tokens > 0:
+        visible = completion - reasoning_tokens
+        completion_str = f"{visible:,}+💭{reasoning_tokens:,}"
+    else:
+        completion_str = f"{completion:,}"
+    parts = [f"提示:{prompt:,} 回复:{completion_str}"]
     if elapsed is not None:
         parts.append(f"· {elapsed:.1f}s")
     if cost:
