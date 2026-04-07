@@ -1380,6 +1380,10 @@ class CallbacksMixin:
         elif data.startswith("hs_"):
             await self._handle_history_callback(query, data)
 
+        # ── Think callbacks ──
+        elif data.startswith("think_"):
+            await self._handle_think_callback(query, data)
+
     async def _handle_history_callback(self, query, data: str) -> None:
         """Handle /history interactive settings callbacks."""
         from nanobot.groupchat import history_settings as hs
@@ -1949,4 +1953,74 @@ class CallbacksMixin:
             await self._gc_send(chat_id, f"✅ {agent_name} 模型: {new_model}")
 
         del self._edit_state[chat_id]
+
+    async def _handle_think_callback(self, query, data: str) -> None:
+        """Handle /think interactive button callbacks."""
+        engine = self._groupchat_engine
+        if not engine:
+            await query.edit_message_text("⚠️ 未配置群聊引擎")
+            return
+
+        if data.startswith("think_agent:"):
+            # Show level-selection buttons for the chosen agent (or __all__)
+            target = data[len("think_agent:"):]
+            label = "全部 Agent" if target == "__all__" else target
+
+            effort_options = [
+                ("❌ 关闭", "off"),
+                ("🔅 低", "low"),
+                ("🔆 中", "medium"),
+                ("✨ 高", "high"),
+            ]
+            buttons = [
+                [InlineKeyboardButton(lbl, callback_data=f"think_set:{target}:{lvl}")]
+                for lbl, lvl in effort_options
+            ]
+            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="think_back")])
+            await query.edit_message_text(
+                f"🧠 设置思考强度 — {label}",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+
+        elif data.startswith("think_set:"):
+            # Apply the setting: think_set:<name|__all__>:<level>
+            parts = data.split(":", 2)
+            if len(parts) != 3:
+                return
+            target, level_raw = parts[1], parts[2]
+
+            effort: str | None = None if level_raw == "off" else level_raw
+
+            if target == "__all__":
+                targets = list(engine.registry.keys())
+            else:
+                matched = engine._resolve_agent_name(target)
+                if not matched:
+                    await query.edit_message_text(f"❌ Agent '{target}' 不存在")
+                    return
+                targets = [matched]
+
+            updated = []
+            for name in targets:
+                cfg = engine.registry.get(name)
+                if cfg is not None:
+                    cfg["reasoning_effort"] = effort
+                    updated.append(name)
+
+            effort_display = effort or "off"
+            names_str = ", ".join(updated)
+            await query.answer(f"✅ {names_str} → {effort_display}", show_alert=False)
+
+            # Refresh the status panel
+            text, buttons = self._build_think_status_panel(engine)
+            await query.edit_message_text(
+                text, reply_markup=InlineKeyboardMarkup(buttons)
+            )
+
+        elif data == "think_back":
+            # Return to the main think status panel
+            text, buttons = self._build_think_status_panel(engine)
+            await query.edit_message_text(
+                text, reply_markup=InlineKeyboardMarkup(buttons)
+            )
 
