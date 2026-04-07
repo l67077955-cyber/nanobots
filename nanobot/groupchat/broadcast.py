@@ -651,9 +651,15 @@ async def broadcast_round(
                         elapsed = _t.time() - _cycle_t0
                         cost = result.cost or 0
                         cache_t = result.cache_tokens or 0
+                        reasoning_t = sum(
+                            (m.get("reasoning_tokens") or 0)
+                            for m in (result.provider_meta or [])
+                            if isinstance(m, dict)
+                        )
                         tok_suffix = "\n" + _d.format_token_stats(
                             tok.get("prompt", 0), tok.get("completion", 0),
                             elapsed=elapsed, cost=cost, cache_tokens=cache_t,
+                            reasoning_tokens=reasoning_t,
                         )
                     
                     target_label = "Broadcast" if (not result.tools_used or "chatroom_send" not in result.tools_used) else "Self/Final"
