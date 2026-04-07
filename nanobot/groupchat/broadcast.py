@@ -695,6 +695,13 @@ async def broadcast_round(
                     await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
                     logger.info("Broadcast: displayed {} cycle {} output ({} chars)", name, cycle, len(content))
 
+                # If leader called end_discussion this cycle, exit immediately.
+                # Continuing into auto-wait would trigger the all-waiting sentinel,
+                # which would re-nudge the leader and cause a repeated end_discussion loop.
+                if is_leader and "end_discussion" in (result.tools_used or []):
+                    logger.info("Broadcast: leader {} called end_discussion, exiting cycle loop", name)
+                    break
+
                 # Now wait for teammate messages
                 logger.info("Broadcast: {} entering auto-wait (cycle {})", name, cycle)
                 # Release unread pool slots before waiting (mirrors WaitTool behavior)
@@ -941,16 +948,20 @@ async def broadcast_round(
                         None,
                     ) if leader_name else None
                     if leader_task:
-                        logger.info("Broadcast: all non-leader agents idle — nudging leader to synthesize")
-                        await engine._send("━━ 队友已完成，等待 Leader 汇总 ━━")
-                        mailbox.send(
-                            "系统", [leader_name],
-                            "所有队友已完成工作并退出。请立即整合所有发现，给出完整的最终答案，然后调用 end_discussion 结束任务。",
-                        )
-                        # Do NOT reset the sentinel — one nudge is enough.
-                        # Re-creating it would fire again as soon as the leader
-                        # enters auto-wait (it's the only remaining active agent),
-                        # producing repeated "队友已完成，等待 Leader 汇总" nudges.
+                        # Only nudge if leader hasn't already decided to end.
+                        # If leader_end_event is already set, the leader called
+                        # end_discussion and is finishing up — re-nudging would
+                        # cause the leader to call end_discussion repeatedly in a loop.
+                        if not leader_end_event.is_set():
+                            logger.info("Broadcast: all non-leader agents idle — nudging leader to synthesize")
+                            await engine._send("━━ 队友已完成，等待 Leader 汇总 ━━")
+                            mailbox.send(
+                                "系统", [leader_name],
+                                "所有队友已完成工作并退出。请立即整合所有发现，给出完整的最终答案，然后调用 end_discussion 结束任务。",
+                            )
+                        else:
+                            logger.info("Broadcast: sentinel fired but leader already called end_discussion, skipping nudge")
+                        # Discard in both cases — one nudge is enough.
                         all_tasks.discard(t)
                     else:
                         logger.info("Broadcast: all agents waiting, ending round")
