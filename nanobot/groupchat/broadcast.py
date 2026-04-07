@@ -787,10 +787,10 @@ async def broadcast_round(
                 elif t is leader_end_sentinel:
                     logger.info("Broadcast: leader ended discussion")
                     await engine._send("━━ Leader 结束讨论 — entering synthesis ━━")
-                    for task_obj in tasks:
-                        if not task_obj.done():
+                    for task_obj, task_name in tasks.items():
+                        if not task_obj.done() and task_name != leader_name:
                             task_obj.cancel()
-                    break
+                    # Don't break — let the while loop continue waiting for leader to finish
                 elif t in tasks:
                     try:
                         name, content, tools_used_list, *_ = t.result()
