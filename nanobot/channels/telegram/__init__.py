@@ -207,6 +207,7 @@ class TelegramChannel(
         self._app.add_handler(CommandHandler("providers", self._on_providers))
         self._app.add_handler(CommandHandler("speedtest", self._on_speedtest))
         self._app.add_handler(CommandHandler("groupchat", self._on_groupchat))
+        self._app.add_handler(CommandHandler("think", self._on_think))
         self._app.add_handler(CallbackQueryHandler(self._on_callback))
 
         # Add message handler for text, photos, voice, documents
@@ -468,7 +469,8 @@ class TelegramChannel(
             "/prompt [agent] — 查看/编辑/排序提示词组件\n"
             "/summary — 生成对话总结\n\n"
             "⚙️ 群聊设置：\n"
-            "/groupchat — 对话池/搜索预算等参数\n\n"
+            "/groupchat — 对话池/搜索预算等参数\n"
+            "/think [agent] [on|off|low|medium|high] — 设置 agent 思考模式\n\n"
             "💡 加入 agent 后直接发消息即可对话\n"
             "2+ agent 自动进入群聊模式"
         )

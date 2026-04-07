@@ -460,3 +460,93 @@ class SettingsCommandsMixin:
             text, reply_markup=InlineKeyboardMarkup(buttons),
         )
 
+    # ── Think command ───────────────────────────────────────
+
+    _THINK_VALID = {"on", "off", "low", "medium", "high"}
+
+    async def _on_think(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /think command: get or set per-agent reasoning_effort.
+
+        Usage:
+          /think                         — show current thinking status for all agents
+          /think <name> <on|off|low|medium|high>  — set for one agent
+          /think all <on|off|low|medium|high>     — set for all active agents
+        """
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+
+        engine = self._groupchat_engine
+        if not engine:
+            await update.message.reply_text("⚠️ 未配置群聊引擎")
+            return
+
+        args = context.args or []
+
+        # ── Show status ──
+        if not args:
+            lines = ["🧠 Agent 思考状态:\n"]
+            for name, cfg in engine.registry.items():
+                effort = cfg.get("reasoning_effort") or "off"
+                active_mark = "🟢" if name in engine.active_agents else "⚪"
+                lines.append(f"  {active_mark} {name}: {effort}")
+            await update.message.reply_text("\n".join(lines))
+            return
+
+        # ── Set thinking ──
+        if len(args) < 2:
+            await update.message.reply_text(
+                "用法: /think <agent|all> <on|off|low|medium|high>\n"
+                "  on = medium\n"
+                "  off = 关闭思考\n"
+                "示例: /think Alice on\n"
+                "      /think all low"
+            )
+            return
+
+        target = args[0]
+        level_raw = args[1].lower()
+        if level_raw not in self._THINK_VALID:
+            await update.message.reply_text(
+                f"⚠️ 无效值: '{level_raw}'\n可选: on / off / low / medium / high"
+            )
+            return
+
+        # Map on/off to actual effort values
+        effort: str | None
+        if level_raw == "on":
+            effort = "medium"
+        elif level_raw == "off":
+            effort = None
+        else:
+            effort = level_raw
+
+        # Determine which agents to update
+        if target.lower() == "all":
+            targets = list(engine.registry.keys())
+        else:
+            matched = engine._resolve_agent_name(target)
+            if not matched:
+                await update.message.reply_text(
+                    f"❌ Agent '{target}' 不存在\n可用: {', '.join(engine.registry.keys())}"
+                )
+                return
+            targets = [matched]
+
+        # Apply to registry (in-memory, takes effect on next tool_loop call)
+        updated = []
+        for name in targets:
+            cfg = engine.registry.get(name)
+            if cfg is not None:
+                cfg["reasoning_effort"] = effort
+                updated.append(name)
+
+        effort_display = effort or "off"
+        names_str = ", ".join(updated)
+        await update.message.reply_text(
+            f"✅ 已设置思考模式\n"
+            f"  🤖 {names_str}\n"
+            f"  🧠 reasoning_effort: {effort_display}"
+        )
+
