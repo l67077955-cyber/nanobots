@@ -72,7 +72,6 @@ class TelegramChannel(
         BotCommand("newagent", "Create new agent"),
         BotCommand("editagent", "Edit agent config"),
         BotCommand("hyperparams", "View/edit sampling params"),
-        BotCommand("endchat", "Clear all agents"),
         BotCommand("restart", "Hard reset system"),
         BotCommand("log", "View session log"),
         BotCommand("savegroup", "Save current members as group"),
@@ -188,7 +187,6 @@ class TelegramChannel(
         self._app.add_handler(CommandHandler("newagent", self._on_newagent))
         self._app.add_handler(CommandHandler("editagent", self._on_editagent))
         self._app.add_handler(CommandHandler("hyperparams", self._on_hyperparams))
-        self._app.add_handler(CommandHandler("endchat", self._on_endchat))
         self._app.add_handler(CommandHandler("restart", self._on_restart))
         self._app.add_handler(CommandHandler("log", self._on_log))
         self._app.add_handler(CommandHandler("savegroup", self._on_savegroup))
@@ -448,7 +446,6 @@ class TelegramChannel(
             "/newagent <name> — 创建新 agent\n"
             "/editagent <name> — 编辑 agent (名字/人设/模型/工具)\n"
             "/hyperparams — 查看/修改超参数\n"
-            "/endchat — 清空所有 agent\n"
             "/restart — 硬重置（卡死时用）\n\n"
             "📁 分组管理：\n"
             "/savegroup <名称> — 保存当前成员\n"
@@ -488,6 +485,16 @@ class TelegramChannel(
             return
         chat_id = str(update.message.chat_id)
         command = update.message.text or ""
+        # Extract bare command name (strip @botname suffix)
+        cmd = command.strip().split()[0].lower().split("@")[0]
+
+        # Apply group chat side-effects before forwarding to AgentLoop
+        if self._groupchat_engine:
+            if cmd == "/stop":
+                self._groupchat_engine._stop_group_loop()
+            elif cmd in ("/clear", "/new"):
+                self._groupchat_engine.clear_history()
+
         from nanobot.bus.events import InboundMessage
         await self.bus.publish_inbound(InboundMessage(
             channel="telegram",

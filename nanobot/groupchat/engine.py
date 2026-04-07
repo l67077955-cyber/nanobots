@@ -321,6 +321,12 @@ class GroupChatEngine:
         """Persist the current active agents list to disk."""
         self._state.save_active(self._active_agents)
 
+    def clear_history(self) -> None:
+        """Clear conversation history and request log, but keep active agents and loop running."""
+        self._history.clear()
+        self._request_log.clear()
+        self._session_dir = None
+
     def reset(self) -> None:
         """Clear history, request log, active agents, and stop the loop."""
         self.stop()

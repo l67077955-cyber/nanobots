@@ -152,19 +152,6 @@ class SettingsCommandsMixin:
             reply_markup=InlineKeyboardMarkup(buttons),
         )
 
-    async def _on_endchat(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not update.message or not update.effective_user:
-            return
-        if not self.is_allowed(self._sender_id(update.effective_user)):
-            return
-        if not self._groupchat_engine:
-            return
-        if not self._groupchat_engine.active_agents:
-            await update.message.reply_text("没有活跃 agent")
-            return
-        self._groupchat_engine.stop()
-        await update.message.reply_text("⏹ 所有 agent 已移除")
-
     async def _on_restart(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Hard restart: save notification info, then replace the current process."""
         if not update.message or not update.effective_user:
