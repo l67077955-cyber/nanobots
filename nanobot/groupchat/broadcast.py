@@ -790,12 +790,33 @@ async def broadcast_round(
 
             for t in done_set:
                 if t is sentinel:
-                    logger.info("Broadcast: all agents waiting, ending round")
-                    await engine._send("━━ all agents idle — round complete ━━")
-                    for task_obj in tasks:
-                        if not task_obj.done():
-                            task_obj.cancel()
-                    break
+                    # If a leader is still running, inject a synthesis prompt instead of cancelling.
+                    # Non-leaders finishing first removes them from _active_agents, which causes the
+                    # sentinel to fire while the leader is mid-cycle (waiting between tool loops).
+                    # Cancelling the leader here means no synthesis is ever produced.
+                    leader_task = next(
+                        (task_obj for task_obj, task_name in tasks.items()
+                         if task_name == leader_name and not task_obj.done()),
+                        None,
+                    ) if leader_name else None
+                    if leader_task:
+                        logger.info("Broadcast: all non-leader agents idle — nudging leader to synthesize")
+                        await engine._send("━━ 队友已完成，等待 Leader 汇总 ━━")
+                        mailbox.send(
+                            "系统", [leader_name],
+                            "所有队友已完成工作并退出。请立即整合所有发现，给出完整的最终答案，然后调用 end_discussion 结束任务。",
+                        )
+                        # Reset the sentinel so it can fire again if leader goes idle again
+                        sentinel = asyncio.create_task(_watch_all_waiting())
+                        all_tasks.discard(t)
+                        all_tasks.add(sentinel)
+                    else:
+                        logger.info("Broadcast: all agents waiting, ending round")
+                        await engine._send("━━ all agents idle — round complete ━━")
+                        for task_obj in tasks:
+                            if not task_obj.done():
+                                task_obj.cancel()
+                        break
                 elif t is leader_end_sentinel:
                     logger.info("Broadcast: leader ended discussion")
                     await engine._send("━━ Leader 结束讨论 — entering synthesis ━━")
