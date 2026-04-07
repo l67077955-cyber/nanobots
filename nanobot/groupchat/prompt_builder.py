@@ -267,13 +267,7 @@ class PromptBuilder:
         elif key == "persona":
             return agent.get("prompt", "")
         elif key == "memory":
-            # First: user-defined instructions from ~/.nanobot/prompts/memory.md
-            user_instr = self.get_component_template("memory")
-            # Then: live file-pointer hint (paths to actual memory files)
-            pointer = self._build_memory_content()
-            if user_instr and pointer:
-                return f"{user_instr}\n\n{pointer}"
-            return user_instr or pointer
+            return self.get_component_template("memory")
         elif key == "tool_instructions":
             return self.get_component_template("tool_instructions")
         elif key == "skills":
@@ -311,40 +305,6 @@ class PromptBuilder:
             "标记 available=\"false\" 的技能需要先安装依赖。\n\n"
             + summary
         )
-
-    def _build_memory_content(self) -> str:
-        """Build the long-term memory hint for progressive loading.
-
-        Instead of injecting full MEMORY.md content (which grows over time),
-        provide a brief pointer so the agent can read_file when relevant.
-        Matches the progressive-loading pattern used by skills.
-        """
-        try:
-            from nanobot.agent.memory import MemoryStore
-            store = MemoryStore(self._workspace)
-            content = store.read_long_term()
-            if content and content.strip():
-                # Show first non-empty line as preview
-                preview = ""
-                for line in content.splitlines():
-                    stripped = line.strip()
-                    if stripped and not stripped.startswith("#"):
-                        preview = stripped[:80]
-                        break
-                mem_path = store.memory_file
-                history_path = store.history_file
-                hint = (
-                    "[Long-term Memory — 长期记忆]\n\n"
-                    f"你有持久化记忆文件。用 read_file 查看完整内容：\n"
-                    f"- `{mem_path}` — 长期事实记忆 (MEMORY.md)\n"
-                    f"- `{history_path}` — 时间线日志 (HISTORY.md)\n"
-                )
-                if preview:
-                    hint += f"\n预览: {preview}…"
-                return hint
-        except Exception as e:
-            logger.warning("Failed to load memory hint: {}", e)
-        return ""
 
     @staticmethod
     def get_component_template(key: str) -> str:
