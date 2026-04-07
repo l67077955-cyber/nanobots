@@ -584,6 +584,7 @@ def gateway(
             web_search_config=config.tools.web.search,
             web_proxy=config.tools.web.proxy or None,
             cron_service=cron,
+            send_outbound_fn=bus.publish_outbound,
         )
         # Register the base model as an agent too
         base_model = config.agents.defaults.model or "anthropic/claude-opus-4.5"

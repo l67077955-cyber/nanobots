@@ -159,6 +159,12 @@ class GroupChatEngine:
         registry.register(WriteFileTool(workspace=ws, allowed_dir=ws))
         registry.register(EditFileTool(workspace=ws, allowed_dir=ws))
         registry.register(ListDirTool(workspace=ws, allowed_dir=None))
+        # Register MessageTool so agents can send files (PDFs, images, etc.) to the user.
+        # The send_outbound_fn is wired in from the gateway (bus.publish_outbound).
+        # channel/chat_id are injected later via set_tool_context → _update_message_tool_context.
+        if self._send_outbound_fn:
+            from nanobot.agent.tools.message import MessageTool
+            registry.register(MessageTool(send_callback=self._send_outbound_fn))
         return registry
 
     def _get_reader_model(self) -> str:
@@ -263,6 +269,17 @@ class GroupChatEngine:
         import os
         os.environ["NANOBOT_CHANNEL"] = channel
         os.environ["NANOBOT_CHAT_ID"] = chat_id
+        # Also update MessageTool context in all cached registries so agents
+        # can send files (PDFs, images) to the correct Telegram chat.
+        self._update_message_tool_context(channel, chat_id)
+
+    def _update_message_tool_context(self, channel: str, chat_id: str) -> None:
+        """Push channel/chat_id into all MessageTool instances in the registry cache."""
+        from nanobot.agent.tools.message import MessageTool
+        for reg in self._tool_registry_cache.values():
+            mt = reg.get("message")
+            if isinstance(mt, MessageTool):
+                mt.set_context(channel, chat_id)
 
     def set_send_fn(self, send_fn: Callable[[str], Awaitable[None]]) -> None:
         """Set the message output callback."""
