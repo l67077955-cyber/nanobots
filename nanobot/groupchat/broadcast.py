@@ -546,6 +546,7 @@ async def broadcast_round(
                     max_tokens=engine.config.max_tokens,
                     max_iterations=agent_max_iters,
                     tool_defs=tool_defs if tool_defs else None,
+                    reasoning_effort=agent_cfg.get("reasoning_effort") or None,
                     metadata={
                         "trace_name": f"broadcast_{name}_c{cycle}",
                         "trace_user_id": "groupchat",

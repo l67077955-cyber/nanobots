@@ -136,6 +136,7 @@ async def tool_loop(
     max_iterations: int = 5,
     tool_defs: list[dict[str, Any]] | None = None,
     metadata: dict[str, Any] | None = None,
+    reasoning_effort: str | None = None,
     # ── Callbacks ──
     on_tool_start: Callable[[str, dict], Awaitable[None]] | None = None,
     on_tool_result: Callable[[str, str, str], Awaitable[None]] | None = None,
@@ -263,7 +264,7 @@ async def tool_loop(
         if _can_stream:
             response = await _stream_call(
                 provider, llm_messages, iter_tool_defs, model, max_tokens, metadata,
-                on_content_delta,
+                on_content_delta, reasoning_effort=reasoning_effort,
             )
         else:
             response = await provider.chat_with_retry(
@@ -272,6 +273,7 @@ async def tool_loop(
                 model=model,
                 max_tokens=max_tokens,
                 metadata=metadata,
+                reasoning_effort=reasoning_effort,
             )
 
         latency = _time.time() - t0
@@ -575,6 +577,8 @@ async def _stream_call(
     max_tokens: int,
     metadata: dict[str, Any] | None,
     on_content_delta: Callable[[str], Awaitable[None]],
+    *,
+    reasoning_effort: str | None = None,
 ) -> LLMResponse:
     """Call provider.chat_stream(), forwarding content deltas to the callback.
 
@@ -637,6 +641,7 @@ async def _stream_call(
             model=model,
             max_tokens=max_tokens,
             metadata=metadata,
+            reasoning_effort=reasoning_effort,
         )
 
     return response
