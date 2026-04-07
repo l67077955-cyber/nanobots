@@ -835,9 +835,15 @@ async def broadcast_round(
                 new_reg.register(send_tool)
                 new_reg.register(wait_tool)
                 agent_tool_registries[new_name] = new_reg
-                search_pool.add_agent(new_name, initial=search_pool._initial_per_agent)
+                # Register with search pool (initialize credits for new agent)
+                with search_pool._lock:
+                    search_pool._agents.append(new_name)
+                    search_pool._credits[new_name] = search_pool._initial
+                    search_pool._searches[new_name] = 0
+                    search_pool._outputs[new_name] = 0
+                # Register with mailbox
                 mailbox.create(new_name)
-                mailbox.add_active_agent(new_name)
+                mailbox._active_agents.add(new_name)
                 idx = total
                 total += 1
                 new_task = asyncio.create_task(_run_one(new_name, idx))
@@ -945,10 +951,13 @@ async def broadcast_round(
         if not leader_end_sentinel.done():
             leader_end_sentinel.cancel()
 
-        # Stop user listener
+        # Stop user listener and join listener
         _user_listener_running = False
         if not user_task.done():
             user_task.cancel()
+        _join_listener_running = False
+        if not join_task.done():
+            join_task.cancel()
 
         # Cancel any remaining agent tasks
         for task_obj in tasks:
