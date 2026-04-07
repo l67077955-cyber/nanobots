@@ -297,6 +297,8 @@ async def broadcast_round(
                 f"- 发现队友空转或无法完成任务时：果断 end_discussion\n"
                 f"- 可以一次给多个队友同时发任务（并行工作）\n"
                 f"- 你的最终文字回复就是给用户的答案，要完整、结构化\n"
+                f"- ⚠️ 如果你打算自己做搜索/验证，必须先完成工具调用，再调用 end_discussion。\n"
+                f"  end_discussion 一旦触发无法撤销，之后再说'我来搜索'只是文字，不会执行。\n"
             )
             messages.insert(max(len(messages) - 1, 0), {
                 "role": "system",
