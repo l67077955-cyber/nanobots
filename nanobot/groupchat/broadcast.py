@@ -616,6 +616,24 @@ async def broadcast_round(
                     })
                     continue  # skip auto-wait, re-enter tool_loop
 
+                # ── Guard: used tools but produced no text ──
+                # Agent ran substantive tools but finished without writing any text.
+                # Force a summary cycle so the output is not silently swallowed.
+                elif not content and (set(result.tools_used or []) & _substantive_tools) and "chatroom_send" not in (result.tools_used or []):
+                    logger.warning(
+                        "Broadcast: {} used tools on cycle {} but produced no text (tools={}), forcing summary",
+                        name, cycle, result.tools_used,
+                    )
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            f"[⚠️ 你（{name}）完成了工具调用，但没有输出任何文字！]\n"
+                            "请用自然语言总结工具执行结果，写出你的结论，让 Leader 和队友能看到你的输出。\n"
+                            "禁止再调用工具，直接输出文字。"
+                        ),
+                    })
+                    continue  # re-enter tool_loop to produce text
+
                 # ── Auto-wait: enter idle state ──
                 # Display the agent's final text for this cycle so it's not swallowed.
                 if content:
