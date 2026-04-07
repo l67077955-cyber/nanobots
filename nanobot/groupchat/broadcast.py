@@ -188,22 +188,41 @@ async def broadcast_round(
         registry.register(wait_tool)
         agent_tool_registries[name] = registry
 
-    # ── Leader-specific tools: manage_agent + end_discussion + transfer_credits ──
+    # ── Leader-specific tools: manage_agent + end_discussion + transfer_credits + clear_context ──
     leader_end_event = asyncio.Event()
     _leader_agent_tasks: dict = {}  # populated after tasks are created
+
+    # spawn_fn: called by ManageAgentTool.restart to re-create a task
+    def _spawn_agent_task(name: str, idx: int) -> asyncio.Task:
+        """Re-spawn a single agent task (used by manage_agent restart action)."""
+        task = asyncio.create_task(_run_one(name, idx))
+        tasks[task] = name
+        # Add to all_tasks set so the main wait loop tracks it
+        all_tasks.add(task)
+        return task
+
     if leader_name and leader_name in agent_tool_registries:
-        from nanobot.groupchat.chatroom_tools import ManageAgentTool, EndDiscussionTool, TransferCreditsTool
+        from nanobot.groupchat.chatroom_tools import (
+            ManageAgentTool, EndDiscussionTool, TransferCreditsTool, ClearContextTool,
+        )
         manage_tool = ManageAgentTool(
             exec_agents=non_leader_agents,
             agent_tasks=_leader_agent_tasks,
             engine=engine,
             mailbox=mailbox,
+            spawn_fn=_spawn_agent_task,
         )
         end_tool = EndDiscussionTool(end_event=leader_end_event, engine=engine)
         transfer_tool = TransferCreditsTool(search_pool=search_pool, engine=engine)
+        clear_ctx_tool = ClearContextTool(
+            engine=engine,
+            mailbox=mailbox,
+            exec_agents=non_leader_agents,
+        )
         agent_tool_registries[leader_name].register(manage_tool)
         agent_tool_registries[leader_name].register(end_tool)
         agent_tool_registries[leader_name].register(transfer_tool)
+        agent_tool_registries[leader_name].register(clear_ctx_tool)
 
     # ── Run each agent as a concurrent task ──
 

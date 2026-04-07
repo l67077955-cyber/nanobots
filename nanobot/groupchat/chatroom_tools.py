@@ -858,9 +858,11 @@ class ManageAgentTool(Tool):
     """Leader-only tool: manage agents during broadcast execution.
 
     Actions:
-        disable  — Remove an agent from the current round
-        enable   — Reactivate a previously disabled agent
+        disable   — Remove an agent from the current round (cancels its task)
+        enable    — Mark a disabled agent as active again (no task restart)
+        restart   — Re-spawn a disabled agent's task so it actively participates
         set_tools — Change an agent's tool permissions for this session
+        set_status — Modify the agent's status message injected into its next cycle
     """
 
     def __init__(
@@ -870,12 +872,16 @@ class ManageAgentTool(Tool):
         agent_tasks: dict,  # asyncio.Task → name mapping
         engine: Any,
         mailbox: Any,
+        spawn_fn: Any = None,  # Callable[[str, int], asyncio.Task] | None
     ) -> None:
         self._exec_agents = exec_agents
         self._agent_tasks = agent_tasks  # {Task: name}
         self._engine = engine
         self._mailbox = mailbox
+        self._spawn_fn = spawn_fn  # injected by broadcast_round
         self._disabled: set[str] = set()
+        # {agent_name: status_message} — injected into agent's next cycle
+        self._status_overrides: dict[str, str] = {}
 
     @property
     def name(self) -> str:
@@ -884,8 +890,8 @@ class ManageAgentTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "管理 agent: disable(移除), enable(激活), set_tools(改工具权限)。"
-            "仅当前轮有效。"
+            "管理 agent: disable(踢出), restart(拉回重启), enable(标记激活), "
+            "set_tools(改工具权限), set_status(修改agent状态消息)。仅当前轮有效。"
         )
 
     @property
@@ -895,8 +901,15 @@ class ManageAgentTool(Tool):
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["disable", "enable", "set_tools"],
-                    "description": "操作类型",
+                    "enum": ["disable", "enable", "restart", "set_tools", "set_status"],
+                    "description": (
+                        "操作类型: "
+                        "disable=踢出并取消任务, "
+                        "restart=重新拉回并启动任务, "
+                        "enable=仅标记为激活(不重启任务), "
+                        "set_tools=修改工具权限, "
+                        "set_status=注入状态消息到agent下次循环"
+                    ),
                 },
                 "agent": {
                     "type": "string",
@@ -905,6 +918,10 @@ class ManageAgentTool(Tool):
                 "tools": {
                     "type": "object",
                     "description": "工具权限 (仅 set_tools 时需要), 如 {\"web_search\": true, \"exec\": false}",
+                },
+                "status": {
+                    "type": "string",
+                    "description": "状态消息 (仅 set_status 时需要), 会作为系统提示注入agent下次循环",
                 },
             },
             "required": ["action", "agent"],
@@ -915,6 +932,7 @@ class ManageAgentTool(Tool):
         action: str = "",
         agent: str = "",
         tools: dict | None = None,
+        status: str = "",
         **kwargs: Any,
     ) -> str:
         if not action or not agent:
@@ -940,17 +958,44 @@ class ManageAgentTool(Tool):
             await self._engine._send(f"⛔ Leader 已移除 {agent}")
             return f"✅ {agent} 已被 disable，其 task 已取消"
 
+        elif action == "restart":
+            # Re-spawn the agent's task so it actively participates again
+            if self._spawn_fn is None:
+                return f"Error: restart 不可用（spawn_fn 未注入）"
+            # Mark as active first
+            self._disabled.discard(agent)
+            # Cancel any existing (zombie) task for this agent
+            for task_obj, task_name in list(self._agent_tasks.items()):
+                if task_name == agent and not task_obj.done():
+                    task_obj.cancel()
+            # Determine agent index in exec_agents list
+            idx = self._exec_agents.index(agent) if agent in self._exec_agents else 0
+            # Notify agent it's being restarted
+            notify_msg = f"[系统通知] Leader 已将你（{agent}）拉回讨论，请重新开始参与。"
+            self._mailbox.send("系统", [agent], notify_msg)
+            # Spawn new task
+            new_task = self._spawn_fn(agent, idx)
+            self._agent_tasks[new_task] = agent
+            # Notify others
+            active = [a for a in self._exec_agents if a not in self._disabled]
+            others = [a for a in active if a != agent]
+            if others:
+                self._mailbox.send("系统", others,
+                    f"[系统通知] {agent} 已被 Leader 拉回，重新加入讨论")
+            await self._engine._send(f"🔄 Leader 已重启 {agent}")
+            return f"✅ {agent} 已重新启动，新 task 已创建"
+
         elif action == "enable":
             if agent not in self._disabled:
-                return f"{agent} 没有被 disable"
+                return f"{agent} 没有被 disable（当前已是激活状态）"
             self._disabled.discard(agent)
             # Notify
             active = [a for a in self._exec_agents if a not in self._disabled]
             if active:
                 self._mailbox.send("系统", active,
-                    f"[系统通知] {agent} 已被 Leader 重新激活")
-            await self._engine._send(f"✅ Leader 已重新激活 {agent}")
-            return f"✅ {agent} 已被 enable（注意：已取消的 task 不会自动重启）"
+                    f"[系统通知] {agent} 已被 Leader 标记为激活")
+            await self._engine._send(f"✅ Leader 已激活 {agent}（标记，未重启任务）")
+            return f"✅ {agent} 已标记为 enable。如需重新参与讨论请用 restart。"
 
         elif action == "set_tools":
             if not tools or not isinstance(tools, dict):
@@ -969,6 +1014,16 @@ class ManageAgentTool(Tool):
                     f"[系统通知] Leader 已修改 {agent} 的工具权限: {changes}")
             await self._engine._send(f"🔧 Leader 修改 {agent} 权限: {changes}")
             return f"✅ {agent} 工具权限已更新: {changes}"
+
+        elif action == "set_status":
+            if not status:
+                return "Error: set_status 需要 status 参数"
+            self._status_overrides[agent] = status
+            # Send status message directly to the agent's mailbox so it sees it on next wait()
+            self._mailbox.send("系统", [agent],
+                f"[Leader 状态更新] {status}")
+            await self._engine._send(f"📋 Leader 已更新 {agent} 状态: {status[:80]}")
+            return f"✅ {agent} 状态已更新，消息已注入其收件箱"
 
         return f"Error: 未知 action '{action}'"
 
@@ -1015,6 +1070,107 @@ class EndDiscussionTool(Tool):
         await self._engine._send(f"★ Leader 决定结束讨论{reason_str}")
         self._end_event.set()
         return f"✅ 讨论已结束{reason_str}，即将进入总结阶段"
+
+
+class ClearContextTool(Tool):
+    """Leader-only tool: clear an agent's context from the shared history.
+
+    Removes all messages sent by the target agent from the engine's history,
+    then injects a system notification into the agent's mailbox so it knows
+    its context has been reset and it should start fresh.
+    """
+
+    def __init__(self, *, engine: Any, mailbox: Any, exec_agents: list[str]) -> None:
+        self._engine = engine
+        self._mailbox = mailbox
+        self._exec_agents = exec_agents
+
+    @property
+    def name(self) -> str:
+        return "clear_context"
+
+    @property
+    def description(self) -> str:
+        return (
+            "清理 agent 的上下文：从共享历史中移除指定 agent 的所有消息，"
+            "并通知该 agent 重新开始。适用于某个 agent 陷入循环或输出垃圾时。"
+            "参数: agent (目标agent), keep_last (保留最后N条消息，默认0=全清)"
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "type": "string",
+                    "description": "要清理上下文的 agent 名字",
+                },
+                "keep_last": {
+                    "type": "integer",
+                    "description": "保留该 agent 最后 N 条消息（0=全清，默认0）",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "清理原因（会通知给该 agent）",
+                },
+            },
+            "required": ["agent"],
+        }
+
+    async def execute(
+        self,
+        agent: str = "",
+        keep_last: int = 0,
+        reason: str = "",
+        **kwargs: Any,
+    ) -> str:
+        if not agent:
+            return "Error: 必须指定 agent"
+
+        if agent not in self._exec_agents:
+            return f"Error: agent '{agent}' 不在当前轮中。可用: {', '.join(self._exec_agents)}"
+
+        history = self._engine._history
+        # Collect messages from this agent
+        agent_msgs = [m for m in history if m.get("sender") == agent]
+        total = len(agent_msgs)
+
+        if total == 0:
+            return f"⚠️ {agent} 在历史中没有消息，无需清理"
+
+        # Determine how many to remove
+        remove_count = max(0, total - keep_last)
+        if remove_count == 0:
+            return f"⚠️ keep_last={keep_last} 已覆盖所有消息，无消息被清理"
+
+        # Remove oldest remove_count messages from this agent
+        removed = 0
+        new_history = []
+        agent_seen = 0
+        for m in history:
+            if m.get("sender") == agent:
+                agent_seen += 1
+                if agent_seen <= remove_count:
+                    removed += 1
+                    continue  # drop this message
+            new_history.append(m)
+
+        self._engine._history[:] = new_history
+
+        # Notify the agent via mailbox
+        reason_str = f"（原因: {reason}）" if reason else ""
+        notify = (
+            f"[系统通知] Leader 已清理你（{agent}）的上下文历史{reason_str}。"
+            f"共清理 {removed} 条消息。请忘记之前的思路，重新分析当前任务。"
+        )
+        self._mailbox.send("系统", [agent], notify)
+
+        keep_info = f"，保留最后 {keep_last} 条" if keep_last > 0 else ""
+        await self._engine._send(
+            f"🧹 Leader 已清理 {agent} 的上下文（{removed}/{total} 条{keep_info}）"
+        )
+        return f"✅ 已清理 {agent} 的 {removed} 条历史消息{keep_info}，已通知该 agent 重置思路"
 
 
 class TransferCreditsTool(Tool):
