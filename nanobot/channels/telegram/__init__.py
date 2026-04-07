@@ -491,7 +491,20 @@ class TelegramChannel(
         # Apply group chat side-effects before forwarding to AgentLoop
         if self._groupchat_engine:
             if cmd == "/stop":
+                was_running = self._groupchat_engine._running
                 self._groupchat_engine._stop_group_loop()
+                if was_running:
+                    from nanobot.bus.events import OutboundMessage
+                    await self.bus.publish_outbound(OutboundMessage(
+                        channel="telegram",
+                        chat_id=chat_id,
+                        content="✅ 群聊已停止。",
+                        metadata={
+                            "message_id": update.message.message_id,
+                            "message_thread_id": update.message.message_thread_id,
+                        },
+                    ))
+                    return
             elif cmd in ("/clear", "/new"):
                 self._groupchat_engine.clear_history()
 
