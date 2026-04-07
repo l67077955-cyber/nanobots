@@ -315,6 +315,12 @@ class SettingsCommandsMixin:
         text, markup = self._build_prompt_order_view(engine)
         await update.message.reply_text(text, reply_markup=markup)
 
+    # Components that are only injected under specific conditions
+    _CONDITIONAL_TAGS: dict[str, str] = {
+        "broadcast_hint": "广播模式",
+        "leader_prompt": "Leader",
+    }
+
     def _build_prompt_order_view(self, engine) -> tuple[str, "InlineKeyboardMarkup"]:
         """Build the global prompt component order view with edit/reorder buttons."""
         order = engine.prompt_builder.get_agent_prompt_order()
@@ -322,31 +328,59 @@ class SettingsCommandsMixin:
         labels = _COMPONENT_LABELS
         global_editable = _GLOBAL_EDITABLE
         agent_editable = _AGENT_EDITABLE
+        conditional_tags = self._CONDITIONAL_TAGS
 
-        lines = ["📝 提示词组件编排 (全局)\n"]
+        history_idx = order.index("history") if "history" in order else len(order)
+        pre_count = sum(1 for k in order[:history_idx] if k != "history")
+        post_count = sum(1 for k in order[history_idx + 1:])
+
+        lines = ["📋 System Prompt 组装管线 (全局)\n"]
+        lines.append(f"↓ 系统上下文  ({pre_count} 个组件)\n")
+
+        display_num = 0
         for i, key in enumerate(order):
+            if key == "history":
+                lines.append("┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
+                lines.append("  💬 聊天记录（运行时自动插入）")
+                lines.append("┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
+                if post_count > 0:
+                    lines.append(f"\n↓ 后置规范  ({post_count} 个组件)\n")
+                continue
+
+            display_num += 1
             if key in global_editable:
-                icon = "✏️"
+                edit_icon = "✏️"
             elif key in agent_editable:
-                icon = "📂"
+                edit_icon = "📂"
             else:
-                icon = "🔒"
+                edit_icon = "🔒"
+
             label = labels.get(key, key)
             tpl = overrides.get(key) or PromptBuilder.get_component_template(key)
-            preview = f" — {len(tpl)}字" if tpl else ""
-            lines.append(f"{i+1}. {icon} {label}{preview}")
-        lines.append(f"\n✏️ = 全局模板  📂 = 每个agent独立 (/editagent)  🔒 = 自动生成")
+            status = f"● {len(tpl):,}字" if tpl else "○ 空"
+
+            cond = conditional_tags.get(key, "")
+            cond_str = f"  [仅{cond}]" if cond else ""
+
+            lines.append(f"{display_num}. {edit_icon} {label} — {status}{cond_str}")
+
+        lines.append("")
+        lines.append("✏️ 全局模板  📂 per-agent(/editagent)  🔒 自动生成")
+        lines.append("● 已配置  ○ 空(跳过注入)  [条件] 按条件激活")
         lines.append("💡 变量: {{agent}} {{members}} {{datetime}} {{round}} {{tools}} {{others}}")
 
         buttons = []
         for i, key in enumerate(order):
             row = []
+            label = labels.get(key, key)
             if key in global_editable:
-                row.append(InlineKeyboardButton(f"✏️ {key}", callback_data=f"pre:__global__:{key}"))
+                tpl = overrides.get(key) or PromptBuilder.get_component_template(key)
+                dot = "●" if tpl else "○"
+                row.append(InlineKeyboardButton(f"✏️{dot} {label}", callback_data=f"pre:__global__:{key}"))
             elif key in agent_editable:
-                row.append(InlineKeyboardButton(f"📂 {key}", callback_data="pr:refresh"))
+                row.append(InlineKeyboardButton(f"📂 {label}", callback_data="pr:refresh"))
             else:
-                row.append(InlineKeyboardButton(f"🔒 {key}", callback_data="pr:refresh"))
+                row.append(InlineKeyboardButton(f"🔒 {label}", callback_data="pr:refresh"))
             if i > 0:
                 row.append(InlineKeyboardButton("⬆️", callback_data=f"pru:{i}"))
             if i < len(order) - 1:
@@ -355,7 +389,7 @@ class SettingsCommandsMixin:
             if key != "history":
                 row.append(InlineKeyboardButton("❌", callback_data=f"prdel:{i}"))
             buttons.append(row)
-        bottom_row = [InlineKeyboardButton("🔍 预览", callback_data="prv:0")]
+        bottom_row = [InlineKeyboardButton("🔍 预览完整上下文", callback_data="prv:0")]
         if engine.prompt_builder.get_available_components():
             bottom_row.insert(0, InlineKeyboardButton("➕ 添加组件", callback_data="pradd"))
         buttons.append(bottom_row)

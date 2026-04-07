@@ -932,22 +932,27 @@ class CallbacksMixin:
             labels = _COMPONENT_LABELS
 
             lines: list[str] = []
-            # Dynamic components show markers instead of placeholder text
-            dynamic_markers = {
-                "persona": "(→ 运行时加载每个 agent 的 SOUL.md)",
-                "history": "(→ 运行时自动插入聊天记录)",
-            }
+            display_num = 0
             for i, key in enumerate(order):
                 label = labels.get(key, key)
-                if key in dynamic_markers:
-                    lines.append(f"═══ [{i+1}] {label} ═══")
-                    lines.append(dynamic_markers[key])
+                if key == "history":
+                    lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+                    lines.append("  💬 聊天记录（运行时自动插入）")
+                    lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+                    lines.append("")
+                    continue
+                display_num += 1
+                if key == "persona":
+                    lines.append(f"─── [{display_num}] {label} ───")
+                    lines.append("(→ 运行时加载每个 agent 的 SOUL.md)")
                     lines.append("")
                     continue
                 tpl = overrides.get(key) or PromptBuilder.get_component_template(key)
                 if not tpl:
+                    lines.append(f"─── [{display_num}] {label} ─── ○ 空 (跳过注入)")
+                    lines.append("")
                     continue
-                lines.append(f"═══ [{i+1}] {label} ({len(tpl)}字) ═══")
+                lines.append(f"─── [{display_num}] {label} ({len(tpl):,}字) ───")
                 preview = tpl[:400]
                 if len(tpl) > 400:
                     preview += "…"
