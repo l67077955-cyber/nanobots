@@ -122,6 +122,13 @@ class CachedSearchTool(Tool):
         # Per-iteration batch tracking: concurrent calls share 1 credit
         self._batch_lock = asyncio.Lock()
         self._batch_spent = False
+        # Per-cycle limit: only 1 search call (single or batch) allowed per cycle
+        self._cycle_searched = False
+
+    def reset_cycle(self) -> None:
+        """Reset per-cycle search flag. Call at the start of each tool_loop cycle."""
+        self._cycle_searched = False
+        self._batch_spent = False
 
     @property
     def description(self):
@@ -202,6 +209,14 @@ class CachedSearchTool(Tool):
                       count: int | None = None, **kwargs):
         import asyncio as _asyncio
 
+        # Per-cycle limit: only 1 search call allowed per tool_loop cycle
+        if self._cycle_searched:
+            return (
+                f"BLOCKED: 本轮已搜索过一次。若需多角度搜索，请合并为一次并行调用：\n"
+                f"web_search(queries=[\"query1\", \"query2\", ...])\n"
+                f"下一个 wait() 周期后可再次搜索。"
+            )
+
         # Batch mode: spend only 1 credit for the entire batch
         if queries:
             all_queries = list(queries)
@@ -218,6 +233,7 @@ class CachedSearchTool(Tool):
                         f"或请求 Leader 从其他 agent 划拨额度给你。"
                     )
 
+            self._cycle_searched = True
             tasks = [self._search_one(q, count, skip_pool=True) for q in all_queries]
             results = await _asyncio.gather(*tasks)
             parts = []
@@ -225,11 +241,11 @@ class CachedSearchTool(Tool):
                 parts.append(f"=== Query: {q} ===\n{r}")
             return "\n\n".join(parts)
 
-        # Single mode (original behaviour)
+        # Single mode
         if not query:
             return "Error: 必须提供 query 或 queries 参数"
         result = await self._search_one(query, count)
-        # Reset batch flag after single call completes
+        self._cycle_searched = True
         self._batch_spent = False
         return result
 
