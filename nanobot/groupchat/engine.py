@@ -53,6 +53,7 @@ class GroupChatEngine:
         web_search_config: Any = None,
         web_proxy: str | None = None,
         cron_service: Any | None = None,
+        send_outbound_fn: Any | None = None,
     ):
         self.config = config
         self.provider = provider
@@ -60,6 +61,7 @@ class GroupChatEngine:
         self.web_search_config = web_search_config
         self.web_proxy = web_proxy
         self._cron_service = cron_service
+        self._send_outbound_fn = send_outbound_fn  # Callable[[OutboundMessage], Awaitable[None]]
         self._pm_cache: dict | None = None
         self._mailbox = MailboxHub(on_message=self._on_agent_comm)
         self._prompt_builder = PromptBuilder(config=config, workspace=workspace)
