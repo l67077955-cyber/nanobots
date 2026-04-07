@@ -215,6 +215,9 @@ class GroupChatEngine:
         # so remove_agent() can cancel an in-flight agent mid-round.
         self._broadcast_tasks: dict[str, asyncio.Task] = {}
         self._input_queue: asyncio.Queue[str] = asyncio.Queue()
+        # Agents added via add_agent() while a broadcast round is running are
+        # queued here so broadcast_round can pick them up and spawn tasks for them.
+        self._pending_join_queue: asyncio.Queue[str] = asyncio.Queue()
         self._send_fn: Callable[[str], Awaitable[None]] | None = None
         self._edit_fn: Callable[[int, str], Awaitable[None]] | None = None
         self._on_round_done: Callable[[], Awaitable[None]] | None = None
@@ -356,6 +359,12 @@ class GroupChatEngine:
         self._active_agents.append(matched)
         self._state.save_active(self._active_agents)
         logger.info("Groupchat: added agent {}, active={}", matched, self._active_agents)
+
+        # If a broadcast round is currently running, notify it so the new agent
+        # can be spawned immediately rather than waiting for the next round.
+        if self._running and self._broadcast_tasks:
+            self._pending_join_queue.put_nowait(matched)
+            logger.info("Groupchat: queued {} for mid-round join", matched)
 
         # Don't auto-start loop here — inject() will lazy-start
         # when user sends the first message with 2+ agents.
