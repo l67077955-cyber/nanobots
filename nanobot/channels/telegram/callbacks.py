@@ -1891,14 +1891,27 @@ class CallbacksMixin:
                 if agent_name in engine._active_agents:
                     idx = engine._active_agents.index(agent_name)
                     engine._active_agents[idx] = new_name
+                # Update leader if needed
+                if engine._leader == agent_name:
+                    engine._leader = new_name
+                    engine._state.save_leader(new_name)
+                # Update saved groups
+                groups = engine._state.load_groups()
+                changed = False
+                for gname, members in groups.items():
+                    if agent_name in members:
+                        groups[gname] = [new_name if m == agent_name else m for m in members]
+                        changed = True
+                if changed:
+                    engine._state.save_groups(groups)
                 # Rename directory
                 from pathlib import Path as _P
                 agents_dir = _P.home() / ".nanobot" / "agents"
-                old = agents_dir / agent_name.lower()
-                new = agents_dir / new_name.lower()
-                if old.exists() and not new.exists():
-                    old.rename(new)
-                engine._save_active()
+                old_dir = agents_dir / agent_name.lower()
+                new_dir = agents_dir / new_name.lower()
+                if old_dir.exists() and not new_dir.exists():
+                    old_dir.rename(new_dir)
+                engine._state.save_active(engine._active_agents)
                 await self._gc_send(chat_id, f"✅ {agent_name} → {new_name}")
             else:
                 await self._gc_send(chat_id, "⚠️ 名字未变")
