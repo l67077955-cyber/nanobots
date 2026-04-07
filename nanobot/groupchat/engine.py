@@ -733,6 +733,14 @@ class GroupChatEngine:
         if self._task and not self._task.done():
             self._task.cancel()
         self._task = None
+        # Cancel any in-flight broadcast agent tasks so they don't keep running
+        # after /stop. Without this, agents continue tool calls and send messages
+        # even though the run loop has been cancelled.
+        for name, task in list(self._broadcast_tasks.items()):
+            if not task.done():
+                task.cancel()
+                logger.info("Groupchat: stop cancelled broadcast task for {}", name)
+        self._broadcast_tasks.clear()
 
     async def _send(self, text: str) -> None:
         if self._send_fn:

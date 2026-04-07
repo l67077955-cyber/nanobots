@@ -520,6 +520,10 @@ async def broadcast_round(
 
         try:
             while cycle < MAX_CYCLES:
+                # Respect /stop — exit immediately if engine is no longer running
+                if not engine._running:
+                    logger.info("Broadcast: {} exiting — engine stopped", name)
+                    break
                 cycle += 1
                 import time as _t
                 _cycle_t0 = _t.time()
@@ -684,6 +688,10 @@ async def broadcast_round(
                     break
 
                 # Got a message! Inject it and re-run tool_loop
+                # But first check if /stop was issued while we were waiting
+                if not engine._running:
+                    logger.info("Broadcast: {} exiting after wait — engine stopped", name)
+                    break
                 logger.info("Broadcast: {} reactivated by {}: {}", name, msg.sender, msg.content[:60])
                 await engine._send(_d.chatroom_wait_msg(name, str(msg), leader=leader_name))
                 # Inject agent's own previous output so LLM knows what it already said
