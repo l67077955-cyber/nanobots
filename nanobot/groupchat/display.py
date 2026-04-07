@@ -7,6 +7,28 @@ Design: clean Unicode, role-aware badges, compact and readable.
 from __future__ import annotations
 
 
+def format_token_stats(
+    prompt: int,
+    completion: int,
+    elapsed: float | None = None,
+    cost: float | None = None,
+    cache_tokens: int = 0,
+) -> str:
+    """Format token usage into a compact, human-readable status line.
+
+    Returns a backtick-wrapped string for Telegram monospace rendering.
+    Example: `提示:46,902 回复:68 · 9.9s $0.034 💾缓存:23,305`
+    """
+    parts = [f"提示:{prompt:,} 回复:{completion:,}"]
+    if elapsed is not None:
+        parts.append(f"· {elapsed:.1f}s")
+    if cost:
+        parts.append(f"${cost:.4f}")
+    if cache_tokens:
+        parts.append(f"💾缓存:{cache_tokens:,}")
+    return "`" + " ".join(parts) + "`"
+
+
 def _shorten_path(path: str, max_parts: int = 2) -> str:
     """Shorten a filesystem path to the last N components.
 
