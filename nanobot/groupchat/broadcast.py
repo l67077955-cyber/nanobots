@@ -639,6 +639,27 @@ async def broadcast_round(
                     })
                     continue  # re-enter tool_loop to produce text
 
+                # ── Leader guard: management-only cycle produced no text ──
+                # Leader used manage_agent / end_discussion / transfer_credits but no
+                # substantive data tool.  The existing guard above won't fire for these
+                # tool names, so the leader silently exits without a synthesis message.
+                elif is_leader and not content and result.tools_used \
+                        and "chatroom_send" not in (result.tools_used or []) \
+                        and not (set(result.tools_used or []) & _substantive_tools):
+                    logger.warning(
+                        "Broadcast: leader {} management-only cycle {} (tools={}), forcing synthesis",
+                        name, cycle, result.tools_used,
+                    )
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            f"[⚠️ 你（{name}）完成了管理操作，但没有输出任何文字！]\n"
+                            "请立即整合所有队友的发现，给出完整、结构化的最终答案。\n"
+                            "这是你作为 Leader 的核心职责，禁止再调用工具，直接输出文字。"
+                        ),
+                    })
+                    continue  # re-enter tool_loop to produce synthesis text
+
                 # ── Auto-wait: enter idle state ──
                 # Display the agent's final text for this cycle so it's not swallowed.
                 if content:
@@ -686,6 +707,23 @@ async def broadcast_round(
                 if msg is None:
                     # Timeout — no one talking to us, we're done
                     logger.info("Broadcast: {} auto-wait timeout, exiting", name)
+                    # Leader fallback: if no text was produced in this cycle, force a
+                    # synthesis pass before exiting so the final answer is never silently
+                    # swallowed.  Only do this once (cycle < MAX_CYCLES guards the loop).
+                    if is_leader and not content and cycle < MAX_CYCLES:
+                        logger.warning(
+                            "Broadcast: leader {} auto-wait timeout with no text (cycle {}), forcing synthesis",
+                            name, cycle,
+                        )
+                        messages.append({
+                            "role": "system",
+                            "content": (
+                                f"[最终综合] 等待超时，队友已全部完成。\n"
+                                f"请立即综合所有发现，给出完整、结构化的最终答案给用户。\n"
+                                f"禁止再调用工具，直接输出文字。"
+                            ),
+                        })
+                        continue  # re-enter tool_loop for synthesis
                     break
 
                 # Got a message! Inject it and re-run tool_loop
