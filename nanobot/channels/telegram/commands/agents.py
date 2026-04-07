@@ -297,6 +297,7 @@ class AgentCommandsMixin:
             [InlineKeyboardButton("📝 修改提示词", callback_data=f"ef:{agent_name}:persona")],
             [InlineKeyboardButton("🤖 更换模型/提供商", callback_data=f"ef:{agent_name}:model")],
             [InlineKeyboardButton("🔧 工具权限设置", callback_data=f"ef:{agent_name}:tools")],
+            [InlineKeyboardButton("🗑️ 删除 Agent", callback_data=f"da:{agent_name}")],
             [InlineKeyboardButton("❌ 取消", callback_data=f"ef:{agent_name}:cancel")],
         ])
 

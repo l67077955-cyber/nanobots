@@ -96,6 +96,72 @@ class CallbacksMixin:
                 reply_markup=self._edit_menu_buttons(name),
             )
 
+        elif data.startswith("da:"):
+            # da:AgentName — show delete confirmation
+            name = data[3:]
+            agent = self._groupchat_engine.registry.get(name)
+            if not agent:
+                await query.edit_message_text(f"❌ Agent '{name}' 不存在")
+                return
+            await query.edit_message_text(
+                f"🗑️ 删除 Agent: {name}\n\n"
+                f"模型: {agent.get('model', '?')}\n\n"
+                "⚠️ 此操作将永久删除该 agent 的配置文件，无法恢复！\n"
+                "确认删除吗？",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✅ 确认删除", callback_data=f"dac:{name}:yes")],
+                    [InlineKeyboardButton("❌ 取消", callback_data=f"edit:{name}")],
+                ]),
+            )
+
+        elif data.startswith("dac:"):
+            # dac:AgentName:yes/no — confirm or cancel delete
+            parts = data.split(":", 2)
+            if len(parts) < 3:
+                return
+            name, confirm = parts[1], parts[2]
+            if confirm != "yes":
+                await query.edit_message_text("❌ 已取消")
+                return
+            engine = self._groupchat_engine
+            if not engine or name not in engine.registry:
+                await query.edit_message_text(f"❌ Agent '{name}' 不存在")
+                return
+            # Remove from active agents
+            if name in engine._active_agents:
+                engine._active_agents.remove(name)
+                engine._state.save_active(engine._active_agents)
+            # Clear leader if needed
+            if engine._leader == name:
+                engine._leader = None
+                engine._state.save_leader(None)
+            # Remove from all saved groups
+            groups = engine._state.load_groups()
+            changed = False
+            for gname, members in groups.items():
+                if name in members:
+                    groups[gname] = [m for m in members if m != name]
+                    changed = True
+            if changed:
+                engine._state.save_groups(groups)
+            # Remove from registry
+            del engine.registry[name]
+            # Delete agent directory
+            from pathlib import Path as _P
+            import shutil
+            agent_dir = _P.home() / ".nanobot" / "agents" / name.lower()
+            deleted_dir = False
+            if agent_dir.exists():
+                try:
+                    shutil.rmtree(agent_dir)
+                    deleted_dir = True
+                except Exception as e:
+                    logger.warning("Failed to delete agent dir {}: {}", agent_dir, e)
+            msg = f"🗑️ Agent '{name}' 已删除"
+            if deleted_dir:
+                msg += f"\n📁 配置目录已删除: {agent_dir}"
+            await query.edit_message_text(msg)
+
         elif data.startswith("ef:"):
             # ef:AgentName:field
             parts = data.split(":", 2)
