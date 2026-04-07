@@ -364,6 +364,15 @@ class HttpxProvider(LLMProvider):
         if cost is None and "cost" in usage_raw:
             cost = float(usage_raw["cost"])
 
+        # Extract cache tokens: Anthropic native uses cache_read_input_tokens,
+        # OpenAI-compat uses prompt_tokens_details.cached_tokens
+        cache_tokens = 0
+        cache_tokens = int(usage_raw.get("cache_read_input_tokens", 0) or 0)
+        if not cache_tokens:
+            ptd = usage_raw.get("prompt_tokens_details") or {}
+            if isinstance(ptd, dict):
+                cache_tokens = int(ptd.get("cached_tokens", 0) or 0)
+
         # Extract provider metadata (e.g. OpenRouter generation details)
         provider_meta = []
         if "provider_specific_fields" in data:
@@ -378,7 +387,7 @@ class HttpxProvider(LLMProvider):
             finish_reason=finish_reason,
             usage=usage,
             cost=cost,
-            cache_tokens=0,
+            cache_tokens=cache_tokens,
             provider_meta=provider_meta if provider_meta else None,
             reasoning_content=reasoning,
             thinking_blocks=thinking,

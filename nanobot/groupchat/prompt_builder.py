@@ -88,8 +88,7 @@ TEMPLATES: dict[str, str] = {
         "Focus on executing the user's request — do not just greet or ask what to do."
     ),
     "group_context": (
-        "[Start a new group chat. Group members: {{members}}]\n"
-        "[Current date and time: {{datetime}}]"
+        "[Start a new group chat. Group members: {{members}}]"
     ),
     "persona": "[从 SOUL.md 加载 — 在 /editagent 中编辑]",
     "tool_instructions": "",  # Loaded from ~/.nanobot/prompts/tool_instructions.md
@@ -264,8 +263,7 @@ class PromptBuilder:
             )
         elif key == "group_context":
             members = ", ".join(active_agents) if active_agents else "(无)"
-            now = _cn_now().strftime("%Y年%m月%d日 %H:%M")
-            return f"[Start a new group chat. Group members: {members}]\n[Current date and time: {now}]"
+            return f"[Start a new group chat. Group members: {members}]"
         elif key == "persona":
             return agent.get("prompt", "")
         elif key == "memory":
