@@ -299,6 +299,8 @@ async def broadcast_round(
                 f"- 你的最终文字回复就是给用户的答案，要完整、结构化\n"
                 f"- ⚠️ 如果你打算自己做搜索/验证，必须先完成工具调用，再调用 end_discussion。\n"
                 f"  end_discussion 一旦触发无法撤销，之后再说'我来搜索'只是文字，不会执行。\n"
+                f"- ⚠️ 原假设被否证时，不要立即结束。应转向：'那么最近的可验证链条是什么？'\n"
+                f"  继续搜索直到能给出正面结论（即使度数更高），而不是仅报告'不成立'。\n"
             )
             messages.insert(max(len(messages) - 1, 0), {
                 "role": "system",
