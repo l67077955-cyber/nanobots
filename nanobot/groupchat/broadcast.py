@@ -830,10 +830,11 @@ async def broadcast_round(
                             "系统", [leader_name],
                             "所有队友已完成工作并退出。请立即整合所有发现，给出完整的最终答案，然后调用 end_discussion 结束任务。",
                         )
-                        # Reset the sentinel so it can fire again if leader goes idle again
-                        sentinel = asyncio.create_task(_watch_all_waiting())
+                        # Do NOT reset the sentinel — one nudge is enough.
+                        # Re-creating it would fire again as soon as the leader
+                        # enters auto-wait (it's the only remaining active agent),
+                        # producing repeated "队友已完成，等待 Leader 汇总" nudges.
                         all_tasks.discard(t)
-                        all_tasks.add(sentinel)
                     else:
                         logger.info("Broadcast: all agents waiting, ending round")
                         await engine._send("━━ all agents idle — round complete ━━")
