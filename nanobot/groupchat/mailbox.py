@@ -227,6 +227,10 @@ class MailboxHub:
         self._all_waiting = asyncio.Event()
         # Track which agents are still active (not finished their tool_loop)
         self._active_agents: set[str] = set()
+        # Track expected replies: {waiter: {active_agent_that_may_reply, ...}}
+        # When agentB receives a message from agentA, agentA is added here so
+        # agentA's auto-wait deadline is extended while agentB is still busy.
+        self._expected_replies: dict[str, set[str]] = {}
 
     def create(self, agent_name: str) -> None:
         """Create a mailbox for an agent (idempotent)."""
@@ -246,6 +250,7 @@ class MailboxHub:
         self._waiting.clear()
         self._all_waiting.clear()
         self._active_agents = set(active_agents) if active_agents else set(self._queues.keys())
+        self._expected_replies.clear()
         self._global_start = _time.time()
         logger.debug("MailboxHub: round started, {} agents", len(self._queues))
 
@@ -283,6 +288,27 @@ class MailboxHub:
             "MailboxHub: {} → {} ({} delivered): {}",
             sender, targets, delivered, content[:100],
         )
+
+        # Update expected-reply tracking:
+        # Each recipient now has a message from `sender` in their queue —
+        # sender may be waiting for their reply, so register sender as
+        # expecting a reply from each recipient (while that recipient is active).
+        # Also clear any prior expectation that sender was waiting on these recipients
+        # (sender is clearly active now, not passively waiting).
+        actual_targets: list[str]
+        if "All" in targets or "all" in targets:
+            actual_targets = [n for n in self._queues if n != sender]
+        else:
+            actual_targets = [t for t in targets if t != sender]
+
+        for recipient in actual_targets:
+            # sender expects recipient may reply back
+            if sender not in self._expected_replies:
+                self._expected_replies[sender] = set()
+            self._expected_replies[sender].add(recipient)
+            # recipient no longer needs to wait for sender (sender just sent)
+            if recipient in self._expected_replies:
+                self._expected_replies[recipient].discard(sender)
 
         # Notify persistence callback
         if self._on_message:
@@ -350,19 +376,39 @@ class MailboxHub:
             logger.info("MailboxHub.wait: global timeout exceeded for {}", agent_name)
             return None
 
+        # Poll interval: re-check expected-reply state at this cadence so we
+        # can extend the deadline if a busy teammate is still working.
+        _POLL_INTERVAL = 5.0
         deadline = _time.time() + effective_timeout
 
         try:
             while True:
                 remaining = deadline - _time.time()
                 if remaining <= 0:
+                    # Before giving up: check whether any active agent is still
+                    # expected to reply to us (i.e. they received our message and
+                    # are busy processing — not yet in _waiting).  If so, extend
+                    # the deadline to avoid premature idle-exit.
+                    busy_repliers = self._get_busy_expected_repliers(agent_name)
+                    elapsed_global = _time.time() - self._global_start if self._global_start else 0
+                    global_remaining = max(0, self._global_timeout - elapsed_global)
+                    if busy_repliers and global_remaining > 0:
+                        extension = min(_POLL_INTERVAL, global_remaining)
+                        deadline = _time.time() + extension
+                        logger.info(
+                            "MailboxHub.wait: {} deadline extended +{}s "
+                            "(busy repliers: {})",
+                            agent_name, extension, busy_repliers,
+                        )
+                        continue
                     logger.info(
                         "MailboxHub.wait: timeout for {} ({}s)",
                         agent_name, effective_timeout,
                     )
                     return None
                 try:
-                    msg = await asyncio.wait_for(q.get(), timeout=remaining)
+                    poll = min(remaining, _POLL_INTERVAL)
+                    msg = await asyncio.wait_for(q.get(), timeout=poll)
                     # Filter by sender if requested
                     if from_agent and msg.sender != from_agent:
                         continue
@@ -372,13 +418,12 @@ class MailboxHub:
                     )
                     return msg
                 except asyncio.TimeoutError:
-                    logger.info(
-                        "MailboxHub.wait: timeout for {} ({}s)",
-                        agent_name, effective_timeout,
-                    )
-                    return None
+                    # Not a final timeout — loop back to check remaining/deadline
+                    continue
         finally:
             self._waiting.discard(agent_name)
+            # Clean up expected-reply entry for this agent
+            self._expected_replies.pop(agent_name, None)
 
     def clear(self) -> None:
         """Clear message queues but preserve history for later reading."""
@@ -409,10 +454,32 @@ class MailboxHub:
         """Event that fires when all active agents are simultaneously waiting."""
         return self._all_waiting
 
+    def _get_busy_expected_repliers(self, agent_name: str) -> set[str]:
+        """Return the set of agents that are expected to reply to agent_name
+        and are still actively processing (not waiting, not done).
+
+        These are agents that received a message from agent_name (so they may
+        reply back) but have not yet entered the waiting state — meaning they
+        are still running their tool_loop.
+        """
+        expected = self._expected_replies.get(agent_name, set())
+        busy = set()
+        for other in expected:
+            if (
+                other in self._active_agents   # still active (not done)
+                and other not in self._waiting  # not currently idle-waiting
+            ):
+                busy.add(other)
+        return busy
+
     def mark_agent_done(self, agent_name: str) -> None:
         """Mark an agent as finished (no longer active)."""
         self._active_agents.discard(agent_name)
         self._waiting.discard(agent_name)
+        # Remove this agent from all expected-reply sets so waiters don't
+        # extend their deadline for a finished agent.
+        for repliers in self._expected_replies.values():
+            repliers.discard(agent_name)
         # Re-check: if remaining active agents are all waiting
         if self._active_agents and self._waiting >= self._active_agents:
             self._all_waiting.set()
