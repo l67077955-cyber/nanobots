@@ -741,12 +741,29 @@ class GroupChatEngine:
     def _add_message(self, sender: str, content: str) -> None:
         self._history.append({"sender": sender, "content": content})
         try:
-            from nanobot.groupchat.history_settings import max_messages
+            from nanobot.groupchat.history_settings import max_messages, max_context_chars
             limit = max_messages()
+            char_budget = max_context_chars()
         except Exception:
             limit = self.config.max_history
+            char_budget = 0
+
+        # Step 1: 条数上限（保留最近 N 条）
         if len(self._history) > limit:
             self._history = self._history[-limit:]
+
+        # Step 2: 字符预算裁剪（从尾部往前累加，超预算就截掉头部）
+        if char_budget > 0:
+            total = 0
+            cutoff = 0
+            for i in range(len(self._history) - 1, -1, -1):
+                total += len(self._history[i]["content"])
+                if total > char_budget:
+                    cutoff = i + 1
+                    break
+            if cutoff > 0:
+                self._history = self._history[cutoff:]
+
         self._state.save_message(sender, content, self._history)
 
     def _save_event(
@@ -776,6 +793,56 @@ class GroupChatEngine:
             "targets": targets,
         })
 
+    async def _maybe_compress_history(self) -> None:
+        """Summarize the oldest half of history when approaching the message limit.
+
+        Triggered when history exceeds 80% of max_messages. The earliest
+        messages are replaced by a single system summary, keeping recent
+        messages intact for full context.
+        """
+        from nanobot.groupchat.history_settings import (
+            max_messages, summarize_enabled, summarize_model,
+        )
+
+        if not summarize_enabled():
+            return
+        limit = max_messages()
+        if len(self._history) < int(limit * 0.8):
+            return
+
+        half = len(self._history) // 2
+        to_compress = self._history[:half]
+        keep = self._history[half:]
+
+        history_text = "\n".join(
+            f"[{m['sender']}]: {m['content']}" for m in to_compress
+        )
+        prompt = (
+            f"以下是群聊的早期历史记录（共 {len(to_compress)} 条）。\n"
+            f"请用简洁的中文摘要这些内容，保留关键决策、重要事实和用户的核心需求。\n"
+            f"摘要不超过 500 字。\n\n{history_text}"
+        )
+
+        try:
+            response = await self.provider.chat_with_retry(
+                messages=[{"role": "user", "content": prompt}],
+                model=summarize_model(),
+                max_tokens=600,
+            )
+            summary = (response.content or "").strip()
+            if summary:
+                summary_msg = {
+                    "sender": "系统",
+                    "content": f"[早期对话摘要（共 {len(to_compress)} 条消息）]\n{summary}",
+                }
+                self._history = [summary_msg] + keep
+                logger.info(
+                    "History compressed: {} messages → summary + {} recent",
+                    len(to_compress), len(keep),
+                )
+        except Exception as e:
+            logger.warning("History compression failed: {}", e)
+
     def _format_history(self) -> str:
         return "\n\n".join(f"[{m['sender']}]: {m['content']}" for m in self._history)
 
@@ -797,7 +864,11 @@ class GroupChatEngine:
             candidates = [n for n in candidates if n != last_speaker]
         return random.choice(candidates) if candidates else random.choice(names)
 
-    def _build_agent_prompt(self, agent_name: str) -> list[dict[str, Any]]:
+    def _build_agent_prompt(
+        self,
+        agent_name: str,
+        relevant_agents: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         """Build prompt — delegates to PromptBuilder, with skills injected."""
         messages = self._prompt_builder.build_agent_prompt(
             agent_name,
@@ -806,6 +877,7 @@ class GroupChatEngine:
             history=self._history,
             leader=self._leader,
             round_num=self._round,
+            relevant_agents=relevant_agents,
         )
 
         # Inject skills (always-on content + summary of available skills)

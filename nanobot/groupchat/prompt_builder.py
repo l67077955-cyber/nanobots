@@ -361,6 +361,7 @@ class PromptBuilder:
         history: list[dict[str, str]],
         leader: str | None = None,
         round_num: int = 0,
+        relevant_agents: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Build the full prompt messages list for an agent turn."""
         agent = registry[agent_name]
@@ -384,7 +385,12 @@ class PromptBuilder:
         messages: list[dict[str, Any]] = []
         for key in order:
             if key == "history":
-                messages.extend(self.history_to_messages(history, agent_name))
+                from nanobot.groupchat.history_settings import max_context_chars
+                messages.extend(self.history_to_messages(
+                    history, agent_name,
+                    max_chars=max_context_chars(),
+                    relevant_agents=relevant_agents,
+                ))
                 continue
             if key == "leader_prompt" and leader != agent_name:
                 continue
@@ -408,23 +414,77 @@ class PromptBuilder:
     def history_to_messages(
         history: list[dict[str, str]],
         current_agent: str = "",
+        max_chars: int = 0,
+        pin_first_user: bool = True,
+        relevant_agents: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Convert history dicts into LLM API messages."""
-        msgs: list[dict[str, Any]] = []
-        for m in history:
-            sender = m["sender"]
-            content = m["content"]
+        """Convert history dicts into LLM API messages.
+
+        When max_chars > 0, applies a budget strategy:
+        - Pins the first user message (preserves original intent)
+        - Fills remaining budget from the tail (most recent messages)
+        - Inserts a system placeholder if any middle messages were skipped
+
+        When relevant_agents is set, other agents' messages are filtered out
+        (用户 and 系统 messages are always kept). Used in broadcast mode so
+        each agent only sees its own prior turns rather than every agent's output.
+        """
+        def _to_msg(m: dict[str, str]) -> dict[str, Any]:
+            sender, content = m["sender"], m["content"]
             if sender == "用户":
-                msgs.append({"role": "user", "content": content})
+                return {"role": "user", "content": content}
             elif sender == "系统":
-                msgs.append({"role": "system", "content": content})
+                return {"role": "system", "content": content}
             else:
-                msgs.append({
+                return {
                     "role": "assistant",
                     "content": f"{sender}: {content}",
                     "name": sender.replace(" ", "_"),
-                })
-        return msgs
+                }
+
+        # Apply agent filter before any budget logic
+        filtered = history
+        if relevant_agents is not None:
+            filtered = [
+                m for m in history
+                if m["sender"] in ("用户", "系统") or m["sender"] in relevant_agents
+            ]
+
+        msgs_full = [_to_msg(m) for m in filtered]
+
+        if not max_chars or not msgs_full:
+            return msgs_full
+
+        # Find first user message to pin
+        pinned: list[dict[str, Any]] = []
+        rest_start = 0
+        if pin_first_user:
+            for i, m in enumerate(msgs_full):
+                if m["role"] == "user":
+                    pinned = [m]
+                    rest_start = i + 1
+                    break
+
+        # Fill from tail within remaining budget
+        pinned_chars = sum(len(m.get("content", "")) for m in pinned)
+        budget = max_chars - pinned_chars
+        tail: list[dict[str, Any]] = []
+        for m in reversed(msgs_full[rest_start:]):
+            c = len(m.get("content", ""))
+            if budget - c < 0:
+                break
+            tail.insert(0, m)
+            budget -= c
+
+        skipped = len(msgs_full) - rest_start - len(tail)
+        result = list(pinned)
+        if skipped > 0:
+            result.append({
+                "role": "system",
+                "content": f"[...{skipped} 条历史消息已省略以节省上下文...]",
+            })
+        result.extend(tail)
+        return result
 
     @staticmethod
     def _expand_template_vars(text: str, tpl_vars: dict[str, str]) -> str:

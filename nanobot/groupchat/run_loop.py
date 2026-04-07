@@ -99,6 +99,9 @@ async def run_loop(engine: Any) -> None:
                     await asyncio.sleep(engine.config.auto_reply_delay)
                     await engine._agent_speak(name)
 
+            # Compress history if approaching the message limit
+            await engine._maybe_compress_history()
+
             # Signal round complete
             if engine._on_round_done:
                 try:

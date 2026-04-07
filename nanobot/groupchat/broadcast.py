@@ -237,7 +237,10 @@ async def broadcast_round(
         agent_cfg = engine.registry[name]
         model = agent_cfg["model"]
         model_short = model.split("/")[-1]
-        messages = engine._build_agent_prompt(name)
+        # In broadcast mode each agent only sees its own prior turns in history.
+        # User/system messages are always kept; other agents' verbose outputs
+        # are filtered out to reduce noise and context bloat.
+        messages = engine._build_agent_prompt(name, relevant_agents=[name])
 
         is_leader = (name == leader_name)
 
