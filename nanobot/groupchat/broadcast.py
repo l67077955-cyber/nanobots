@@ -574,23 +574,27 @@ async def broadcast_round(
 
                 content = result.content or ""
                 is_error = result.finish_reason == "error"
+                is_timeout = result.finish_reason == "timeout"
                 latency = result.latency
                 total_latency += latency
                 total_iterations += result.iterations
                 all_tools_used.extend(result.tools_used or [])
 
-                if is_error:
-                    err_short = content[:150] if content else "Unknown error"
-                    await engine._send(f"  ✗ {name} failed ({latency:.1f}s): {err_short}")
+                if is_error or is_timeout:
+                    if is_timeout:
+                        err_short = f"LLM 调用超时 ({gc_settings.get('call_timeout', 90)}s)"
+                    else:
+                        err_short = content[:150] if content else "Unknown error"
+                    await engine._send(f"  ✗ {name} {'timeout' if is_timeout else 'failed'} ({latency:.1f}s): {err_short}")
                     log_request(engine, name, model, "broadcast",
                                 error=err_short, iterations=total_iterations,
                                 latency=total_latency)
-                    
+
                     # Broadcast the error to other agents to prevent them from waiting forever
-                    error_msg = f"⚠️ [System Alert] I encountered a fatal error and my process has crashed. Error details:\n{err_short}"
+                    error_msg = f"⚠️ [System Alert] {'LLM call timed out' if is_timeout else 'Fatal error'}. Details: {err_short}"
                     engine._add_message(name, error_msg)
                     mailbox.send(name, ["All"], error_msg)
-                    
+
                     return (name, None, [], {})
 
                 # Record final text in history
