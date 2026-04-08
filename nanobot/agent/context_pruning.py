@@ -8,8 +8,10 @@ Phase 1 — **Soft Trim**: When estimated tokens exceed ``soft_ratio`` of the
 context window, old tool results are truncated to ``head_chars + tail_chars``
 (e.g. first 1500 + last 1500 chars).
 
-Phase 2 — **Hard Clear**: When estimated tokens still exceed ``hard_ratio``,
-old tool results are replaced with a short placeholder string.
+Phase 2 — **Smart Clear**: When estimated tokens still exceed ``hard_ratio``,
+old tool results are replaced with a compact fact-extraction placeholder that
+preserves key structured information (paths, errors, URLs, numbers) so the
+model retains critical context even after hard pruning.
 
 Only tool-result messages *before* the last ``keep_recent`` assistant turns
 are eligible for pruning.  User and assistant messages are never modified.
@@ -22,6 +24,7 @@ Usage::
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 CHARS_PER_TOKEN = 4  # conservative estimate
@@ -35,6 +38,79 @@ DEFAULT_SOFT_MAX_CHARS = 4_000
 DEFAULT_SOFT_HEAD_CHARS = 1_500
 DEFAULT_SOFT_TAIL_CHARS = 1_500
 DEFAULT_HARD_PLACEHOLDER = "[Old tool result cleared]"
+
+# ── Key-fact extraction patterns ──────────────────────────────────────────
+
+# File/system paths (Unix and Windows)
+_RE_PATHS = re.compile(
+    r'(?:^|[\s\'"`(])(/(?:[\w.\-]+/){1,}[\w.\-]+|(?:[A-Za-z]:)?\\(?:[\w.\-]+\\){1,}[\w.\-]+)',
+    re.MULTILINE,
+)
+# Error / exception lines
+_RE_ERROR_LINE = re.compile(
+    r'^.{0,120}(?:error|exception|traceback|errno|failed|failure|fatal|critical).{0,120}$',
+    re.IGNORECASE | re.MULTILINE,
+)
+# URLs
+_RE_URLS = re.compile(r'https?://\S{8,}')
+# Important key=value or key: value pairs (exit code, version, port, count…)
+_RE_KV = re.compile(
+    r'\b(exit[_ ]?code|returncode|status|version|port|host|ip|id|count|total|size|pid|result)\s*[:=]\s*(\S{1,60})',
+    re.IGNORECASE,
+)
+# Standalone numbers that look significant (not inside long words)
+_RE_NUMBERS = re.compile(r'(?<!\w)(\d{1,10})(?!\w)')
+
+
+def _extract_key_facts(content: str, tool_name: str = "") -> str:
+    """Extract key structured facts from tool output for a compact placeholder.
+
+    Returns a string like:
+        [Cleared 12345c | paths:/foo/bar,/etc/app.conf | errors:connection refused | urls:https://... | kv:port=8080,status=200]
+
+    Falls back to ``[Cleared Nc]`` if nothing noteworthy is found.
+    """
+    parts: list[str] = [f"Cleared {len(content):,}c"]
+
+    # ── Paths ──
+    raw_paths = [m.group(1).strip() for m in _RE_PATHS.finditer(content)]
+    # deduplicate while preserving order
+    seen: set[str] = set()
+    unique_paths: list[str] = []
+    for p in raw_paths:
+        if p not in seen and len(p) > 3:
+            seen.add(p)
+            unique_paths.append(p)
+    if unique_paths:
+        parts.append("paths:" + ",".join(unique_paths[:6]))
+
+    # ── Error lines ──
+    error_lines = [m.group(0).strip() for m in _RE_ERROR_LINE.finditer(content)]
+    if error_lines:
+        # keep shortest / most informative lines first
+        error_lines.sort(key=len)
+        parts.append("errors:" + " | ".join(error_lines[:3]))
+
+    # ── URLs ──
+    urls = list(dict.fromkeys(_RE_URLS.findall(content)))
+    if urls:
+        parts.append("urls:" + ",".join(urls[:3]))
+
+    # ── Key-value pairs ──
+    kvs = _RE_KV.findall(content)
+    if kvs:
+        seen_kv: set[str] = set()
+        kv_parts: list[str] = []
+        for k, v in kvs:
+            key = k.lower().replace(" ", "_")
+            entry = f"{key}={v}"
+            if entry not in seen_kv:
+                seen_kv.add(entry)
+                kv_parts.append(entry)
+        if kv_parts:
+            parts.append("kv:" + ",".join(kv_parts[:6]))
+
+    return "[" + " | ".join(parts) + "]"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -160,7 +236,12 @@ def prune_messages(
     if ratio < hard_ratio:
         return result
 
-    # Phase 2: Hard Clear (oldest first)
+    # Phase 2: Smart Clear (oldest first)
+    # Instead of a blank placeholder, extract key facts so the model retains
+    # critical structured information (paths, errors, URLs, numbers) even after
+    # hard pruning.  Falls back to hard_placeholder only if extraction yields
+    # a string longer than the original (shouldn't happen in practice).
+    tool_name_map = _build_tool_name_map(messages)
     for i in prunable:
         if ratio < hard_ratio:
             break
@@ -170,8 +251,38 @@ def prune_messages(
         old_len = len(content)
         if old_len <= len(hard_placeholder) + 100:
             continue  # already small enough
-        result[i] = {**result[i], "content": hard_placeholder}
-        total_chars += len(hard_placeholder) - old_len
+        tname = tool_name_map.get(i, "")
+        compact = _extract_key_facts(content, tname)
+        # Safety: if extraction somehow made it longer, fall back to blank placeholder
+        replacement = compact if len(compact) < old_len else hard_placeholder
+        result[i] = {**result[i], "content": replacement}
+        total_chars += len(replacement) - old_len
         ratio = total_chars / char_window
 
+    return result
+
+
+def _build_tool_name_map(messages: list[dict[str, Any]]) -> dict[int, str]:
+    """Map tool-result message indices to their tool name.
+
+    The tool name is recovered from the preceding assistant message's
+    ``tool_calls`` list by matching ``tool_call_id``.
+    """
+    # Build id → name from all assistant tool_calls
+    id_to_name: dict[str, str] = {}
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            for tc in msg.get("tool_calls") or []:
+                if isinstance(tc, dict):
+                    fn = tc.get("function", {})
+                    tcid = tc.get("id", "")
+                    name = fn.get("name", "")
+                    if tcid and name:
+                        id_to_name[tcid] = name
+
+    result: dict[int, str] = {}
+    for idx, msg in enumerate(messages):
+        if msg.get("role") == "tool":
+            tcid = msg.get("tool_call_id", "")
+            result[idx] = id_to_name.get(tcid, "")
     return result
