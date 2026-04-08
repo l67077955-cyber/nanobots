@@ -155,13 +155,21 @@ def _find_cutoff_index(messages: list[dict[str, Any]], keep_recent: int) -> int:
 
 
 def _soft_trim_content(content: str, head_chars: int, tail_chars: int) -> str:
-    """Trim long content to head + tail with a marker in between."""
+    """Trim long content to head + extracted-middle-facts + tail.
+
+    The middle section (chars head_chars..-tail_chars) is replaced with a
+    compact fact-extraction summary instead of a blank ``[trimmed N chars]``
+    marker, so key information (paths, errors, URLs, kv-pairs) buried in the
+    middle is not silently discarded.
+    """
     if len(content) <= head_chars + tail_chars + 100:
         return content
     head = content[:head_chars]
     tail = content[-tail_chars:] if tail_chars > 0 else ""
-    trimmed_chars = len(content) - head_chars - tail_chars
-    return f"{head}\n...\n[trimmed {trimmed_chars:,} chars]\n...\n{tail}"
+    middle = content[head_chars: len(content) - tail_chars]
+    trimmed_chars = len(middle)
+    middle_facts = _extract_key_facts(middle)
+    return f"{head}\n...\n{middle_facts}\n...\n{tail}"
 
 
 # ── Main function ─────────────────────────────────────────────────────────
