@@ -74,7 +74,9 @@ class ConversationPool:
 
         n = len(recipients)
 
-        # Check real available slots (user force-alloc may have drained them)
+        # Check real available slots (user force-alloc may have drained them).
+        # Pre-deduct immediately (before any await) so concurrent coroutines see
+        # the reservation and don't double-commit the same slots.
         if self._available < n:
             logger.warning(
                 "ConversationPool: {} rejected — not enough slots "
@@ -82,6 +84,8 @@ class ConversationPool:
                 sender, n, self._available,
             )
             return False
+
+        self._available -= n  # reserve slots before yielding to event loop
 
         acquired = 0
         try:
@@ -94,15 +98,17 @@ class ConversationPool:
                 if not self._user_priority.is_set():
                     for _ in range(acquired):
                         self._sem.release()
+                    self._available += n  # restore reservation
                     logger.info(
                         "ConversationPool: {} interrupted — user priority",
                         sender,
                     )
                     return False
         except asyncio.TimeoutError:
-            # Release any partially acquired slots
+            # Release any partially acquired slots and restore reservation
             for _ in range(acquired):
                 self._sem.release()
+            self._available += n
             logger.warning(
                 "ConversationPool: {} failed to allocate {} slots "
                 "(acquired {}, pool full)",
@@ -114,8 +120,6 @@ class ConversationPool:
         for r in recipients:
             if r in self._pending:
                 self._pending[r].append(sender)
-
-        self._available -= n
 
         logger.debug(
             "ConversationPool: {} → {} ({} slots used, {} available)",
@@ -409,8 +413,10 @@ class MailboxHub:
                 try:
                     poll = min(remaining, _POLL_INTERVAL)
                     msg = await asyncio.wait_for(q.get(), timeout=poll)
-                    # Filter by sender if requested
+                    # Filter by sender if requested — put back if wrong sender
+                    # so other agents' messages are not silently discarded.
                     if from_agent and msg.sender != from_agent:
+                        q.put_nowait(msg)
                         continue
                     logger.info(
                         "MailboxHub.wait: {} received from {}: {}",

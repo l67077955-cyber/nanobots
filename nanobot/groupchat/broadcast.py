@@ -779,7 +779,7 @@ async def broadcast_round(
             comp = _d.completion_msg(name, round(total_latency, 1), total_iterations, all_tools_used, leader=leader_name)
             if comp:
                 await engine._send(comp)
-            return (name, content if 'content' in dir() else "", all_tools_used, {})
+            return (name, content if 'content' in locals() else "", all_tools_used, {})
 
         except Exception as e:
             logger.error("Broadcast: {} failed: {}", name, e)
