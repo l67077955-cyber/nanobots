@@ -839,8 +839,7 @@ class CallbacksMixin:
             if len(parts) == 2:
                 _, key = parts
                 engine = self._groupchat_engine
-                overrides = PromptBuilder._load_prompt_overrides("__global__")
-                content = overrides.get(key) or PromptBuilder.get_component_template(key)
+                content = PromptBuilder.get_component_template(key)
                 label = _COMPONENT_LABELS.get(key, key)
                 self._edit_state[chat_id] = {"field": "prompt_edit", "agent": "__global__", "key": key}
                 preview = (content[:3500] + "…") if len(content) > 3500 else (content or "(空)")
@@ -928,7 +927,6 @@ class CallbacksMixin:
             page = int(data[4:])
             engine = self._groupchat_engine
             order = engine.prompt_builder.get_agent_prompt_order()
-            overrides = PromptBuilder._load_prompt_overrides("__global__")
             labels = _COMPONENT_LABELS
 
             lines: list[str] = []
@@ -947,7 +945,7 @@ class CallbacksMixin:
                     lines.append("(→ 运行时加载每个 agent 的 SOUL.md)")
                     lines.append("")
                     continue
-                tpl = overrides.get(key) or PromptBuilder.get_component_template(key)
+                tpl = PromptBuilder.get_component_template(key)
                 if not tpl:
                     lines.append(f"─── [{display_num}] {label} ─── ○ 空 (跳过注入)")
                     lines.append("")

@@ -324,7 +324,6 @@ class SettingsCommandsMixin:
     def _build_prompt_order_view(self, engine) -> tuple[str, "InlineKeyboardMarkup"]:
         """Build the global prompt component order view with edit/reorder buttons."""
         order = engine.prompt_builder.get_agent_prompt_order()
-        overrides = PromptBuilder._load_prompt_overrides("__global__")
         labels = _COMPONENT_LABELS
         global_editable = _GLOBAL_EDITABLE
         agent_editable = _AGENT_EDITABLE
@@ -356,7 +355,7 @@ class SettingsCommandsMixin:
                 edit_icon = "🔒"
 
             label = labels.get(key, key)
-            tpl = overrides.get(key) or PromptBuilder.get_component_template(key)
+            tpl = PromptBuilder.get_component_template(key)
             status = f"● {len(tpl):,}字" if tpl else "○ 空"
 
             cond = conditional_tags.get(key, "")
@@ -374,7 +373,7 @@ class SettingsCommandsMixin:
             row = []
             label = labels.get(key, key)
             if key in global_editable:
-                tpl = overrides.get(key) or PromptBuilder.get_component_template(key)
+                tpl = PromptBuilder.get_component_template(key)
                 dot = "●" if tpl else "○"
                 row.append(InlineKeyboardButton(f"✏️{dot} {label}", callback_data=f"pre:__global__:{key}"))
             elif key in agent_editable:

@@ -502,17 +502,6 @@ class PromptBuilder:
             text = text.replace(key, val)
         return text
 
-    @staticmethod
-    def _load_prompt_overrides(agent_name: str) -> dict[str, str]:
-        f = Path.home() / ".nanobot" / "prompt_overrides.json"
-        if f.exists():
-            try:
-                data = json.loads(f.read_text())
-                return data.get(agent_name, {})
-            except Exception:
-                pass
-        return {}
-
     # ── Component updates ──
 
     def update_prompt_component(

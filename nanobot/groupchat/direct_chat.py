@@ -102,15 +102,8 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
     except Exception:
         pass  # skills are optional
 
-    # Tool instructions (load from overrides → file → fallback)
-    tool_hint = ""
-    try:
-        overrides = PromptBuilder._load_prompt_overrides("__global__")
-        tool_hint = overrides.get("tool_instructions", "")
-    except Exception:
-        pass
-    if not tool_hint:
-        tool_hint = PromptBuilder.get_component_template("tool_instructions")
+    # Tool instructions (load from .md file → fallback to default)
+    tool_hint = PromptBuilder.get_component_template("tool_instructions")
     if tool_hint:
         messages.append({"role": "system", "content": tool_hint})
 

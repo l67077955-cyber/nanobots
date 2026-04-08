@@ -375,7 +375,7 @@ async def broadcast_round(
         # ── Inject broadcast coordination hint from template ──
         teammates = [a for a in agents if a != name]
         # Load from override system (editable via /prompt), fallback to default
-        overrides = engine.prompt_builder._load_prompt_overrides("__global__")
+        # Removed stale prompt_overrides.json lookup; .md files are the source of truth.
 
         if is_leader:
             # ── Leader prompt: active orchestrator ──
@@ -442,7 +442,7 @@ async def broadcast_round(
             })
         else:
             # ── Non-leader: standard broadcast hint + wait for leader ──
-            hint_template = overrides.get("broadcast_hint") or engine.prompt_builder.get_component_template("broadcast_hint")
+            hint_template = engine.prompt_builder.get_component_template("broadcast_hint")
             if hint_template:
                 hint = (
                     hint_template
