@@ -537,7 +537,7 @@ def status_panel(
         badge = "👑" if agent == leader else "  "
 
         # Build activity text
-        if state in ("blocked", "error") and reason:
+        if state in ("blocked", "error", "cancelled") and reason:
             activity = f"{label}: {reason[:35]}"
         elif state == "done" and reason:
             activity = f"{label} ({reason[:30]})"
