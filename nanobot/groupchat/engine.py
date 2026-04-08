@@ -418,6 +418,22 @@ class GroupChatEngine:
             logger.info("Groupchat: cancelled broadcast task for {}", matched)
         self._mailbox.mark_agent_done(matched)
 
+        # If the departing agent was the leader, transfer the role to the last
+        # remaining agent (who speaks last and is best positioned to synthesize),
+        # or clear it entirely when no one is left.
+        leader_note = ""
+        if matched == self._leader:
+            if self._active_agents:
+                new_leader = self._active_agents[-1]
+                self._leader = new_leader
+                self._state.save_leader(new_leader)
+                leader_note = f"\n👑 Leader 已转移给 {new_leader}"
+                logger.info("Groupchat: leader transferred from {} to {}", matched, new_leader)
+            else:
+                self._leader = None
+                self._state.save_leader(None)
+                logger.info("Groupchat: leader {} left, leader mode cleared", matched)
+
         # If below 2 agents, stop group loop
         if len(self._active_agents) < 2 and self._running:
             self._stop_group_loop()
@@ -425,10 +441,11 @@ class GroupChatEngine:
                 return (
                     f"✅ {matched} 已离开\n"
                     f"💬 回到与 {self._active_agents[0]} 的对话模式"
+                    + leader_note
                 )
             return f"✅ {matched} 已离开，无活跃 agent"
 
-        return f"✅ {matched} 已离开\n👥 当前成员: {', '.join(self._active_agents)}"
+        return f"✅ {matched} 已离开\n👥 当前成员: {', '.join(self._active_agents)}" + leader_note
     # ── Agent ordering ────────────────────────────────────
 
     def reorder_agents(self, new_order: list[str]) -> str:

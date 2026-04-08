@@ -972,6 +972,29 @@ async def broadcast_round(
                         # Discard in both cases — one nudge is enough.
                         all_tasks.discard(t)
                     else:
+                        # No leader task running. If the engine still has a leader
+                        # configured but they aren't in this round's agent list
+                        # (e.g. they were removed mid-session), fall back to the
+                        # last remaining agent for synthesis rather than ending silently.
+                        configured_leader = getattr(engine, '_leader', None)
+                        if configured_leader and configured_leader not in agents:
+                            fallback = next(
+                                (task_name for task_obj, task_name in tasks.items()
+                                 if not task_obj.done()),
+                                None,
+                            )
+                            if fallback:
+                                logger.info(
+                                    "Broadcast: leader {} absent — nudging {} for synthesis",
+                                    configured_leader, fallback,
+                                )
+                                await engine._send(f"━━ Leader 缺席，由 {fallback} 负责汇总 ━━")
+                                mailbox.send(
+                                    "系统", [fallback],
+                                    "Leader 已离场。请你整合所有讨论内容，给出完整的最终结论。",
+                                )
+                                all_tasks.discard(t)
+                                continue
                         logger.info("Broadcast: all agents waiting, ending round")
                         await engine._send("━━ all agents idle — round complete ━━")
                         for task_obj in tasks:
