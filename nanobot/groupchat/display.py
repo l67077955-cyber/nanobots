@@ -489,3 +489,66 @@ def leader_end_msg(leader_name: str, reason: str = "") -> str:
 def leader_transfer_msg(leader_name: str, result: str) -> str:
     """Display when leader transfers search credits."""
     return f"👑🔄 {result}"
+
+
+# ── Agent Status Dashboard ──────────────────────────────────
+
+STATUS_INDICATORS: dict[str, tuple[str, str]] = {
+    "thinking":   ("🟡", "Thinking..."),
+    "searching":  ("🔵", "Searching"),
+    "fetching":   ("🔵", "Fetching"),
+    "executing":  ("🟣", "Executing"),
+    "reading":    ("📖", "Reading"),
+    "writing":    ("✏️", "Writing"),
+    "sending":    ("🟢", "Sending"),
+    "waiting":    ("⚪", "Waiting..."),
+    "blocked":    ("🔴", "Blocked"),
+    "done":       ("✅", "Done"),
+    "error":      ("❌", "Error"),
+    "cancelled":  ("⬛", "Cancelled"),
+}
+
+
+def status_panel(
+    agents: list[str],
+    states: dict[str, str],
+    details: dict[str, str],
+    reasons: dict[str, str],
+    leader: str | None = None,
+) -> str:
+    """Render a live status dashboard for all agents.
+
+    Example:
+        ┏━━ status ━━━━━━━━━━━━━━━━━━━┓
+        ┃ 🟡 👑 Kirk      Thinking...  ┃
+        ┃ 🔵    Harper    Searching... ┃
+        ┃ ⚪    Verifier  Waiting...   ┃
+        ┃ 🔴    Ares      Blocked: no credits ┃
+        ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+    """
+    lines: list[str] = []
+    max_name = max((len(a) for a in agents), default=6)
+
+    for agent in agents:
+        state = states.get(agent, "thinking")
+        emoji, label = STATUS_INDICATORS.get(state, ("⚪", state))
+        detail = details.get(agent, "")
+        reason = reasons.get(agent, "")
+        badge = "👑" if agent == leader else "  "
+
+        # Build activity text
+        if state in ("blocked", "error") and reason:
+            activity = f"{label}: {reason[:35]}"
+        elif state == "done" and reason:
+            activity = f"{label} ({reason[:30]})"
+        elif detail:
+            activity = f"{label} {detail[:30]}" if not label.endswith("...") else f"{label[:-3]} {detail[:30]}..."
+        else:
+            activity = label
+
+        name_pad = agent.ljust(max_name)
+        lines.append(f"┃ {emoji} {badge} {name_pad}  {activity}")
+
+    header = "┏━━ status ━━━━━━━━━━━━━━━━━━━┓"
+    footer = "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"
+    return "\n".join([header] + lines + [footer])
