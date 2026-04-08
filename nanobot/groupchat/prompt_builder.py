@@ -205,7 +205,11 @@ class PromptBuilder:
 
     def get_available_components(self) -> list[str]:
         current = set(self.get_agent_prompt_order())
-        return [k for k in DEFAULT_PROMPT_ORDER if k not in current]
+        # Default components first, then any registered custom components
+        all_known = list(DEFAULT_PROMPT_ORDER) + [
+            k for k in COMPONENT_LABELS if k not in DEFAULT_PROMPT_ORDER
+        ]
+        return [k for k in all_known if k not in current]
 
     @staticmethod
     def add_custom_component(key: str, label: str) -> str:
@@ -247,6 +251,28 @@ class PromptBuilder:
             })
         return components
 
+    # Per-agent .md file names for components that support agent-level overrides.
+    _PER_AGENT_FILES: dict[str, str] = {
+        "main_prompt":        "MAIN_PROMPT.md",
+        "tool_instructions":  "TOOL_INSTRUCTIONS.md",
+        "group_nudge":        "GROUP_NUDGE.md",
+    }
+
+    def _get_agent_file(self, agent: dict, filename: str) -> str:
+        """Read a file from the agent's workspace dir, return '' if absent."""
+        agent_dir = agent.get("agent_dir")
+        if not agent_dir:
+            return ""
+        d = Path(agent_dir)
+        ws = d / "workspace"
+        f = (ws / filename) if ws.exists() else (d / filename)
+        if f.exists():
+            try:
+                return f.read_text().strip()
+            except Exception:
+                pass
+        return ""
+
     def _get_component_content(
         self,
         agent_name: str,
@@ -255,13 +281,24 @@ class PromptBuilder:
         active_agents: list[str],
         leader: str | None = None,
     ) -> str:
+        # Per-agent .md override (for keys that support it)
+        if key in self._PER_AGENT_FILES:
+            per_agent = self._get_agent_file(agent, self._PER_AGENT_FILES[key])
+            if per_agent:
+                return per_agent
+
         if key == "main_prompt":
-            return (
+            # Fall back to global template, then hardcoded default
+            return self.get_component_template("main_prompt") or (
                 f"Write {agent_name}'s next reply in a fictional group chat. "
                 f"Write 1 reply only in character as {agent_name}. "
                 f"Do not write as or for other characters."
             )
         elif key == "group_context":
+            # Global template may use {{members}} which is expanded later
+            tpl = self.get_component_template("group_context")
+            if tpl:
+                return tpl
             members = ", ".join(active_agents) if active_agents else "(无)"
             return f"[Start a new group chat. Group members: {members}]"
         elif key == "persona":
@@ -284,7 +321,7 @@ class PromptBuilder:
             return ""
         elif key in ("broadcast_hint", "group_nudge"):
             return self.get_component_template(key)
-        # Custom components or others: check file
+        # Custom components: check global template file
         return self.get_component_template(key)
 
     def _build_skills_content(self) -> str:
@@ -308,16 +345,17 @@ class PromptBuilder:
 
     @staticmethod
     def get_component_template(key: str) -> str:
-        content = TEMPLATES.get(key, "")
-        # For any component, check ~/.nanobot/prompts/{key}.md as file-based override
-        if not content:
-            f = Path.home() / ".nanobot" / "prompts" / f"{key}.md"
-            if f.exists():
-                try:
-                    content = f.read_text().strip()
-                except Exception:
-                    pass
-        return content
+        # ~/.nanobot/prompts/{key}.md is authoritative — always checked first.
+        f = Path.home() / ".nanobot" / "prompts" / f"{key}.md"
+        if f.exists():
+            try:
+                content = f.read_text().strip()
+                if content:
+                    return content
+            except Exception:
+                pass
+        # Fall back to in-code defaults.
+        return TEMPLATES.get(key, "")
 
     # ── Prompt building ──
 
@@ -335,8 +373,6 @@ class PromptBuilder:
         """Build the full prompt messages list for an agent turn."""
         agent = registry[agent_name]
         order = self.get_agent_prompt_order()
-
-        overrides = self._load_prompt_overrides("__global__")
 
         members_list = ", ".join(active_agents) if active_agents else "(无)"
         other_members = [a for a in active_agents if a != agent_name]
@@ -373,20 +409,10 @@ class PromptBuilder:
             if key == "leader_prompt" and leader != agent_name:
                 continue
 
-            override = overrides.get(key)
-            if override:
-                raw = override
-            else:
-                raw = self._get_component_content(
-                    agent_name, agent, key, active_agents, leader
-                )
+            raw = self._get_component_content(agent_name, agent, key, active_agents, leader)
             if not raw:
                 continue
 
-            # Use only stable vars for early components (before history) to
-            # preserve KV cache prefix.  Volatile vars are still substituted
-            # here for completeness, but callers should avoid putting
-            # {{datetime}} / {{round}} in early components.
             content = self._expand_template_vars(raw, all_tpl_vars)
             if key == "examples":
                 content = f"[Example Chat]\n{content}"
@@ -502,21 +528,10 @@ class PromptBuilder:
             return f"❌ 组件 '{key}' 不可编辑"
 
         if agent_name == "__global__":
-            # Save to ~/.nanobot/prompts/{key}.md
+            # ~/.nanobot/prompts/{key}.md is the single source of truth.
             prompts_dir = Path.home() / ".nanobot" / "prompts"
             prompts_dir.mkdir(parents=True, exist_ok=True)
-            md_file = prompts_dir / f"{key}.md"
-            md_file.write_text(content)
-            # Also update prompt_overrides.json for backward compatibility
-            overrides_file = Path.home() / ".nanobot" / "prompt_overrides.json"
-            overrides: dict = {}
-            if overrides_file.exists():
-                try:
-                    overrides = json.loads(overrides_file.read_text())
-                except Exception:
-                    pass
-            overrides.setdefault("__global__", {})[key] = content
-            overrides_file.write_text(json.dumps(overrides, ensure_ascii=False, indent=2))
+            (prompts_dir / f"{key}.md").write_text(content)
             label = COMPONENT_LABELS.get(key, key)
             return f"✅ 已更新全局模板: {label}\n📄 已保存到 prompts/{key}.md\n💡 使用 {{{{agent}}}} 代表 agent 名字"
 
@@ -524,26 +539,22 @@ class PromptBuilder:
         if not agent:
             return f"❌ Agent '{agent_name}' 不存在"
 
-        if key == "persona":
-            agent["prompt"] = content
-            _persist_agent_file(agent_name, "SOUL.md", content, agents_dir or workspace)
-        elif key == "examples":
-            agent["examples"] = content
-            _persist_agent_file(agent_name, "EXAMPLES.md", content, agents_dir or workspace)
-        elif key == "instructions":
-            agent["instructions"] = content
-            _persist_agent_file(agent_name, "INSTRUCTIONS.md", content, agents_dir or workspace)
-        elif key in ("main_prompt", "tool_instructions", "group_nudge"):
-            overrides_file = Path.home() / ".nanobot" / "prompt_overrides.json"
-            overrides: dict = {}
-            if overrides_file.exists():
-                try:
-                    overrides = json.loads(overrides_file.read_text())
-                except Exception:
-                    pass
-            overrides.setdefault(agent_name, {})[key] = content
-            overrides_file.write_text(json.dumps(overrides, ensure_ascii=False, indent=2))
-            agent[f"_override_{key}"] = content
+        _FILE_MAP = {
+            "persona":           "SOUL.md",
+            "examples":          "EXAMPLES.md",
+            "instructions":      "INSTRUCTIONS.md",
+            "main_prompt":       "MAIN_PROMPT.md",
+            "tool_instructions": "TOOL_INSTRUCTIONS.md",
+            "group_nudge":       "GROUP_NUDGE.md",
+        }
+        if key in _FILE_MAP:
+            filename = _FILE_MAP[key]
+            _persist_agent_file(agent_name, filename, content, agents_dir or workspace)
+            # Update in-memory too for keys that are read directly from agent dict
+            if key == "persona":
+                agent["prompt"] = content
+            elif key in ("examples", "instructions"):
+                agent[key] = content
 
         return f"✅ 已更新 {agent_name} 的 {COMPONENT_LABELS.get(key, key)}"
 
