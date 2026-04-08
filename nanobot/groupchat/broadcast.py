@@ -58,7 +58,7 @@ async def broadcast_round(
     agents: list[str],
     engine: BroadcastContext,
     mailbox: MailboxHub,
-    global_timeout: float = 200.0,
+    global_timeout: float = 3600.0,
 ) -> list[tuple[str, str | None]]:
     """Run all agents concurrently with out-of-order completion display.
 
@@ -112,7 +112,7 @@ async def broadcast_round(
 
     # ── Load groupchat settings ──
     _gc_settings_path = Path.home() / ".nanobot" / "groupchat_settings.json"
-    _gc_defaults = {"search_initial": 2, "search_earn_interval": 4, "allocate_timeout": 15}
+    _gc_defaults = {"search_initial": 2, "search_earn_interval": 4, "allocate_timeout": 15, "call_timeout": 90}
     gc_settings = dict(_gc_defaults)
     if _gc_settings_path.exists():
         try:
@@ -566,6 +566,7 @@ async def broadcast_round(
                     on_content_reset=None,
                     clean_response=lambda c: engine._clean_response(c, name),
                     result_max_chars=20_000,
+                    call_timeout=float(gc_settings.get("call_timeout", 90)) or None,
                 )
 
                 # Flush any remaining buffered search lines

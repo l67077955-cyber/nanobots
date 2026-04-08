@@ -262,20 +262,35 @@ async def tool_loop(
         # Use streaming when available for real-time text display.
         # _stream_call handles fallback to non-streaming if tool_calls
         # have empty names (Claude streaming bug).
-        if _can_stream:
-            response = await _stream_call(
-                provider, llm_messages, iter_tool_defs, model, max_tokens, metadata,
-                on_content_delta, reasoning_effort=reasoning_effort,
+        try:
+            if _can_stream:
+                _coro = _stream_call(
+                    provider, llm_messages, iter_tool_defs, model, max_tokens, metadata,
+                    on_content_delta, reasoning_effort=reasoning_effort,
+                )
+            else:
+                _coro = provider.chat_with_retry(
+                    messages=llm_messages,
+                    tools=iter_tool_defs,
+                    model=model,
+                    max_tokens=max_tokens,
+                    metadata=metadata,
+                    reasoning_effort=reasoning_effort,
+                )
+            if call_timeout:
+                response = await asyncio.wait_for(_coro, timeout=call_timeout)
+            else:
+                response = await _coro
+        except asyncio.TimeoutError:
+            latency = _time.time() - t0
+            result.latency += latency
+            _agent = (metadata or {}).get("log_agent", "?")
+            logger.warning(
+                "tool_loop: LLM call timed out ({:.1f}s) on iter {} — model={} agent={}",
+                latency, iteration, model, _agent,
             )
-        else:
-            response = await provider.chat_with_retry(
-                messages=llm_messages,
-                tools=iter_tool_defs,
-                model=model,
-                max_tokens=max_tokens,
-                metadata=metadata,
-                reasoning_effort=reasoning_effort,
-            )
+            result.finish_reason = "timeout"
+            break
 
         latency = _time.time() - t0
         result.latency += latency
