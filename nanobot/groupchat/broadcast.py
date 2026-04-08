@@ -689,11 +689,6 @@ async def broadcast_round(
                 _cycle_t0 = _t.time()
                 _cycle_usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
-                # Reset per-cycle search limit at the start of each tool_loop cycle
-                _search_tool = reg.get("web_search")
-                if _search_tool and hasattr(_search_tool, "reset_cycle"):
-                    _search_tool.reset_cycle()
-
                 async def _on_iter_usage(usage: dict) -> None:
                     for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
                         _cycle_usage[k] += usage.get(k, 0)

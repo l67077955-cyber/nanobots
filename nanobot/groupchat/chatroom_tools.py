@@ -218,7 +218,6 @@ class CachedSearchTool(Tool):
                         f"或请求 Leader 从其他 agent 划拨额度给你。"
                     )
 
-            self._cycle_searched = True
             tasks = [self._search_one(q, count, skip_pool=True) for q in all_queries]
             results = await _asyncio.gather(*tasks)
             parts = []
@@ -230,7 +229,6 @@ class CachedSearchTool(Tool):
         if not query:
             return "Error: 必须提供 query 或 queries 参数"
         result = await self._search_one(query, count)
-        self._cycle_searched = True
         self._batch_spent = False
         return result
 
