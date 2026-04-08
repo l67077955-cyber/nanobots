@@ -147,6 +147,7 @@ async def tool_loop(
     clean_response: Callable[[str], str] | None = None,
     build_message: Callable[..., dict[str, Any]] | None = None,
     result_max_chars: int | None = None,
+    call_timeout: float | None = None,
 ) -> ToolLoopResult:
     """Run the LLM → tool → repeat loop.
 
