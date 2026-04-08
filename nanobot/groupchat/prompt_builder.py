@@ -340,16 +340,25 @@ class PromptBuilder:
 
         members_list = ", ".join(active_agents) if active_agents else "(无)"
         other_members = [a for a in active_agents if a != agent_name]
-        now = _cn_now().strftime("%Y年%m月%d日 %H:%M")
         tool_names = "web_search, web_fetch, exec, read_file, write_file, edit_file, list_dir"
-        tpl_vars = {
+
+        # Stable template vars — safe to use anywhere in the prompt.
+        # These do NOT change between consecutive turns for the same agent,
+        # so they don't break server-side KV cache prefix stability.
+        stable_tpl_vars = {
             "{{agent}}": agent_name,
             "{{members}}": members_list,
-            "{{datetime}}": now,
-            "{{round}}": str(round_num),
             "{{tools}}": tool_names,
             "{{others}}": ", ".join(other_members),
         }
+        # Volatile vars — change every turn/minute.  They are available for use
+        # in templates but are injected separately at the END of the prompt (after
+        # history) so that the stable prefix remains cacheable.
+        volatile_tpl_vars = {
+            "{{datetime}}": _cn_now().strftime("%Y年%m月%d日 %H:%M"),
+            "{{round}}": str(round_num),
+        }
+        all_tpl_vars = {**stable_tpl_vars, **volatile_tpl_vars}
 
         messages: list[dict[str, Any]] = []
         for key in order:
@@ -366,13 +375,19 @@ class PromptBuilder:
 
             override = overrides.get(key)
             if override:
-                content = self._expand_template_vars(override, tpl_vars)
+                raw = override
             else:
-                content = self._get_component_content(
+                raw = self._get_component_content(
                     agent_name, agent, key, active_agents, leader
                 )
-            if not content:
+            if not raw:
                 continue
+
+            # Use only stable vars for early components (before history) to
+            # preserve KV cache prefix.  Volatile vars are still substituted
+            # here for completeness, but callers should avoid putting
+            # {{datetime}} / {{round}} in early components.
+            content = self._expand_template_vars(raw, all_tpl_vars)
             if key == "examples":
                 content = f"[Example Chat]\n{content}"
             messages.append({"role": "system", "content": content})
