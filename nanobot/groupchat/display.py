@@ -401,7 +401,7 @@ def chatroom_send_msg(
     to: str,
     message: str,
     *,
-    max_len: int = 500,
+    max_len: int = 2000,
     leader: str | None = None,
 ) -> str:
     """Format an inter-agent chatroom_send.

@@ -133,6 +133,10 @@ class ConversationPool:
         User messages go directly into the pool, even if it exceeds
         capacity. Agents still follow normal wait/timeout/drop logic.
         _user_priority blocks agents during delivery.
+
+        Drains available semaphore slots first to keep _available and
+        _sem in sync. Only overflows _available for slots the semaphore
+        couldn't provide.
         """
         self._user_priority.clear()
         n = len(recipients)
@@ -142,12 +146,28 @@ class ConversationPool:
             if r in self._pending:
                 self._pending[r].append("User")
 
-        self._available -= n  # can go negative (over capacity)
+        # Acquire semaphore slots where available to keep _available in sync.
+        # Semaphore.locked() is True when _value == 0 (no slots left).
+        acquired = 0
+        for _ in range(n):
+            if not self._sem.locked():
+                try:
+                    # Non-blocking: only acquire if slot is available right now
+                    await asyncio.wait_for(self._sem.acquire(), timeout=0.01)
+                    acquired += 1
+                except (asyncio.TimeoutError, Exception):
+                    break
+            else:
+                break
+        # Only decrement _available by the overflow (slots semaphore couldn't provide)
+        overflow = n - acquired
+        self._available -= overflow
 
         self._user_priority.set()
         logger.info(
-            "ConversationPool: user allocated {} slots ({} available), priority OFF",
-            n, self._available,
+            "ConversationPool: user allocated {} slots "
+            "({} from sem, {} overflow, {} available), priority OFF",
+            n, acquired, overflow, self._available,
         )
 
     def release_unread(self, agent_name: str) -> int:

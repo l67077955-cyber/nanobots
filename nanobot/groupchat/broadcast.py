@@ -826,6 +826,28 @@ async def broadcast_round(
                     })
                     continue  # re-enter tool_loop to produce synthesis text
 
+                # ── Leader end_discussion with no text: force synthesis ──
+                # When leader uses chatroom_send + end_discussion + write_file in
+                # the same cycle but produces no text, none of the guards above
+                # fire (chatroom_send disables guard #1, substantive tools disable
+                # guard #2). The code would silently break at the end_discussion
+                # check below, leaving the user with no visible result.
+                if is_leader and not content and "end_discussion" in (result.tools_used or []):
+                    logger.warning(
+                        "Broadcast: leader {} called end_discussion without text (cycle {}, tools={}), forcing synthesis",
+                        name, cycle, result.tools_used,
+                    )
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            f"[⚠️ 你调用了 end_discussion 但没有给用户写最终答案！]\n"
+                            f"请立即整合所有队友的发现和你自己的工作成果，"
+                            f"给出完整、结构化的最终答案。这是用户唯一能看到的结果。\n"
+                            f"禁止再调用任何工具（包括 end_discussion），直接输出文字。"
+                        ),
+                    })
+                    continue  # re-enter tool_loop to produce synthesis
+
                 # ── Auto-wait: enter idle state ──
                 # Display the agent's final text for this cycle so it's not swallowed.
                 if content:
