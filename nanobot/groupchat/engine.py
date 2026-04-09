@@ -486,16 +486,10 @@ class GroupChatEngine:
                 self._state.save_leader(None)
                 logger.info("Groupchat: leader {} left, leader mode cleared", matched)
 
-        # If below 2 agents, stop group loop
-        if len(self._active_agents) < 2 and self._running:
+        # Stop loop only when no agents left
+        if not self._active_agents and self._running:
             self._stop_group_loop()
-            if self._active_agents:
-                return (
-                    f"✅ {matched} 已离开\n"
-                    f"💬 回到与 {self._active_agents[0]} 的对话模式"
-                    + leader_note
-                )
-            return f"✅ {matched} 已离开，无活跃 agent"
+            return f"✅ {matched} 已离开，无活跃 agent" + leader_note
 
         return f"✅ {matched} 已离开\n👥 当前成员: {', '.join(self._active_agents)}" + leader_note
     # ── Agent ordering ────────────────────────────────────
@@ -766,9 +760,9 @@ class GroupChatEngine:
         return await _direct_chat(self, user_message)
 
     def inject(self, message: str) -> None:
-        """Inject a user message into the group chat."""
-        # Lazy start: if 2+ agents and loop not running, start it now
-        if not self._running and len(self._active_agents) >= 2:
+        """Inject a user message into the chat loop (1+ agents)."""
+        # Lazy start: if any agents and loop not running, start it now
+        if not self._running and len(self._active_agents) >= 1:
             self._start_group_loop()
         if self._running:
             self._input_queue.put_nowait(message)

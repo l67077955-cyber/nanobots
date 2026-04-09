@@ -49,11 +49,18 @@ async def run_loop(engine: Any) -> None:
     """
     _my_task = asyncio.current_task()
     try:
-        await engine._send(
-            f"🎭 群聊模式！\n"
-            f"👥 成员: {', '.join(engine._active_agents)}\n"
-            f"📌 直接发消息，所有 agent 会轮流回复"
-        )
+        n = len(engine._active_agents)
+        if n >= 2:
+            await engine._send(
+                f"🎭 群聊模式！\n"
+                f"👥 成员: {', '.join(engine._active_agents)}\n"
+                f"📌 直接发消息，所有 agent 会轮流回复"
+            )
+        else:
+            await engine._send(
+                f"💬 对话模式\n"
+                f"👤 {engine._active_agents[0]}"
+            )
 
         if not any(m["sender"] == "系统" for m in engine._history):
             engine._add_message("系统", f"话题：{engine._topic}")
