@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -54,6 +55,7 @@ class GroupChatEngine:
         web_proxy: str | None = None,
         cron_service: Any | None = None,
         send_outbound_fn: Any | None = None,
+        mcp_servers: dict | None = None,
     ):
         self.config = config
         self.provider = provider
@@ -65,6 +67,12 @@ class GroupChatEngine:
         self._pm_cache: dict | None = None
         self._mailbox = MailboxHub(on_message=self._on_agent_comm)
         self._prompt_builder = PromptBuilder(config=config, workspace=workspace)
+
+        # MCP servers (lazy-connected on first run)
+        self._mcp_servers: dict = mcp_servers or {}
+        self._mcp_stack: AsyncExitStack | None = None
+        self._mcp_connected: bool = False
+        self._mcp_connecting: bool = False
 
         # Skills system (shared with single-chat)
         from nanobot.agent.skills import SkillsLoader
@@ -198,6 +206,50 @@ class GroupChatEngine:
             self._tool_registry_cache[key] = reg
             logger.info("Groupchat: built tool registry for {} → {}", agent_name, ws)
         return self._tool_registry_cache[key]
+
+    async def _connect_mcp(self) -> None:
+        """Connect to configured MCP servers and inject tools into all registries (lazy, one-time)."""
+        if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
+            return
+        self._mcp_connecting = True
+        from nanobot.agent.tools.mcp import connect_mcp_servers
+        try:
+            self._mcp_stack = AsyncExitStack()
+            await self._mcp_stack.__aenter__()
+            # Inject into all known registries (default tools + direct_tools + cache)
+            all_registries = set()
+            all_registries.add(id(self.tools))
+            all_registries.add(id(self.direct_tools))
+            await connect_mcp_servers(self._mcp_servers, self.tools, self._mcp_stack)
+            await connect_mcp_servers(self._mcp_servers, self.direct_tools, self._mcp_stack)
+            # Also inject into any already-cached per-agent registries
+            for key, reg in self._tool_registry_cache.items():
+                if id(reg) not in all_registries:
+                    all_registries.add(id(reg))
+                    await connect_mcp_servers(self._mcp_servers, reg, self._mcp_stack)
+            self._mcp_connected = True
+            logger.info("GroupChat MCP: connected {} server(s), tools injected into {} registries",
+                        len(self._mcp_servers), len(all_registries))
+        except BaseException as e:
+            logger.error("GroupChat MCP: failed to connect (will retry next message): {}", e)
+            if self._mcp_stack:
+                try:
+                    await self._mcp_stack.aclose()
+                except Exception:
+                    pass
+                self._mcp_stack = None
+        finally:
+            self._mcp_connecting = False
+
+    async def _disconnect_mcp(self) -> None:
+        """Cleanly disconnect all MCP servers."""
+        if self._mcp_stack:
+            try:
+                await self._mcp_stack.aclose()
+            except Exception as e:
+                logger.warning("GroupChat MCP: error during disconnect: {}", e)
+            self._mcp_stack = None
+            self._mcp_connected = False
 
     def _init_state(self) -> None:
         """Load agent registry, persistence layer, and initialize runtime state."""
