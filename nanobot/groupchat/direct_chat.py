@@ -25,7 +25,7 @@ from nanobot.groupchat.utils import build_tool_log, cn_now as _cn_now, log_reque
 
 
 # Maximum follow-up cycles (safety cap to prevent infinite loops)
-_MAX_CYCLES = 6
+_MAX_CYCLES = 999  # effectively unlimited
 
 
 async def direct_chat(engine: Any, user_message: str) -> str | None:

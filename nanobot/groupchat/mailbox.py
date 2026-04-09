@@ -346,7 +346,7 @@ class MailboxHub:
     async def wait(
         self,
         agent_name: str,
-        timeout: float = 120.0,
+        timeout: float = 600.0,
         from_agent: str = "",
     ) -> AgentMessage | None:
         """Wait for a message in the agent's mailbox.
@@ -389,16 +389,8 @@ class MailboxHub:
                         len(self._active_agents))
             self._all_waiting.set()
 
-        # Enforce hard limits
-        timeout = min(timeout, 120.0)
-        elapsed = _time.time() - self._global_start if self._global_start else 0
-        remaining_global = max(0, self._global_timeout - elapsed)
-        effective_timeout = min(timeout, remaining_global)
-
-        if effective_timeout <= 0:
-            self._waiting.discard(agent_name)
-            logger.info("MailboxHub.wait: global timeout exceeded for {}", agent_name)
-            return None
+        # Use the caller-provided timeout directly (no hard caps)
+        effective_timeout = timeout
 
         # Poll interval: re-check expected-reply state at this cadence so we
         # can extend the deadline if a busy teammate is still working.
@@ -414,10 +406,8 @@ class MailboxHub:
                     # are busy processing — not yet in _waiting).  If so, extend
                     # the deadline to avoid premature idle-exit.
                     busy_repliers = self._get_busy_expected_repliers(agent_name)
-                    elapsed_global = _time.time() - self._global_start if self._global_start else 0
-                    global_remaining = max(0, self._global_timeout - elapsed_global)
-                    if busy_repliers and global_remaining > 0:
-                        extension = min(_POLL_INTERVAL, global_remaining)
+                    if busy_repliers:
+                        extension = _POLL_INTERVAL
                         deadline = _time.time() + extension
                         logger.info(
                             "MailboxHub.wait: {} deadline extended +{}s "

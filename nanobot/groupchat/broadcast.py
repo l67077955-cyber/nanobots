@@ -674,12 +674,10 @@ async def broadcast_round(
         total_iterations = 0
         total_latency = 0.0
         cycle = 0
-        # Leader needs more cycles (chatroom_send/wait loops)
-        MAX_CYCLES = 6 if is_leader else 4
         agent_max_iters = 12 if is_leader else 8
 
         try:
-            while cycle < MAX_CYCLES:
+            while True:
                 # Respect /stop — exit immediately if engine is no longer running
                 if not engine._running:
                     logger.info("Broadcast: {} exiting — engine stopped", name)
@@ -893,18 +891,18 @@ async def broadcast_round(
                 # freed, causing pool exhaustion and blocking other agents' replies.
                 if pool:
                     pool.release_unread(name)
-                msg = await mailbox.wait(name, timeout=60)
+                msg = await mailbox.wait(name, timeout=600)
 
                 if msg is None:
-                    # Timeout — no one talking to us, we're done
-                    await tracker.set_state(name, "done", reason="idle timeout")
-                    logger.info("Broadcast: {} auto-wait timeout, exiting", name)
-                    # Leader fallback: if no text was produced in this cycle, force a
-                    # synthesis pass before exiting so the final answer is never silently
-                    # swallowed.  Only do this once (cycle < MAX_CYCLES guards the loop).
-                    if is_leader and not content and cycle < MAX_CYCLES:
+                    # No message — check if engine stopped, otherwise keep waiting
+                    if not engine._running:
+                        await tracker.set_state(name, "done", reason="engine stopped")
+                        logger.info("Broadcast: {} wait returned None, engine stopped, exiting", name)
+                        break
+                    # Leader fallback: if no text was produced, force synthesis
+                    if is_leader and not content:
                         logger.warning(
-                            "Broadcast: leader {} auto-wait timeout with no text (cycle {}), forcing synthesis",
+                            "Broadcast: leader {} wait timeout with no text (cycle {}), forcing synthesis",
                             name, cycle,
                         )
                         messages.append({
@@ -916,7 +914,9 @@ async def broadcast_round(
                             ),
                         })
                         continue  # re-enter tool_loop for synthesis
-                    break
+                    # Non-leader: keep waiting
+                    logger.info("Broadcast: {} wait timeout, retrying wait", name)
+                    continue
 
                 # Got a message! Inject it and re-run tool_loop
                 # But first check if /stop was issued while we were waiting
@@ -1094,27 +1094,12 @@ async def broadcast_round(
 
         join_task = asyncio.create_task(_join_listener())
 
-        # Watch for all-agents-waiting (natural conversation end)
-        async def _watch_all_waiting() -> None:
-            while True:
-                await mailbox.all_waiting_event.wait()
-                # Grace period: wait 5s and re-check to avoid
-                # premature termination when agents briefly pass
-                # through wait() between processing cycles
-                await asyncio.sleep(5)
-                if mailbox._waiting >= mailbox._active_agents and len(mailbox._active_agents) > 0:
-                    return  # truly all idle
-                # Someone woke up — reset and watch again
-                mailbox._all_waiting.clear()
-                logger.info("Broadcast: idle sentinel reset — agent(s) reactivated")
-
         # Watch for leader end_discussion signal
         async def _watch_leader_end() -> None:
             await leader_end_event.wait()
 
-        sentinel = asyncio.create_task(_watch_all_waiting())
         leader_end_sentinel = asyncio.create_task(_watch_leader_end())
-        all_tasks = set(tasks.keys()) | {sentinel, leader_end_sentinel}
+        all_tasks = set(tasks.keys()) | {leader_end_sentinel}
 
         while not all(t.done() for t in tasks.keys()):
             done_set, _ = await asyncio.wait(
@@ -1127,64 +1112,7 @@ async def broadcast_round(
                 break
 
             for t in done_set:
-                if t is sentinel:
-                    # If a leader is still running, inject a synthesis prompt instead of cancelling.
-                    # Non-leaders finishing first removes them from _active_agents, which causes the
-                    # sentinel to fire while the leader is mid-cycle (waiting between tool loops).
-                    # Cancelling the leader here means no synthesis is ever produced.
-                    leader_task = next(
-                        (task_obj for task_obj, task_name in tasks.items()
-                         if task_name == leader_name and not task_obj.done()),
-                        None,
-                    ) if leader_name else None
-                    if leader_task:
-                        # Only nudge if leader hasn't already decided to end.
-                        # If leader_end_event is already set, the leader called
-                        # end_discussion and is finishing up — re-nudging would
-                        # cause the leader to call end_discussion repeatedly in a loop.
-                        if not leader_end_event.is_set():
-                            logger.info("Broadcast: all non-leader agents idle — nudging leader to synthesize")
-                            await engine._send("━━ 队友已完成，等待 Leader 汇总 ━━")
-                            mailbox.send(
-                                "系统", [leader_name],
-                                "所有队友已完成工作并退出。请立即整合所有发现，给出完整的最终答案，然后调用 end_discussion 结束任务。",
-                            )
-                        else:
-                            logger.info("Broadcast: sentinel fired but leader already called end_discussion, skipping nudge")
-                        # Discard in both cases — one nudge is enough.
-                        all_tasks.discard(t)
-                    else:
-                        # No leader task running. If the engine still has a leader
-                        # configured but they aren't in this round's agent list
-                        # (e.g. they were removed mid-session), fall back to the
-                        # last remaining agent for synthesis rather than ending silently.
-                        configured_leader = getattr(engine, '_leader', None)
-                        if configured_leader and configured_leader not in agents:
-                            fallback = next(
-                                (task_name for task_obj, task_name in tasks.items()
-                                 if not task_obj.done()),
-                                None,
-                            )
-                            if fallback:
-                                logger.info(
-                                    "Broadcast: leader {} absent — nudging {} for synthesis",
-                                    configured_leader, fallback,
-                                )
-                                await engine._send(f"━━ Leader 缺席，由 {fallback} 负责汇总 ━━")
-                                mailbox.send(
-                                    "系统", [fallback],
-                                    "Leader 已离场。请你整合所有讨论内容，给出完整的最终结论。",
-                                )
-                                all_tasks.discard(t)
-                                continue
-                        logger.info("Broadcast: all agents waiting, ending round")
-                        await engine._send("━━ all agents idle — round complete ━━")
-                        for task_obj in tasks:
-                            if not task_obj.done():
-                                await tracker.set_state(tasks[task_obj], "done", reason="all idle")
-                                task_obj.cancel()
-                        break
-                elif t is leader_end_sentinel:
+                if t is leader_end_sentinel:
                     logger.info("Broadcast: leader ended discussion")
                     await engine._send("━━ Leader 结束讨论 — entering synthesis ━━")
                     for task_obj, task_name in tasks.items():
@@ -1210,9 +1138,7 @@ async def broadcast_round(
                 continue
             break
 
-        # Cancel sentinels if still running
-        if not sentinel.done():
-            sentinel.cancel()
+        # Cancel sentinel if still running
         if not leader_end_sentinel.done():
             leader_end_sentinel.cancel()
 
