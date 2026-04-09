@@ -1175,7 +1175,7 @@ async def broadcast_round(
         # still have results. Collect them before computing the round summary.
         pending_cleanup = [t for t in tasks if not t.done()]
         if pending_cleanup:
-            done_late, _ = await asyncio.wait(pending_cleanup, timeout=15)
+            done_late, _ = await asyncio.wait(pending_cleanup, timeout=3)
             for t in done_late:
                 if t in tasks:
                     try:

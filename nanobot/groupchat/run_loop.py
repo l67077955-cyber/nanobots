@@ -124,4 +124,10 @@ async def run_loop(engine: Any) -> None:
     finally:
         if engine._task is _my_task:
             engine._running = False
+        # Ensure typing indicator is cleaned up even on cancellation
+        if engine._on_round_done:
+            try:
+                await engine._on_round_done()
+            except Exception:
+                pass
         logger.info("Group chat loop ended")

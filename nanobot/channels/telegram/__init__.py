@@ -494,7 +494,7 @@ class TelegramChannel(
         if self._groupchat_engine:
             if cmd == "/stop":
                 was_running = self._groupchat_engine._running
-                self._groupchat_engine._stop_group_loop()
+                self._groupchat_engine.stop()
                 if was_running:
                     from nanobot.bus.events import OutboundMessage
                     await self.bus.publish_outbound(OutboundMessage(
