@@ -265,7 +265,7 @@ async def chat_with_tools(
         on_content_delta=on_content_delta,
         on_content_reset=on_content_reset,
         clean_response=clean_response,
-        result_max_chars=8_000,
+        result_max_chars=_direct_result_max,
     )
 
     content = result.content or ""

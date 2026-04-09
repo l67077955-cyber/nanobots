@@ -178,12 +178,12 @@ def prune_messages(
     messages: list[dict[str, Any]],
     context_window_tokens: int,
     *,
-    soft_ratio: float = DEFAULT_SOFT_RATIO,
-    hard_ratio: float = DEFAULT_HARD_RATIO,
-    keep_recent: int = DEFAULT_KEEP_RECENT,
-    soft_max_chars: int = DEFAULT_SOFT_MAX_CHARS,
-    soft_head_chars: int = DEFAULT_SOFT_HEAD_CHARS,
-    soft_tail_chars: int = DEFAULT_SOFT_TAIL_CHARS,
+    soft_ratio: float | None = None,
+    hard_ratio: float | None = None,
+    keep_recent: int | None = None,
+    soft_max_chars: int | None = None,
+    soft_head_chars: int | None = None,
+    soft_tail_chars: int | None = None,
     hard_placeholder: str = DEFAULT_HARD_PLACEHOLDER,
 ) -> list[dict[str, Any]]:
     """Prune old tool-result messages to fit within the context window.
@@ -202,6 +202,37 @@ def prune_messages(
     Returns:
         Pruned message list (may be the same object if no pruning needed).
     """
+    # Resolve defaults from history_settings when not explicitly provided
+    try:
+        from nanobot.groupchat import history_settings as hs
+        if soft_ratio is None:
+            soft_ratio = hs.pruning_soft_ratio()
+        if hard_ratio is None:
+            hard_ratio = hs.pruning_hard_ratio()
+        if keep_recent is None:
+            keep_recent = hs.pruning_keep_recent()
+        if soft_max_chars is None:
+            soft_max_chars = hs.pruning_soft_max_chars()
+        if soft_head_chars is None:
+            soft_head_chars = hs.pruning_soft_head_chars()
+        if soft_tail_chars is None:
+            soft_tail_chars = hs.pruning_soft_tail_chars()
+    except Exception:
+        pass
+    # Final fallback to module-level defaults
+    if soft_ratio is None:
+        soft_ratio = DEFAULT_SOFT_RATIO
+    if hard_ratio is None:
+        hard_ratio = DEFAULT_HARD_RATIO
+    if keep_recent is None:
+        keep_recent = DEFAULT_KEEP_RECENT
+    if soft_max_chars is None:
+        soft_max_chars = DEFAULT_SOFT_MAX_CHARS
+    if soft_head_chars is None:
+        soft_head_chars = DEFAULT_SOFT_HEAD_CHARS
+    if soft_tail_chars is None:
+        soft_tail_chars = DEFAULT_SOFT_TAIL_CHARS
+
     if not messages or context_window_tokens <= 0:
         return messages
 

@@ -63,8 +63,8 @@ async def summarize_tool_output(
     raw_output: str,
     *,
     threshold: int | None = None,
-    max_input_chars: int = 8000,
-    max_output_chars: int = 4000,
+    max_input_chars: int | None = None,
+    max_output_chars: int | None = None,
 ) -> tuple[str, bool]:
     """Summarize a tool's output if it exceeds *threshold* characters.
 
@@ -79,12 +79,20 @@ async def summarize_tool_output(
         from nanobot.groupchat import history_settings as hs
         if threshold is None:
             threshold = hs.summarize_threshold()
+        if max_input_chars is None:
+            max_input_chars = hs.summarize_max_input_chars()
+        if max_output_chars is None:
+            max_output_chars = hs.summarize_max_output_chars()
         if not hs.summarize_enabled():
             # Summarization disabled — just truncate
             return _head_tail_truncate(raw_output, threshold), False
     except Exception:
         if threshold is None:
             threshold = 8000
+        if max_input_chars is None:
+            max_input_chars = 8000
+        if max_output_chars is None:
+            max_output_chars = 4000
 
     if len(raw_output) <= threshold:
         return raw_output, False

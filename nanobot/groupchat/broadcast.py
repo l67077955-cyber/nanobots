@@ -669,6 +669,13 @@ async def broadcast_round(
         from nanobot.agent.tool_loop import tool_loop
         import time as _t
 
+        # Load configurable result_max_chars for broadcast mode
+        try:
+            from nanobot.groupchat.history_settings import broadcast_result_max_chars
+            _broadcast_result_max = broadcast_result_max_chars()
+        except Exception:
+            _broadcast_result_max = 20_000
+
         all_tools_used: list[str] = []
         total_iterations = 0
         total_latency = 0.0
@@ -718,7 +725,7 @@ async def broadcast_round(
                     on_content_delta=None,
                     on_content_reset=None,
                     clean_response=lambda c: engine._clean_response(c, name),
-                    result_max_chars=20_000,
+                    result_max_chars=_broadcast_result_max,
                     call_timeout=float(gc_settings.get("call_timeout", 90)) or None,
                 )
 

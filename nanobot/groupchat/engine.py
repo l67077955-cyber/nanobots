@@ -913,12 +913,14 @@ class GroupChatEngine:
         """
         from nanobot.groupchat.history_settings import (
             max_messages, summarize_enabled, summarize_model,
+            compress_ratio, compress_max_summary_tokens,
         )
 
         if not summarize_enabled():
             return
         limit = max_messages()
-        if len(self._history) < int(limit * 0.8):
+        ratio = compress_ratio()
+        if len(self._history) < int(limit * ratio):
             return
 
         half = len(self._history) // 2
@@ -934,11 +936,12 @@ class GroupChatEngine:
             f"摘要不超过 500 字。\n\n{history_text}"
         )
 
+        max_tok = compress_max_summary_tokens()
         try:
             response = await self.provider.chat_with_retry(
                 messages=[{"role": "user", "content": prompt}],
                 model=summarize_model(),
-                max_tokens=600,
+                max_tokens=max_tok,
             )
             summary = (response.content or "").strip()
             if summary:
