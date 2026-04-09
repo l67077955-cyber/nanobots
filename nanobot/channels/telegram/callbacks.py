@@ -1382,6 +1382,136 @@ class CallbacksMixin:
         elif data.startswith("think_"):
             await self._handle_think_callback(query, data)
 
+    # ── Parameter documentation for /history UI ────────────────────────────
+    _PARAM_DOCS: dict[str, dict[str, str]] = {
+        "__top__:context_window_tokens": {
+            "label": "上下文窗口 (tokens)",
+            "location": "全局 → 贯穿整个上下文管理链",
+            "doc": (
+                "LLM 单次请求可接收的最大 token 数。所有裁剪、"
+                "合并策略的上限锚点。\n\n"
+                "算法链路:\n"
+                "  1. context_pruning 按此值的 30%/50% "
+                "触发 soft/hard 裁剪\n"
+                "  2. MemoryConsolidator 在达到 50% 时"
+                "将旧消息合并为摘要\n"
+                "  3. 最终发送给 LLM 的 prompt 不超过此值\n\n"
+                "建议: 与你使用的模型窗口匹配 (如 GPT-4.1 → 1,000,000)"
+            ),
+        },
+        "__top__:tool_result_max_chars": {
+            "label": "工具结果截断上限 (字符)",
+            "location": "全局 → agent loop 入口处",
+            "doc": (
+                "工具返回的原始输出在进入任何后处理之前的"
+                "字符硬上限。超过即截断。\n\n"
+                "位置: agent/loop.py 初始化时读取\n"
+                "时机: 最早的一刀 — 在 Stage 1 分工具截断之前\n"
+                "截断方式: 保留首尾各一半，中间标记 truncated\n\n"
+                "建议: 应 ≥ 各工具 max_chars 中的最大值"
+            ),
+        },
+        "tool_results:exec_max_chars": {
+            "label": "exec 工具截断 (字符)",
+            "location": "Stage 1 → 命令执行输出",
+            "doc": (
+                "shell 命令 (exec tool) 返回结果的最大字符数。\n\n"
+                "场景: pip install、git log、ls -la 等命令\n"
+                "截断方式: head(前半) + '(N chars truncated)' + tail(后半)\n"
+                "下游关系: 截断后若仍超 summarize_threshold → "
+                "进入 Stage 2 AI 总结\n\n"
+                "重要: 若此值 ≤ summarize_threshold，"
+                "则 AI 总结永远不会被触发 (先截断了)"
+            ),
+        },
+        "tool_results:web_fetch_max_chars": {
+            "label": "web_fetch 截断 (字符)",
+            "location": "Stage 1 → 网页抓取输出",
+            "doc": (
+                "web_fetch 工具 (URL 抓取) 返回内容的最大字符数。\n\n"
+                "场景: 抓取网页/API 的 HTML→Markdown 转换结果\n"
+                "截断方式: head + truncated 标记 + tail\n"
+                "特点: 网页内容通常含大量导航/页脚噪音，"
+                "适当降低可提升信噪比\n\n"
+                "建议: 一般 8,000-15,000 即可覆盖正文"
+            ),
+        },
+        "tool_results:web_search_max_chars": {
+            "label": "web_search 截断 (字符)",
+            "location": "Stage 1 → 搜索结果输出",
+            "doc": (
+                "web_search 工具返回的搜索结果最大字符数。\n\n"
+                "场景: 搜索引擎结果摘要列表\n"
+                "截断方式: head + truncated 标记 + tail\n"
+                "特点: 搜索结果结构化程度高、信息密度大，"
+                "通常比网页内容更紧凑\n\n"
+                "建议: 5,000-10,000 即可包含足够条目"
+            ),
+        },
+        "tool_results:summarize_threshold": {
+            "label": "AI 总结触发阈值 (字符)",
+            "location": "Stage 2 → 总结器入口判断",
+            "doc": (
+                "工具输出超过此字符数时，调用小模型提取关键信息。\n\n"
+                "流程: 原始输出 → LLM 提取要点 → 压缩结果注入上下文\n"
+                "失败兜底: head+tail 截断 (summarizer.py)\n"
+                "模型: 使用 summarize_model 指定的轻量模型\n\n"
+                "关键约束: 必须 < exec/web_fetch/web_search_max_chars\n"
+                "  否则输出在 Stage 1 已被截断到阈值以下，"
+                "总结器永远不触发\n\n"
+                "建议: 设为各工具截断值的 60-80%"
+            ),
+        },
+        "tool_results:summarize_enabled": {
+            "label": "AI 总结开关",
+            "location": "Stage 2 → 总结器启用/禁用",
+            "doc": (
+                "控制是否启用 LLM 自动总结工具输出。\n\n"
+                "开启: 超过阈值的工具结果用小模型压缩\n"
+                "关闭: 跳过总结，仅依靠 Stage 1 截断"
+            ),
+        },
+        "tool_results:summarize_model": {
+            "label": "总结模型",
+            "location": "Stage 2 → 总结用 LLM",
+            "doc": (
+                "用于压缩工具输出的轻量模型。通过 OpenRouter 调用。\n\n"
+                "要求: 低延迟、低成本、能准确提取关键信息\n"
+                "配置: 也可在 ~/.nanobot/agents/reader/config.json 覆盖"
+            ),
+        },
+        "history:max_messages": {
+            "label": "最大消息条数",
+            "location": "Stage 3 → 历史窗口裁剪",
+            "doc": (
+                "对话历史中保留的最大消息数量。\n\n"
+                "算法: 超过时从最早的消息开始丢弃，"
+                "保证 assistant tool_call 与 tool result 配对完整\n"
+                "位置: session/manager.py get_history()\n\n"
+                "与 max_context_chars 的关系:\n"
+                "  两个限制取先触发者 — 哪个先到就执行裁剪\n"
+                "  若消息数很少但单条很长 → max_context_chars 先触发\n"
+                "  若消息多但都很短 → max_messages 先触发\n\n"
+                "建议: 根据平均消息长度调整，"
+                "确保与 max_context_chars 匹配"
+            ),
+        },
+        "history:max_context_chars": {
+            "label": "最大上下文字符数",
+            "location": "Stage 3 → 历史窗口裁剪",
+            "doc": (
+                "对话历史的总字符数上限。\n\n"
+                "算法: sum(所有消息 content 长度)，超过时从最早丢弃\n"
+                "位置: groupchat/prompt_builder.py 构建 prompt 时检查\n\n"
+                "与 context_window_tokens 的关系:\n"
+                "  此值是字符数，context_window 是 token 数\n"
+                "  粗略换算: 1 token ≈ 4 字符 (英文) / 2 字符 (中文)\n"
+                "  建议此值 ≤ context_window_tokens × 2\n\n"
+                "与 max_messages 的关系: 两者取先触发"
+            ),
+        },
+    }
+
     async def _handle_history_callback(self, query, data: str) -> None:
         """Handle /history interactive settings callbacks."""
         from nanobot.groupchat import history_settings as hs
@@ -1394,13 +1524,19 @@ class CallbacksMixin:
 
         if data == "hs_global":
             settings = hs.get_all()
+            d1 = self._PARAM_DOCS["__top__:context_window_tokens"]
+            d2 = self._PARAM_DOCS["__top__:tool_result_max_chars"]
             text = (
-                "🌐 全局设置\n\n"
-                "影响记忆合并和工具结果保存的核心参数：\n\n"
-                f"  上下文窗口 → {settings['context_window_tokens']:,} tokens\n"
-                f"  工具结果截断 → {settings['tool_result_max_chars']:,} 字符\n\n"
-                "上下文窗口: 超过时自动合并旧消息为摘要\n"
-                "工具结果截断: 保存到会话时的最大字符数"
+                "🌐 全局设置\n"
+                "影响整条上下文管理链的顶层参数\n\n"
+                f"━ {d1['label']} ━\n"
+                f"  当前值: {settings['context_window_tokens']:,}\n"
+                f"  位置: {d1['location']}\n"
+                f"  {d1['doc'].split(chr(10))[0]}\n\n"
+                f"━ {d2['label']} ━\n"
+                f"  当前值: {settings['tool_result_max_chars']:,}\n"
+                f"  位置: {d2['location']}\n"
+                f"  {d2['doc'].split(chr(10))[0]}\n"
             )
             buttons = [
                 [InlineKeyboardButton(f"上下文窗口: {settings['context_window_tokens']:,}", callback_data="hs_edit:__top__:context_window_tokens")],
@@ -1413,13 +1549,22 @@ class CallbacksMixin:
         if data == "hs_stage1":
             settings = hs.get_all()
             tr = settings["tool_results"]
+            d_exec = self._PARAM_DOCS["tool_results:exec_max_chars"]
+            d_web = self._PARAM_DOCS["tool_results:web_fetch_max_chars"]
+            d_search = self._PARAM_DOCS["tool_results:web_search_max_chars"]
             text = (
-                "📝 Stage 1: 工具输出截断\n\n"
-                "工具返回长文本时，先在源头截断：\n\n"
-                f"  exec       → {tr['exec_max_chars']:,} 字符\n"
-                f"  web_fetch  → {tr['web_fetch_max_chars']:,} 字符\n"
-                f"  web_search → {tr['web_search_max_chars']:,} 字符\n\n"
-                "截断方式: 保留首尾各一半，中间标记 (N chars truncated)"
+                "📝 Stage 1: 工具输出截断\n"
+                "工具返回长文本时，在源头按工具类型分别截断\n"
+                "截断方式: 保留首尾各一半，中间标记 (N chars truncated)\n\n"
+                f"━ {d_exec['label']} ━\n"
+                f"  当前: {tr['exec_max_chars']:,} 字符\n"
+                f"  {d_exec['doc'].split(chr(10))[0]}\n\n"
+                f"━ {d_web['label']} ━\n"
+                f"  当前: {tr['web_fetch_max_chars']:,} 字符\n"
+                f"  {d_web['doc'].split(chr(10))[0]}\n\n"
+                f"━ {d_search['label']} ━\n"
+                f"  当前: {tr['web_search_max_chars']:,} 字符\n"
+                f"  {d_search['doc'].split(chr(10))[0]}\n"
             )
             buttons = [
                 [InlineKeyboardButton(f"exec: {tr['exec_max_chars']:,}", callback_data="hs_edit:tool_results:exec_max_chars")],
@@ -1435,14 +1580,21 @@ class CallbacksMixin:
             enabled = tr["summarize_enabled"]
             toggle_text = "❌ 关闭" if enabled else "✅ 开启"
             toggle_val = "false" if enabled else "true"
+            d_thresh = self._PARAM_DOCS["tool_results:summarize_threshold"]
+            d_model = self._PARAM_DOCS["tool_results:summarize_model"]
             text = (
-                "🤖 Stage 2: AI 总结压缩\n\n"
-                "工具结果超过阈值时，用小模型提取关键信息：\n\n"
-                f"  状态   → {'✅ 开启' if enabled else '❌ 关闭'}\n"
-                f"  阈值   → {tr['summarize_threshold']:,} 字符\n"
-                f"  模型   → {tr['summarize_model']}\n\n"
-                "流程: raw → LLM提取关键信息 → 压缩后注入上下文\n"
-                "失败兜底: head+tail 截断"
+                "🤖 Stage 2: AI 总结压缩\n"
+                "工具结果超过阈值时，用小模型提取关键信息\n\n"
+                f"  状态 → {'✅ 开启' if enabled else '❌ 关闭'}\n\n"
+                f"━ {d_thresh['label']} ━\n"
+                f"  当前: {tr['summarize_threshold']:,} 字符\n"
+                f"  位置: {d_thresh['location']}\n"
+                f"  {d_thresh['doc'].split(chr(10))[0]}\n\n"
+                f"━ {d_model['label']} ━\n"
+                f"  当前: {tr['summarize_model']}\n"
+                f"  {d_model['doc'].split(chr(10))[0]}\n\n"
+                "流程: raw → LLM提取要点 → 压缩注入上下文\n"
+                "兜底: LLM 失败时降级为 head+tail 截断"
             )
             buttons = [
                 [InlineKeyboardButton(f"{toggle_text} AI总结", callback_data=f"hs_set:tool_results:summarize_enabled:{toggle_val}")],
@@ -1457,12 +1609,18 @@ class CallbacksMixin:
             engine = self._groupchat_engine
             current_msgs = len(engine._history) if engine else 0
             current_chars = sum(len(m.get("content", "")) for m in (engine._history if engine else []))
+            d_msgs = self._PARAM_DOCS["history:max_messages"]
+            d_chars = self._PARAM_DOCS["history:max_context_chars"]
             text = (
-                "📚 Stage 3: 历史存储\n\n"
-                "对话历史超过限制时，丢弃最早消息：\n\n"
-                f"  最大消息数 → {hist['max_messages']} 条\n"
-                f"  最大上下文 → {hist['max_context_chars']:,} 字符\n\n"
-                f"  当前 → {current_msgs} 条 / {current_chars:,} 字符"
+                "📚 Stage 3: 历史存储\n"
+                "对话历史超过限制时，从最早消息开始丢弃\n\n"
+                f"━ {d_msgs['label']} ━\n"
+                f"  当前: {hist['max_messages']} 条\n"
+                f"  {d_msgs['doc'].split(chr(10))[0]}\n\n"
+                f"━ {d_chars['label']} ━\n"
+                f"  当前: {hist['max_context_chars']:,} 字符\n"
+                f"  {d_chars['doc'].split(chr(10))[0]}\n\n"
+                f"  实时状态 → {current_msgs} 条 / {current_chars:,} 字符"
             )
             buttons = [
                 [InlineKeyboardButton(f"消息数: {hist['max_messages']}", callback_data="hs_edit:history:max_messages")],
@@ -1549,14 +1707,26 @@ class CallbacksMixin:
                     "section": section,
                     "key": key,
                 }
-                label = key
-                if section != "__top__":
-                    label = f"{section}.{key}"
-                await query.edit_message_text(
-                    f"✏️ 修改 {label}\n\n"
-                    f"当前值: {current:,}\n\n"
-                    f"请输入新值 (数字):"
-                )
+                # Build rich edit prompt with parameter documentation
+                doc_key = f"{section}:{key}"
+                param_doc = self._PARAM_DOCS.get(doc_key)
+                if param_doc:
+                    text = (
+                        f"✏️ 修改: {param_doc['label']}\n\n"
+                        f"📍 位置: {param_doc['location']}\n\n"
+                        f"📖 说明:\n{param_doc['doc']}\n\n"
+                        f"━━━━━━━━━━━━━━━\n"
+                        f"当前值: {current:,}\n"
+                        f"请输入新值 (数字):"
+                    )
+                else:
+                    label = key if section == "__top__" else f"{section}.{key}"
+                    text = (
+                        f"✏️ 修改 {label}\n\n"
+                        f"当前值: {current:,}\n\n"
+                        f"请输入新值 (数字):"
+                    )
+                await query.edit_message_text(text)
 
     async def _handle_edit_input(self, chat_id: str, content: str) -> None:
         """Process interactive edit state input."""
