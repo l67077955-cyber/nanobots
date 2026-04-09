@@ -1480,6 +1480,58 @@ class CallbacksMixin:
                 "配置: 也可在 ~/.nanobot/agents/reader/config.json 覆盖"
             ),
         },
+        "tool_results:summarize_max_input_chars": {
+            "label": "总结器最大输入 (字符)",
+            "location": "Stage 2 → 总结器调用",
+            "doc": (
+                "发送给总结模型的最大输入字符数。\n\n"
+                "工具输出先按此长度截断，再发给小模型提取要点。\n"
+                "过小会丢失尾部信息，过大会增加 nano 模型成本。\n\n"
+                "建议: 与 summarize_threshold 保持一致或略大"
+            ),
+        },
+        "tool_results:summarize_max_output_chars": {
+            "label": "总结器最大输出 (tokens)",
+            "location": "Stage 2 → 总结器调用",
+            "doc": (
+                "总结模型生成摘要的最大 token 数 (max_tokens)。\n\n"
+                "控制摘要的最大长度。过小可能截断关键信息，"
+                "过大则摘要冗长、上下文膨胀。\n\n"
+                "建议: 2000-6000"
+            ),
+        },
+        "tool_results:broadcast_result_max_chars": {
+            "label": "广播模式 result_max_chars",
+            "location": "Stage 2 → broadcast tool_loop",
+            "doc": (
+                "广播模式下 tool_loop 的 result_max_chars 参数。\n\n"
+                "控制每个工具结果注入 LLM 上下文前的最大字符数。\n"
+                "超过此值会触发 AI 总结或截断。\n"
+                "广播模式通常需要更大的值，因为多 agent 并行。\n\n"
+                "建议: 15,000-30,000"
+            ),
+        },
+        "tool_results:direct_result_max_chars": {
+            "label": "直接模式 result_max_chars",
+            "location": "Stage 2 → direct/serial tool_loop",
+            "doc": (
+                "直接对话/串行模式下 tool_loop 的 result_max_chars。\n\n"
+                "控制每个工具结果注入 LLM 上下文前的最大字符数。\n"
+                "超过此值会触发 AI 总结或截断。\n\n"
+                "建议: 6,000-12,000"
+            ),
+        },
+        "tool_results:html_detect_enabled": {
+            "label": "HTML 检测开关",
+            "location": "Stage 1 → exec/web_fetch 结果后处理",
+            "doc": (
+                "当 exec 或 web_fetch 返回原始 HTML 时，\n"
+                "自动注入警告提示 agent 结果不可用。\n\n"
+                "场景: curl API 返回 HTML 登录页而非 JSON 数据\n"
+                "效果: agent 能及时发现并切换策略，"
+                "而非基于无用 HTML 摘要继续推理"
+            ),
+        },
         "history:max_messages": {
             "label": "最大消息条数",
             "location": "Stage 3 → 历史窗口裁剪",
@@ -1508,6 +1560,82 @@ class CallbacksMixin:
                 "  粗略换算: 1 token ≈ 4 字符 (英文) / 2 字符 (中文)\n"
                 "  建议此值 ≤ context_window_tokens × 2\n\n"
                 "与 max_messages 的关系: 两者取先触发"
+            ),
+        },
+        "history:compress_ratio": {
+            "label": "历史压缩触发比例",
+            "location": "Stage 3 → 历史压缩",
+            "doc": (
+                "当消息数达到 max_messages × 此比例时，\n"
+                "触发历史压缩（将最早一半消息用小模型摘要）。\n\n"
+                "值域: 0.0-1.0，默认 0.8\n"
+                "建议: 0.7-0.9"
+            ),
+        },
+        "history:compress_max_summary_tokens": {
+            "label": "历史压缩摘要长度 (tokens)",
+            "location": "Stage 3 → 历史压缩",
+            "doc": (
+                "压缩历史时，摘要模型的最大输出 token 数。\n\n"
+                "控制生成摘要的长度上限。\n"
+                "建议: 400-800"
+            ),
+        },
+        "context_pruning:soft_ratio": {
+            "label": "软裁剪触发比例",
+            "location": "Stage 4 → context_pruning",
+            "doc": (
+                "tool_loop 迭代 2+ 时，当上下文字符数超过\n"
+                "context_window_tokens × CHARS_PER_TOKEN × 此比例\n"
+                "时触发软裁剪。\n\n"
+                "软裁剪: 旧 tool result 截断为 head+tail，"
+                "中间部分提取关键事实。\n\n"
+                "建议: 0.2-0.4"
+            ),
+        },
+        "context_pruning:hard_ratio": {
+            "label": "硬裁剪触发比例",
+            "location": "Stage 4 → context_pruning",
+            "doc": (
+                "软裁剪后仍超预算时，当比例超过此值\n"
+                "触发硬裁剪。\n\n"
+                "硬裁剪: 旧 tool result 替换为精简摘要\n"
+                "（保留 paths/errors/urls/kv）。\n\n"
+                "建议: 0.4-0.6"
+            ),
+        },
+        "context_pruning:keep_recent": {
+            "label": "保护最近 N 轮",
+            "location": "Stage 4 → context_pruning",
+            "doc": (
+                "最近 N 个 assistant turn 的 tool result 不被裁剪。\n\n"
+                "保护最近的工具结果，确保模型能引用最新数据。\n"
+                "建议: 2-5"
+            ),
+        },
+        "context_pruning:soft_max_chars": {
+            "label": "软裁剪阈值 (字符)",
+            "location": "Stage 4 → context_pruning",
+            "doc": (
+                "tool result 超过此长度才会被软裁剪。\n"
+                "低于此值的 tool result 保持原样。\n\n"
+                "建议: 3,000-6,000"
+            ),
+        },
+        "context_pruning:soft_head_chars": {
+            "label": "软裁剪保留头部 (字符)",
+            "location": "Stage 4 → context_pruning",
+            "doc": (
+                "软裁剪时保留 tool result 开头的字符数。\n\n"
+                "建议: 1,000-2,500"
+            ),
+        },
+        "context_pruning:soft_tail_chars": {
+            "label": "软裁剪保留尾部 (字符)",
+            "location": "Stage 4 → context_pruning",
+            "doc": (
+                "软裁剪时保留 tool result 末尾的字符数。\n\n"
+                "建议: 1,000-2,500"
             ),
         },
     }
@@ -1566,10 +1694,14 @@ class CallbacksMixin:
                 f"  当前: {tr['web_search_max_chars']:,} 字符\n"
                 f"  {d_search['doc'].split(chr(10))[0]}\n"
             )
+            html_enabled = tr.get("html_detect_enabled", True)
+            html_toggle_text = "❌ 关闭 HTML检测" if html_enabled else "✅ 开启 HTML检测"
+            html_toggle_val = "false" if html_enabled else "true"
             buttons = [
                 [InlineKeyboardButton(f"exec: {tr['exec_max_chars']:,}", callback_data="hs_edit:tool_results:exec_max_chars")],
                 [InlineKeyboardButton(f"web_fetch: {tr['web_fetch_max_chars']:,}", callback_data="hs_edit:tool_results:web_fetch_max_chars")],
                 [InlineKeyboardButton(f"web_search: {tr['web_search_max_chars']:,}", callback_data="hs_edit:tool_results:web_search_max_chars")],
+                [InlineKeyboardButton(html_toggle_text, callback_data=f"hs_set:tool_results:html_detect_enabled:{html_toggle_val}")],
                 [InlineKeyboardButton("⬅️ 返回", callback_data="hs_back")],
             ]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
@@ -1599,6 +1731,10 @@ class CallbacksMixin:
             buttons = [
                 [InlineKeyboardButton(f"{toggle_text} AI总结", callback_data=f"hs_set:tool_results:summarize_enabled:{toggle_val}")],
                 [InlineKeyboardButton(f"阈值: {tr['summarize_threshold']:,}", callback_data="hs_edit:tool_results:summarize_threshold")],
+                [InlineKeyboardButton(f"最大输入: {tr.get('summarize_max_input_chars', 8000):,}", callback_data="hs_edit:tool_results:summarize_max_input_chars")],
+                [InlineKeyboardButton(f"最大输出: {tr.get('summarize_max_output_chars', 4000):,}", callback_data="hs_edit:tool_results:summarize_max_output_chars")],
+                [InlineKeyboardButton(f"广播模式: {tr.get('broadcast_result_max_chars', 20000):,}", callback_data="hs_edit:tool_results:broadcast_result_max_chars")],
+                [InlineKeyboardButton(f"直接模式: {tr.get('direct_result_max_chars', 8000):,}", callback_data="hs_edit:tool_results:direct_result_max_chars")],
                 [InlineKeyboardButton("⬅️ 返回", callback_data="hs_back")],
             ]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
@@ -1625,6 +1761,32 @@ class CallbacksMixin:
             buttons = [
                 [InlineKeyboardButton(f"消息数: {hist['max_messages']}", callback_data="hs_edit:history:max_messages")],
                 [InlineKeyboardButton(f"上下文: {hist['max_context_chars']:,}", callback_data="hs_edit:history:max_context_chars")],
+                [InlineKeyboardButton(f"压缩比例: {hist.get('compress_ratio', 0.8)}", callback_data="hs_edit:history:compress_ratio")],
+                [InlineKeyboardButton(f"摘要tokens: {hist.get('compress_max_summary_tokens', 600)}", callback_data="hs_edit:history:compress_max_summary_tokens")],
+                [InlineKeyboardButton("⬅️ 返回", callback_data="hs_back")],
+            ]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+
+        elif data == "hs_stage4":
+            settings = hs.get_all()
+            cp = settings.get("context_pruning", {})
+            text = (
+                "✂️ Stage 4: 迭代上下文裁剪\n"
+                "tool_loop 迭代 2+ 时，自动裁剪旧 tool result\n\n"
+                f"  软裁剪比例 → {cp.get('soft_ratio', 0.3)}\n"
+                f"  硬裁剪比例 → {cp.get('hard_ratio', 0.5)}\n"
+                f"  保护最近   → {cp.get('keep_recent', 3)} 轮\n"
+                f"  软裁剪阈值 → {cp.get('soft_max_chars', 4000):,} 字符\n"
+                f"  保留头部   → {cp.get('soft_head_chars', 1500):,} 字符\n"
+                f"  保留尾部   → {cp.get('soft_tail_chars', 1500):,} 字符"
+            )
+            buttons = [
+                [InlineKeyboardButton(f"软裁剪比例: {cp.get('soft_ratio', 0.3)}", callback_data="hs_edit:context_pruning:soft_ratio")],
+                [InlineKeyboardButton(f"硬裁剪比例: {cp.get('hard_ratio', 0.5)}", callback_data="hs_edit:context_pruning:hard_ratio")],
+                [InlineKeyboardButton(f"保护最近: {cp.get('keep_recent', 3)}", callback_data="hs_edit:context_pruning:keep_recent")],
+                [InlineKeyboardButton(f"软裁剪阈值: {cp.get('soft_max_chars', 4000):,}", callback_data="hs_edit:context_pruning:soft_max_chars")],
+                [InlineKeyboardButton(f"保留头部: {cp.get('soft_head_chars', 1500):,}", callback_data="hs_edit:context_pruning:soft_head_chars")],
+                [InlineKeyboardButton(f"保留尾部: {cp.get('soft_tail_chars', 1500):,}", callback_data="hs_edit:context_pruning:soft_tail_chars")],
                 [InlineKeyboardButton("⬅️ 返回", callback_data="hs_back")],
             ]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
@@ -1634,10 +1796,12 @@ class CallbacksMixin:
             settings = hs.get_all()
             tr = settings["tool_results"]
             hist = settings["history"]
+            cp = settings.get("context_pruning", {})
             engine = self._groupchat_engine
             current_msgs = len(engine._history) if engine else 0
             current_chars = sum(len(m.get("content", "")) for m in (engine._history if engine else []))
             summarize_status = "✅ 开启" if tr["summarize_enabled"] else "❌ 关闭"
+            html_detect_status = "✅ 开启" if tr.get("html_detect_enabled", True) else "❌ 关闭"
             text = (
                 "📊 历史管理流程\n\n"
                 "━━ 全局设置 ━━\n"
@@ -1646,16 +1810,30 @@ class CallbacksMixin:
                 "━━ Stage 1: 工具输出截断 ━━\n"
                 f"  exec       → 最大 {tr['exec_max_chars']:,} 字符\n"
                 f"  web_fetch  → 最大 {tr['web_fetch_max_chars']:,} 字符\n"
-                f"  web_search → 最大 {tr['web_search_max_chars']:,} 字符\n\n"
+                f"  web_search → 最大 {tr['web_search_max_chars']:,} 字符\n"
+                f"  HTML 检测  → {html_detect_status}\n\n"
                 "━━ Stage 2: AI 总结压缩 ━━\n"
-                f"  触发阈值 → {tr['summarize_threshold']:,} 字符\n"
-                f"  总结模型 → {tr['summarize_model']}\n"
-                f"  状态     → {summarize_status}\n\n"
+                f"  触发阈值   → {tr['summarize_threshold']:,} 字符\n"
+                f"  总结模型   → {tr['summarize_model']}\n"
+                f"  最大输入   → {tr.get('summarize_max_input_chars', 8000):,} 字符\n"
+                f"  最大输出   → {tr.get('summarize_max_output_chars', 4000):,} tokens\n"
+                f"  广播模式   → {tr.get('broadcast_result_max_chars', 20000):,} 字符\n"
+                f"  直接模式   → {tr.get('direct_result_max_chars', 8000):,} 字符\n"
+                f"  状态       → {summarize_status}\n\n"
                 "━━ Stage 3: 历史存储 ━━\n"
                 f"  最大消息数 → {hist['max_messages']} 条\n"
                 f"  最大上下文 → {hist['max_context_chars']:,} 字符\n"
+                f"  压缩比例   → {hist.get('compress_ratio', 0.8)}\n"
+                f"  压缩摘要   → {hist.get('compress_max_summary_tokens', 600)} tokens\n"
                 f"  当前消息数 → {current_msgs} 条\n"
-                f"  当前上下文 → {current_chars:,} 字符\n"
+                f"  当前上下文 → {current_chars:,} 字符\n\n"
+                "━━ Stage 4: 迭代上下文裁剪 ━━\n"
+                f"  软裁剪比例 → {cp.get('soft_ratio', 0.3)}\n"
+                f"  硬裁剪比例 → {cp.get('hard_ratio', 0.5)}\n"
+                f"  保护最近   → {cp.get('keep_recent', 3)} 轮\n"
+                f"  软裁剪阈值 → {cp.get('soft_max_chars', 4000):,} 字符\n"
+                f"  保留头部   → {cp.get('soft_head_chars', 1500):,} 字符\n"
+                f"  保留尾部   → {cp.get('soft_tail_chars', 1500):,} 字符\n"
             )
             buttons = [
                 [
@@ -1667,6 +1845,7 @@ class CallbacksMixin:
                     InlineKeyboardButton("📚 历史限制", callback_data="hs_stage3"),
                 ],
                 [
+                    InlineKeyboardButton("✂️ 上下文裁剪", callback_data="hs_stage4"),
                     InlineKeyboardButton("🔄 重载配置", callback_data="hs_reload"),
                 ],
             ]
@@ -1686,9 +1865,15 @@ class CallbacksMixin:
                     value = raw_val
                 result = hs.update_field(section, key, value)
                 await query.answer(result, show_alert=True)
-                # Refresh stage view
-                if section == "tool_results" and "summarize" in key:
+                # Refresh the stage view that owns this setting
+                if section == "tool_results" and ("summarize" in key or "result_max_chars" in key):
                     await self._handle_history_callback(query, "hs_stage2")
+                elif section == "tool_results" and "html_detect" in key:
+                    await self._handle_history_callback(query, "hs_stage1")
+                elif section == "context_pruning":
+                    await self._handle_history_callback(query, "hs_stage4")
+                elif section == "history":
+                    await self._handle_history_callback(query, "hs_stage3")
                 else:
                     await self._handle_history_callback(query, "hs_back")
 
@@ -1710,21 +1895,22 @@ class CallbacksMixin:
                 # Build rich edit prompt with parameter documentation
                 doc_key = f"{section}:{key}"
                 param_doc = self._PARAM_DOCS.get(doc_key)
+                current_display = f"{current:,}" if isinstance(current, int) else str(current)
                 if param_doc:
                     text = (
                         f"✏️ 修改: {param_doc['label']}\n\n"
                         f"📍 位置: {param_doc['location']}\n\n"
                         f"📖 说明:\n{param_doc['doc']}\n\n"
                         f"━━━━━━━━━━━━━━━\n"
-                        f"当前值: {current:,}\n"
-                        f"请输入新值 (数字):"
+                        f"当前值: {current_display}\n"
+                        f"请输入新值:"
                     )
                 else:
                     label = key if section == "__top__" else f"{section}.{key}"
                     text = (
                         f"✏️ 修改 {label}\n\n"
-                        f"当前值: {current:,}\n\n"
-                        f"请输入新值 (数字):"
+                        f"当前值: {current_display}\n\n"
+                        f"请输入新值:"
                     )
                 await query.edit_message_text(text)
 
@@ -1738,11 +1924,24 @@ class CallbacksMixin:
             del self._edit_state[chat_id]
             section = state["section"]
             key = state["key"]
-            try:
-                value = int(content.strip())
-            except ValueError:
-                await self._gc_send(chat_id, f"❌ 请输入数字，收到: {content.strip()}")
-                return
+            raw = content.strip()
+            # Detect type: float keys (ratios), string keys (model), else int
+            _float_keys = {"soft_ratio", "hard_ratio", "compress_ratio"}
+            _string_keys = {"summarize_model"}
+            if key in _string_keys:
+                value: Any = raw
+            elif key in _float_keys:
+                try:
+                    value = float(raw)
+                except ValueError:
+                    await self._gc_send(chat_id, f"❌ 请输入数字，收到: {raw}")
+                    return
+            else:
+                try:
+                    value = int(raw)
+                except ValueError:
+                    await self._gc_send(chat_id, f"❌ 请输入数字，收到: {raw}")
+                    return
             from nanobot.groupchat import history_settings as hs
             result = hs.update_field(section, key, value)
             await self._gc_send(chat_id, result)

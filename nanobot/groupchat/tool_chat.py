@@ -225,6 +225,13 @@ async def chat_with_tools(
         iter_usage_ref=_iter_usage_ref,
     )
 
+    # Load configurable result_max_chars for direct/serial mode
+    try:
+        from nanobot.groupchat.history_settings import direct_result_max_chars
+        _direct_result_max = direct_result_max_chars()
+    except Exception:
+        _direct_result_max = 8_000
+
     effective_defs = None if force_no_tools else (tool_defs if tool_defs else None)
     # Compute context stats for logging
     _total_chars = sum(

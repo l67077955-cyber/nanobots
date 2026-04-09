@@ -413,6 +413,7 @@ class SettingsCommandsMixin:
         settings = hs.get_all()
         tr = settings["tool_results"]
         hist = settings["history"]
+        cp = settings.get("context_pruning", {})
 
         # Current stats
         engine = self._groupchat_engine
@@ -420,6 +421,7 @@ class SettingsCommandsMixin:
         current_chars = sum(len(m.get("content", "")) for m in (engine._history if engine else []))
 
         summarize_status = "✅ 开启" if tr["summarize_enabled"] else "❌ 关闭"
+        html_detect_status = "✅ 开启" if tr.get("html_detect_enabled", True) else "❌ 关闭"
 
         text = (
             "📊 历史管理流程\n\n"
@@ -429,16 +431,30 @@ class SettingsCommandsMixin:
             "━━ Stage 1: 工具输出截断 ━━\n"
             f"  exec       → 最大 {tr['exec_max_chars']:,} 字符\n"
             f"  web_fetch  → 最大 {tr['web_fetch_max_chars']:,} 字符\n"
-            f"  web_search → 最大 {tr['web_search_max_chars']:,} 字符\n\n"
+            f"  web_search → 最大 {tr['web_search_max_chars']:,} 字符\n"
+            f"  HTML 检测  → {html_detect_status}\n\n"
             "━━ Stage 2: AI 总结压缩 ━━\n"
-            f"  触发阈值 → {tr['summarize_threshold']:,} 字符\n"
-            f"  总结模型 → {tr['summarize_model']}\n"
-            f"  状态     → {summarize_status}\n\n"
+            f"  触发阈值   → {tr['summarize_threshold']:,} 字符\n"
+            f"  总结模型   → {tr['summarize_model']}\n"
+            f"  最大输入   → {tr.get('summarize_max_input_chars', 8000):,} 字符\n"
+            f"  最大输出   → {tr.get('summarize_max_output_chars', 4000):,} tokens\n"
+            f"  广播模式   → {tr.get('broadcast_result_max_chars', 20000):,} 字符\n"
+            f"  直接模式   → {tr.get('direct_result_max_chars', 8000):,} 字符\n"
+            f"  状态       → {summarize_status}\n\n"
             "━━ Stage 3: 历史存储 ━━\n"
             f"  最大消息数 → {hist['max_messages']} 条\n"
             f"  最大上下文 → {hist['max_context_chars']:,} 字符\n"
+            f"  压缩比例   → {hist.get('compress_ratio', 0.8)}\n"
+            f"  压缩摘要   → {hist.get('compress_max_summary_tokens', 600)} tokens\n"
             f"  当前消息数 → {current_msgs} 条\n"
-            f"  当前上下文 → {current_chars:,} 字符\n"
+            f"  当前上下文 → {current_chars:,} 字符\n\n"
+            "━━ Stage 4: 迭代上下文裁剪 ━━\n"
+            f"  软裁剪比例 → {cp.get('soft_ratio', 0.3)}\n"
+            f"  硬裁剪比例 → {cp.get('hard_ratio', 0.5)}\n"
+            f"  保护最近   → {cp.get('keep_recent', 3)} 轮\n"
+            f"  软裁剪阈值 → {cp.get('soft_max_chars', 4000):,} 字符\n"
+            f"  保留头部   → {cp.get('soft_head_chars', 1500):,} 字符\n"
+            f"  保留尾部   → {cp.get('soft_tail_chars', 1500):,} 字符\n"
         )
 
         buttons = [
@@ -451,6 +467,7 @@ class SettingsCommandsMixin:
                 InlineKeyboardButton("📚 历史限制", callback_data="hs_stage3"),
             ],
             [
+                InlineKeyboardButton("✂️ 上下文裁剪", callback_data="hs_stage4"),
                 InlineKeyboardButton("🔄 重载配置", callback_data="hs_reload"),
             ],
         ]
