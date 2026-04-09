@@ -363,7 +363,7 @@ async def broadcast_round(
             return (name, None, [], {})
 
         agent_cfg = engine.registry[name]
-        model = agent_cfg["model"]
+        model = agent_cfg["model"]  # initial; re-read each cycle below
         model_short = model.split("/")[-1]
         # In broadcast mode each agent only sees its own prior turns in history.
         # User/system messages are always kept; other agents' verbose outputs
@@ -683,6 +683,9 @@ async def broadcast_round(
                     logger.info("Broadcast: {} exiting — engine stopped", name)
                     break
                 cycle += 1
+                # Re-read model from registry each cycle so mid-round changes take effect
+                _live_cfg = engine.registry.get(name, agent_cfg)
+                model = _live_cfg.get("model", model)
                 import time as _t
                 _cycle_t0 = _t.time()
                 _cycle_usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
@@ -1089,6 +1092,28 @@ async def broadcast_round(
                 await engine._send(
                     f"✅ {new_name} 加入当前讨论\n"
                     f"👥 当前成员: {', '.join(engine._active_agents)}"
+                )
+                # Notify leader so it can assign tasks to the new agent
+                if leader_name and leader_name != new_name:
+                    new_cfg = engine.registry.get(new_name, {})
+                    new_tools = new_cfg.get("tools", {})
+                    if isinstance(new_tools, dict):
+                        tool_list = [k for k, v in new_tools.items() if v]
+                    else:
+                        tool_list = list(engine.TOOL_NAMES) if new_cfg.get("tools_enabled", False) else []
+                    mailbox.send(
+                        "系统", [leader_name],
+                        f"[新成员加入] {new_name} 已加入讨论。"
+                        f"工具: {', '.join(tool_list) if tool_list else '无'}。"
+                        f"请给 {new_name} 分配任务。",
+                    )
+                # Also send the new agent a kickstart message with context
+                mailbox.send(
+                    "系统", [new_name],
+                    f"你刚刚加入了正在进行的群聊讨论。"
+                    f"用户问题: {user_question}\n"
+                    f"当前成员: {', '.join(engine._active_agents)}。"
+                    f"{'Leader 是 ' + leader_name + '，等待 Leader 给你分配任务。' if leader_name and leader_name != new_name else '请开始工作。'}",
                 )
                 logger.info("Broadcast: dynamically spawned {} (idx={})", new_name, idx)
 
