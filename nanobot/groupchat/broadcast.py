@@ -547,10 +547,9 @@ async def broadcast_round(
                 "args": {k: (v if isinstance(v, str) else v) for k, v in args.items()},
             })
             # Full args logging to server log
-            import json as _json_log
             logger.info(
                 "broadcast [{}] tool_call: {}({})",
-                name, tool_name, _json_log.dumps(args, ensure_ascii=False),
+                name, tool_name, _json.dumps(args, ensure_ascii=False),
             )
             if tool_name == "chatroom_send":
                 # Flush any buffered searches before showing chatroom_send
@@ -566,7 +565,6 @@ async def broadcast_round(
                 line = f"{name}: chatroom_send({to_str}) [cost={cost}]"
                 _tool_lines.append(line)
                 # Build stats suffix: token + latency
-                import time as _t
                 elapsed = _t.time() - _cycle_t0
                 tok_t = _cycle_usage.get("total_tokens", 0)
                 stats_suffix = ""
@@ -667,14 +665,17 @@ async def broadcast_round(
         # ── Run tool-loop + auto-wait cycle ──
         # After tool_loop finishes, agent automatically enters wait().
         # If a teammate message arrives, inject it and re-run tool_loop.
-        # Only exits when cancelled (all-agents-wait) or on error.
+        # Only exits when cancelled by leader end_discussion, /stop, or on error.
         from nanobot.agent.tool_loop import tool_loop
+        import time as _t
 
         all_tools_used: list[str] = []
         total_iterations = 0
         total_latency = 0.0
         cycle = 0
+        content = ""  # last cycle's text output
         agent_max_iters = 12 if is_leader else 8
+        _substantive_tools = {"web_search", "web_fetch", "exec", "read_file", "write_file"}
 
         try:
             while True:
@@ -686,7 +687,6 @@ async def broadcast_round(
                 # Re-read model from registry each cycle so mid-round changes take effect
                 _live_cfg = engine.registry.get(name, agent_cfg)
                 model = _live_cfg.get("model", model)
-                import time as _t
                 _cycle_t0 = _t.time()
                 _cycle_usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
@@ -763,10 +763,6 @@ async def broadcast_round(
                     search_pool.on_output(name)
 
                 # ── Anti-idle guard: force re-entry if agent did nothing ──
-                # If this is cycle 1 and the agent produced no content and used
-                # no substantive tools (web_search, web_fetch, exec, etc.),
-                # the model is being lazy. Inject a forcing prompt and retry.
-                _substantive_tools = {"web_search", "web_fetch", "exec", "read_file", "write_file"}
                 if cycle == 1 and not content and not (set(result.tools_used or []) & _substantive_tools):
                     logger.warning(
                         "Broadcast: {} idle on cycle 1 (no content, tools={}), forcing retry",
@@ -857,7 +853,6 @@ async def broadcast_round(
                     total_tok = tok.get("total", 0)
                     tok_suffix = ""
                     if total_tok > 0:
-                        import time as _t
                         elapsed = _t.time() - _cycle_t0
                         cost = result.cost or 0
                         cache_t = result.cache_tokens or 0
@@ -880,8 +875,6 @@ async def broadcast_round(
                     logger.info("Broadcast: displayed {} cycle {} output ({} chars)", name, cycle, len(content))
 
                 # If leader called end_discussion this cycle, exit immediately.
-                # Continuing into auto-wait would trigger the all-waiting sentinel,
-                # which would re-nudge the leader and cause a repeated end_discussion loop.
                 if is_leader and "end_discussion" in (result.tools_used or []):
                     logger.info("Broadcast: leader {} called end_discussion, exiting cycle loop", name)
                     break
@@ -962,12 +955,12 @@ async def broadcast_round(
             return (name, content, all_tools_used, {})
 
         except asyncio.CancelledError:
-            # Cancelled by sentinel (all-agents-waiting) — normal exit
+            # Cancelled by leader end_discussion or engine stop
             await tracker.set_state(name, "cancelled")
             comp = _d.completion_msg(name, round(total_latency, 1), total_iterations, all_tools_used, leader=leader_name)
             if comp:
                 await engine._send(comp)
-            return (name, content if 'content' in locals() else "", all_tools_used, {})
+            return (name, content, all_tools_used, {})
 
         except Exception as e:
             await tracker.set_state(name, "error", reason=str(e)[:40])
@@ -1144,7 +1137,6 @@ async def broadcast_round(
                         if not task_obj.done() and task_name != leader_name:
                             await tracker.set_state(task_name, "cancelled", reason="leader ended")
                             task_obj.cancel()
-                    # Don't break — let the while loop continue waiting for leader to finish
                 elif t in tasks:
                     try:
                         name, content, tools_used_list, *_ = t.result()
@@ -1159,9 +1151,6 @@ async def broadcast_round(
                         completed += 1
                         logger.error("Broadcast: agent task error: {}", e)
                         await engine._send(f"\u2717 Agent error: {e}")
-            else:
-                continue
-            break
 
         # Cancel sentinel if still running
         if not leader_end_sentinel.done():
