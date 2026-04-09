@@ -659,14 +659,6 @@ class ChatroomSendTool(Tool):
         if not targets:
             return "⚠️ 不支持发送给 User。你的文字回复会自动展示给用户，直接写在回复里即可。"
 
-        # ── Leader gate: non-leader agents limited to 1 message between leader messages ──
-        if self._leader_gate and not self._leader_gate.try_send(self._agent_name):
-            leader = self._leader_gate.leader
-            return (
-                f"⚠️ 你已发过 1 条消息，必须等待 Leader ({leader}) 发言后才能再发。"
-                f"请用 wait() 等待 {leader} 的回复。"
-            )
-
         # Deduplicate: "All" already includes everyone, strip individual names
         if any(t.lower() == "all" for t in targets):
             targets = ["All"]
@@ -690,10 +682,6 @@ class ChatroomSendTool(Tool):
                 self._pool.mark_replied(self._agent_name, self._last_received_from)
 
         delivered = self._mailbox.send(self._agent_name, targets, message)
-
-        # Record send in leader gate
-        if self._leader_gate:
-            self._leader_gate.record_send(self._agent_name)
 
         # Count successful sends as "output" for search credit recovery
         if delivered > 0 and self._search_pool:
