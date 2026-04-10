@@ -511,7 +511,11 @@ class SmartFetchTool(Tool):
         focus_log = f" focus='{focus[:40]}'" if focus else ""
         logger.info("SmartFetch: extracting {} via {}/{} (input={}c{})",
                      url[:60], provider_name, model, len(input_text), focus_log)
-        response = await llm.chat(messages, max_tokens=4000, temperature=0.1)
+        import asyncio as _asyncio
+        response = await _asyncio.wait_for(
+            llm.chat(messages, max_tokens=4000, temperature=0.1),
+            timeout=30.0,
+        )
         usage = response.usage or {}
         result = response.content.strip() if response.content else None
         if result:

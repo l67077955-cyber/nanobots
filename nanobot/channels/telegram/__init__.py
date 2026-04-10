@@ -490,26 +490,38 @@ class TelegramChannel(
         # Extract bare command name (strip @botname suffix)
         cmd = command.strip().split()[0].lower().split("@")[0]
 
-        # Apply group chat side-effects before forwarding to AgentLoop
+        # All commands handled by GroupChatEngine — no forwarding to AgentLoop bus
         if self._groupchat_engine:
             if cmd == "/stop":
                 was_running = self._groupchat_engine._running
                 self._groupchat_engine.stop()
-                if was_running:
-                    from nanobot.bus.events import OutboundMessage
-                    await self.bus.publish_outbound(OutboundMessage(
-                        channel="telegram",
-                        chat_id=chat_id,
-                        content="✅ 群聊已停止。",
-                        metadata={
-                            "message_id": update.message.message_id,
-                            "message_thread_id": update.message.message_thread_id,
-                        },
-                    ))
-                    return
+                msg = "✅ 群聊已停止。" if was_running else "ℹ️ 当前没有运行中的任务。"
+                from nanobot.bus.events import OutboundMessage
+                await self.bus.publish_outbound(OutboundMessage(
+                    channel="telegram",
+                    chat_id=chat_id,
+                    content=msg,
+                    metadata={
+                        "message_id": update.message.message_id,
+                        "message_thread_id": update.message.message_thread_id,
+                    },
+                ))
             elif cmd in ("/clear", "/new"):
                 self._groupchat_engine.clear_history()
+                action = "新对话已开始" if cmd == "/new" else "上下文已清空"
+                from nanobot.bus.events import OutboundMessage
+                await self.bus.publish_outbound(OutboundMessage(
+                    channel="telegram",
+                    chat_id=chat_id,
+                    content=f"✅ {action}。",
+                    metadata={
+                        "message_id": update.message.message_id,
+                        "message_thread_id": update.message.message_thread_id,
+                    },
+                ))
+            return
 
+        # Fallback: no groupchat engine configured (shouldn't happen in normal operation)
         from nanobot.bus.events import InboundMessage
         await self.bus.publish_inbound(InboundMessage(
             channel="telegram",
