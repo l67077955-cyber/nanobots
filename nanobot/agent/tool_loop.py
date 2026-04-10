@@ -367,6 +367,7 @@ async def tool_loop(
 
             # ── Phase 1: Sequential pre-check (dedup, permission, progress) ──
             pending: list[tuple] = []  # (tc, args_str, dedup_key)
+            _batch_dedup_keys: set[str] = set()  # track dedup keys within this batch
             for tc in response.tool_calls:
                 result.tools_used.append(tc.name)
 
@@ -377,9 +378,10 @@ async def tool_loop(
                 dedup_key = None
                 if tc.name in _DEDUP_TOOLS:
                     dedup_key = _normalize_dedup_args(tc.name, tc.arguments)
-                    if dedup_key in _seen_calls:
+                    # Check both cross-iteration cache AND within-batch duplicates
+                    if dedup_key in _seen_calls or dedup_key in _batch_dedup_keys:
                         tool_result = (
-                            _seen_calls[dedup_key]
+                            (_seen_calls.get(dedup_key, "") or "")
                             + "\n\n[DUPLICATE] 你已经用完全相同的参数调用过此工具，结果与上次一致。"
                             "请使用不同的搜索词，或直接基于已有结果回答用户的问题。"
                         )
@@ -405,6 +407,7 @@ async def tool_loop(
                             "content": tool_result[:result_max_chars],
                         })
                         continue
+                    _batch_dedup_keys.add(dedup_key)
 
                 # Permission guard: block unauthorized tool calls
                 if _allowed_tools is not None and tc.name not in _allowed_tools:
