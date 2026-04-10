@@ -114,6 +114,7 @@ class LogCommandsMixin:
         lines = [header + "\n"]
 
         buttons = []
+        btn_row: list = []
         last_session = None
         for i, r in enumerate(page_logs):
             idx = start + i
@@ -146,11 +147,16 @@ class LogCommandsMixin:
                 f"{status} #{idx+1} {ts} {agent} [{model}] "
                 f"{total_tok}tok{cost_str}{cache_str} {latency}s{has_tc}{stream_icon}"
             )
-            # Button: agent + time for easy identification
-            buttons.append([InlineKeyboardButton(
-                f"#{idx+1} {ts} {agent} [{model}]",
+            # Button: 2-column layout with shortened labels
+            btn_row.append(InlineKeyboardButton(
+                f"#{idx+1} {ts} {agent[:8]}",
                 callback_data=f"rlog:{idx}"
-            )])
+            ))
+            if len(btn_row) == 2:
+                buttons.append(btn_row)
+                btn_row = []
+        if btn_row:
+            buttons.append(btn_row)
 
         # Pagination
         nav = []

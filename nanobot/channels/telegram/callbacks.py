@@ -414,8 +414,30 @@ class CallbacksMixin:
             buttons.append([InlineKeyboardButton("⬅️ 返回详情", callback_data=f"rlog:{idx}")])
             await query.edit_message_text(text[:4096], reply_markup=InlineKeyboardMarkup(buttons))
 
+        elif data.startswith("rlog_dl:"):
+            # Download full log as JSON file
+            idx = int(data[8:])
+            logs = self._load_request_logs()
+            if idx >= len(logs):
+                await query.answer("⚠️ 记录不存在")
+                return
+            r = logs[idx]
+            import io as _io
+            agent = (r.get("agent") or "unknown").replace("/", "_")[:20]
+            ts_str = (r.get("ts") or "unknown").replace(" ", "_").replace(":", "")
+            filename = f"log_{idx+1}_{agent}_{ts_str}.json"
+            content = json.dumps(r, ensure_ascii=False, indent=2, default=str)
+            buf = _io.BytesIO(content.encode("utf-8"))
+            buf.name = filename
+            await query.answer("📤 正在发送文件…")
+            await query.message.reply_document(
+                document=buf,
+                filename=filename,
+                caption=f"📋 请求日志 #{idx+1} — {r.get('agent', '?')} [{(r.get('model') or '?').split('/')[-1][:20]}]",
+            )
+
         elif data.startswith("rlog:"):
-            # Persistent log detail view
+            # Persistent log detail — brief summary + download confirmation
             idx = int(data[5:])
             logs = self._load_request_logs()
             if idx >= len(logs):
@@ -423,123 +445,35 @@ class CallbacksMixin:
                 return
             r = logs[idx]
 
-            def _trunc(s: str, limit: int) -> str:
-                if len(s) <= limit:
-                    return s
-                return s[:limit] + f"…(还有{len(s)-limit}字)"
-
-            model = r.get("model", "?")
+            model = (r.get("model") or "?").split("/")[-1][:25]
             agent = r.get("agent") or "?"
-            session = r.get("session") or "?"
-            topic = r.get("topic") or ""
-            mode = r.get("mode") or "?"
-            lines = [
-                f"--- 请求 #{idx+1} ---",
-                f"agent={agent} mode={mode}",
-                f"session={session}",
-            ]
-            if topic:
-                lines.append(f"topic={topic}")
-            lines += [
-                f"model={model}",
-                f"api_base={r.get('api_base', '(default)')}",
-                f"ts={r.get('ts', '?')} latency={r.get('latency', 0)}s",
-                f"max_tokens={r.get('max_tokens', '?')} stream={'是' if r.get('stream') else '否'}",
-                f"status={'✅ 成功' if r.get('status') == 'ok' else '❌ 失败'}",
-            ]
-
-            # Params
-            params = r.get("params", {})
-            if params:
-                ps = " ".join(f"{k}={v}" for k, v in params.items() if v is not None)
-                if ps:
-                    lines.append(f"params: {ps}")
-
-            # Messages summary
-            msgs = r.get("messages", [])
-            if msgs:
-                role_counts: dict[str, int] = {}
-                for m in msgs:
-                    rl = m.get("role", "?")
-                    role_counts[rl] = role_counts.get(rl, 0) + 1
-                rc_str = " ".join(f"{rl}={c}" for rl, c in role_counts.items())
-                lines.append(f"msgs: {len(msgs)} ({rc_str}) total={r.get('total_chars', 0)}字")
-
-            # Tools
-            tc_count = r.get("tools_count", 0)
-            if tc_count:
-                lines.append(f"tools_count: {tc_count}")
-
-            # Usage
-            usage = r.get("usage", {})
-            if usage:
-                lines.append(
-                    f"tokens: prompt={usage.get('prompt', 0)} "
-                    f"compl={usage.get('completion', 0)} "
-                    f"total={usage.get('total', 0)}"
-                )
-
-            # Cost & cache
+            ts = r.get("ts") or "?"
+            status = "✅" if r.get("status") == "ok" else "❌"
+            latency = r.get("latency", 0)
+            usage = r.get("usage") or {}
+            total_tok = usage.get("total", 0)
             cost = r.get("cost")
-            cache_t = r.get("cache_tokens")
-            if cost:
-                lines.append(f"💰 cost: ${cost:.6f}")
-            if cache_t:
-                lines.append(f"🔵 cache: {cache_t} tokens")
-
-            # Provider metadata (OpenRouter etc.)
-            pmeta_list = r.get("provider_meta", [])
-            if pmeta_list:
-                pm = pmeta_list[0] if isinstance(pmeta_list, list) else pmeta_list
-                if isinstance(pm, dict) and pm:
-                    lines.append("")
-                    lines.append("📡 Provider:")
-                    if pm.get("model_id"):
-                        lines.append(f"  model: {pm['model_id']}")
-                    if pm.get("provider"):
-                        lines.append(f"  provider: {pm['provider']}")
-                    if pm.get("generation_id"):
-                        lines.append(f"  gen_id: {pm['generation_id']}")
-                    if pm.get("latency_ms"):
-                        lines.append(f"  latency: {pm['latency_ms']}ms")
-                    if pm.get("tps"):
-                        lines.append(f"  throughput: {pm['tps']} tps")
-                    if pm.get("reasoning_tokens"):
-                        lines.append(f"  reasoning: {pm['reasoning_tokens']} tokens")
-                    if pm.get("final_cost") is not None:
-                        lines.append(f"  final_cost: ${pm['final_cost']:.6f}")
-                    if pm.get("cache_tokens"):
-                        lines.append(f"  cached: {pm['cache_tokens']} tokens")
-
-            # Response
-            reply_len = r.get("reply_len", 0)
-            finish = r.get("finish_reason", "")
-            lines.append(f"reply: {reply_len}字 finish={finish}")
-
-            if r.get("has_tool_calls"):
-                tc_list = r.get("reply_tool_calls", [])
-                for tc in tc_list[:5]:
-                    lines.append(f"  🔧 {tc.get('name', '?')} args={tc.get('args_len', tc.get('args_preview', '?'))}")
-
-            # Reply preview
+            cost_str = f"  💰${cost:.4f}" if cost else ""
+            msgs = r.get("messages", [])
+            msg_count = len(msgs)
+            tc_count = r.get("tools_count", 0)
+            has_tc = f"  🔧{tc_count}tools" if tc_count else ""
             preview = r.get("reply_preview", "")
-            if preview:
-                lines.append(f"\n[回复预览]\n{_trunc(preview, 300)}")
+            preview_str = f"\n\n[回复预览]\n{preview[:200]}…" if len(preview) > 200 else (f"\n\n[回复预览]\n{preview}" if preview else "")
 
-            # Error
-            if r.get("error"):
-                lines.append(f"\n[错误] {r.get('error_type', '?')}")
-                lines.append(_trunc(r["error"], 300))
-                sc = r.get("status_code")
-                if sc:
-                    lines.append(f"http_status={sc}")
+            text = (
+                f"📋 请求 #{idx+1}\n"
+                f"{status} {agent} [{model}]\n"
+                f"⏱ {ts}  {latency}s\n"
+                f"📊 {total_tok}tok  {msg_count}msgs{has_tc}{cost_str}"
+                f"{preview_str}"
+            )
 
-            text = "\n".join(lines)
             page = idx // 8
-            buttons = []
-            if msgs:
-                buttons.append([InlineKeyboardButton("📝 完整请求内容", callback_data=f"rlogp:{idx}:0")])
-            buttons.append([InlineKeyboardButton("⬅️ 返回列表", callback_data=f"rlog_pg:{page}")])
+            buttons = [
+                [InlineKeyboardButton("📥 下载完整日志", callback_data=f"rlog_dl:{idx}")],
+                [InlineKeyboardButton("⬅️ 返回列表", callback_data=f"rlog_pg:{page}")],
+            ]
             await query.edit_message_text(text[:4096], reply_markup=InlineKeyboardMarkup(buttons))
 
         elif data.startswith("logd:"):
