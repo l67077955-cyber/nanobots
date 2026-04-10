@@ -87,7 +87,9 @@ class AgentLoop:
         from nanobot.groupchat.config import GroupChatConfig
         self._prompt_builder = PromptBuilder(config=GroupChatConfig(), workspace=workspace)
         self._agent_name = "Nanobot"
-        self._agent_registry: dict[str, dict] = {}
+        self._agent_registry: dict[str, dict] = {
+            "Nanobot": {"model": self.model, "prompt": "You are nanobot, a helpful AI assistant."},
+        }
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
         self.subagents = SubagentManager(
