@@ -19,7 +19,6 @@ from typing import Any
 from loguru import logger
 
 from nanobot.groupchat import display as _d
-from nanobot.groupchat.prompt_builder import PromptBuilder
 from nanobot.groupchat.streaming import StreamingDisplay
 from nanobot.groupchat.utils import build_tool_log, cn_now as _cn_now, log_request
 
@@ -64,64 +63,16 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
             "models": {agent_name: agent.get("model", "?")},
         })
 
-    # Build messages: system(persona) → [memory] → [skills] → [history] → user(new)
-    now = _cn_now().strftime("%Y年%m月%d日 %H:%M")
-    messages: list[dict[str, str]] = [
-        {"role": "system", "content": agent["prompt"] + f"\n\n[Current date and time: {now}]"},
-    ]
-
-    # Long-term memory (progressive loading — pointer only, agent reads via read_file)
-    try:
-        from nanobot.agent.memory import MemoryStore
-        store = MemoryStore(engine.workspace)
-        if store.read_long_term().strip():
-            messages.append({"role": "system", "content": (
-                "[Long-term Memory — 长期记忆]\n\n"
-                f"你有持久化记忆文件。用 read_file 查看完整内容：\n"
-                f"- `{store.memory_file}` — 长期事实记忆 (MEMORY.md)\n"
-                f"- `{store.history_file}` — 时间线日志 (HISTORY.md)"
-            )})
-    except Exception:
-        pass  # memory is optional; don't break chat if unavailable
-
-    # Skills (always-on full content + compact listing of others)
-    try:
-        from nanobot.agent.skills import SkillsLoader
-        loader = SkillsLoader(engine.workspace)
-        parts: list[str] = []
-        always = loader.get_always_skills()
-        if always:
-            ac = loader.load_skills_for_context(always)
-            if ac:
-                parts.append(ac)
-        summary = loader.build_skills_summary(exclude=set(always) if always else None)
-        if summary:
-            parts.append("Other skills (read SKILL.md to use):\n" + summary)
-        if parts:
-            messages.append({"role": "system", "content": "\n\n".join(parts)})
-    except Exception:
-        pass  # skills are optional
-
-    # Tool instructions (load from .md file → fallback to default)
-    tool_hint = PromptBuilder.get_component_template("tool_instructions")
-    if tool_hint:
-        messages.append({"role": "system", "content": tool_hint})
-
-    # Few-shot examples
-    examples = agent.get("examples", "")
-    if examples:
-        messages.append({"role": "system", "content": f"以下是对话风格示例：\n{examples}"})
-
-    # Chat history
-    messages.extend(PromptBuilder.history_to_messages(engine._history, agent_name))
-
-    # Current user message
+    # Build messages via PromptBuilder (unified prompt construction)
+    messages: list[dict[str, Any]] = engine.prompt_builder.build_agent_prompt(
+        agent_name,
+        registry=engine.registry,
+        active_agents=[agent_name],
+        history=engine._history,
+        leader=None,
+        round_num=0,
+    )
     messages.append({"role": "user", "content": user_message})
-
-    # Post-history instructions
-    instructions = agent.get("instructions", "")
-    if instructions:
-        messages.append({"role": "system", "content": instructions})
 
     # ── Cycle loop: reply → wait for interjection → reply again ──
     cycle = 0

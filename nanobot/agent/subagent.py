@@ -201,10 +201,10 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
     
     def _build_subagent_prompt(self) -> str:
         """Build a focused system prompt for the subagent."""
-        from nanobot.agent.context import ContextBuilder
         from nanobot.agent.skills import SkillsLoader
+        from nanobot.utils.helpers import build_runtime_context
 
-        time_ctx = ContextBuilder._build_runtime_context(None, None)
+        time_ctx = build_runtime_context(None, None)
         parts = [f"""# Subagent
 
 {time_ctx}

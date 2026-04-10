@@ -10,6 +10,48 @@ from typing import Any
 import tiktoken
 
 
+RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
+
+
+def build_runtime_context(channel: str | None, chat_id: str | None) -> str:
+    """Build untrusted runtime metadata block for injection before the user message."""
+    lines = [f"Current Time: {current_time_str()}"]
+    if channel and chat_id:
+        lines += [f"Channel: {channel}", f"Chat ID: {chat_id}"]
+    return RUNTIME_CONTEXT_TAG + "\n" + "\n".join(lines)
+
+
+def build_user_content(
+    text: str, media: list[str] | None,
+) -> str | list[dict[str, Any]]:
+    """Build user message content with optional base64-encoded images."""
+    import base64
+    import mimetypes
+
+    if not media:
+        return text
+
+    images = []
+    for path in media:
+        p = Path(path)
+        if not p.is_file():
+            continue
+        raw = p.read_bytes()
+        mime = detect_image_mime(raw) or mimetypes.guess_type(path)[0]
+        if not mime or not mime.startswith("image/"):
+            continue
+        b64 = base64.b64encode(raw).decode()
+        images.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{b64}"},
+            "_meta": {"path": str(p)},
+        })
+
+    if not images:
+        return text
+    return images + [{"type": "text", "text": text}]
+
+
 def detect_image_mime(data: bytes) -> str | None:
     """Detect image MIME type from magic bytes, ignoring file extension."""
     if data[:8] == b"\x89PNG\r\n\x1a\n":

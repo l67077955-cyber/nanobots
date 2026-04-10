@@ -10,6 +10,28 @@ from pathlib import Path
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
 
 
+def build_skills_section(workspace: Path) -> str:
+    """Build the skills section for prompt injection (shared logic).
+
+    Always-on skills are injected in full; other skills are listed
+    compactly (one line each) for progressive loading via read_file.
+    """
+    loader = SkillsLoader(workspace)
+    parts: list[str] = []
+
+    always_skills = loader.get_always_skills()
+    if always_skills:
+        content = loader.load_skills_for_context(always_skills)
+        if content:
+            parts.append(content)
+
+    summary = loader.build_skills_summary(exclude=set(always_skills) if always_skills else None)
+    if summary:
+        parts.append("Other skills (read SKILL.md to use):\n" + summary)
+
+    return "\n\n".join(parts)
+
+
 class SkillsLoader:
     """
     Loader for agent skills.

@@ -13,9 +13,9 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from loguru import logger
 
-from nanobot.agent.context import ContextBuilder
 from nanobot.groupchat import display as _display
 from nanobot.groupchat import history_settings
+from nanobot.groupchat.prompt_builder import PromptBuilder
 from nanobot.agent.memory import MemoryConsolidator
 from nanobot.agent.subagent import SubagentManager
 
@@ -31,7 +31,7 @@ from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider
 from nanobot.session.manager import Session, SessionManager
-from nanobot.utils.helpers import build_assistant_message
+from nanobot.utils.helpers import RUNTIME_CONTEXT_TAG as _RUNTIME_CONTEXT_TAG, build_assistant_message
 
 if TYPE_CHECKING:
     from nanobot.config.schema import ChannelsConfig, ExecToolConfig, WebSearchConfig
@@ -84,7 +84,10 @@ class AgentLoop:
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
 
-        self.context = ContextBuilder(workspace)
+        from nanobot.groupchat.config import GroupChatConfig
+        self._prompt_builder = PromptBuilder(config=GroupChatConfig(), workspace=workspace)
+        self._agent_name = "Nanobot"
+        self._agent_registry: dict[str, dict] = {}
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
         self.subagents = SubagentManager(
@@ -115,10 +118,21 @@ class AgentLoop:
             model=self.model,
             sessions=self.sessions,
             context_window_tokens=context_window_tokens,
-            build_messages=self.context.build_messages,
+            build_messages=self._build_messages,
             get_tool_definitions=self.tools.get_definitions,
         )
         self._register_default_tools()
+
+    def set_agent_config(self, name: str, config: dict) -> None:
+        """Set the agent identity for prompt building."""
+        self._agent_name = name
+        self._agent_registry[name] = config
+
+    def _build_messages(self, **kwargs) -> list[dict]:
+        """Wrapper for PromptBuilder.build_single_agent_messages (used by MemoryConsolidator)."""
+        return self._prompt_builder.build_single_agent_messages(
+            self._agent_name, registry=self._agent_registry, **kwargs,
+        )
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
@@ -377,7 +391,9 @@ class AgentLoop:
             history = session.get_history(max_messages=None)
             # Subagent results should be assistant role, other system messages use user role
             current_role = "assistant" if msg.sender_id == "subagent" else "user"
-            messages = self.context.build_messages(
+            messages = self._prompt_builder.build_single_agent_messages(
+                self._agent_name,
+                registry=self._agent_registry,
                 history=history,
                 current_message=msg.content, channel=channel, chat_id=chat_id,
                 current_role=current_role,
@@ -428,7 +444,9 @@ class AgentLoop:
                 message_tool.start_turn()
 
         history = session.get_history(max_messages=0)
-        initial_messages = self.context.build_messages(
+        initial_messages = self._prompt_builder.build_single_agent_messages(
+            self._agent_name,
+            registry=self._agent_registry,
             history=history,
             current_message=msg.content,
             media=msg.media if msg.media else None,
@@ -500,7 +518,7 @@ class AgentLoop:
                         continue
                     entry["content"] = filtered
             elif role == "user":
-                if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
+                if isinstance(content, str) and content.startswith(_RUNTIME_CONTEXT_TAG):
                     # Strip the runtime-context prefix, keep only the user text.
                     parts = content.split("\n\n", 1)
                     if len(parts) > 1 and parts[1].strip():
@@ -510,7 +528,7 @@ class AgentLoop:
                 if isinstance(content, list):
                     filtered = []
                     for c in content:
-                        if c.get("type") == "text" and isinstance(c.get("text"), str) and c["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
+                        if c.get("type") == "text" and isinstance(c.get("text"), str) and c["text"].startswith(_RUNTIME_CONTEXT_TAG):
                             continue  # Strip runtime context from multimodal messages
                         if (c.get("type") == "image_url"
                                 and c.get("image_url", {}).get("url", "").startswith("data:image/")):

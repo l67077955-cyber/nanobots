@@ -38,26 +38,11 @@ class ContextBuilder:
         if memory:
             parts.append(f"# Memory\n\n{memory}")
 
-        # 3. 一次性获取所有 skill 信息（关键优化点）
-        all_skills = self.skills.list_skills(filter_unavailable=False)
-        always_skills = self.skills.get_always_skills()  # 仍可复用（内部已有缓存后会很快）
-
-        # 加载 always skills 的完整内容
-        if always_skills:
-            always_content = self.skills.load_skills_for_context(always_skills)
-            if always_content:
-                parts.append(f"# Active Skills\n\n{always_content}")
-
-        # 构建 summary（排除 always skills）
-        skills_summary = self.skills.build_skills_summary(
-            exclude=set(always_skills) if always_skills else None,
-        )
-        if skills_summary:
-            parts.append(
-                "# Other Skills\n\n"
-                "Read SKILL.md to use.\n\n"
-                f"{skills_summary}"
-            )
+        # 3. Skills (shared logic)
+        from nanobot.agent.skills import build_skills_section
+        skills_content = build_skills_section(self.workspace)
+        if skills_content:
+            parts.append(f"# Skills\n\n{skills_content}")
 
         return "\n\n---\n\n".join(parts)
 
