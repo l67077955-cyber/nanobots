@@ -327,21 +327,34 @@ class PromptBuilder:
     def _build_skills_content(self) -> str:
         """Build the skills section for group chat agents.
 
-        Uses SkillsLoader to generate an XML summary of available skills.
-        Agents can read the full SKILL.md via read_file for progressive loading.
+        Includes both always-on skill content and the XML summary of
+        available skills.  Agents can read the full SKILL.md via read_file
+        for progressive loading.
         """
         from nanobot.agent.skills import SkillsLoader
 
         loader = SkillsLoader(self._workspace)
+
+        parts: list[str] = []
+
+        # Always-on skills: their full content is injected directly.
+        always_skills = loader.get_always_skills()
+        if always_skills:
+            content = loader.load_skills_for_context(always_skills)
+            if content:
+                parts.append(content)
+
+        # Summary listing of all skills (XML).
         summary = loader.build_skills_summary()
-        if not summary:
-            return ""
-        return (
-            "[Skills — 可用技能列表]\n\n"
-            "以下技能扩展你的能力。需要时用 read_file 读取对应的 SKILL.md 来使用。\n"
-            "标记 available=\"false\" 的技能需要先安装依赖。\n\n"
-            + summary
-        )
+        if summary:
+            parts.append(
+                "[Skills — 可用技能列表]\n\n"
+                "以下技能扩展你的能力。需要时用 read_file 读取对应的 SKILL.md 来使用。\n"
+                "标记 available=\"false\" 的技能需要先安装依赖。\n\n"
+                + summary
+            )
+
+        return "\n\n".join(parts)
 
     @staticmethod
     def get_component_template(key: str) -> str:

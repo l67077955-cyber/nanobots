@@ -74,9 +74,6 @@ class GroupChatEngine:
         self._mcp_connected: bool = False
         self._mcp_connecting: bool = False
 
-        # Skills system (shared with single-chat)
-        from nanobot.agent.skills import SkillsLoader
-        self._skills = SkillsLoader(workspace)
         self._register_tools()
         self._init_state()
 
@@ -983,7 +980,7 @@ class GroupChatEngine:
         agent_name: str,
         relevant_agents: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Build prompt — delegates to PromptBuilder, with skills injected."""
+        """Build prompt — delegates entirely to PromptBuilder."""
         messages = self._prompt_builder.build_agent_prompt(
             agent_name,
             registry=self.registry,
@@ -994,25 +991,8 @@ class GroupChatEngine:
             relevant_agents=relevant_agents,
         )
 
-        # Inject skills (always-on content + summary of available skills)
-        skills_parts: list[str] = []
-        always_skills = self._skills.get_always_skills()
-        if always_skills:
-            content = self._skills.load_skills_for_context(always_skills)
-            if content:
-                skills_parts.append(content)
-        summary = self._skills.build_skills_summary()
-        if summary:
-            skills_parts.append(
-                "# Skills\n\n"
-                "To use a skill, read its SKILL.md with read_file.\n\n"
-                + summary
-            )
-        if skills_parts:
-            messages.insert(1, {
-                "role": "system",
-                "content": "\n\n".join(skills_parts),
-            })
+        # Skills are now built by PromptBuilder._build_skills_content()
+        # (included in DEFAULT_PROMPT_ORDER as "skills" component).
 
         return messages
 
