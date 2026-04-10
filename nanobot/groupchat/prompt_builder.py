@@ -166,6 +166,7 @@ class PromptBuilder:
         self._config = config
         self._workspace = workspace
         self._prompt_order: dict[str, list[str]] = self._load_prompt_order()
+        self._visibility: dict[str, str] = self._load_visibility()
 
     # ── Order management ──
 
