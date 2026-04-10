@@ -25,28 +25,39 @@ class ContextBuilder:
         self.skills = SkillsLoader(workspace)
 
     def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
-        """Build the system prompt from identity, bootstrap files, memory, and skills."""
+        """Build the system prompt — 优化后只遍历一次 skill 目录"""
         parts = [self._get_identity()]
 
+        # 1. Bootstrap files
         bootstrap = self._load_bootstrap_files()
         if bootstrap:
             parts.append(bootstrap)
 
+        # 2. Memory
         memory = self.memory.get_memory_context()
         if memory:
             parts.append(f"# Memory\n\n{memory}")
 
-        always_skills = self.skills.get_always_skills()
+        # 3. 一次性获取所有 skill 信息（关键优化点）
+        all_skills = self.skills.list_skills(filter_unavailable=False)
+        always_skills = self.skills.get_always_skills()  # 仍可复用（内部已有缓存后会很快）
+
+        # 加载 always skills 的完整内容
         if always_skills:
             always_content = self.skills.load_skills_for_context(always_skills)
             if always_content:
                 parts.append(f"# Active Skills\n\n{always_content}")
 
+        # 构建 summary（排除 always skills）
         skills_summary = self.skills.build_skills_summary(
             exclude=set(always_skills) if always_skills else None,
         )
         if skills_summary:
-            parts.append(f"# Other Skills\n\nRead SKILL.md to use.\n\n{skills_summary}")
+            parts.append(
+                "# Other Skills\n\n"
+                "Read SKILL.md to use.\n\n"
+                f"{skills_summary}"
+            )
 
         return "\n\n---\n\n".join(parts)
 
