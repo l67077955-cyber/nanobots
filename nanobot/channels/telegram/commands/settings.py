@@ -361,11 +361,17 @@ class SettingsCommandsMixin:
             cond = conditional_tags.get(key, "")
             cond_str = f"  [仅{cond}]" if cond else ""
 
-            lines.append(f"{display_num}. {edit_icon} {label} — {status}{cond_str}")
+            # Visibility icon
+            vis = engine.prompt_builder.get_component_visibility(key)
+            vis_icon = "👁" if vis == "all" else "👑"
+            vis_str = f" {vis_icon}" if key != "history" else ""
+
+            lines.append(f"{display_num}. {edit_icon} {label} — {status}{cond_str}{vis_str}")
 
         lines.append("")
         lines.append("✏️ 全局模板  📂 per-agent(/editagent)  🔒 自动生成")
         lines.append("● 已配置  ○ 空(跳过注入)  [条件] 按条件激活")
+        lines.append("👁全体可见  👑仅Leader可见  点击👁/👑按钮切换")
         lines.append("💡 变量: {{agent}} {{members}} {{datetime}} {{round}} {{tools}} {{others}}")
 
         buttons = []
@@ -387,6 +393,11 @@ class SettingsCommandsMixin:
             # Delete button (history cannot be removed)
             if key != "history":
                 row.append(InlineKeyboardButton("❌", callback_data=f"prdel:{i}"))
+            # Visibility toggle button (history always all-visible)
+            if key != "history":
+                vis = engine.prompt_builder.get_component_visibility(key)
+                vis_btn = "👁" if vis == "all" else "👑"
+                row.append(InlineKeyboardButton(vis_btn, callback_data=f"pviz:{i}"))
             buttons.append(row)
         bottom_row = [InlineKeyboardButton("🔍 预览完整上下文", callback_data="prv:0")]
         if engine.prompt_builder.get_available_components():
