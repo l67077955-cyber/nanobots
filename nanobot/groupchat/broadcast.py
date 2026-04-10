@@ -346,6 +346,7 @@ async def broadcast_round(
             engine=engine,
             mailbox=mailbox,
             exec_agents=non_leader_agents,
+            leader_name=leader_name,
         )
         agent_tool_registries[leader_name].register(manage_tool)
         agent_tool_registries[leader_name].register(end_tool)

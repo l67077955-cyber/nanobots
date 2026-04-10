@@ -1075,10 +1075,11 @@ class ClearContextTool(Tool):
     its context has been reset and it should start fresh.
     """
 
-    def __init__(self, *, engine: Any, mailbox: Any, exec_agents: list[str]) -> None:
+    def __init__(self, *, engine: Any, mailbox: Any, exec_agents: list[str], leader_name: str = "") -> None:
         self._engine = engine
         self._mailbox = mailbox
         self._exec_agents = exec_agents
+        self._leader_name = leader_name
 
     @property
     def name(self) -> str:
@@ -1089,7 +1090,7 @@ class ClearContextTool(Tool):
         return (
             "清理 agent 的上下文：从共享历史中移除指定 agent 的所有消息，"
             "并通知该 agent 重新开始。适用于某个 agent 陷入循环或输出垃圾时。"
-            "参数: agent (目标agent), keep_last (保留最后N条消息，默认0=全清)"
+            "参数: agent (目标agent名字，或 'all' 清理所有agent), keep_last (保留最后N条消息，默认0=全清)"
         )
 
     @property
@@ -1099,11 +1100,11 @@ class ClearContextTool(Tool):
             "properties": {
                 "agent": {
                     "type": "string",
-                    "description": "要清理上下文的 agent 名字",
+                    "description": "要清理上下文的 agent 名字，或 'all' 清理所有 agent（包括 Leader）",
                 },
                 "keep_last": {
                     "type": "integer",
-                    "description": "保留该 agent 最后 N 条消息（0=全清，默认0）",
+                    "description": "保留每个 agent 最后 N 条消息（0=全清，默认0）",
                 },
                 "reason": {
                     "type": "string",
@@ -1113,33 +1114,26 @@ class ClearContextTool(Tool):
             "required": ["agent"],
         }
 
-    async def execute(
-        self,
-        agent: str = "",
-        keep_last: int = 0,
-        reason: str = "",
-        **kwargs: Any,
-    ) -> str:
-        if not agent:
-            return "Error: 必须指定 agent"
+    def _all_known_agents(self) -> list[str]:
+        """Return all agents including leader."""
+        agents = list(self._exec_agents)
+        if self._leader_name and self._leader_name not in agents:
+            agents.append(self._leader_name)
+        return agents
 
-        if agent not in self._exec_agents:
-            return f"Error: agent '{agent}' 不在当前轮中。可用: {', '.join(self._exec_agents)}"
-
+    async def _clear_one(self, agent: str, keep_last: int, reason: str) -> str:
+        """Clear messages for a single agent. Returns result string."""
         history = self._engine._history
-        # Collect messages from this agent
         agent_msgs = [m for m in history if m.get("sender") == agent]
         total = len(agent_msgs)
 
         if total == 0:
-            return f"⚠️ {agent} 在历史中没有消息，无需清理"
+            return f"⚠️ {agent}: 无消息"
 
-        # Determine how many to remove
         remove_count = max(0, total - keep_last)
         if remove_count == 0:
-            return f"⚠️ keep_last={keep_last} 已覆盖所有消息，无消息被清理"
+            return f"⚠️ {agent}: keep_last={keep_last} 已覆盖所有消息"
 
-        # Remove oldest remove_count messages from this agent
         removed = 0
         new_history = []
         agent_seen = 0
@@ -1148,7 +1142,7 @@ class ClearContextTool(Tool):
                 agent_seen += 1
                 if agent_seen <= remove_count:
                     removed += 1
-                    continue  # drop this message
+                    continue
             new_history.append(m)
 
         self._engine._history[:] = new_history
@@ -1162,10 +1156,43 @@ class ClearContextTool(Tool):
         self._mailbox.send("系统", [agent], notify)
 
         keep_info = f"，保留最后 {keep_last} 条" if keep_last > 0 else ""
-        await self._engine._send(
-            f"🧹 Leader 已清理 {agent} 的上下文（{removed}/{total} 条{keep_info}）"
-        )
-        return f"✅ 已清理 {agent} 的 {removed} 条历史消息{keep_info}，已通知该 agent 重置思路"
+        return f"✅ {agent}: 清理 {removed}/{total} 条{keep_info}"
+
+    async def execute(
+        self,
+        agent: str = "",
+        keep_last: int = 0,
+        reason: str = "",
+        **kwargs: Any,
+    ) -> str:
+        if not agent:
+            return "Error: 必须指定 agent"
+
+        if agent.lower() == "all":
+            # Clear all agents
+            all_agents = self._all_known_agents()
+            results = []
+            for a in all_agents:
+                r = await self._clear_one(a, keep_last, reason)
+                results.append(r)
+            summary = " | ".join(results)
+            reason_str = f"（原因: {reason}）" if reason else ""
+            await self._engine._send(
+                f"🧹 Leader 已清理所有 agent 的上下文{reason_str}: {summary}"
+            )
+            return f"✅ 已清理所有 agent 的上下文: {summary}"
+        else:
+            # Clear single agent — validate against all known agents (including leader)
+            all_agents = self._all_known_agents()
+            if agent not in all_agents:
+                return f"Error: agent '{agent}' 不在当前轮中。可用: {', '.join(all_agents)}"
+
+            result = await self._clear_one(agent, keep_last, reason)
+            keep_info = f"，保留最后 {keep_last} 条" if keep_last > 0 else ""
+            await self._engine._send(
+                f"🧹 Leader 已清理 {agent} 的上下文{keep_info}: {result}"
+            )
+            return f"✅ {result}，已通知该 agent 重置思路"
 
 
 class TransferCreditsTool(Tool):
