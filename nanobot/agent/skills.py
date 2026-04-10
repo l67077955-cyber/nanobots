@@ -113,44 +113,35 @@ class SkillsLoader:
                 return str(self.builtin_skills / name)
         return None
 
-    def build_skills_summary(self) -> str:
-        """
-        Build a summary of all skills (name, description, path, availability).
+    def build_skills_summary(
+        self, *, exclude: set[str] | None = None,
+    ) -> str:
+        """Build a compact summary of available skills.
 
-        This is used for progressive loading - the agent can read the full
-        skill content using read_file when needed.
+        Args:
+            exclude: Skill names to omit (e.g. already-loaded always-on skills).
 
         Returns:
-            XML-formatted skills summary.
+            Compact one-line-per-skill summary.
         """
         all_skills = self.list_skills(filter_unavailable=False)
         if not all_skills:
             return ""
 
-        def escape_xml(s: str) -> str:
-            return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-        lines = ["<skills>"]
+        exclude = exclude or set()
+        lines: list[str] = []
         for s in all_skills:
-            name = escape_xml(s["name"])
-            path = s["path"]
-            desc = escape_xml(self._get_skill_description(s["name"]))
-            skill_meta = self._get_skill_meta(s["name"])
+            name = s["name"]
+            if name in exclude:
+                continue
+            desc = self._get_skill_description(name)
+            skill_meta = self._get_skill_meta(name)
             available = self._check_requirements(skill_meta)
-
-            lines.append(f"  <skill available=\"{str(available).lower()}\">")
-            lines.append(f"    <name>{name}</name>")
-            lines.append(f"    <description>{desc}</description>")
-            lines.append(f"    <location>{path}</location>")
-
-            # Show missing requirements for unavailable skills
+            status = ""
             if not available:
                 missing = self._get_missing_requirements(skill_meta)
-                if missing:
-                    lines.append(f"    <requires>{escape_xml(missing)}</requires>")
-
-            lines.append("  </skill>")
-        lines.append("</skills>")
+                status = f" [unavailable: {missing}]" if missing else " [unavailable]"
+            lines.append(f"- {name}: {desc}{status}")
 
         return "\n".join(lines)
 

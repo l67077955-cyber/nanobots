@@ -42,14 +42,11 @@ class ContextBuilder:
             if always_content:
                 parts.append(f"# Active Skills\n\n{always_content}")
 
-        skills_summary = self.skills.build_skills_summary()
+        skills_summary = self.skills.build_skills_summary(
+            exclude=set(always_skills) if always_skills else None,
+        )
         if skills_summary:
-            parts.append(f"""# Skills
-
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
-Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
-
-{skills_summary}""")
+            parts.append(f"# Other Skills\n\nRead SKILL.md to use.\n\n{skills_summary}")
 
         return "\n\n---\n\n".join(parts)
 

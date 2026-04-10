@@ -219,7 +219,7 @@ You possess native multimodal perception. Tools like 'read_file' or 'web_fetch' 
 
         skills_summary = SkillsLoader(self.workspace).build_skills_summary()
         if skills_summary:
-            parts.append(f"## Skills\n\nRead SKILL.md with read_file to use a skill.\n\n{skills_summary}")
+            parts.append(f"## Skills\n\nRead SKILL.md to use.\n\n{skills_summary}")
 
         return "\n\n".join(parts)
 

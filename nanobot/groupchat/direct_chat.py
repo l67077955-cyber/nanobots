@@ -84,7 +84,7 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
     except Exception:
         pass  # memory is optional; don't break chat if unavailable
 
-    # Skills (always-on + summary) — mirrors engine._build_agent_prompt()
+    # Skills (always-on full content + compact listing of others)
     try:
         from nanobot.agent.skills import SkillsLoader
         loader = SkillsLoader(engine.workspace)
@@ -94,9 +94,9 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
             ac = loader.load_skills_for_context(always)
             if ac:
                 parts.append(ac)
-        summary = loader.build_skills_summary()
+        summary = loader.build_skills_summary(exclude=set(always) if always else None)
         if summary:
-            parts.append("# Skills\n\nTo use a skill, read its SKILL.md with read_file.\n\n" + summary)
+            parts.append("Other skills (read SKILL.md to use):\n" + summary)
         if parts:
             messages.append({"role": "system", "content": "\n\n".join(parts)})
     except Exception:
