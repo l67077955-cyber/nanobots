@@ -682,10 +682,39 @@ async def broadcast_round(
         cycle = 0
         content = ""  # last cycle's text output
         agent_max_iters = 12 if is_leader else 8
+        max_cycles = 30 if is_leader else 20  # hard cap to prevent runaway agents
         _substantive_tools = {"web_search", "web_fetch", "exec", "read_file", "write_file"}
+        # Separate system-prompt messages (stable prefix) from conversation messages
+        # so we can prune conversation turns without touching the system prompt.
+        _sys_msg_count = len(messages)
 
         try:
             while True:
+                # Hard cycle cap — prevent runaway agents from draining resources
+                if cycle >= max_cycles:
+                    logger.warning(
+                        "Broadcast: {} hit max_cycles={}, forcing exit", name, max_cycles
+                    )
+                    if not content:
+                        messages.append({
+                            "role": "system",
+                            "content": "[已达到最大轮次限制，请立即输出最终总结，禁止再调用工具。]",
+                        })
+                        try:
+                            from nanobot.agent.tool_loop import tool_loop as _final_loop
+                            _r = await _final_loop(
+                                provider=engine.provider,
+                                messages=messages,
+                                tool_registry=reg,
+                                model=model,
+                                max_tokens=engine.config.max_tokens,
+                                max_iterations=1,
+                                tool_defs=None,
+                            )
+                            content = _r.content or ""
+                        except Exception:
+                            pass
+                    break
                 # Respect /stop — exit immediately if engine is no longer running
                 if not engine._running:
                     logger.info("Broadcast: {} exiting — engine stopped", name)
@@ -929,6 +958,21 @@ async def broadcast_round(
                 logger.info("Broadcast: {} reactivated by {}: {}", name, msg.sender, msg.content[:60])
                 await tracker.set_state(name, "thinking")
                 await engine._send(_d.chatroom_wait_msg(name, str(msg), leader=leader_name))
+
+                # ── Prune conversation tail to prevent unbounded growth ──
+                # Keep system-prompt prefix intact; only retain the last
+                # _CONV_KEEP_TURNS conversation turns (3 msgs per turn).
+                _CONV_KEEP_TURNS = 6  # keep last 6 reactivation cycles worth of msgs
+                _max_conv = _CONV_KEEP_TURNS * 3
+                conv_msgs = messages[_sys_msg_count:]
+                if len(conv_msgs) > _max_conv:
+                    dropped = len(conv_msgs) - _max_conv
+                    messages[_sys_msg_count:] = conv_msgs[-_max_conv:]
+                    logger.debug(
+                        "Broadcast: {} pruned {} conversation messages (kept {})",
+                        name, dropped, _max_conv,
+                    )
+
                 # Inject agent's own previous output so LLM knows what it already said
                 if content:
                     messages.append({
