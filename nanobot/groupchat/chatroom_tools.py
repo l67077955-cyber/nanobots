@@ -335,10 +335,14 @@ class SmartSearchTool(Tool):
 
         logger.info("SmartSearch: summarizing {}c via {}/{} (query={})",
                      len(raw_results), provider_name, model, query_context[:50])
-        response = await llm.chat(
-            [{"role": "user", "content": prompt}],
-            max_tokens=2000,
-            temperature=0.1,
+        import asyncio as _asyncio
+        response = await _asyncio.wait_for(
+            llm.chat(
+                [{"role": "user", "content": prompt}],
+                max_tokens=2000,
+                temperature=0.1,
+            ),
+            timeout=30.0,
         )
         summary = response.content.strip() if response.content else None
         if summary:
