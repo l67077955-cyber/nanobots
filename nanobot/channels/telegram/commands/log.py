@@ -54,8 +54,10 @@ class LogCommandsMixin:
 
     @staticmethod
     def _load_request_logs(max_lines: int = 500) -> list[dict]:
-        """Load recent request logs from JSONL files."""
+        """Load recent request logs from JSONL files (tail-read for speed)."""
         import json as _json
+        from pathlib import Path
+
         log_dir = Path.home() / ".nanobot" / "request_logs"
         if not log_dir.exists():
             return []
@@ -63,13 +65,27 @@ class LogCommandsMixin:
         logs: list[dict] = []
         for f in files:
             try:
-                file_lines = f.read_text(encoding="utf-8").strip().split("\n")
-                for line in reversed(file_lines):
-                    if line.strip():
-                        try:
-                            logs.append(_json.loads(line))
-                        except Exception:
-                            pass
+                # Read only the tail of large files instead of loading entire file
+                fsize = f.stat().st_size
+                if fsize == 0:
+                    continue
+                # Estimate: avg ~50KB per log line, read enough for max_lines
+                need = max_lines - len(logs)
+                read_bytes = min(fsize, need * 80_000)
+                with open(f, "rb") as fh:
+                    if read_bytes < fsize:
+                        fh.seek(fsize - read_bytes)
+                        # Skip partial first line
+                        fh.readline()
+                    raw_lines = fh.read().split(b"\n")
+                for raw in reversed(raw_lines):
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        logs.append(_json.loads(raw))
+                    except Exception:
+                        pass
                     if len(logs) >= max_lines:
                         break
             except Exception:
