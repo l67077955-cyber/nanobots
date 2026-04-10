@@ -133,27 +133,21 @@ class MessageHandlerMixin:
             self._stop_typing(str_chat_id)
             return
 
-        # Route to active agents if any (1+ agents all use inject → group loop)
+        # Route to GroupChatEngine (always active)
         if self._groupchat_engine and self._groupchat_engine.active_agents:
             self._ensure_gc_send(str_chat_id)
             self._groupchat_engine.inject(content)
             return
 
-        # Engine exists but no active agents — don't fall through to main loop
+        # Engine exists but no active agents
         if self._groupchat_engine and not self._groupchat_engine.active_agents:
             await self._send_text(int(str_chat_id), "💤 没有活跃 agent，用 /addagent 加入一个")
             self._stop_typing(str_chat_id)
             return
 
-        # Default: forward to the message bus (main agent loop)
-        await self._handle_message(
-            sender_id=sender_id,
-            chat_id=str_chat_id,
-            content=content,
-            media=media_paths,
-            metadata=metadata,
-            session_key=session_key,
-        )
+        # No engine configured (should not happen in normal operation)
+        await self._send_text(int(str_chat_id), "⚠️ 群聊引擎未初始化")
+        self._stop_typing(str_chat_id)
 
     async def _flush_media_group(self, key: str) -> None:
         """Wait briefly, then forward buffered media-group as one turn."""

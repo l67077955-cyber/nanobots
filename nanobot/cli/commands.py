@@ -1,10 +1,7 @@
 """CLI commands for nanobot."""
 
 import asyncio
-from contextlib import contextmanager, nullcontext
 import os
-import select
-import signal
 import sys
 from pathlib import Path
 from typing import Any
@@ -21,15 +18,8 @@ if sys.platform == "win32":
             pass
 
 import typer
-from prompt_toolkit import PromptSession, print_formatted_text
-from prompt_toolkit.application import run_in_terminal
-from prompt_toolkit.formatted_text import ANSI, HTML
-from prompt_toolkit.history import FileHistory
-from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
-from rich.markdown import Markdown
 from rich.table import Table
-from rich.text import Text
 
 from nanobot import __logo__, __version__
 from nanobot.config.paths import get_workspace_path
@@ -44,201 +34,6 @@ app = typer.Typer(
 )
 
 console = Console()
-EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
-
-# ---------------------------------------------------------------------------
-# CLI input: prompt_toolkit for editing, paste, history, and display
-# ---------------------------------------------------------------------------
-
-_PROMPT_SESSION: PromptSession | None = None
-_SAVED_TERM_ATTRS = None  # original termios settings, restored on exit
-
-
-def _flush_pending_tty_input() -> None:
-    """Drop unread keypresses typed while the model was generating output."""
-    try:
-        fd = sys.stdin.fileno()
-        if not os.isatty(fd):
-            return
-    except Exception:
-        return
-
-    try:
-        import termios
-        termios.tcflush(fd, termios.TCIFLUSH)
-        return
-    except Exception:
-        pass
-
-    try:
-        while True:
-            ready, _, _ = select.select([fd], [], [], 0)
-            if not ready:
-                break
-            if not os.read(fd, 4096):
-                break
-    except Exception:
-        return
-
-
-def _restore_terminal() -> None:
-    """Restore terminal to its original state (echo, line buffering, etc.)."""
-    if _SAVED_TERM_ATTRS is None:
-        return
-    try:
-        import termios
-        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, _SAVED_TERM_ATTRS)
-    except Exception:
-        pass
-
-
-def _init_prompt_session() -> None:
-    """Create the prompt_toolkit session with persistent file history."""
-    global _PROMPT_SESSION, _SAVED_TERM_ATTRS
-
-    # Save terminal state so we can restore it on exit
-    try:
-        import termios
-        _SAVED_TERM_ATTRS = termios.tcgetattr(sys.stdin.fileno())
-    except Exception:
-        pass
-
-    from nanobot.config.paths import get_cli_history_path
-
-    history_file = get_cli_history_path()
-    history_file.parent.mkdir(parents=True, exist_ok=True)
-
-    _PROMPT_SESSION = PromptSession(
-        history=FileHistory(str(history_file)),
-        enable_open_in_editor=False,
-        multiline=False,   # Enter submits (single line mode)
-    )
-
-
-def _make_console() -> Console:
-    return Console(file=sys.stdout)
-
-
-def _render_interactive_ansi(render_fn) -> str:
-    """Render Rich output to ANSI so prompt_toolkit can print it safely."""
-    ansi_console = Console(
-        force_terminal=True,
-        color_system=console.color_system or "standard",
-        width=console.width,
-    )
-    with ansi_console.capture() as capture:
-        render_fn(ansi_console)
-    return capture.get()
-
-
-def _print_agent_response(response: str, render_markdown: bool) -> None:
-    """Render assistant response with consistent terminal styling."""
-    console = _make_console()
-    content = response or ""
-    body = Markdown(content) if render_markdown else Text(content)
-    console.print()
-    console.print(f"[cyan]{__logo__} nanobot[/cyan]")
-    console.print(body)
-    console.print()
-
-
-async def _print_interactive_line(text: str) -> None:
-    """Print async interactive updates with prompt_toolkit-safe Rich styling."""
-    def _write() -> None:
-        ansi = _render_interactive_ansi(
-            lambda c: c.print(f"  [dim]↳ {text}[/dim]")
-        )
-        print_formatted_text(ANSI(ansi), end="")
-
-    await run_in_terminal(_write)
-
-
-async def _print_interactive_response(response: str, render_markdown: bool) -> None:
-    """Print async interactive replies with prompt_toolkit-safe Rich styling."""
-    def _write() -> None:
-        content = response or ""
-        ansi = _render_interactive_ansi(
-            lambda c: (
-                c.print(),
-                c.print(f"[cyan]{__logo__} nanobot[/cyan]"),
-                c.print(Markdown(content) if render_markdown else Text(content)),
-                c.print(),
-            )
-        )
-        print_formatted_text(ANSI(ansi), end="")
-
-    await run_in_terminal(_write)
-
-
-class _ThinkingSpinner:
-    """Spinner wrapper with pause support for clean progress output."""
-
-    def __init__(self, enabled: bool):
-        self._spinner = console.status(
-            "[dim]nanobot is thinking...[/dim]", spinner="dots"
-        ) if enabled else None
-        self._active = False
-
-    def __enter__(self):
-        if self._spinner:
-            self._spinner.start()
-        self._active = True
-        return self
-
-    def __exit__(self, *exc):
-        self._active = False
-        if self._spinner:
-            self._spinner.stop()
-        return False
-
-    @contextmanager
-    def pause(self):
-        """Temporarily stop spinner while printing progress."""
-        if self._spinner and self._active:
-            self._spinner.stop()
-        try:
-            yield
-        finally:
-            if self._spinner and self._active:
-                self._spinner.start()
-
-
-def _print_cli_progress_line(text: str, thinking: _ThinkingSpinner | None) -> None:
-    """Print a CLI progress line, pausing the spinner if needed."""
-    with thinking.pause() if thinking else nullcontext():
-        console.print(f"  [dim]↳ {text}[/dim]")
-
-
-async def _print_interactive_progress_line(text: str, thinking: _ThinkingSpinner | None) -> None:
-    """Print an interactive progress line, pausing the spinner if needed."""
-    with thinking.pause() if thinking else nullcontext():
-        await _print_interactive_line(text)
-
-
-def _is_exit_command(command: str) -> bool:
-    """Return True when input should end interactive chat."""
-    return command.lower() in EXIT_COMMANDS
-
-
-async def _read_interactive_input_async() -> str:
-    """Read user input using prompt_toolkit (handles paste, history, display).
-
-    prompt_toolkit natively handles:
-    - Multiline paste (bracketed paste mode)
-    - History navigation (up/down arrows)
-    - Clean display (no ghost characters or artifacts)
-    """
-    if _PROMPT_SESSION is None:
-        raise RuntimeError("Call _init_prompt_session() first")
-    try:
-        with patch_stdout():
-            return await _PROMPT_SESSION.prompt_async(
-                HTML("<b fg='ansiblue'>You:</b> "),
-            )
-    except EOFError as exc:
-        raise KeyboardInterrupt from exc
-
-
 
 def version_callback(value: bool):
     if value:
@@ -574,43 +369,45 @@ def gateway(
     # Create channel manager
     channels = ChannelManager(config, bus)
 
-    # Wire group chat engine to Telegram channel if configured
-    if config.groupchat.enabled:
-        from nanobot.groupchat.engine import GroupChatEngine
-        gc_engine = GroupChatEngine(
-            config=config.groupchat,
-            provider=provider,
-            workspace=config.workspace_path,
-            web_search_config=config.tools.web.search,
-            web_proxy=config.tools.web.proxy or None,
-            cron_service=cron,
-            send_outbound_fn=bus.publish_outbound,
-        )
-        # Register the base model as an agent too
-        base_model = config.agents.defaults.model or "anthropic/claude-opus-4.5"
-        base_workspace = Path(config.agents.defaults.workspace or "~/.nanobot/workspace").expanduser()
-        base_soul = base_workspace / "SOUL.md"
-        base_prompt = base_soul.read_text() if base_soul.exists() else "I am nanobot, a personal AI assistant."
-        nanobot_entry = {"model": base_model, "prompt": base_prompt, "_default": True}
-        # Load saved tool toggles from separate file
-        try:
-            import json as _json
-            tools_path = Path.home() / ".nanobot" / "nanobot_tools.json"
-            if tools_path.exists():
-                nanobot_entry["tools"] = _json.loads(tools_path.read_text())
-                logger.info("Loaded Nanobot tools: {}", nanobot_entry["tools"])
-        except Exception:
-            pass
-        gc_engine.registry["Nanobot"] = nanobot_entry
-        gc_engine._active_agents.append("Nanobot")
-        logger.info("Registered base model '{}' as Nanobot agent (auto-active)", base_model)
+    # Always create GroupChatEngine (unified prompt building)
+    from nanobot.groupchat.engine import GroupChatEngine
+    gc_engine = GroupChatEngine(
+        config=config.groupchat,
+        provider=provider,
+        workspace=config.workspace_path,
+        web_search_config=config.tools.web.search,
+        web_proxy=config.tools.web.proxy or None,
+        cron_service=cron,
+        send_outbound_fn=bus.publish_outbound,
+    )
+    # Register the base model as an agent too
+    base_model = config.agents.defaults.model or "anthropic/claude-opus-4.5"
+    base_workspace = Path(config.agents.defaults.workspace or "~/.nanobot/workspace").expanduser()
+    base_soul = base_workspace / "SOUL.md"
+    base_prompt = base_soul.read_text() if base_soul.exists() else "I am nanobot, a personal AI assistant."
+    nanobot_entry = {"model": base_model, "prompt": base_prompt, "_default": True}
+    # Load saved tool toggles from separate file
+    try:
+        import json as _json
+        tools_path = Path.home() / ".nanobot" / "nanobot_tools.json"
+        if tools_path.exists():
+            nanobot_entry["tools"] = _json.loads(tools_path.read_text())
+            logger.info("Loaded Nanobot tools: {}", nanobot_entry["tools"])
+    except Exception:
+        pass
+    gc_engine.registry["Nanobot"] = nanobot_entry
+    gc_engine._active_agents.append("Nanobot")
+    logger.info("Registered base model '{}' as Nanobot agent (auto-active)", base_model)
 
-        tg_channel = channels.get_channel("telegram")
-        if tg_channel:
-            from nanobot.channels.telegram import TelegramChannel
-            if isinstance(tg_channel, TelegramChannel):
-                tg_channel.set_groupchat_engine(gc_engine)
-                logger.info("Group chat engine wired to Telegram channel")
+    # Inject agent config into AgentLoop for cron/heartbeat prompt building
+    agent.set_agent_config("Nanobot", nanobot_entry)
+
+    tg_channel = channels.get_channel("telegram")
+    if tg_channel:
+        from nanobot.channels.telegram import TelegramChannel
+        if isinstance(tg_channel, TelegramChannel):
+            tg_channel.set_groupchat_engine(gc_engine)
+            logger.info("Group chat engine wired to Telegram channel")
 
     def _pick_heartbeat_target() -> tuple[str, str]:
         """Pick a routable channel/chat target for heartbeat-triggered messages."""
@@ -698,193 +495,6 @@ def gateway(
     asyncio.run(run())
 
 
-
-
-# ============================================================================
-# Agent Commands
-# ============================================================================
-
-
-@app.command()
-def agent(
-    message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
-    session_id: str = typer.Option("cli:direct", "--session", "-s", help="Session ID"),
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
-    config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
-    markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
-    logs: bool = typer.Option(False, "--logs/--no-logs", help="Show nanobot runtime logs during chat"),
-):
-    """Interact with the agent directly."""
-    from loguru import logger
-
-    from nanobot.agent.loop import AgentLoop
-    from nanobot.bus.queue import MessageBus
-    from nanobot.config.paths import get_cron_dir
-    from nanobot.cron.service import CronService
-
-    config = _load_runtime_config(config, workspace)
-    _print_deprecated_memory_window_notice(config)
-    sync_workspace_templates(config.workspace_path)
-
-    bus = MessageBus()
-    provider = _make_provider(config)
-
-    # Create cron service for tool usage (no callback needed for CLI unless running)
-    cron_store_path = get_cron_dir() / "jobs.json"
-    cron = CronService(cron_store_path)
-
-    if logs:
-        logger.enable("nanobot")
-    else:
-        logger.disable("nanobot")
-
-    agent_loop = AgentLoop(
-        bus=bus,
-        provider=provider,
-        workspace=config.workspace_path,
-        model=config.agents.defaults.model,
-        max_iterations=config.agents.defaults.max_tool_iterations,
-        context_window_tokens=config.agents.defaults.context_window_tokens,
-        web_search_config=config.tools.web.search,
-        web_proxy=config.tools.web.proxy or None,
-        exec_config=config.tools.exec,
-        cron_service=cron,
-        restrict_to_workspace=config.tools.restrict_to_workspace,
-        mcp_servers=config.tools.mcp_servers,
-        channels_config=config.channels,
-    )
-
-    # Shared reference for progress callbacks
-    _thinking: _ThinkingSpinner | None = None
-
-    async def _cli_progress(content: str, *, tool_hint: bool = False) -> None:
-        ch = agent_loop.channels_config
-        if ch and tool_hint and not ch.send_tool_hints:
-            return
-        if ch and not tool_hint and not ch.send_progress:
-            return
-        _print_cli_progress_line(content, _thinking)
-
-    if message:
-        # Single message mode — direct call, no bus needed
-        async def run_once():
-            nonlocal _thinking
-            _thinking = _ThinkingSpinner(enabled=not logs)
-            with _thinking:
-                response = await agent_loop.process_direct(message, session_id, on_progress=_cli_progress)
-            _thinking = None
-            _print_agent_response(response, render_markdown=markdown)
-            await agent_loop.close_mcp()
-
-        asyncio.run(run_once())
-    else:
-        # Interactive mode — route through bus like other channels
-        from nanobot.bus.events import InboundMessage
-        _init_prompt_session()
-        console.print(f"{__logo__} Interactive mode (type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit)\n")
-
-        if ":" in session_id:
-            cli_channel, cli_chat_id = session_id.split(":", 1)
-        else:
-            cli_channel, cli_chat_id = "cli", session_id
-
-        def _handle_signal(signum, frame):
-            sig_name = signal.Signals(signum).name
-            _restore_terminal()
-            console.print(f"\nReceived {sig_name}, goodbye!")
-            sys.exit(0)
-
-        signal.signal(signal.SIGINT, _handle_signal)
-        signal.signal(signal.SIGTERM, _handle_signal)
-        # SIGHUP is not available on Windows
-        if hasattr(signal, 'SIGHUP'):
-            signal.signal(signal.SIGHUP, _handle_signal)
-        # Ignore SIGPIPE to prevent silent process termination when writing to closed pipes
-        # SIGPIPE is not available on Windows
-        if hasattr(signal, 'SIGPIPE'):
-            signal.signal(signal.SIGPIPE, signal.SIG_IGN)
-
-        async def run_interactive():
-            bus_task = asyncio.create_task(agent_loop.run())
-            turn_done = asyncio.Event()
-            turn_done.set()
-            turn_response: list[str] = []
-
-            async def _consume_outbound():
-                while True:
-                    try:
-                        msg = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
-                        if msg.metadata.get("_progress"):
-                            is_tool_hint = msg.metadata.get("_tool_hint", False)
-                            ch = agent_loop.channels_config
-                            if ch and is_tool_hint and not ch.send_tool_hints:
-                                pass
-                            elif ch and not is_tool_hint and not ch.send_progress:
-                                pass
-                            else:
-                                await _print_interactive_progress_line(msg.content, _thinking)
-
-                        elif not turn_done.is_set():
-                            if msg.content:
-                                turn_response.append(msg.content)
-                            turn_done.set()
-                        elif msg.content:
-                            await _print_interactive_response(msg.content, render_markdown=markdown)
-
-                    except asyncio.TimeoutError:
-                        continue
-                    except asyncio.CancelledError:
-                        break
-
-            outbound_task = asyncio.create_task(_consume_outbound())
-
-            try:
-                while True:
-                    try:
-                        _flush_pending_tty_input()
-                        user_input = await _read_interactive_input_async()
-                        command = user_input.strip()
-                        if not command:
-                            continue
-
-                        if _is_exit_command(command):
-                            _restore_terminal()
-                            console.print("\nGoodbye!")
-                            break
-
-                        turn_done.clear()
-                        turn_response.clear()
-
-                        await bus.publish_inbound(InboundMessage(
-                            channel=cli_channel,
-                            sender_id="user",
-                            chat_id=cli_chat_id,
-                            content=user_input,
-                        ))
-
-                        nonlocal _thinking
-                        _thinking = _ThinkingSpinner(enabled=not logs)
-                        with _thinking:
-                            await turn_done.wait()
-                        _thinking = None
-
-                        if turn_response:
-                            _print_agent_response(turn_response[0], render_markdown=markdown)
-                    except KeyboardInterrupt:
-                        _restore_terminal()
-                        console.print("\nGoodbye!")
-                        break
-                    except EOFError:
-                        _restore_terminal()
-                        console.print("\nGoodbye!")
-                        break
-            finally:
-                agent_loop.stop()
-                outbound_task.cancel()
-                await asyncio.gather(bus_task, outbound_task, return_exceptions=True)
-                await agent_loop.close_mcp()
-
-        asyncio.run(run_interactive())
 
 
 # ============================================================================
