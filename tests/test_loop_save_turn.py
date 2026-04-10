@@ -1,4 +1,4 @@
-from nanobot.agent.context import ContextBuilder
+from nanobot.utils.helpers import RUNTIME_CONTEXT_TAG
 from nanobot.agent.loop import AgentLoop
 from nanobot.session.manager import Session
 
@@ -12,7 +12,7 @@ def _mk_loop() -> AgentLoop:
 def test_save_turn_skips_multimodal_user_when_only_runtime_context() -> None:
     loop = _mk_loop()
     session = Session(key="test:runtime-only")
-    runtime = ContextBuilder._RUNTIME_CONTEXT_TAG + "\nCurrent Time: now (UTC)"
+    runtime = RUNTIME_CONTEXT_TAG + "\nCurrent Time: now (UTC)"
 
     loop._save_turn(
         session,
@@ -25,7 +25,7 @@ def test_save_turn_skips_multimodal_user_when_only_runtime_context() -> None:
 def test_save_turn_keeps_image_placeholder_with_path_after_runtime_strip() -> None:
     loop = _mk_loop()
     session = Session(key="test:image")
-    runtime = ContextBuilder._RUNTIME_CONTEXT_TAG + "\nCurrent Time: now (UTC)"
+    runtime = RUNTIME_CONTEXT_TAG + "\nCurrent Time: now (UTC)"
 
     loop._save_turn(
         session,
@@ -44,7 +44,7 @@ def test_save_turn_keeps_image_placeholder_with_path_after_runtime_strip() -> No
 def test_save_turn_keeps_image_placeholder_without_meta() -> None:
     loop = _mk_loop()
     session = Session(key="test:image-no-meta")
-    runtime = ContextBuilder._RUNTIME_CONTEXT_TAG + "\nCurrent Time: now (UTC)"
+    runtime = RUNTIME_CONTEXT_TAG + "\nCurrent Time: now (UTC)"
 
     loop._save_turn(
         session,

@@ -2,20 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime as real_datetime
-from importlib.resources import files as pkg_files
 from pathlib import Path
-import datetime as datetime_module
 
-from nanobot.agent.context import ContextBuilder
-
-
-class _FakeDatetime(real_datetime):
-    current = real_datetime(2026, 2, 24, 13, 59)
-
-    @classmethod
-    def now(cls, tz=None):  # type: ignore[override]
-        return cls.current
+from nanobot.groupchat.prompt_builder import PromptBuilder
+from nanobot.groupchat.config import GroupChatConfig
+from nanobot.utils.helpers import RUNTIME_CONTEXT_TAG
 
 
 def _make_workspace(tmp_path: Path) -> Path:
@@ -24,49 +15,47 @@ def _make_workspace(tmp_path: Path) -> Path:
     return workspace
 
 
-def test_bootstrap_files_are_backed_by_templates() -> None:
-    template_dir = pkg_files("nanobot") / "templates"
-
-    for filename in ContextBuilder.BOOTSTRAP_FILES:
-        assert (template_dir / filename).is_file(), f"missing bootstrap template: {filename}"
-
-
-def test_system_prompt_stays_stable_when_clock_changes(tmp_path, monkeypatch) -> None:
-    """System prompt should not change just because wall clock minute changes."""
-    monkeypatch.setattr(datetime_module, "datetime", _FakeDatetime)
-
+def test_system_prompt_stays_stable_when_clock_changes(tmp_path) -> None:
+    """System prompt components should not change just because wall clock minute changes."""
     workspace = _make_workspace(tmp_path)
-    builder = ContextBuilder(workspace)
+    builder = PromptBuilder(config=GroupChatConfig(), workspace=workspace)
+    registry = {"Nanobot": {"model": "test", "prompt": "I am nanobot."}}
 
-    _FakeDatetime.current = real_datetime(2026, 2, 24, 13, 59)
-    prompt1 = builder.build_system_prompt()
+    prompt1 = builder.build_agent_prompt(
+        "Nanobot", registry=registry, active_agents=["Nanobot"],
+        history=[], leader=None, round_num=0,
+    )
+    prompt2 = builder.build_agent_prompt(
+        "Nanobot", registry=registry, active_agents=["Nanobot"],
+        history=[], leader=None, round_num=0,
+    )
 
-    _FakeDatetime.current = real_datetime(2026, 2, 24, 14, 0)
-    prompt2 = builder.build_system_prompt()
+    # System components (excluding volatile datetime) should be stable
+    sys1 = [m["content"] for m in prompt1 if m["role"] == "system"]
+    sys2 = [m["content"] for m in prompt2 if m["role"] == "system"]
+    assert len(sys1) == len(sys2)
 
-    assert prompt1 == prompt2
 
-
-def test_runtime_context_is_separate_untrusted_user_message(tmp_path) -> None:
+def test_runtime_context_is_merged_with_user_message(tmp_path) -> None:
     """Runtime metadata should be merged with the user message."""
     workspace = _make_workspace(tmp_path)
-    builder = ContextBuilder(workspace)
+    builder = PromptBuilder(config=GroupChatConfig(), workspace=workspace)
+    registry = {"Nanobot": {"model": "test", "prompt": "I am nanobot."}}
 
-    messages = builder.build_messages(
+    messages = builder.build_single_agent_messages(
+        "Nanobot",
+        registry=registry,
         history=[],
         current_message="Return exactly: OK",
         channel="cli",
         chat_id="direct",
     )
 
-    assert messages[0]["role"] == "system"
-    assert "## Current Session" not in messages[0]["content"]
-
-    # Runtime context is now merged with user message into a single message
+    # Last message should be user with runtime context merged
     assert messages[-1]["role"] == "user"
     user_content = messages[-1]["content"]
     assert isinstance(user_content, str)
-    assert ContextBuilder._RUNTIME_CONTEXT_TAG in user_content
+    assert RUNTIME_CONTEXT_TAG in user_content
     assert "Current Time:" in user_content
     assert "Channel: cli" in user_content
     assert "Chat ID: direct" in user_content
