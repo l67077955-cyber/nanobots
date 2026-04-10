@@ -186,6 +186,52 @@ class PromptBuilder:
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(json.dumps(self._prompt_order, ensure_ascii=False, indent=2))
 
+    # ── Visibility management ──
+
+    def _load_visibility(self) -> dict[str, str]:
+        """Load per-component visibility settings from disk.
+
+        Returns a dict mapping component key to visibility mode:
+        - "all": visible to all agents (default)
+        - "leader": visible only to the leader agent
+        """
+        f = Path.home() / ".nanobot" / "prompt_visibility.json"
+        if f.exists():
+            try:
+                data = json.loads(f.read_text())
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                pass
+        return {}
+
+    def _save_visibility(self) -> None:
+        """Persist visibility settings to disk."""
+        f = Path.home() / ".nanobot" / "prompt_visibility.json"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(self._visibility, ensure_ascii=False, indent=2))
+
+    def get_component_visibility(self, key: str) -> str:
+        """Get visibility mode for a component. Returns 'all' or 'leader'."""
+        return self._visibility.get(key, "all")
+
+    def set_component_visibility(self, key: str, mode: str) -> str:
+        """Set visibility mode for a component. mode: 'all' or 'leader'."""
+        if mode not in ("all", "leader"):
+            return f"❌ 无效的可见性模式: {mode}"
+        self._visibility[key] = mode
+        self._save_visibility()
+        label = COMPONENT_LABELS.get(key, key)
+        vis_label = "全体可见" if mode == "all" else "仅Leader可见"
+        return f"✅ {label} → {vis_label}"
+
+    def toggle_component_visibility(self, key: str) -> str:
+        """Toggle visibility between 'all' and 'leader'."""
+        current = self.get_component_visibility(key)
+        new_mode = "leader" if current == "all" else "all"
+        return self.set_component_visibility(key, new_mode)
+
+
     def get_agent_prompt_order(self, agent_name: str = "") -> list[str]:
         return list(self._prompt_order.get("default", DEFAULT_PROMPT_ORDER))
 
@@ -438,6 +484,11 @@ class PromptBuilder:
                 ))
                 continue
             if key == "leader_prompt" and leader != agent_name:
+                continue
+
+            # Visibility filter: "leader" mode components only injected for the leader agent
+            vis = self.get_component_visibility(key)
+            if vis == "leader" and leader != agent_name:
                 continue
 
             raw = self._get_component_content(agent_name, agent, key, active_agents, leader)
