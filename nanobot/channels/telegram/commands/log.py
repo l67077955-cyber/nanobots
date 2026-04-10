@@ -316,12 +316,9 @@ class LogCommandsMixin:
         if cmd in ("/new", "/clear", "/stop"):
             str_chat_id = str(message.chat_id)
             self._edit_state.pop(str_chat_id, None)
-            # If /new or /clear, also reset the conversation pool's unread status if it exists
+            # If /new or /clear, clear conversation history but keep active agents
             if cmd in ("/new", "/clear") and self._groupchat_engine:
-                self._groupchat_engine.reset()
-                # Auto-add default agent so user can chat immediately
-                if "Nanobot" in self._groupchat_engine.registry:
-                    self._groupchat_engine.add_agent("Nanobot")
+                self._groupchat_engine.clear_history()
 
         await self._handle_message(
             sender_id=self._sender_id(user),
