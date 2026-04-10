@@ -805,6 +805,22 @@ class CallbacksMixin:
                 engine.prompt_builder.set_default_prompt_order(order)
             await self._prompt_show_components(query)
 
+        elif data.startswith("pviz:"):
+            # Toggle visibility: pviz:<idx>
+            idx = int(data[5:])
+            engine = self._groupchat_engine
+            order = engine.prompt_builder.get_prompt_order()
+            if 0 <= idx < len(order):
+                key = order[idx]
+                current = engine.prompt_builder.get_component_visibility(key)
+                new_vis = "leader" if current == "all" else "all"
+                engine.prompt_builder.set_component_visibility(key, new_vis)
+                vis_label = "全体可见" if new_vis == "all" else "仅Leader可见"
+                await query.answer(f"可见性已切换为: {vis_label}")
+            else:
+                await query.answer("索引无效", show_alert=True)
+            await self._prompt_show_components(query)
+
         elif data.startswith("prdel:"):
             # Delete component: prdel:<idx>
             idx = int(data[6:])
