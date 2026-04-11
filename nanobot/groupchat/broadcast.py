@@ -1252,10 +1252,19 @@ async def broadcast_round(
         # orphaned tasks that steal messages from future sessions.
         _user_listener_running = False
         _join_listener_running = False
+        _aux_to_cancel = []
         for aux_task in (user_task, join_task, leader_end_sentinel):
             if aux_task is not None and not aux_task.done():
                 aux_task.cancel()
+                _aux_to_cancel.append(aux_task)
                 logger.debug("Broadcast: cancelled auxiliary task {}", aux_task.get_name())
+        # Wait for auxiliary tasks to *actually* finish — without this, a cancelled
+        # user_task can survive into the next session, reading from the new session's
+        # _input_queue and calling pool.allocate_user() on the old pool (stale
+        # capacity reference), which causes the "-4/30" thread bar display bug.
+        if _aux_to_cancel:
+            await asyncio.gather(*_aux_to_cancel, return_exceptions=True)
+            logger.debug("Broadcast: all auxiliary tasks finished")
         # Remove auxiliary task entries from engine registry
         if hasattr(engine, '_broadcast_tasks'):
             for key in ('__user_listener', '__join_listener', '__leader_sentinel'):
