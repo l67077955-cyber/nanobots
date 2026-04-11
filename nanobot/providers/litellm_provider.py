@@ -640,6 +640,7 @@ class LiteLLMProvider(LLMProvider):
             "model": model,
             "messages": self._sanitize_messages(self._sanitize_empty_content(messages), extra_keys=extra_msg_keys),
             "max_tokens": max_tokens,
+            "timeout": 120.0,
             **self.sampling_params,
         }
 
