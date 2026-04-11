@@ -319,17 +319,15 @@ async def broadcast_round(
     leader_end_event = asyncio.Event()
     _leader_agent_tasks: dict = {}  # populated after tasks are created
 
-    # ── 关键修复1：spawn_agent_task 改用参数传递，避免闭包 UnboundLocalError ──
-    def _spawn_agent_task(
-        name: str,
-        idx: int,
-        tasks_dict: dict,
-        all_tasks_set: set,
-    ) -> asyncio.Task:
+    # ── 关键修复：tasks / all_tasks 必须在 spawn_fn 之前创建 ──
+    tasks: dict[asyncio.Task, str] = {}
+    all_tasks: set[asyncio.Task] = set()
+
+    def _spawn_agent_task(name: str, idx: int) -> asyncio.Task:
         """Re-spawn a single agent task (used by ManageAgentTool.restart)."""
         task = asyncio.create_task(_run_one(name, idx))
-        tasks_dict[task] = name
-        all_tasks_set.add(task)
+        tasks[task] = name
+        all_tasks.add(task)
         return task
 
     if leader_name and leader_name in agent_tool_registries:
@@ -341,7 +339,7 @@ async def broadcast_round(
             agent_tasks=_leader_agent_tasks,
             engine=engine,
             mailbox=mailbox,
-            spawn_fn=lambda n, i: _spawn_agent_task(n, i, tasks, all_tasks),
+            spawn_fn=_spawn_agent_task,   # 现在安全
         )
         end_tool = EndDiscussionTool(end_event=leader_end_event, engine=engine)
         transfer_tool = TransferCreditsTool(search_pool=search_pool, engine=engine)
@@ -363,6 +361,9 @@ async def broadcast_round(
         agent_idx: int,
     ) -> tuple[str, str | None, list[str], dict]:
         """Run a single agent with streaming display."""
+        import time as _t
+        _cycle_t0 = _t.time()
+
         if name not in engine.registry:
             return (name, None, [], {})
 
@@ -671,7 +672,6 @@ async def broadcast_round(
         # If a teammate message arrives, inject it and re-run tool_loop.
         # Only exits when cancelled by leader end_discussion, /stop, or on error.
         from nanobot.agent.tool_loop import tool_loop
-        import time as _t
 
         # Load configurable result_max_chars for broadcast mode
         try:
@@ -1030,13 +1030,11 @@ async def broadcast_round(
         mailbox.create(name)
     mailbox.start_round(active_agents=list(exec_agents))
 
-    # ── 关键修复2：tasks / all_tasks 初始化顺序调整 ──
-    tasks: dict[asyncio.Task, str] = {}
+    # populate tasks dict previously initialized
     for idx, name in enumerate(exec_agents):
         task = asyncio.create_task(_run_one(name, idx))
         tasks[task] = name
-
-    all_tasks: set[asyncio.Task] = set(tasks.keys())
+        all_tasks.add(task)
 
     # Register tasks on the engine so remove_agent() can cancel them mid-round
     if hasattr(engine, '_broadcast_tasks'):
@@ -1143,7 +1141,7 @@ async def broadcast_round(
                 engine._broadcast_tasks[new_name] = new_task
                 await engine._send(
                     f"✅ {new_name} 加入当前讨论\n"
-                    f"👥 当前成员: {', '.join(engine._active_agents)}"
+                    f"👥 当前成员: {', '.join(mailbox._active_agents)}"
                 )
                 # Notify leader so it can assign tasks to the new agent
                 if leader_name and leader_name != new_name:
@@ -1164,7 +1162,7 @@ async def broadcast_round(
                     "系统", [new_name],
                     f"你刚刚加入了正在进行的群聊讨论。"
                     f"用户问题: {user_question}\n"
-                    f"当前成员: {', '.join(engine._active_agents)}。"
+                    f"当前成员: {', '.join(mailbox._active_agents)}。"
                     f"{'Leader 是 ' + leader_name + '，等待 Leader 给你分配任务。' if leader_name and leader_name != new_name else '请开始工作。'}",
                 )
                 logger.info("Broadcast: dynamically spawned {} (idx={})", new_name, idx)
