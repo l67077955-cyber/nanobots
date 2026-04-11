@@ -699,6 +699,9 @@ async def broadcast_round(
 
         # ── Forced interrupt: get this agent's interrupt event from mailbox ──
         _interrupt_event = mailbox.get_interrupt_event(name)
+        # Tracks how many timeout-recovery attempts this agent has made.
+        # Hard cap at 1 to prevent recovery loops.
+        _timeout_recovery_count = 0
 
         try:
             while True:
@@ -770,7 +773,13 @@ async def broadcast_round(
                         on_content_reset=None,
                         clean_response=lambda c: engine._clean_response(c, name),
                         result_max_chars=_broadcast_result_max,
-                        call_timeout=float(gc_settings.get("call_timeout", 90)) or None,
+                        # Leader gets a longer timeout budget: 2× base (default 180s vs 90s).
+                        # Configurable via gc_settings["leader_call_timeout"].
+                        call_timeout=(
+                            float(gc_settings.get("leader_call_timeout", 180)) or None
+                            if is_leader else
+                            float(gc_settings.get("call_timeout", 90)) or None
+                        ),
                         interrupt_event=_interrupt_event,
                     )
                 finally:
@@ -792,21 +801,88 @@ async def broadcast_round(
 
                 if is_error or is_timeout:
                     if is_timeout:
-                        err_short = f"LLM 调用超时 ({gc_settings.get('call_timeout', 90)}s)"
-                    else:
+                        _base_timeout = gc_settings.get("leader_call_timeout" if is_leader else "call_timeout", 180 if is_leader else 90)
+                        err_short = f"LLM 调用超时 ({_base_timeout}s)"
+
+                        # ── Graceful timeout recovery ──
+                        # If this is the first timeout this turn, try one quick
+                        # no-tool LLM call to produce at least a partial reply,
+                        # rather than abandoning the turn entirely.
+                        if _timeout_recovery_count == 0:
+                            _timeout_recovery_count += 1
+                            await tracker.set_state(name, "thinking", detail="recovering...")
+                            await engine._send(f"⏰ {name} LLM 超时，尝试快速恢复...")
+                            logger.warning(
+                                "Broadcast: {} LLM timeout ({:.1f}s), attempting recovery (attempt 1/1)",
+                                name, latency,
+                            )
+                            # Inject recovery hint so LLM gives a brief direct answer
+                            messages.append({
+                                "role": "system",
+                                "content": (
+                                    f"[超时恢复] 上一次回复耗时过长。"
+                                    f"请立即用 1-3 句话给出当前进展的简短总结，"
+                                    f"不需要调用任何工具。"
+                                ),
+                            })
+                            try:
+                                from nanobot.agent.tool_loop import tool_loop as _recovery_loop
+                                _recovery_timeout = min(60.0, float(_base_timeout) * 0.4)
+                                _r = await _recovery_loop(
+                                    provider=engine.provider,
+                                    messages=messages,
+                                    tool_registry=reg,
+                                    model=model,
+                                    max_tokens=512,       # keep it short
+                                    max_iterations=1,
+                                    tool_defs=None,        # no tools — text only
+                                    call_timeout=_recovery_timeout,
+                                )
+                                if _r.content:
+                                    content = _r.content
+                                    latency += _r.latency
+                                    total_latency += _r.latency
+                                    logger.info(
+                                        "Broadcast: {} timeout recovery succeeded ({:.1f}s): {}",
+                                        name, _r.latency, content[:80],
+                                    )
+                                    # Emit the recovered content and continue normally
+                                    await engine._send(
+                                        _d.chatroom_send_msg(
+                                            name, "恢复输出", content, max_len=1000, leader=leader_name
+                                        )
+                                    )
+                                    engine._add_message(name, content)
+                                    search_pool.on_output(name)
+                                    # Notify other agents so they don't keep waiting
+                                    mailbox.send(name, ["All"], content[:300])
+                                    # Drop back into auto-wait for the next message
+                                    continue
+                            except Exception as _rec_exc:
+                                logger.warning("Broadcast: {} recovery also failed: {}", name, _rec_exc)
+                            # Recovery failed — fall through to hard exit
+                            await engine._send(f"⚠️ {name} 超时且恢复失败，跳过本轮")
+                        else:
+                            err_short_disp = f"LLM 超时 ({_base_timeout}s)"
+                            await tracker.set_state(name, "error", reason=err_short_disp[:40])
+                            await engine._send(f"  ✗ {name} timeout ({latency:.1f}s): {err_short_disp}")
+
+                    else:  # is_error
                         err_short = content[:150] if content else "Unknown error"
-                    await tracker.set_state(name, "error", reason=err_short[:40])
-                    await engine._send(f"  ✗ {name} {'timeout' if is_timeout else 'failed'} ({latency:.1f}s): {err_short}")
+                        await tracker.set_state(name, "error", reason=err_short[:40])
+                        await engine._send(f"  ✗ {name} failed ({latency:.1f}s): {err_short}")
+
                     log_request(engine, name, model, "broadcast",
                                 error=err_short, iterations=total_iterations,
                                 latency=total_latency)
 
-                    # Broadcast the error to other agents to prevent them from waiting forever
-                    error_msg = f"⚠️ [System Alert] {'LLM call timed out' if is_timeout else 'Fatal error'}. Details: {err_short}"
-                    engine._add_message(name, error_msg)
-                    mailbox.send(name, ["All"], error_msg)
+                    # Broadcast the error so teammates stop waiting for this agent
+                    _alert = f"⚠️ [System Alert] {'LLM call timed out' if is_timeout else 'Fatal error'}. Details: {err_short}"
+                    engine._add_message(name, _alert)
+                    mailbox.send(name, ["All"], _alert)
 
                     return (name, None, [], {})
+
 
                 # Record final text in history
                 if content:
