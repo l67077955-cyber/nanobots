@@ -440,6 +440,18 @@ async def tool_loop(
 
                 pending.append((tc, args_str, dedup_key))
 
+            # ── Checkpoint 2.5: interrupt check before tool execution ──
+            # After LLM has decided on tools (expending one LLM call) but
+            # BEFORE executing them.  Prevents a long tool batch (web_search ×3,
+            # exec, fetch…) from blocking the interrupt for another 30-90s.
+            if interrupt_event is not None and interrupt_event.is_set():
+                logger.info(
+                    "tool_loop: ⚡ interrupt detected before tool batch (iter {}, {} tools pending)",
+                    iteration, len(pending),
+                )
+                result.finish_reason = "interrupted"
+                break
+
             # ── Phase 2: Parallel execution via asyncio.gather ──
             async def _exec_one(tc_inner):
                 t0 = _time.time()
