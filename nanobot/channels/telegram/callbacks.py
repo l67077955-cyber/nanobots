@@ -804,7 +804,7 @@ class CallbacksMixin:
             # Toggle visibility: pviz:<idx>
             idx = int(data[5:])
             engine = self._groupchat_engine
-            order = engine.prompt_builder.get_agent_prompt_order()
+            order = engine.prompt_builder.get_prompt_order()
             if 0 <= idx < len(order):
                 key = order[idx]
                 current = engine.prompt_builder.get_component_visibility(key)
