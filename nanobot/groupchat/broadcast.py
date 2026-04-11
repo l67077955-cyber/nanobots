@@ -1050,9 +1050,16 @@ async def broadcast_round(
     results: list[tuple[str, str | None, list[str]]] = []
     completed = 0
 
+    # Auxiliary tasks that must be cleaned up even on CancelledError.
+    # Initialised to None so the finally block is safe if creation fails.
+    user_task: asyncio.Task | None = None
+    join_task: asyncio.Task | None = None
+    leader_end_sentinel: asyncio.Task | None = None
+    _user_listener_running = True
+    _join_listener_running = True
+
     try:
         # ── User interjection listener ──
-        _user_listener_running = True
 
         async def _user_listener() -> None:
             while _user_listener_running:
@@ -1080,7 +1087,6 @@ async def broadcast_round(
         # ── Mid-round agent join listener ──
         # Drains engine._pending_join_queue so agents added via /add during
         # an active round are spawned immediately rather than waiting for next round.
-        _join_listener_running = True
 
         async def _join_listener() -> None:
             nonlocal total
@@ -1163,12 +1169,21 @@ async def broadcast_round(
 
         join_task = asyncio.create_task(_join_listener())
 
+        # Register auxiliary tasks on the engine so _stop_group_loop can cancel
+        # them even when CancelledError short-circuits this function.
+        if hasattr(engine, '_broadcast_tasks'):
+            engine._broadcast_tasks['__user_listener'] = user_task
+            engine._broadcast_tasks['__join_listener'] = join_task
+
         # Watch for leader end_discussion signal
         async def _watch_leader_end() -> None:
             await leader_end_event.wait()
 
         leader_end_sentinel = asyncio.create_task(_watch_leader_end())
         all_tasks = set(tasks.keys()) | {leader_end_sentinel}
+
+        if hasattr(engine, '_broadcast_tasks'):
+            engine._broadcast_tasks['__leader_sentinel'] = leader_end_sentinel
 
         while not all(t.done() for t in tasks.keys()):
             done_set, _ = await asyncio.wait(
@@ -1203,18 +1218,6 @@ async def broadcast_round(
                         logger.error("Broadcast: agent task error: {}", e)
                         await engine._send(f"\u2717 Agent error: {e}")
 
-        # Cancel sentinel if still running
-        if not leader_end_sentinel.done():
-            leader_end_sentinel.cancel()
-
-        # Stop user listener and join listener
-        _user_listener_running = False
-        if not user_task.done():
-            user_task.cancel()
-        _join_listener_running = False
-        if not join_task.done():
-            join_task.cancel()
-
         # Cancel any remaining agent tasks
         for task_obj in tasks:
             if not task_obj.done():
@@ -1242,6 +1245,21 @@ async def broadcast_round(
                 task.cancel()
                 logger.warning("Broadcast: {} cancelled (global timeout)", name)
                 await engine._send(f"\u23f0 {name} timeout")
+    finally:
+        # ── Guarantee cleanup of ALL sub-tasks, even on CancelledError ──
+        # Without this, /stop causes CancelledError which bypasses the normal
+        # cleanup path, leaving user_task/join_task/leader_end_sentinel as
+        # orphaned tasks that steal messages from future sessions.
+        _user_listener_running = False
+        _join_listener_running = False
+        for aux_task in (user_task, join_task, leader_end_sentinel):
+            if aux_task is not None and not aux_task.done():
+                aux_task.cancel()
+                logger.debug("Broadcast: cancelled auxiliary task {}", aux_task.get_name())
+        # Remove auxiliary task entries from engine registry
+        if hasattr(engine, '_broadcast_tasks'):
+            for key in ('__user_listener', '__join_listener', '__leader_sentinel'):
+                engine._broadcast_tasks.pop(key, None)
 
     # (auto-share logic is now inside _run_one's auto-wait cycle)
 

@@ -192,8 +192,10 @@ def thread_bar(used: int, capacity: int) -> str:
 
     Example: '▰▰▰▱▱▱▱▱▱▱▱▱ 3/12'
     """
+    # Clamp: pool bookkeeping can go negative in race conditions
+    used = max(0, min(used, capacity))
     filled = "▰" * used
-    empty = "▱" * max(capacity - used, 0)
+    empty = "▱" * (capacity - used)
     return f"{filled}{empty} {used}/{capacity}"
 
 
