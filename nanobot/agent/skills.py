@@ -13,11 +13,11 @@ BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
 # Single SKILL.md files larger than this are skipped and only noted in the footer.
 MAX_SINGLE_SKILL_CHARS: int = 20_000
 # Total character budget for the non-always-on summary block.
-MAX_SKILLS_SUMMARY_CHARS: int = 15_000
-# Total budget for always-on skills (full-text injected block).
-MAX_ALWAYS_SKILLS_CHARS: int = 10_000
+MAX_SKILLS_SUMMARY_CHARS: int = 12_500
+# Total budget for always-on skills (cumulative, enforced inside load_skills_for_context).
+MAX_ALWAYS_SKILLS_CHARS: int = 9_200
 # Per-skill inline truncation limit for always-on skills.
-MAX_ALWAYS_SKILL_INLINE: int = 2_000
+MAX_ALWAYS_SKILL_INLINE: int = 1_300
 
 
 def build_skills_section(workspace: Path) -> str:
@@ -34,11 +34,9 @@ def build_skills_section(workspace: Path) -> str:
         content = loader.load_skills_for_context(
             always_skills,
             max_chars_per_skill=MAX_ALWAYS_SKILL_INLINE,
+            max_total_chars=MAX_ALWAYS_SKILLS_CHARS,
         )
         if content:
-            # Hard cap on the entire always block as a final safety net.
-            if len(content) > MAX_ALWAYS_SKILLS_CHARS:
-                content = content[:MAX_ALWAYS_SKILLS_CHARS] + "\n\n[...always-on skills truncated — read SKILL.md files for full docs]"
             parts.append(content)
 
     summary = loader.build_skills_summary(exclude=set(always_skills) if always_skills else None)
@@ -127,6 +125,7 @@ class SkillsLoader:
         self,
         skill_names: list[str],
         max_chars_per_skill: int = 0,
+        max_total_chars: int = 0,
     ) -> str:
         """Load specific skills for inclusion in agent context.
 
@@ -134,28 +133,50 @@ class SkillsLoader:
             skill_names: List of skill names to load.
             max_chars_per_skill: If > 0, truncate each skill's content to this
                 many chars and append a read_file hint for the remainder.
+            max_total_chars: If > 0, stop adding skills once the cumulative
+                output would exceed this limit (footer note appended).
 
         Returns:
             Formatted skills content.
         """
         parts = []
+        total_chars = 0
+        skipped: list[str] = []
+
         for name in skill_names:
             content = self.load_skill(name)
-            if content:
-                content = self._strip_frontmatter(content)
-                # Resolve {baseDir} to actual skill directory path
-                base_dir = self._resolve_skill_dir(name)
-                if base_dir:
-                    content = content.replace("{baseDir}", base_dir)
-                # Apply per-skill inline truncation if requested.
-                if max_chars_per_skill and len(content) > max_chars_per_skill:
-                    skill_path = f"skills/{name}/SKILL.md"
-                    content = (
-                        content[:max_chars_per_skill]
-                        + f"\n\n[…content truncated at {max_chars_per_skill} chars."
-                        f" Use `read_file {skill_path}` for the full document.]"
-                    )
-                parts.append(f"### Skill: {name}\n\n{content}")
+            if not content:
+                continue
+            content = self._strip_frontmatter(content)
+            base_dir = self._resolve_skill_dir(name)
+            if base_dir:
+                content = content.replace("{baseDir}", base_dir)
+            # Per-skill truncation.
+            if max_chars_per_skill and len(content) > max_chars_per_skill:
+                skill_path = f"skills/{name}/SKILL.md"
+                content = (
+                    content[:max_chars_per_skill]
+                    + f"\n\n[…truncated. `read_file {skill_path}` for full doc.]"
+                )
+            block = f"### Skill: {name}\n\n{content}"
+            # Cumulative budget check.
+            if max_total_chars and total_chars + len(block) > max_total_chars:
+                skipped.append(name)
+                continue
+            parts.append(block)
+            total_chars += len(block)
+
+        # Append remaining skipped names so the agent knows they exist.
+        if skipped:
+            note = (
+                "\n\n(还有 always-on 技能因总预算限制未完整展示: "
+                + ", ".join(skipped)
+                + "。用 `read_file skills/<名称>/SKILL.md` 加载。)"
+            )
+            if parts:
+                parts[-1] += note
+            else:
+                parts.append(note)
 
         return "\n\n---\n\n".join(parts) if parts else ""
 
