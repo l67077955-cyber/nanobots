@@ -773,13 +773,7 @@ async def broadcast_round(
                         on_content_reset=None,
                         clean_response=lambda c: engine._clean_response(c, name),
                         result_max_chars=_broadcast_result_max,
-                        # Leader gets a longer timeout budget: 2× base (default 180s vs 90s).
-                        # Configurable via gc_settings["leader_call_timeout"].
-                        call_timeout=(
-                            float(gc_settings.get("leader_call_timeout", 180)) or None
-                            if is_leader else
-                            float(gc_settings.get("call_timeout", 90)) or None
-                        ),
+                        call_timeout=float(gc_settings.get("call_timeout", 90)) or None,
                         interrupt_event=_interrupt_event,
                     )
                 finally:
@@ -801,63 +795,52 @@ async def broadcast_round(
 
                 if is_error or is_timeout:
                     if is_timeout:
-                        _base_timeout = gc_settings.get("leader_call_timeout" if is_leader else "call_timeout", 180 if is_leader else 90)
-                        err_short = f"LLM 调用超时 ({_base_timeout}s)"
+                        _base_timeout = gc_settings.get(
+                            "leader_call_timeout" if is_leader else "call_timeout",
+                            180 if is_leader else 90,
+                        )
+                        err_short = f"LLM 超时 ({_base_timeout}s)"
 
-                        # ── Graceful timeout recovery ──
-                        # If this is the first timeout this turn, try one quick
-                        # no-tool LLM call to produce at least a partial reply,
-                        # rather than abandoning the turn entirely.
+                        # ── Clean retry on first timeout ──
+                        # Re-use the same messages context (no injection) so history
+                        # stays clean. Run one short no-tool call to get at least a
+                        # brief output rather than abandoning the turn entirely.
                         if _timeout_recovery_count == 0:
                             _timeout_recovery_count += 1
-                            await tracker.set_state(name, "thinking", detail="recovering...")
-                            await engine._send(f"⏰ {name} LLM 超时，尝试快速恢复...")
+                            await tracker.set_state(name, "thinking", detail="retry...")
+                            await engine._send(f"⏰ {name} 超时，重试中...")
                             logger.warning(
-                                "Broadcast: {} LLM timeout ({:.1f}s), attempting recovery (attempt 1/1)",
+                                "Broadcast: {} LLM timeout ({:.1f}s), retrying once (no tools)",
                                 name, latency,
                             )
-                            # Inject recovery hint so LLM gives a brief direct answer
-                            messages.append({
-                                "role": "system",
-                                "content": (
-                                    f"[超时恢复] 上一次回复耗时过长。"
-                                    f"请立即用 1-3 句话给出当前进展的简短总结，"
-                                    f"不需要调用任何工具。"
-                                ),
-                            })
                             try:
-                                from nanobot.agent.tool_loop import tool_loop as _recovery_loop
-                                _recovery_timeout = min(60.0, float(_base_timeout) * 0.4)
-                                _r = await _recovery_loop(
+                                _r = await tool_loop(
                                     provider=engine.provider,
-                                    messages=messages,
+                                    messages=messages,          # unchanged — no injection
                                     tool_registry=reg,
                                     model=model,
-                                    max_tokens=512,       # keep it short
+                                    max_tokens=600,             # short answer only
                                     max_iterations=1,
-                                    tool_defs=None,        # no tools — text only
-                                    call_timeout=_recovery_timeout,
+                                    tool_defs=None,             # text-only, no tools
+                                    call_timeout=60.0,          # hard cap for retry
                                 )
                                 if _r.content:
                                     content = _r.content
-                                    latency += _r.latency
                                     total_latency += _r.latency
-                                    logger.info(
-                                        "Broadcast: {} timeout recovery succeeded ({:.1f}s): {}",
-                                        name, _r.latency, content[:80],
-                                    )
-                                    # Emit the recovered content and continue normally
-                                    await engine._send(
-                                        _d.chatroom_send_msg(
-                                            name, "恢复输出", content, max_len=1000, leader=leader_name
-                                        )
-                                    )
                                     engine._add_message(name, content)
                                     search_pool.on_output(name)
-                                    # Notify other agents so they don't keep waiting
                                     mailbox.send(name, ["All"], content[:300])
-                                    # Drop back into auto-wait for the next message
-                                    continue
+                                    await engine._send(
+                                        _d.chatroom_send_msg(
+                                            name, "重试输出", content, max_len=1000, leader=leader_name
+                                        )
+                                    )
+                                    logger.info(
+                                        "Broadcast: {} retry succeeded ({:.1f}s): {}",
+                                        name, _r.latency, content[:80],
+                                    )
+                                    continue  # back to auto-wait
+
                             except Exception as _rec_exc:
                                 logger.warning("Broadcast: {} recovery also failed: {}", name, _rec_exc)
                             # Recovery failed — fall through to hard exit
