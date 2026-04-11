@@ -79,6 +79,9 @@ def make_tool_callbacks(
 ) -> tuple[Callable, Callable]:
     """Create on_tool_start / on_tool_result callbacks for an agent.
 
+    Supports parallel tool calls by keying state on tool_call_id rather
+    than using a single shared variable pair.
+
     Args:
         iter_usage_ref: Shared mutable dict updated with per-iteration token
             usage before tool execution. When provided, a token suffix is
@@ -87,13 +90,16 @@ def make_tool_callbacks(
     Returns:
         (on_tool_start, on_tool_result) async callbacks.
     """
-    _tool_msg_id: int | None = None
-    _tool_msg_text: str = ""
+    # tool_call_id → (msg_id, original_text)
+    _pending_tools: dict[str, tuple[int | None, str]] = {}
+    _temp_counter = 0
 
-    async def on_tool_start(name: str, args: dict) -> None:
-        nonlocal _tool_msg_id, _tool_msg_text
-        _tool_msg_id = None
-        _tool_msg_text = ""
+    async def on_tool_start(
+        name: str,
+        args: dict,
+        tool_call_id: str | None = None,
+    ) -> None:
+        nonlocal _temp_counter
         if not isinstance(args, dict):
             args = {}
         # Persist tool_call event
@@ -116,14 +122,21 @@ def make_tool_callbacks(
         if isinstance(short, str) and len(short) > 80:
             short = short[:80] + "…"
         text = _d.tool_call_line(agent_name, name, short if isinstance(short, str) else str(short))
-        _tool_msg_text = text
+
+        # Generate a fallback key when tool_loop doesn't pass tool_call_id
+        if tool_call_id is None:
+            _temp_counter += 1
+            tool_call_id = f"_temp-{agent_name}-{_temp_counter}"
+
+        msg_id: int | None = None
         if send_and_get_id_fn:
-            _tool_msg_id = await send_and_get_id_fn(text)
+            msg_id = await send_and_get_id_fn(text)
         elif send_fn:
             await send_fn(text)
 
+        _pending_tools[tool_call_id] = (msg_id, text)
+
     async def on_tool_result(name: str, tool_call_id: str, result: str) -> None:
-        nonlocal _tool_msg_id, _tool_msg_text
         save_event("tool_result", agent=agent_name, extra={
             "tool": name,
             "result_len": len(result) if result else 0,
@@ -135,7 +148,7 @@ def make_tool_callbacks(
             agent_name, name, len(result) if result else 0, result,
         )
         if not result:
-            _tool_msg_id = None
+            _pending_tools.pop(tool_call_id, None)
             return
         rlen = len(result)
         preview = result.strip().replace("\n", " ")[:60]
@@ -153,17 +166,17 @@ def make_tool_callbacks(
             if total:
                 token_suffix = "\n" + _d.format_token_stats(p, c, cost=cost, cache_tokens=cache_t)
 
-        if _tool_msg_id and edit_fn and _tool_msg_text:
+        pending = _pending_tools.pop(tool_call_id, None)
+        if pending and pending[0] is not None and edit_fn and pending[1]:
             try:
-                updated = f"{_tool_msg_text}\n{result_line}{token_suffix}"
-                await edit_fn(_tool_msg_id, updated)
-            except Exception:
+                updated = f"{pending[1]}\n{result_line}{token_suffix}"
+                await edit_fn(pending[0], updated)
+            except Exception as exc:
+                logger.warning("tool_chat [{}] edit_fn failed: {}", agent_name, exc)
                 if send_fn:
                     await send_fn(result_line + token_suffix)
         elif send_fn:
             await send_fn(result_line + token_suffix)
-        _tool_msg_id = None
-        _tool_msg_text = ""
 
     return on_tool_start, on_tool_result
 
@@ -232,14 +245,22 @@ async def chat_with_tools(
     except Exception:
         _direct_result_max = 8_000
 
-    effective_defs = None if force_no_tools else (tool_defs if tool_defs else None)
+    effective_defs = None if force_no_tools else tool_defs
+
     # Compute context stats for logging
-    _total_chars = sum(
-        len(m.get("content", "")) if isinstance(m.get("content"), str)
-        else sum(len(b.get("text", "")) for b in m.get("content", []) if isinstance(b, dict))
-        if isinstance(m.get("content"), list) else 0
-        for m in messages
-    )
+    def _calc_total_chars(msgs: list[dict]) -> int:
+        total = 0
+        for m in msgs:
+            content = m.get("content", "")
+            if isinstance(content, str):
+                total += len(content)
+            elif isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        total += len(block.get("text", ""))
+        return total
+
+    _total_chars = _calc_total_chars(messages)
     logger.info(
         "chat_with_tools: agent={} model={} tool_defs={} is_direct={} msgs={} total_chars={}",
         agent_name, model, len(tool_defs) if tool_defs else 0, is_direct,
@@ -276,7 +297,9 @@ async def chat_with_tools(
     )
 
     content = result.content or ""
-    stats = build_stats(result, tool_defs, tool_names, messages_snap, sampling, max_tokens)
+    # Use effective_defs (not original tool_defs) for accurate stats
+    # when force_no_tools=True
+    stats = build_stats(result, effective_defs, tool_names, messages_snap, sampling, max_tokens)
 
     # Log complete result
     logger.info(

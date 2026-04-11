@@ -526,7 +526,7 @@ async def broadcast_round(
                 await engine._send(combined)
                 _pending_searches.clear()
 
-        async def _on_tool_start(tool_name: str, args: dict) -> None:
+        async def _on_tool_start(tool_name: str, args: dict, **_kw) -> None:
             if not isinstance(args, dict):
                 args = {}
             # ── Update status dashboard ──

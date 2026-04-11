@@ -138,7 +138,7 @@ async def tool_loop(
     metadata: dict[str, Any] | None = None,
     reasoning_effort: str | None = None,
     # ── Callbacks ──
-    on_tool_start: Callable[[str, dict], Awaitable[None]] | None = None,
+    on_tool_start: Callable[..., Awaitable[None]] | None = None,
     on_tool_result: Callable[[str, str, str], Awaitable[None]] | None = None,
     on_iteration_usage: Callable[[dict], Awaitable[None]] | None = None,
     on_thought: Callable[[str], Awaitable[None]] | None = None,
@@ -424,7 +424,7 @@ async def tool_loop(
                     continue
 
                 if on_tool_start:
-                    await on_tool_start(tc.name, tc.arguments)
+                    await on_tool_start(tc.name, tc.arguments, tool_call_id=tc.id)
 
                 pending.append((tc, args_str, dedup_key))
 

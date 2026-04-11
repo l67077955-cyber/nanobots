@@ -235,7 +235,7 @@ class AgentLoop:
             if on_progress:
                 await on_progress(thought)
 
-        async def _on_tool_start(name: str, args: dict) -> None:
+        async def _on_tool_start(name: str, args: dict, **_kw: Any) -> None:
             if on_progress:
                 hint = self._tool_hint_single(name, args)
                 await on_progress(hint, tool_hint=True)
