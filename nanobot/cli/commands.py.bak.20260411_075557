@@ -380,27 +380,27 @@ def gateway(
         cron_service=cron,
         send_outbound_fn=bus.publish_outbound,
     )
-#     # Register the base model as an agent too
-#     base_model = config.agents.defaults.model or "anthropic/claude-opus-4.5"
-#     base_workspace = Path(config.agents.defaults.workspace or "~/.nanobot/workspace").expanduser()
-#     base_soul = base_workspace / "SOUL.md"
-#     base_prompt = base_soul.read_text() if base_soul.exists() else "I am nanobot, a personal AI assistant."
-#     nanobot_entry = {"model": base_model, "prompt": base_prompt, "_default": True}
-#     # Load saved tool toggles from separate file
-#     try:
-#         import json as _json
-#         tools_path = Path.home() / ".nanobot" / "nanobot_tools.json"
-#         if tools_path.exists():
-#             nanobot_entry["tools"] = _json.loads(tools_path.read_text())
-#             logger.info("Loaded Nanobot tools: {}", nanobot_entry["tools"])
-#     except Exception:
-#         pass
-#     gc_engine.registry["Nanobot"] = nanobot_entry
-#     gc_engine._active_agents.append("Nanobot")
-#     logger.info("Registered base model '{}' as Nanobot agent (auto-active)", base_model)
-# 
-#     # Inject agent config into AgentLoop for cron/heartbeat prompt building
-#     agent.set_agent_config("Nanobot", nanobot_entry)
+    # Register the base model as an agent too
+    base_model = config.agents.defaults.model or "anthropic/claude-opus-4.5"
+    base_workspace = Path(config.agents.defaults.workspace or "~/.nanobot/workspace").expanduser()
+    base_soul = base_workspace / "SOUL.md"
+    base_prompt = base_soul.read_text() if base_soul.exists() else "I am nanobot, a personal AI assistant."
+    nanobot_entry = {"model": base_model, "prompt": base_prompt, "_default": True}
+    # Load saved tool toggles from separate file
+    try:
+        import json as _json
+        tools_path = Path.home() / ".nanobot" / "nanobot_tools.json"
+        if tools_path.exists():
+            nanobot_entry["tools"] = _json.loads(tools_path.read_text())
+            logger.info("Loaded Nanobot tools: {}", nanobot_entry["tools"])
+    except Exception:
+        pass
+    gc_engine.registry["Nanobot"] = nanobot_entry
+    gc_engine._active_agents.append("Nanobot")
+    logger.info("Registered base model '{}' as Nanobot agent (auto-active)", base_model)
+
+    # Inject agent config into AgentLoop for cron/heartbeat prompt building
+    agent.set_agent_config("Nanobot", nanobot_entry)
 
     tg_channel = channels.get_channel("telegram")
     if tg_channel:
