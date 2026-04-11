@@ -197,6 +197,10 @@ async def broadcast_round(
     if not agents:
         return []
 
+    # Lazy-connect MCP servers before building tool registries
+    if hasattr(engine, '_connect_mcp'):
+        await engine._connect_mcp()
+
     import time as _time
     _round_t0 = _time.time()
 

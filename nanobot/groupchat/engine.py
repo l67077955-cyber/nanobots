@@ -64,7 +64,7 @@ class GroupChatEngine:
         self.web_proxy = web_proxy
         self._cron_service = cron_service
         self._send_outbound_fn = send_outbound_fn  # Callable[[OutboundMessage], Awaitable[None]]
-        self._pm_cache: dict | None = None
+
         self._mailbox = MailboxHub(on_message=self._on_agent_comm)
         self._prompt_builder = PromptBuilder(config=config, workspace=workspace)
 
@@ -77,8 +77,7 @@ class GroupChatEngine:
         self._register_tools()
         self._init_state()
 
-    # ── Workspace scope presets ────────────────────────────────
-    _WORKSPACE_PRESETS = {"source", "workspace", "prompts", "tmp"}
+    # ── Workspace scope resolution ────────────────────────────────
 
     def _resolve_agent_workspace(self, agent_name: str) -> Path:
         """Resolve an agent's workspace path from its workspace_scope config.
@@ -282,6 +281,7 @@ class GroupChatEngine:
         self._request_log: list[dict[str, Any]] = []
         self._debug_context: bool = False
         self._prompt_order: dict[str, list[str]] = self._prompt_builder._load_prompt_order()
+        self._current_group_name: str | None = None
 
         # Direct chat interjection state (single-agent mode)
         self._direct_chat_task: asyncio.Task | None = None
@@ -679,6 +679,9 @@ class GroupChatEngine:
 
         Returns (content, tools_used, stats).
         """
+        # Lazy-connect MCP servers (one-time, idempotent)
+        await self._connect_mcp()
+
         from nanobot.groupchat.tool_chat import chat_with_tools
 
         # Tool selection — use per-agent registry based on workspace_scope
@@ -753,6 +756,11 @@ class GroupChatEngine:
         self._stop_group_loop()
         self._active_agents.clear()
         self._state.save_active(self._active_agents)
+        # Schedule MCP disconnect (best-effort, non-blocking)
+        try:
+            asyncio.ensure_future(self._disconnect_mcp())
+        except RuntimeError:
+            pass  # no event loop — shutdown scenario
 
     # ── Internal ─────────────────────────────────────────────
 
