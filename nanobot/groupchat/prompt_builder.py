@@ -297,6 +297,7 @@ class PromptBuilder:
                 "content": content,
                 "chars": len(content) if content else 0,
                 "editable": key in GLOBAL_EDITABLE or key in AGENT_EDITABLE,
+                "visibility": self.get_component_visibility(key),  # "all" or "leader"
             })
         return components
 
@@ -484,10 +485,12 @@ class PromptBuilder:
                     relevant_agents=relevant_agents,
                 ))
                 continue
-            if key == "leader_prompt" and leader != agent_name:
-                continue
 
-            # Visibility filter: "leader" mode components only injected for the leader agent
+            # Visibility filter: controls whether a component is injected for this agent.
+            # "leader" mode: only inject for the leader agent.
+            # "all" mode (default): inject for everyone.
+            # Note: leader_prompt previously had a hard-coded skip that bypassed this
+            # system — it now goes through the same visibility logic as all other components.
             vis = self.get_component_visibility(key)
             if vis == "leader" and leader != agent_name:
                 continue
