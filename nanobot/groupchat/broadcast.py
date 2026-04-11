@@ -30,6 +30,7 @@ _TOOL_STATE_MAP: dict[str, str] = {
     "list_dir": "reading",
     "chatroom_send": "sending",
     "wait": "waiting",
+    "interrupted": "interrupted",
 }
 
 
@@ -696,6 +697,9 @@ async def broadcast_round(
         # so we can prune conversation turns without touching the system prompt.
         _sys_msg_count = len(messages)
 
+        # ── Forced interrupt: get this agent's interrupt event from mailbox ──
+        _interrupt_event = mailbox.get_interrupt_event(name)
+
         try:
             while True:
                 # Hard cycle cap — prevent runaway agents from draining resources
@@ -738,33 +742,41 @@ async def broadcast_round(
                     for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
                         _cycle_usage[k] += usage.get(k, 0)
 
-                result = await tool_loop(
-                    provider=engine.provider,
-                    messages=messages,
-                    tool_registry=reg,
-                    model=model,
-                    max_tokens=engine.config.max_tokens,
-                    max_iterations=agent_max_iters,
-                    tool_defs=tool_defs if tool_defs else None,
-                    reasoning_effort=agent_cfg.get("reasoning_effort") or None,
-                    metadata={
-                        "trace_name": f"broadcast_{name}_c{cycle}",
-                        "trace_user_id": "groupchat",
-                        "tags": [name, "broadcast"],
-                        "generation_name": f"{name}_broadcast",
-                        "debug_context": engine._debug_context,
-                        "log_agent": name,
-                        "log_mode": "broadcast",
-                    },
-                    on_tool_start=_on_tool_start,
-                    on_tool_result=_on_tool_result,
-                    on_iteration_usage=_on_iter_usage,
-                    on_content_delta=None,
-                    on_content_reset=None,
-                    clean_response=lambda c: engine._clean_response(c, name),
-                    result_max_chars=_broadcast_result_max,
-                    call_timeout=float(gc_settings.get("call_timeout", 90)) or None,
-                )
+                # Mark agent busy so incoming messages can trigger interrupt
+                mailbox.mark_busy(name)
+                try:
+                    result = await tool_loop(
+                        provider=engine.provider,
+                        messages=messages,
+                        tool_registry=reg,
+                        model=model,
+                        max_tokens=engine.config.max_tokens,
+                        max_iterations=agent_max_iters,
+                        tool_defs=tool_defs if tool_defs else None,
+                        reasoning_effort=agent_cfg.get("reasoning_effort") or None,
+                        metadata={
+                            "trace_name": f"broadcast_{name}_c{cycle}",
+                            "trace_user_id": "groupchat",
+                            "tags": [name, "broadcast"],
+                            "generation_name": f"{name}_broadcast",
+                            "debug_context": engine._debug_context,
+                            "log_agent": name,
+                            "log_mode": "broadcast",
+                        },
+                        on_tool_start=_on_tool_start,
+                        on_tool_result=_on_tool_result,
+                        on_iteration_usage=_on_iter_usage,
+                        on_content_delta=None,
+                        on_content_reset=None,
+                        clean_response=lambda c: engine._clean_response(c, name),
+                        result_max_chars=_broadcast_result_max,
+                        call_timeout=float(gc_settings.get("call_timeout", 90)) or None,
+                        interrupt_event=_interrupt_event,
+                    )
+                finally:
+                    # Always mark idle when tool_loop exits (interrupt, stop, normal, error)
+                    mailbox.mark_idle(name)
+
 
                 # Flush any remaining buffered search lines
                 await _flush_searches()
@@ -772,6 +784,7 @@ async def broadcast_round(
                 content = result.content or ""
                 is_error = result.finish_reason == "error"
                 is_timeout = result.finish_reason == "timeout"
+                is_interrupted = result.finish_reason == "interrupted"
                 latency = result.latency
                 total_latency += latency
                 total_iterations += result.iterations
@@ -805,6 +818,73 @@ async def broadcast_round(
                     engine._add_message(name, history_content)
                     # Track output for search pool credit recovery
                     search_pool.on_output(name)
+
+                # ── Handle forced interrupt ──
+                if is_interrupted:
+                    # Clear the event so it can be set again by a future message
+                    _interrupt_event.clear()
+                    # (agent is already idle — the try/finally around tool_loop handled it)
+
+                    # Read the pending interrupt message from mailbox (non-blocking fast-path)
+                    _intr_q = mailbox._queues.get(name)
+                    _intr_msg = None
+                    if _intr_q and not _intr_q.empty():
+                        try:
+                            _intr_msg = _intr_q.get_nowait()
+                        except Exception:
+                            pass
+
+                    # UI: show who interrupted whom
+                    _sender_name = _intr_msg.sender if _intr_msg else "teammate"
+                    await tracker.set_state(name, "interrupted", detail=f"from {_sender_name}")
+                    await engine._send(
+                        f"\u26a1 {name} 被 {_sender_name} 的消息打断，正在立即响应..."
+                    )
+                    logger.info(
+                        "Broadcast: ⚡ {} interrupted by {} mid-turn (cycle {})",
+                        name, _sender_name, cycle,
+                    )
+
+                    # Save any partial content already produced this cycle
+                    if content:
+                        history_content = content + build_tool_log(result.tool_calls_detail)
+                        engine._add_message(name, history_content)
+                        search_pool.on_output(name)
+                        # Don't re-display partial content — it may be incomplete/mid-thought
+
+                    # Prune conversation tail before re-entry (same as normal reactivation)
+                    _CONV_KEEP_TURNS = 6
+                    _max_conv = _CONV_KEEP_TURNS * 3
+                    conv_msgs = messages[_sys_msg_count:]
+                    if len(conv_msgs) > _max_conv:
+                        dropped = len(conv_msgs) - _max_conv
+                        messages[_sys_msg_count:] = conv_msgs[-_max_conv:]
+                        logger.debug(
+                            "Broadcast: {} pruned {} messages after interrupt",
+                            name, dropped,
+                        )
+
+                    # Inject any partial content so LLM knows what it said already
+                    if content:
+                        messages.append({"role": "assistant", "content": content})
+
+                    # Inject the interrupt message as a "user" message from the sender
+                    if _intr_msg:
+                        messages.append({
+                            "role": "user",
+                            "content": f"[{_intr_msg.sender}]: {_intr_msg.content}",
+                        })
+                    else:
+                        # Fallback: no message in queue (already consumed by auto-wait?)
+                        messages.append({
+                            "role": "system",
+                            "content": f"[打断通知] 你的执行被中断，请立即总结当前进展并响应队友的最新需求。",
+                        })
+
+                    await tracker.set_state(name, "thinking")
+                    mailbox.mark_busy(name)
+                    content = ""  # reset for the new cycle
+                    continue  # re-enter tool_loop with injected message
 
                 # ── Anti-idle guard: force re-entry if agent did nothing ──
                 if cycle == 1 and not content and not (set(result.tools_used or []) & _substantive_tools):

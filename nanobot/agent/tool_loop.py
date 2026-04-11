@@ -148,6 +148,8 @@ async def tool_loop(
     build_message: Callable[..., dict[str, Any]] | None = None,
     result_max_chars: int | None = None,
     call_timeout: float | None = None,
+    # ── Cooperative interrupt ──
+    interrupt_event: "asyncio.Event | None" = None,
 ) -> ToolLoopResult:
     """Run the LLM → tool → repeat loop.
 
@@ -196,6 +198,16 @@ async def tool_loop(
 
     while iteration < max_iterations:
         iteration += 1
+
+        # ── Checkpoint 1: cooperative interrupt check (before LLM call) ──
+        # Checked at the top of every iteration so we exit as quickly as
+        # possible when another agent has sent an urgent message.
+        if interrupt_event is not None and interrupt_event.is_set():
+            logger.info(
+                "tool_loop: ⚡ interrupt detected before LLM call (iter {})", iteration
+            )
+            result.finish_reason = "interrupted"
+            break
 
         # ── Context pruning: trim old tool results to save tokens ──
         # On iteration 2+, prune old tool results before sending to LLM.
@@ -515,6 +527,17 @@ async def tool_loop(
                         "tool_call_id": tc.id,
                         "content": tool_content,
                     })
+
+                # ── Checkpoint 2: cooperative interrupt check (after tool batch) ──
+                # Checked after all tools in this iteration have finished so
+                # we don't interrupt mid-batch (keeps tool/message ledger clean).
+                if interrupt_event is not None and interrupt_event.is_set():
+                    logger.info(
+                        "tool_loop: ⚡ interrupt detected after tool batch (iter {})", iteration
+                    )
+                    result.finish_reason = "interrupted"
+                    break
+
         else:
             # Text response — done
             raw_content = response.content

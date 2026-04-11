@@ -489,18 +489,19 @@ def leader_transfer_msg(leader_name: str, result: str) -> str:
 # ── Agent Status Dashboard ──────────────────────────────────
 
 STATUS_INDICATORS: dict[str, tuple[str, str]] = {
-    "thinking":   ("🟡", "Thinking..."),
-    "searching":  ("🔵", "Searching"),
-    "fetching":   ("🔵", "Fetching"),
-    "executing":  ("🟣", "Executing"),
-    "reading":    ("📖", "Reading"),
-    "writing":    ("✏️", "Writing"),
-    "sending":    ("🟢", "Sending"),
-    "waiting":    ("⚪", "Waiting..."),
-    "blocked":    ("🔴", "Blocked"),
-    "done":       ("✅", "Done"),
-    "error":      ("❌", "Error"),
-    "cancelled":  ("⬛", "Cancelled"),
+    "thinking":     ("🟡", "Thinking..."),
+    "searching":    ("🔵", "Searching"),
+    "fetching":     ("🔵", "Fetching"),
+    "executing":    ("🟣", "Executing"),
+    "reading":      ("📖", "Reading"),
+    "writing":      ("✏️", "Writing"),
+    "sending":      ("🟢", "Sending"),
+    "waiting":      ("⚪", "Waiting..."),
+    "blocked":      ("🔴", "Blocked"),
+    "interrupted":  ("⚡", "Interrupted"),
+    "done":         ("✅", "Done"),
+    "error":        ("❌", "Error"),
+    "cancelled":    ("⬛", "Cancelled"),
 }
 
 
