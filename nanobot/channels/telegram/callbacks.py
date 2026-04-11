@@ -647,11 +647,6 @@ class CallbacksMixin:
             result = self._groupchat_engine.set_leader(name)
             await query.edit_message_text(result)
 
-        elif data.startswith("mode:"):
-            mode = data[5:]
-            result = self._groupchat_engine.set_mode(mode)
-            await query.edit_message_text(result)
-
         elif data.startswith("lg:"):
             name = data[3:]
             self._ensure_gc_send(chat_id)

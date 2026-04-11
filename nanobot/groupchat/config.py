@@ -20,7 +20,6 @@ class GroupChatConfig(Base):
     """Configuration for multi-agent group chat."""
 
     enabled: bool = True
-    mode: str = "broadcast"  # "serial" | "broadcast"
     agents_dir: str = ""  # Path to agents directory (e.g. "agents/")
     agents: dict[str, GroupChatAgentConfig] = Field(default_factory=dict)
     excluded_agents: list[str] = Field(default_factory=list)

@@ -1,7 +1,7 @@
 """Main group chat event loop and summary generation.
 
 Contains the core run loop that processes user input and dispatches
-to serial, broadcast, or orchestra modes, plus the summary generator.
+to broadcast mode, plus the summary generator.
 """
 
 from __future__ import annotations
@@ -44,8 +44,7 @@ async def generate_summary(engine: Any) -> None:
 async def run_loop(engine: Any) -> None:
     """Main group chat loop — runs while 2+ agents are active.
 
-    Dispatches to serial, broadcast, or orchestra mode based on
-    engine._mode and engine._leader settings.
+    Dispatches to broadcast mode.
     """
     _my_task = asyncio.current_task()
     try:
@@ -95,18 +94,8 @@ async def run_loop(engine: Any) -> None:
             speak_order = list(engine._active_agents)
 
             # Dispatch to appropriate mode
-            if engine._mode == "broadcast":
-                from nanobot.groupchat.broadcast import broadcast_round
-                await broadcast_round(speak_order, engine, engine._mailbox)
-            else:
-                # Serial mode
-                for si, name in enumerate(speak_order):
-                    if not engine._running or name not in engine._active_agents:
-                        break
-                    model_short = engine.registry.get(name, {}).get("model", "?").split("/")[-1]
-                    await engine._send(_d.thinking_msg(name, model_short, idx=si+1, total=len(speak_order)))
-                    await asyncio.sleep(engine.config.auto_reply_delay)
-                    await engine._agent_speak(name)
+            from nanobot.groupchat.broadcast import broadcast_round
+            await broadcast_round(speak_order, engine, engine._mailbox)
 
             # Compress history if approaching the message limit
             await engine._maybe_compress_history()

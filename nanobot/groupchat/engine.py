@@ -262,7 +262,7 @@ class GroupChatEngine:
         # Restore persisted state
         self._active_agents: list[str] = self._state.load_active()
         self._leader: str | None = self._state.load_leader()
-        self._mode: str = self._state.load_mode()
+        self._mode: str = "broadcast"
         self._round: int = 0
 
         # Runtime state (ephemeral, not persisted)
@@ -348,11 +348,6 @@ class GroupChatEngine:
         self._on_round_done = cb
 
     # ── Public API (used by channels) ─────────────────────────
-
-    @property
-    def mode(self) -> str:
-        """Current chat mode (e.g. 'broadcast', 'orchestra')."""
-        return self._mode
 
     @property
     def history(self) -> list[dict[str, str]]:
@@ -539,20 +534,6 @@ class GroupChatEngine:
         self._leader = matched
         self._state.save_leader(matched)
         return f"👑 {matched} 已设为 Leader\n其他 agent 会先发言，{matched} 最后汇总"
-
-    # ── Mode Management (serial / broadcast) ────────────────
-
-    def set_mode(self, mode: str) -> str:
-        """Switch group chat execution mode."""
-        mode = mode.lower().strip()
-        if mode not in ("serial", "broadcast"):
-            return f"❌ 未知模式 '{mode}'，可选: serial, broadcast"
-        old = self._mode
-        self._mode = mode
-        self._state.save_mode(mode)
-        labels = {"serial": "串行轮流", "broadcast": "广播乱序"}
-        return f"✅ 模式切换: {labels.get(old, old)} → {labels.get(mode, mode)}"
-
 
     def save_group(self, name: str) -> str:
         """Save current active agents as a named group."""
@@ -806,7 +787,7 @@ class GroupChatEngine:
         # Write session metadata to structured log
         self._save_event("session_start", extra={
             "agents": list(self._active_agents),
-            "mode": self._mode,
+            "mode": "broadcast",
             "topic": self._topic,
             "leader": self._leader,
             "models": {n: self.registry.get(n, {}).get("model", "?") for n in self._active_agents},
@@ -995,24 +976,6 @@ class GroupChatEngine:
         # (included in DEFAULT_PROMPT_ORDER as "skills" component).
 
         return messages
-
-    async def _agent_speak(
-        self,
-        agent_name: str,
-        synthesis_context: str | None = None,
-        no_tools: bool = False,
-        no_stream: bool = False,
-        silent: bool = False,
-    ) -> tuple[str, list[str], dict] | None:
-        """Run one agent's turn — delegates to speaker module."""
-        from nanobot.groupchat.speaker import agent_speak
-        return await agent_speak(
-            self, agent_name,
-            synthesis_context=synthesis_context,
-            no_tools=no_tools,
-            no_stream=no_stream,
-            silent=silent,
-        )
 
     async def _generate_summary(self) -> None:
         """Generate discussion summary — delegates to run_loop module."""

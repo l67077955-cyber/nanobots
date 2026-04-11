@@ -3,7 +3,6 @@
 Manages all file I/O for group chat state:
 - Active agents list
 - Leader selection
-- Chat mode (serial/broadcast)
 - Named agent groups
 - Session event logging
 """
@@ -28,14 +27,12 @@ class GroupChatState:
     All state files live under ``~/.nanobot/``:
     - ``active_agents.json``  — ordered list of active agent names
     - ``leader.txt``          — current leader name (or absent)
-    - ``chat_mode.txt``       — "serial" | "broadcast"
     - ``groups.json``         — saved named groups
     - ``collab-sessions/``    — per-session event logs
     """
 
-    def __init__(self, registry: dict[str, Any], default_mode: str = "serial") -> None:
+    def __init__(self, registry: dict[str, Any]) -> None:
         self._registry = registry
-        self._default_mode = default_mode
         self._session_dir: Path | None = None
 
     # ── Active Agents ────────────────────────────────────────
@@ -88,28 +85,6 @@ class GroupChatState:
             except Exception:
                 pass
         return None
-
-    # ── Mode ─────────────────────────────────────────────────
-
-    def save_mode(self, mode: str) -> None:
-        try:
-            p = _NANOBOT_DIR / "chat_mode.txt"
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(mode)
-        except Exception:
-            pass
-
-    def load_mode(self) -> str:
-        p = _NANOBOT_DIR / "chat_mode.txt"
-        if p.exists():
-            try:
-                mode = p.read_text().strip()
-                if mode in ("serial", "broadcast"):
-                    logger.info("Restored chat mode: {}", mode)
-                    return mode
-            except Exception:
-                pass
-        return self._default_mode
 
     # ── Groups ───────────────────────────────────────────────
 

@@ -92,7 +92,7 @@ def agent_header(
     """Build the display header for an agent's turn.
 
     Examples:
-        '▍Benjamin 👑 [1/4]\\n\\n'   (group/serial)
+        '▍Benjamin 👑 [1/4]\n\n'   (direct mode)
         '▍Harper [2/4]: '          (broadcast)
     """
     badge = agent_badge(agent_name, leader)
@@ -294,7 +294,7 @@ def synthesis_agent_msg(
 
 
 def tool_call_line(agent_name: str, tool_name: str, short_arg: str = "") -> str:
-    """Format a tool call for serial/orchestra mode.
+    """Format a tool call for direct mode.
 
     Returns: '▸ Nanobot · search(Trump news)'
     """

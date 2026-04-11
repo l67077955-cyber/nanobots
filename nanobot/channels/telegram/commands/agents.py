@@ -141,39 +141,6 @@ class AgentCommandsMixin:
             result = self._groupchat_engine.set_leader(args[0])
         await update.message.reply_text(result)
 
-    async def _on_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Switch group chat execution mode (serial/broadcast)."""
-        if not update.message or not update.effective_user:
-            return
-        if not self.is_allowed(self._sender_id(update.effective_user)):
-            return
-        if not self._groupchat_engine:
-            await update.message.reply_text("⚠️ 群聊引擎未初始化")
-            return
-
-        args = context.args or []
-        if not args:
-            current = self._groupchat_engine.mode
-            labels = {"serial": "串行轮流", "broadcast": "广播乱序"}
-            buttons = [
-                [InlineKeyboardButton(
-                    f"{'✅ ' if current == 'serial' else ''}串行轮流 (serial)",
-                    callback_data="mode:serial",
-                )],
-                [InlineKeyboardButton(
-                    f"{'✅ ' if current == 'broadcast' else ''}📡 广播乱序 (broadcast)",
-                    callback_data="mode:broadcast",
-                )],
-            ]
-            await update.message.reply_text(
-                f"🎭 当前模式: {labels.get(current, current)}\n\n选择执行模式:",
-                reply_markup=InlineKeyboardMarkup(buttons),
-            )
-            return
-
-        result = self._groupchat_engine.set_mode(args[0])
-        await update.message.reply_text(result)
-
     async def _on_addagent(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message or not update.effective_user:
             return

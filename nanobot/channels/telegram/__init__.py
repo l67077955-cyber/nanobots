@@ -80,7 +80,6 @@ class TelegramChannel(
         BotCommand("groups", "List saved groups"),
         BotCommand("order", "Change agent speaking order"),
         BotCommand("setleader", "Set/clear leader agent"),
-        BotCommand("mode", "切换执行模式 (serial/broadcast)"),
         BotCommand("providers", "查看提供商和模型"),
         BotCommand("newprovider", "添加提供商"),
         BotCommand("newmodel", "添加模型"),
@@ -195,7 +194,6 @@ class TelegramChannel(
         self._app.add_handler(CommandHandler("groups", self._on_groups))
         self._app.add_handler(CommandHandler("order", self._on_order))
         self._app.add_handler(CommandHandler("setleader", self._on_setleader))
-        self._app.add_handler(CommandHandler("mode", self._on_mode))
         self._app.add_handler(CommandHandler("prompt", self._on_prompt))
         self._app.add_handler(CommandHandler("history", self._on_history))
         # Provider & model management
@@ -454,8 +452,7 @@ class TelegramChannel(
             "/delgroup <名称> — 删除分组\n"
             "/groups — 查看所有分组\n"
             "/order — 调整发言顺序\n"
-            "/setleader <name> — 设置/取消 Leader 👑\n"
-            "/mode <serial|broadcast> — 切换执行模式\n\n"
+            "/setleader <name> — 设置/取消 Leader 👑\n\n"
             "🏢 提供商 & 模型：\n"
             "/providers — 查看提供商和模型\n"
             "/newprovider — 添加提供商\n"
