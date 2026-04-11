@@ -12,13 +12,21 @@ from typing import Any
 from loguru import logger
 
 from nanobot.groupchat import display as _d
+# ── 关键修复：import 移到文件顶部，避免循环内重复 import ──
+from nanobot.groupchat.broadcast import broadcast_round
 
 
 async def generate_summary(engine: Any) -> None:
     """Generate a discussion summary using the first active agent's model."""
     if not engine._history:
         return
-    agent_name = engine._active_agents[0] if engine._active_agents else list(engine.registry.keys())[0]
+
+    # ── 关键修复：防止 _active_agents 为空时 IndexError ──
+    if not engine._active_agents:
+        await engine._send("⚠️ 没有活跃 agent，无法生成总结")
+        return
+
+    agent_name = engine._active_agents[0]
     model = engine.registry[agent_name]["model"]
 
     try:
@@ -93,9 +101,14 @@ async def run_loop(engine: Any) -> None:
             # Determine speaking order
             speak_order = list(engine._active_agents)
 
-            # Dispatch to appropriate mode
-            from nanobot.groupchat.broadcast import broadcast_round
-            await broadcast_round(speak_order, engine, engine._mailbox)
+            # ── 关键修复：给 broadcast_round 加上全局超时保护 ──
+            # 防止某一轮卡死导致整个群聊永久阻塞
+            await broadcast_round(
+                speak_order,
+                engine,
+                engine._mailbox,
+                global_timeout=600.0,   # 10 分钟（可根据需要调整）
+            )
 
             # Compress history if approaching the message limit
             await engine._maybe_compress_history()
