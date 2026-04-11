@@ -342,6 +342,33 @@ class MailboxHub:
         )
         return True
 
+    def interrupt_busy_agents(self, sender: str) -> int:
+        """Set the interrupt event for every currently-busy agent.
+
+        Used for high-priority signals (e.g. user messages) that should
+        wake up all active tool_loops immediately.  Unlike ``_try_interrupt``,
+        this does **not** increment ``_interrupt_counts`` so it doesn't
+        consume the per-round agent—agent interrupt quota.
+
+        Returns:
+            Number of agents whose interrupt event was set.
+        """
+        count = 0
+        for agent in list(self._busy_agents):
+            evt = self.get_interrupt_event(agent)
+            if not evt.is_set():
+                evt.set()
+                count += 1
+                logger.info(
+                    "MailboxHub: ⚡ user interrupt set for busy agent {} (sender={})",
+                    agent, sender,
+                )
+        if count:
+            logger.info(
+                "MailboxHub: user message interrupted {} busy agent(s)", count
+            )
+        return count
+
     # ── Message sending ──────────────────────────────────────────────────────
 
     def send(self, sender: str, targets: list[str], content: str) -> int:

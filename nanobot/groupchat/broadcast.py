@@ -834,12 +834,17 @@ async def broadcast_round(
                         except Exception:
                             pass
 
-                    # UI: show who interrupted whom
+                    # UI: show who interrupted whom, with distinct label for user vs agent
                     _sender_name = _intr_msg.sender if _intr_msg else "teammate"
                     await tracker.set_state(name, "interrupted", detail=f"from {_sender_name}")
-                    await engine._send(
-                        f"\u26a1 {name} 被 {_sender_name} 的消息打断，正在立即响应..."
-                    )
+                    if _sender_name == "用户":
+                        await engine._send(
+                            f"⚡ {name} 被【用户消息】打断，正在立即响应..."
+                        )
+                    else:
+                        await engine._send(
+                            f"⚡ {name} 被 {_sender_name} 的消息打断，正在立即响应..."
+                        )
                     logger.info(
                         "Broadcast: ⚡ {} interrupted by {} mid-turn (cycle {})",
                         name, _sender_name, cycle,
@@ -1159,12 +1164,17 @@ async def broadcast_round(
 
                 mailbox.create("用户")
                 mailbox.send("用户", ["All"], msg)
+                # Interrupt any agents currently inside tool_loop so they pick
+                # up the user message at the next safe checkpoint rather than
+                # waiting for their current tool batch to finish.
+                _interrupted = mailbox.interrupt_busy_agents("用户")
                 engine._add_message("用户", msg)
                 await engine._send(
                     f"── User ──\n{msg}\n"
                     f"  {_d.thread_bar(pool.used, pool.capacity)}"
                 )
-                logger.info("Broadcast: user interjected: {}", msg[:60])
+                logger.info("Broadcast: user interjected: {} ({} agent(s) interrupted)", msg[:60], _interrupted)
+
 
         user_task = asyncio.create_task(_user_listener())
 
