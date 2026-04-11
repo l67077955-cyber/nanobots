@@ -292,6 +292,19 @@ async def broadcast_round(
     if leader_name:
         leader_gate = LeaderGate(leader_name)
 
+    # ── Task tracking for dynamic agent management ──
+    _leader_agent_tasks: dict = {}  # populated after tasks are created
+    all_tasks: set[asyncio.Task] = set()
+
+    # spawn_fn: called by ManageAgentTool.restart and ChatroomSendTool to re-create a task
+    def _spawn_agent_task(name: str, idx: int) -> asyncio.Task:
+        """Re-spawn a single agent task."""
+        task = asyncio.create_task(_run_one(name, idx))
+        tasks[task] = name
+        # Add to all_tasks set so the main wait loop tracks it
+        all_tasks.add(task)
+        return task
+
     for name in exec_agents:
         # Get per-agent registry (respects workspace_scope), clone and add chatroom tools
         base_reg = engine._get_agent_registry(name)
@@ -308,6 +321,8 @@ async def broadcast_round(
         send_tool = ChatroomSendTool(
             mailbox=mailbox, agent_name=name, pool=pool,
             search_pool=search_pool, leader_gate=leader_gate,
+            agent_tasks=_leader_agent_tasks, spawn_fn=_spawn_agent_task,
+            exec_agents=exec_agents, engine=engine,
         )
         wait_tool = WaitTool(mailbox=mailbox, agent_name=name, pool=pool)
         wait_tool._send_tool = send_tool
@@ -317,16 +332,6 @@ async def broadcast_round(
 
     # ── Leader-specific tools: manage_agent + end_discussion + transfer_credits + clear_context ──
     leader_end_event = asyncio.Event()
-    _leader_agent_tasks: dict = {}  # populated after tasks are created
-
-    # spawn_fn: called by ManageAgentTool.restart to re-create a task
-    def _spawn_agent_task(name: str, idx: int) -> asyncio.Task:
-        """Re-spawn a single agent task (used by manage_agent restart action)."""
-        task = asyncio.create_task(_run_one(name, idx))
-        tasks[task] = name
-        # Add to all_tasks set so the main wait loop tracks it
-        all_tasks.add(task)
-        return task
 
     if leader_name and leader_name in agent_tool_registries:
         from nanobot.groupchat.chatroom_tools import (
@@ -1180,7 +1185,8 @@ async def broadcast_round(
             await leader_end_event.wait()
 
         leader_end_sentinel = asyncio.create_task(_watch_leader_end())
-        all_tasks = set(tasks.keys()) | {leader_end_sentinel}
+        all_tasks.update(tasks.keys())
+        all_tasks.add(leader_end_sentinel)
 
         if hasattr(engine, '_broadcast_tasks'):
             engine._broadcast_tasks['__leader_sentinel'] = leader_end_sentinel

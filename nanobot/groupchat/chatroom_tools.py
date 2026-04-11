@@ -591,13 +591,21 @@ class ChatroomSendTool(Tool):
 
     def __init__(self, mailbox: MailboxHub, agent_name: str = "", pool: ConversationPool | None = None,
                  search_pool: "SearchPool | None" = None,
-                 leader_gate: LeaderGate | None = None) -> None:
+                 leader_gate: LeaderGate | None = None,
+                 agent_tasks: dict | None = None,
+                 spawn_fn: Any | None = None,
+                 exec_agents: list[str] | None = None,
+                 engine: Any = None) -> None:
         self._mailbox = mailbox
         self._agent_name = agent_name  # Set per-round by the engine
         self._pool = pool
         self._search_pool = search_pool  # for credit recovery on successful sends
         self._last_received_from: str | None = None  # track who we last received from
         self._leader_gate = leader_gate
+        self._agent_tasks = agent_tasks
+        self._spawn_fn = spawn_fn
+        self._exec_agents = exec_agents or []
+        self._engine = engine
 
     def set_agent(self, name: str) -> None:
         """Set which agent is using this tool instance."""
@@ -694,6 +702,27 @@ class ChatroomSendTool(Tool):
         # Count successful sends as "output" for search credit recovery
         if delivered > 0 and self._search_pool:
             self._search_pool.on_output(self._agent_name)
+
+        # Leader interrupt target agents
+        if self._leader_gate and self._agent_name == self._leader_gate.leader:
+            if self._agent_tasks is not None and self._spawn_fn is not None:
+                for target in actual_recipients:
+                    if target == self._agent_name:
+                        continue
+                    # Cancel the agent's current task to interrupt
+                    for task_obj, task_name in list(self._agent_tasks.items()):
+                        if task_name == target and not task_obj.done():
+                            task_obj.cancel()
+                    # Notify the agent of the interruption
+                    notify_msg = f"⚡ [系统急电] Leader 刚才发来了具有高优先级的消息或任务！你的当前工作状态已被打断，请立即阅读并优先处理 Leader 的指示！"
+                    self._mailbox.send("系统", [target], notify_msg)
+                    # Re-spawn them immediately
+                    idx = self._exec_agents.index(target) if target in self._exec_agents else 0
+                    new_task = self._spawn_fn(target, idx)
+                    self._agent_tasks[new_task] = target
+                    if self._engine:
+                        import asyncio as _asyncio
+                        _asyncio.create_task(self._engine._send(f"⚡ Leader 的消息成功打断了 {target} 的当前工作状态"))
 
         avail_hint = ""
         if self._pool:
