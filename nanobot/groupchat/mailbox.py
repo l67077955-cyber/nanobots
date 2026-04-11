@@ -256,6 +256,16 @@ class MailboxHub:
         # agentA's auto-wait deadline is extended while agentB is still busy.
         self._expected_replies: dict[str, set[str]] = {}
 
+        # ── Forced interrupt state ──────────────────────────
+        # Per-agent asyncio.Event: set when a forced interrupt is triggered.
+        # tool_loop checks this between operations and exits gracefully.
+        self._interrupt_events: dict[str, asyncio.Event] = {}
+        # Counts how many times each agent has been interrupted this round.
+        # Hard limit: 1 interrupt per agent per round.
+        self._interrupt_counts: dict[str, int] = {}
+        # Agents currently inside tool_loop (busy — eligible for interruption).
+        self._busy_agents: set[str] = set()
+
     def create(self, agent_name: str) -> None:
         """Create a mailbox for an agent (idempotent)."""
         if agent_name not in self._queues:
@@ -276,7 +286,63 @@ class MailboxHub:
         self._active_agents = set(active_agents) if active_agents else set(self._queues.keys())
         self._expected_replies.clear()
         self._global_start = _time.time()
+        # Reset interrupt state for the new round
+        self._interrupt_counts.clear()
+        self._busy_agents.clear()
+        for evt in self._interrupt_events.values():
+            evt.clear()
         logger.debug("MailboxHub: round started, {} agents", len(self._queues))
+
+    # ── Forced interrupt methods ─────────────────────────────────────────────
+
+    def get_interrupt_event(self, agent_name: str) -> asyncio.Event:
+        """Get (or create) the interrupt event for an agent.
+
+        tool_loop polls this event between operations; when set, the loop
+        exits gracefully with finish_reason='interrupted'.
+        """
+        if agent_name not in self._interrupt_events:
+            self._interrupt_events[agent_name] = asyncio.Event()
+        return self._interrupt_events[agent_name]
+
+    def mark_busy(self, agent_name: str) -> None:
+        """Mark an agent as busy inside tool_loop (interrupt-eligible)."""
+        self._busy_agents.add(agent_name)
+        logger.debug("MailboxHub: {} is now busy", agent_name)
+
+    def mark_idle(self, agent_name: str) -> None:
+        """Mark an agent as no longer inside tool_loop."""
+        self._busy_agents.discard(agent_name)
+        logger.debug("MailboxHub: {} is now idle", agent_name)
+
+    def _try_interrupt(self, target: str, sender: str) -> bool:
+        """Attempt to interrupt a busy agent.
+
+        Returns True if the interrupt was triggered, False if skipped
+        (agent not busy, already interrupted once this round, or
+        target == sender).
+        """
+        if target == sender:
+            return False
+        if target not in self._busy_agents:
+            return False
+        if self._interrupt_counts.get(target, 0) >= 1:
+            logger.debug(
+                "MailboxHub: interrupt skipped for {} (already interrupted once this round)",
+                target,
+            )
+            return False
+        # Trigger the interrupt
+        evt = self.get_interrupt_event(target)
+        evt.set()
+        self._interrupt_counts[target] = self._interrupt_counts.get(target, 0) + 1
+        logger.info(
+            "MailboxHub: ⚡ interrupt triggered for {} by {} (count={}/1)",
+            target, sender, self._interrupt_counts[target],
+        )
+        return True
+
+    # ── Message sending ──────────────────────────────────────────────────────
 
     def send(self, sender: str, targets: list[str], content: str) -> int:
         """Send a message to target agents. Returns number delivered.
@@ -299,12 +365,16 @@ class MailboxHub:
                 if name != sender:
                     q.put_nowait(msg)
                     delivered += 1
+                    # Trigger interrupt if recipient is busy (max 1/round)
+                    self._try_interrupt(name, sender)
         else:
             for name in targets:
                 q = self._queues.get(name)
                 if q is not None and name != sender:
                     q.put_nowait(msg)
                     delivered += 1
+                    # Trigger interrupt if recipient is busy (max 1/round)
+                    self._try_interrupt(name, sender)
                 elif q is None:
                     logger.warning("MailboxHub: target '{}' has no mailbox", name)
 
@@ -496,6 +566,11 @@ class MailboxHub:
         # extend their deadline for a finished agent.
         for repliers in self._expected_replies.values():
             repliers.discard(agent_name)
+        # Cleanup interrupt state
+        self._busy_agents.discard(agent_name)
+        self._interrupt_counts.pop(agent_name, None)
+        if agent_name in self._interrupt_events:
+            self._interrupt_events[agent_name].clear()
         # Re-check: if remaining active agents are all waiting
         if self._active_agents and self._waiting >= self._active_agents:
             self._all_waiting.set()
