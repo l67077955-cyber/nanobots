@@ -1,4 +1,3 @@
-cat > fix_single_agent.py << 'EOF'
 #!/usr/bin/env python3
 """
 nanobot 第三版修復腳本 - 只修單 Agent 模式
@@ -124,6 +123,3 @@ print(f"   備份：{backup}")
 print("\n請執行：")
 print("   python -m nanobot   # 或你原本的重啟指令")
 print("然後測試單 Agent 模式～")
-EOF
-
-python3 fix_single_agent.py

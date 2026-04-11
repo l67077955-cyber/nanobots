@@ -523,15 +523,18 @@ class PromptBuilder:
         """
         from nanobot.utils.helpers import build_runtime_context, build_user_content
 
-        # Build system prompt components + 經過智能裁剪的 history
+        # Build system prompt components
         messages = self.build_agent_prompt(
             agent_name,
             registry=registry,
             active_agents=[agent_name],
-            history=history,           # ← 關鍵修改：傳入真實歷史
+            history=[],  # history handled below as raw LLM messages
             leader=None,
             round_num=0,
         )
+
+        # Append conversation history (raw LLM message dicts, not group chat format)
+        messages.extend(history)
 
         # Build runtime context + user content merged into single message
         runtime_ctx = build_runtime_context(channel, chat_id)

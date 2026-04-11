@@ -523,15 +523,18 @@ class PromptBuilder:
         """
         from nanobot.utils.helpers import build_runtime_context, build_user_content
 
-        # Build system prompt components + 經過智能裁剪的 history
+        # Build system prompt components
         messages = self.build_agent_prompt(
             agent_name,
             registry=registry,
             active_agents=[agent_name],
-            history=history,           # ← 關鍵修改：傳入真實歷史
+            history=[],  # history handled below as raw LLM messages
             leader=None,
             round_num=0,
         )
+
+        # Append conversation history (raw LLM message dicts, not group chat format)
+        messages.extend(history)
 
         # Build runtime context + user content merged into single message
         runtime_ctx = build_runtime_context(channel, chat_id)
@@ -547,7 +550,7 @@ class PromptBuilder:
 
     @staticmethod
     def history_to_messages(
-        history: list[dict],
+        history: list[dict[str, str]],
         current_agent: str = "",
         max_chars: int = 0,
         pin_first_user: bool = True,          # 保留參數，向後相容
@@ -556,10 +559,9 @@ class PromptBuilder:
         """Convert history dicts into LLM API messages.
 
         新策略（2026.4 推薦）：
-        - 自動偵測輸入格式：支援 groupchat (sender) 和 LLM (role) 兩種
-        - 強制保留：第1條消息 + 所有 user 消息 + 所有 system 消息
-        - 僅在中間裁剪 assistant 消息，從尾部補齊最近對話
-        - 單 Agent 模式現在也會走此邏輯
+        - 強制保留：第1條消息（原始意圖） + 所有 user 消息 + 所有 system 消息
+        - 僅在預算不夠時，從中間裁剪 assistant 消息（其他 agent 的發言）
+        - 最後從尾部盡量補齊最近的對話，保證時序正確
         """
         def _to_msg(m: dict[str, str]) -> dict[str, Any]:
             sender, content = m["sender"], m["content"]
@@ -574,43 +576,35 @@ class PromptBuilder:
                     "name": sender.replace(" ", "_"),
                 }
 
-        if not history:
-            return []
+        # 1. 先做 relevant_agents 過濾
+        filtered = history
+        if relevant_agents is not None:
+            filtered = [
+                m for m in history
+                if m["sender"] in ("用户", "系统") or m["sender"] in relevant_agents
+            ]
 
-        # ── 自動偵測格式 ──
-        first = history[0]
-        is_groupchat = "sender" in first
-
-        if is_groupchat:
-            # Group chat 格式：過濾 + 轉換
-            filtered = history
-            if relevant_agents is not None:
-                filtered = [
-                    m for m in history
-                    if m["sender"] in ("用户", "系统") or m["sender"] in relevant_agents
-                ]
-            msgs_full = [_to_msg(m) for m in filtered]
-        else:
-            # LLM 格式（單 Agent）：已經是正確格式
-            msgs_full = list(history)
-
+        msgs_full = [_to_msg(m) for m in filtered]
         if not max_chars or not msgs_full:
             return msgs_full
 
-        # ── 強制保留核心消息 ──
+        # 2. 強制保留的核心消息（全部 user + system + 第一條消息）
         critical: list[dict[str, Any]] = []
-        for i, m in enumerate(msgs_full):
-            if m["role"] in ("user", "system") or i == 0:
-                critical.append(m)
+        user_system_indices = set()
 
-        # ── 預算計算 ──
+        for i, m in enumerate(msgs_full):
+            if m["role"] in ("user", "system") or i == 0:   # 第1條永遠保留
+                critical.append(m)
+                user_system_indices.add(i)
+
+        # 3. 計算已用字數
         used_chars = sum(len(m.get("content", "")) for m in critical)
         budget = max_chars - used_chars
 
-        # ── 從尾部補齊 ──
+        # 4. 從尾部往回補 assistant 消息（保持最新對話）
         tail: list[dict[str, Any]] = []
         for m in reversed(msgs_full):
-            if m in critical:
+            if m in critical:          # 已經在 critical 裡的不重複加
                 continue
             c = len(m.get("content", ""))
             if budget - c < 0:
@@ -618,20 +612,21 @@ class PromptBuilder:
             tail.insert(0, m)
             budget -= c
 
-        # ── 重建最終列表（保持時序） ──
+        # 5. 重建最終列表（保持原始時序）
         result: list[dict[str, Any]] = []
-        seen = set()
-        for m in msgs_full:
-            m_id = id(m)
-            if (m in critical or m in tail) and m_id not in seen:
-                result.append(m)
-                seen.add(m_id)
+        added = set()
 
-        # ── 插入省略提示 ──
+        for m in msgs_full:
+            if m in critical or m in tail:
+                # 避免重複（雖然理論上不會）
+                if id(m) not in added:   # 用 id 判重更快
+                    result.append(m)
+                    added.add(id(m))
+
+        # 6. 如果有裁剪，插入省略提示（放在 critical 之後）
         skipped = len(msgs_full) - len(result)
         if skipped > 0:
-            insert_pos = len(critical)
-            result.insert(insert_pos, {
+            result.insert(len(critical), {   # 插在核心消息之後
                 "role": "system",
                 "content": f"[...{skipped} 條歷史消息已省略以節省上下文...]",
             })
