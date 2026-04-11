@@ -164,13 +164,12 @@ def tool_in_progress_msg(header: str) -> str:
 def broadcast_start_msg(agents: list[str], timeout: int, leader: str | None = None) -> str:
     """Render broadcast start banner with role indicators.
 
-    ┏━━ broadcast · 4 agents · 200s ━━┓
-    │ 👑 Nanobot (leader)              │
-    │ 🔹 Lucas  🔹 Benjamin  🔹 Ares  │
-    └──────────────────────────────────┘
+    ┏━━ broadcast · 4 agents · 200s ━━
+    │ 👑 Nanobot
+    │ 🔹 Lucas  🔹 Benjamin  🔹 Ares
     """
     total = len(agents)
-    lines = [f"┏━━ broadcast · {total} agents · {timeout}s ━━┓"]
+    lines = [f"┏━━ broadcast · {total} agents · {timeout}s ━━"]
     if leader:
         lines.append(f"│ 👑 {leader}")
         members = [a for a in agents if a != leader]
@@ -178,7 +177,6 @@ def broadcast_start_msg(agents: list[str], timeout: int, leader: str | None = No
             lines.append(f"│ {'  '.join('🔹 ' + a for a in members)}")
     else:
         lines.append(f"│ {'  '.join('🔹 ' + a for a in agents)}")
-    lines.append("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
     return "\n".join(lines)
 
 
@@ -190,7 +188,7 @@ def broadcast_complete_msg(
     msg = f"┗━━ done · {completed}/{total}"
     if comm_count > 0:
         msg += f" · {comm_count} msgs"
-    msg += " ━━┛"
+    msg += " ━━"
     return msg
 
 

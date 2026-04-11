@@ -225,7 +225,7 @@ async def chat_with_tools(
         iter_usage_ref=_iter_usage_ref,
     )
 
-    # Load configurable result_max_chars for direct/serial mode
+    # Load configurable result_max_chars for direct mode
     try:
         from nanobot.groupchat.history_settings import direct_result_max_chars
         _direct_result_max = direct_result_max_chars()

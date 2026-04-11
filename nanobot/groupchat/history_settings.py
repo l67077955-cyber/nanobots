@@ -46,7 +46,7 @@ _DEFAULTS: dict[str, Any] = {
 
         # Broadcast mode: tool_loop result_max_chars override
         "broadcast_result_max_chars": 20_000,
-        # Serial / direct mode: tool_loop result_max_chars override
+        # Direct mode: tool_loop result_max_chars override
         "direct_result_max_chars": 8_000,
 
         # HTML detection: when exec/web_fetch returns raw HTML,

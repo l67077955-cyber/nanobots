@@ -256,13 +256,11 @@ class GroupChatEngine:
         # Persistence layer
         self._state = GroupChatState(
             registry=self.registry,
-            default_mode=self.config.mode or "serial",
         )
 
         # Restore persisted state
         self._active_agents: list[str] = self._state.load_active()
         self._leader: str | None = self._state.load_leader()
-        self._mode: str = "broadcast"
         self._round: int = 0
 
         # Runtime state (ephemeral, not persisted)
