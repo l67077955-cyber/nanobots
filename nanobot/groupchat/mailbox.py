@@ -211,8 +211,8 @@ class ConversationPool:
 
     @property
     def used(self) -> int:
-        """Number of used slots (clamped to capacity)."""
-        return min(self._capacity, self._capacity - self._available)
+        """Number of used slots (clamped to [0, capacity])."""
+        return max(0, min(self._capacity, self._capacity - self._available))
 
 
 # Keep SpeakQueue as alias for backward compat (referenced in imports)
