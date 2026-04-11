@@ -319,17 +319,13 @@ async def broadcast_round(
     leader_end_event = asyncio.Event()
     _leader_agent_tasks: dict = {}  # populated after tasks are created
 
-    # ── 关键修复1：spawn_agent_task 改用参数传递，避免闭包 UnboundLocalError ──
-    def _spawn_agent_task(
-        name: str,
-        idx: int,
-        tasks_dict: dict,
-        all_tasks_set: set,
-    ) -> asyncio.Task:
-        """Re-spawn a single agent task (used by ManageAgentTool.restart)."""
+    # spawn_fn: called by ManageAgentTool.restart to re-create a task
+    def _spawn_agent_task(name: str, idx: int) -> asyncio.Task:
+        """Re-spawn a single agent task (used by manage_agent restart action)."""
         task = asyncio.create_task(_run_one(name, idx))
-        tasks_dict[task] = name
-        all_tasks_set.add(task)
+        tasks[task] = name
+        # Add to all_tasks set so the main wait loop tracks it
+        all_tasks.add(task)
         return task
 
     if leader_name and leader_name in agent_tool_registries:
@@ -341,7 +337,7 @@ async def broadcast_round(
             agent_tasks=_leader_agent_tasks,
             engine=engine,
             mailbox=mailbox,
-            spawn_fn=lambda n, i: _spawn_agent_task(n, i, tasks, all_tasks),
+            spawn_fn=_spawn_agent_task,
         )
         end_tool = EndDiscussionTool(end_event=leader_end_event, engine=engine)
         transfer_tool = TransferCreditsTool(search_pool=search_pool, engine=engine)
@@ -858,21 +854,27 @@ async def broadcast_round(
                     })
                     continue  # re-enter tool_loop to produce synthesis text
 
-                # ── 关键修复3：Leader end_discussion 但没有文字输出时强制合成 ──
-                if is_leader and "end_discussion" in (result.tools_used or []) and not content:
+                # ── Leader end_discussion with no text: force synthesis ──
+                # When leader uses chatroom_send + end_discussion + write_file in
+                # the same cycle but produces no text, none of the guards above
+                # fire (chatroom_send disables guard #1, substantive tools disable
+                # guard #2). The code would silently break at the end_discussion
+                # check below, leaving the user with no visible result.
+                if is_leader and not content and "end_discussion" in (result.tools_used or []):
                     logger.warning(
-                        "Broadcast: leader {} called end_discussion without text (cycle {}), forcing synthesis",
-                        name, cycle,
+                        "Broadcast: leader {} called end_discussion without text (cycle {}, tools={}), forcing synthesis",
+                        name, cycle, result.tools_used,
                     )
                     messages.append({
                         "role": "system",
                         "content": (
-                            "[⚠️ 你调用了 end_discussion，但还没有给出最终答案！]\n"
-                            "请立即整合所有队友的发现，给出完整、结构化的最终回复给用户。\n"
-                            "这是用户唯一能看到的内容，禁止再调用任何工具，直接输出文字。"
+                            f"[⚠️ 你调用了 end_discussion 但没有给用户写最终答案！]\n"
+                            f"请立即整合所有队友的发现和你自己的工作成果，"
+                            f"给出完整、结构化的最终答案。这是用户唯一能看到的结果。\n"
+                            f"禁止再调用任何工具（包括 end_discussion），直接输出文字。"
                         ),
                     })
-                    continue  # 重新生成最终答案
+                    continue  # re-enter tool_loop to produce synthesis
 
                 # ── Auto-wait: enter idle state ──
                 # Display the agent's final text for this cycle so it's not swallowed.
@@ -1030,13 +1032,9 @@ async def broadcast_round(
         mailbox.create(name)
     mailbox.start_round(active_agents=list(exec_agents))
 
-    # ── 关键修复2：tasks / all_tasks 初始化顺序调整 ──
-    tasks: dict[asyncio.Task, str] = {}
+    tasks = {}
     for idx, name in enumerate(exec_agents):
-        task = asyncio.create_task(_run_one(name, idx))
-        tasks[task] = name
-
-    all_tasks: set[asyncio.Task] = set(tasks.keys())
+        tasks[asyncio.create_task(_run_one(name, idx))] = name
 
     # Register tasks on the engine so remove_agent() can cancel them mid-round
     if hasattr(engine, '_broadcast_tasks'):
@@ -1182,12 +1180,12 @@ async def broadcast_round(
             await leader_end_event.wait()
 
         leader_end_sentinel = asyncio.create_task(_watch_leader_end())
-        all_tasks.add(leader_end_sentinel)
+        all_tasks = set(tasks.keys()) | {leader_end_sentinel}
 
         if hasattr(engine, '_broadcast_tasks'):
             engine._broadcast_tasks['__leader_sentinel'] = leader_end_sentinel
 
-        while not all(t.done() for t in all_tasks):
+        while not all(t.done() for t in tasks.keys()):
             done_set, _ = await asyncio.wait(
                 [t for t in all_tasks if not t.done()],
                 timeout=global_timeout,
