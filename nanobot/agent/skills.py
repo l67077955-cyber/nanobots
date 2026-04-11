@@ -14,21 +14,31 @@ BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
 MAX_SINGLE_SKILL_CHARS: int = 20_000
 # Total character budget for the non-always-on summary block.
 MAX_SKILLS_SUMMARY_CHARS: int = 15_000
+# Total budget for always-on skills (full-text injected block).
+MAX_ALWAYS_SKILLS_CHARS: int = 10_000
+# Per-skill inline truncation limit for always-on skills.
+MAX_ALWAYS_SKILL_INLINE: int = 2_000
 
 
 def build_skills_section(workspace: Path) -> str:
     """Build the skills section for prompt injection (shared logic).
 
-    Always-on skills are injected in full; other skills are listed
-    compactly (one line each) for progressive loading via read_file.
+    Always-on skills are injected up to MAX_ALWAYS_SKILL_INLINE chars each
+    (with a read_file pointer for the rest); other skills are listed compactly.
     """
     loader = SkillsLoader(workspace)
     parts: list[str] = []
 
     always_skills = loader.get_always_skills()
     if always_skills:
-        content = loader.load_skills_for_context(always_skills)
+        content = loader.load_skills_for_context(
+            always_skills,
+            max_chars_per_skill=MAX_ALWAYS_SKILL_INLINE,
+        )
         if content:
+            # Hard cap on the entire always block as a final safety net.
+            if len(content) > MAX_ALWAYS_SKILLS_CHARS:
+                content = content[:MAX_ALWAYS_SKILLS_CHARS] + "\n\n[...always-on skills truncated — read SKILL.md files for full docs]"
             parts.append(content)
 
     summary = loader.build_skills_summary(exclude=set(always_skills) if always_skills else None)
@@ -113,12 +123,17 @@ class SkillsLoader:
 
         return None
 
-    def load_skills_for_context(self, skill_names: list[str]) -> str:
-        """
-        Load specific skills for inclusion in agent context.
+    def load_skills_for_context(
+        self,
+        skill_names: list[str],
+        max_chars_per_skill: int = 0,
+    ) -> str:
+        """Load specific skills for inclusion in agent context.
 
         Args:
             skill_names: List of skill names to load.
+            max_chars_per_skill: If > 0, truncate each skill's content to this
+                many chars and append a read_file hint for the remainder.
 
         Returns:
             Formatted skills content.
@@ -132,6 +147,14 @@ class SkillsLoader:
                 base_dir = self._resolve_skill_dir(name)
                 if base_dir:
                     content = content.replace("{baseDir}", base_dir)
+                # Apply per-skill inline truncation if requested.
+                if max_chars_per_skill and len(content) > max_chars_per_skill:
+                    skill_path = f"skills/{name}/SKILL.md"
+                    content = (
+                        content[:max_chars_per_skill]
+                        + f"\n\n[…content truncated at {max_chars_per_skill} chars."
+                        f" Use `read_file {skill_path}` for the full document.]"
+                    )
                 parts.append(f"### Skill: {name}\n\n{content}")
 
         return "\n\n---\n\n".join(parts) if parts else ""
