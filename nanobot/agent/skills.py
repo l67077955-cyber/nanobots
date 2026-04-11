@@ -9,6 +9,12 @@ from pathlib import Path
 # Default builtin skills directory (relative to this file)
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
 
+# Budget caps — keep skills section from bloating the prompt.
+# Single SKILL.md files larger than this are skipped and only noted in the footer.
+MAX_SINGLE_SKILL_CHARS: int = 20_000
+# Total character budget for the non-always-on summary block.
+MAX_SKILLS_SUMMARY_CHARS: int = 15_000
+
 
 def build_skills_section(workspace: Path) -> str:
     """Build the skills section for prompt injection (shared logic).
@@ -60,6 +66,10 @@ class SkillsLoader:
         # Workspace skills (highest priority)
         if self.workspace_skills.exists():
             for skill_dir in self.workspace_skills.iterdir():
+                # Skip disabled skill directories entirely — they exist for
+                # reference/archive only and should never burn context tokens.
+                if skill_dir.name.startswith("_disabled."):
+                    continue
                 if skill_dir.is_dir():
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists():
@@ -68,6 +78,8 @@ class SkillsLoader:
         # Built-in skills
         if self.builtin_skills and self.builtin_skills.exists():
             for skill_dir in self.builtin_skills.iterdir():
+                if skill_dir.name.startswith("_disabled."):
+                    continue
                 if skill_dir.is_dir():
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists() and not any(s["name"] == skill_dir.name for s in skills):
@@ -144,7 +156,9 @@ class SkillsLoader:
             exclude: Skill names to omit (e.g. already-loaded always-on skills).
 
         Returns:
-            Compact one-line-per-skill summary.
+            Compact one-line-per-skill summary, capped at MAX_SKILLS_SUMMARY_CHARS.
+            Skills whose SKILL.md exceeds MAX_SINGLE_SKILL_CHARS are skipped and
+            counted in the footer note so the agent knows they exist.
         """
         all_skills = self.list_skills(filter_unavailable=False)
         if not all_skills:
@@ -152,10 +166,25 @@ class SkillsLoader:
 
         exclude = exclude or set()
         lines: list[str] = []
+        total_chars = 0
+        skipped_large: list[str] = []
+        skipped_budget: list[str] = []
+
         for s in all_skills:
             name = s["name"]
             if name in exclude:
                 continue
+
+            # Skip single skills that are too large to ever inline sanely.
+            skill_path = Path(s["path"])
+            try:
+                skill_size = skill_path.stat().st_size
+            except OSError:
+                skill_size = 0
+            if skill_size > MAX_SINGLE_SKILL_CHARS:
+                skipped_large.append(name)
+                continue
+
             desc = self._get_skill_description(name)
             skill_meta = self._get_skill_meta(name)
             available = self._check_requirements(skill_meta)
@@ -163,7 +192,25 @@ class SkillsLoader:
             if not available:
                 missing = self._get_missing_requirements(skill_meta)
                 status = f" [unavailable: {missing}]" if missing else " [unavailable]"
-            lines.append(f"- {name}: {desc}{status}")
+            line = f"- {name}: {desc}{status}"
+
+            # Enforce total character budget.
+            if total_chars + len(line) + 1 > MAX_SKILLS_SUMMARY_CHARS:
+                skipped_budget.append(name)
+                continue
+
+            lines.append(line)
+            total_chars += len(line) + 1  # +1 for newline
+
+        # Footer: let the agent know there are more skills it can load on demand.
+        hidden = skipped_large + skipped_budget
+        if hidden:
+            lines.append(
+                f"\n(还有 {len(hidden)} 个技能因体积/数量限制未展示: "
+                + ", ".join(hidden[:8])
+                + (f" 等" if len(hidden) > 8 else "")
+                + "。需要时请用 `read_file skills/<名称>/SKILL.md` 按需加载。)"
+            )
 
         return "\n".join(lines)
 
