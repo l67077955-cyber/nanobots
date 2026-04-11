@@ -366,9 +366,11 @@ class PromptBuilder:
         elif key == "instructions":
             return agent.get("instructions", "")
         elif key == "leader_prompt":
-            if leader == agent_name:
-                return self.get_component_template("leader_prompt") or "[Leader prompt — 自动生成]"
-            return ""
+            # Always return the template content here.
+            # Whether this component is injected for a given agent is controlled
+            # entirely by the visibility filter in build_agent_prompt — this method
+            # only provides the raw content, not the access decision.
+            return self.get_component_template("leader_prompt") or "[Leader prompt — 自动生成]"
         elif key in ("broadcast_hint", "group_nudge"):
             return self.get_component_template(key)
         # Custom components: check global template file
