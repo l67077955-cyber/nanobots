@@ -534,6 +534,8 @@ async def broadcast_round(
         # This prevents messages from being swallowed by concurrent edits.
         _tool_lines: list[str] = []
         _pending_searches: list[str] = []  # Buffer for batching search displays
+        # Shared state between _on_tool_start and _on_tool_result for chatroom_send args
+        _last_chatroom_send_to: list[str] = []
 
         badge = f" [{agent_idx + 1}/{total}]"
         _header = f"◍ {name}{badge}: "
@@ -583,6 +585,10 @@ async def broadcast_round(
                 # Flush any buffered searches before showing chatroom_send
                 await _flush_searches()
                 to = args.get("to", "?")
+                # Stash to-list for _on_tool_result to check (Leader interrupt logic)
+                _to_list = to if isinstance(to, list) else ([to] if to else [])
+                _last_chatroom_send_to.clear()
+                _last_chatroom_send_to.extend(_to_list)
                 msg_full = (args.get("message", "") or "")
                 to_str = ", ".join(to) if isinstance(to, list) else str(to)
                 # Calculate cost for display
@@ -654,6 +660,22 @@ async def broadcast_round(
                         await engine._send(
                             f"  {_d.thread_bar(pool.used, pool.capacity)}"
                         )
+                elif leader_name and leader_name != name:
+                    # ── Leader 实时打断特权 ──
+                    # 消息成功投递且目标包含 Leader 或 All → 立即打断 Leader
+                    # 让 Leader 实时感知队友汇报，不必等当前 tool_loop 跑完
+                    _targets = _last_chatroom_send_to
+                    _targets_lower = [t.lower() for t in _targets]
+                    if leader_name in _targets or "all" in _targets_lower:
+                        _interrupted = mailbox.interrupt_busy_agents(name)
+                        if _interrupted > 0:
+                            logger.info(
+                                "Broadcast: 队友 {} 消息触发 Leader({}) 实时打断",
+                                name, leader_name,
+                            )
+                            await engine._send(
+                                f"⚡ {leader_name} 被 {name} 的汇报实时打断..."
+                            )
             # Show wait results
             elif tool_name == "wait" and result and not result.startswith("⏰"):
                 await engine._send(_d.chatroom_wait_msg(name, result, leader=leader_name))
@@ -917,6 +939,10 @@ async def broadcast_round(
                     if _sender_name == "用户":
                         await engine._send(
                             f"⚡ {name} 被【用户消息】打断，正在立即响应..."
+                        )
+                    elif is_leader and _sender_name != "用户":
+                        await engine._send(
+                            f"⚡ {name}（Leader）被队友 **{_sender_name}** 汇报实时打断，正在响应..."
                         )
                     else:
                         await engine._send(
