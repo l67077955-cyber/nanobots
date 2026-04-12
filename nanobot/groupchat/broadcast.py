@@ -297,6 +297,11 @@ async def broadcast_round(
     if leader_name:
         leader_gate = LeaderGate(leader_name)
 
+    # ── Shared Memory Palace (all agents; persists across rounds + sessions) ──
+    from nanobot.agent.tools.memory_palace import MemoryPalaceTool
+    _palace_path = gc_settings.get("memory_palace_path", "./memory_palace")
+    memory_palace = MemoryPalaceTool(storage_path=_palace_path)
+
     for name in exec_agents:
         # Get per-agent registry (respects workspace_scope), clone and add chatroom tools
         base_reg = engine._get_agent_registry(name)
@@ -318,6 +323,7 @@ async def broadcast_round(
         wait_tool._send_tool = send_tool
         registry.register(send_tool)
         registry.register(wait_tool)
+        registry.register(memory_palace)  # shared palace — all agents can read/write
         agent_tool_registries[name] = registry
 
     # ── Leader-specific tools: manage_agent + end_discussion + transfer_credits + clear_context ──
@@ -422,20 +428,32 @@ async def broadcast_round(
                 f"- end_discussion(reason): 结束讨论，进入最终总结\n"
                 f"- transfer_credits(from_agent, to_agent, amount): 划拨搜索额度\n"
                 f"- 你也拥有自己的基础工具（web_search 等），可以自己做部分工作\n\n"
+                f"## 🧠 记忆宫殿（所有 Agent 共享）\n"
+                f"memory_palace 工具在本轮结束后仍然保留，下次启动自动加载。\n"
+                f"- memory_palace(action='store', content=..., wing=..., hall=..., room=...)\n"
+                f"    存入记忆。wing=大类（如'项目知识'），hall=子类（如'2026-04'），room=具体槽位\n"
+                f"- memory_palace(action='search', query=..., top_k=5)\n"
+                f"    关键词检索所有记忆，返回最相关的 top_k 条\n"
+                f"- memory_palace(action='list')\n"
+                f"    查看当前宫殿结构（Wing/Hall/Room 及记忆数量）\n"
+                f"- memory_palace(action='delete', wing=..., hall=..., room=...)\n"
+                f"    删除指定路径的记忆\n\n"
                 f"## 搜索额度管理\n"
                 f"每个 agent 有独立的搜索额度（{search_pool.status()}）。\n"
                 f"没有 web_search 的 agent 的额度闲置，你可以用 transfer_credits 把他们的额度\n"
                 f"划拨给有搜索能力的 agent（包括你自己）。\n\n"
                 f"## 工作流程\n"
-                f"1. 分析问题，决定如何分工\n"
-                f"2. 用 chatroom_send 给队友分配具体任务（写清楚要做什么）\n"
+                f"1. 先用 memory_palace(action='search') 检索是否有相关历史记忆\n"
+                f"2. 分析问题，决定如何分工\n"
+                f"3. 用 chatroom_send 给队友分配具体任务（写清楚要做什么）\n"
                 f"   ⚠️ 只分配队友有工具能力完成的任务！无 web_search 的队友不要让他搜索\n"
-                f"3. 用 wait() 等待队友回复结果\n"
-                f"4. 根据结果：追加任务 / 纠正方向 / 自己补充搜索\n"
-                f"5. 信息充分后，先完成以下两步，再调用 end_discussion()：\n"
+                f"4. 用 wait() 等待队友回复结果\n"
+                f"5. 根据结果：追加任务 / 纠正方向 / 自己补充搜索\n"
+                f"6. 信息充分后，先完成以下两步，再调用 end_discussion()：\n"
                 f"   a. 在最终文字回复中整合所有发现，给出完整答案\n"
-                f"   b. 用 write_file/edit_file 将本次对话的问题、结论、重要信息写入 memory/ 文件\n"
-                f"6. 完成记忆写入后，调用 end_discussion() 结束任务\n\n"
+                f"   b. 用 memory_palace(action='store') 将关键结论、发现写入记忆宫殿\n"
+                f"      示例: memory_palace(action='store', content='用户偏好：...', wing='用户', hall='偏好', room='main')\n"
+                f"7. 完成记忆存入后，调用 end_discussion() 结束任务\n\n"
                 f"## 关键规则\n"
                 f"- 发现队友空转或无法完成任务时：果断 end_discussion\n"
                 f"- 可以一次给多个队友同时发任务（并行工作）\n"
@@ -444,7 +462,7 @@ async def broadcast_round(
                 f"  end_discussion 一旦触发无法撤销，之后再说'我来搜索'只是文字，不会执行。\n"
                 f"- ⚠️ 原假设被否证时，不要立即结束。应转向：'那么最近的可验证链条是什么？'\n"
                 f"  继续搜索直到能给出正面结论（即使度数更高），而不是仅报告'不成立'。\n"
-                f"- ⚠️ 禁止在未写记忆的情况下调用 end_discussion。写记忆 → end_discussion 是强制顺序。\n"
+                f"- ⚠️ 禁止在未存记忆的情况下调用 end_discussion。存记忆 → end_discussion 是强制顺序。\n"
             )
             messages.insert(max(len(messages) - 1, 0), {
                 "role": "system",
@@ -654,7 +672,7 @@ async def broadcast_round(
         reg = agent_tool_registries[name]
         tool_defs = engine._get_agent_tools(agent_cfg, reg)
         # Always include chatroom + broadcast-specific tools
-        broadcast_tool_names = ["chatroom_send", "wait"]
+        broadcast_tool_names = ["chatroom_send", "wait", "memory_palace"]
         if is_leader:
             broadcast_tool_names.extend(["manage_agent", "end_discussion", "transfer_credits", "clear_context"])
         broadcast_defs = [
