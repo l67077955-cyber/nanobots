@@ -78,7 +78,7 @@ class MemoryPalaceTool(Tool):
                         "'search' — keyword search; "
                         "'list' — show palace structure; "
                         "'clear' — wipe everything (requires confirm=true); "
-                        "'delete' — remove a wing/hall/room path."
+                        "'delete' — remove a wing, hall, or room by path."
                     ),
                 },
                 "content": {
@@ -87,24 +87,15 @@ class MemoryPalaceTool(Tool):
                 },
                 "wing": {
                     "type": "string",
-                    "description": (
-                        "[store/delete] Top-level category, e.g. 'project', 'user_prefs'. "
-                        "Defaults to 'default'."
-                    ),
+                    "description": "[store/delete] Top-level category, e.g. 'project', 'user_prefs'.",
                 },
                 "hall": {
                     "type": "string",
-                    "description": (
-                        "[store/delete] Mid-level grouping within a wing, e.g. 'decisions', '2026-04'. "
-                        "Defaults to 'general'."
-                    ),
+                    "description": "[store/delete] Mid-level grouping within a wing, e.g. 'decisions', '2026-04'.",
                 },
                 "room": {
                     "type": "string",
-                    "description": (
-                        "[store/delete] Fine-grained slot within a hall, e.g. 'api_design'. "
-                        "Defaults to 'main'."
-                    ),
+                    "description": "[store/delete] Fine-grained slot within a hall, e.g. 'api_design'.",
                 },
                 "metadata": {
                     "type": "object",
@@ -121,6 +112,15 @@ class MemoryPalaceTool(Tool):
                 "confirm": {
                     "type": "boolean",
                     "description": "[clear] Must be true to actually wipe the palace.",
+                },
+                "target": {
+                    "type": "string",
+                    "enum": ["wing", "hall", "room"],
+                    "description": (
+                        "[delete] Granularity level to delete. "
+                        "'wing' removes an entire wing; 'hall' removes one hall inside a wing; "
+                        "'room' removes one room inside a hall."
+                    ),
                 },
             },
             "required": ["action"],
@@ -139,22 +139,27 @@ class MemoryPalaceTool(Tool):
         query: str = "",
         top_k: int = 5,
         confirm: bool = False,
+        target: str = "",
         **_: Any,
     ) -> str:
-        if action == "store":
-            return self._store(content, wing, hall, room, metadata)
-        if action == "search":
-            return self._search(query, top_k)
-        if action == "list":
-            return self._list_structure()
-        if action == "clear":
-            return self._clear(confirm)
-        if action == "delete":
-            return self._delete(wing, hall, room)
-        return (
-            f"Unknown action '{action}'. "
-            "Supported: store, search, list, clear, delete."
-        )
+        try:
+            if action == "store":
+                return self._store(content, wing, hall, room, metadata)
+            if action == "search":
+                return self._search(query, top_k)
+            if action == "list":
+                return self._list_structure()
+            if action == "clear":
+                return self._clear(confirm)
+            if action == "delete":
+                return self._delete(target=target, wing=wing, hall=hall, room=room)
+            return (
+                f"Unknown action '{action}'. "
+                "Supported: store, search, list, clear, delete."
+            )
+        except Exception as exc:
+            logger.error("MemoryPalace execute error: {}", exc)
+            return f"Error executing memory_palace: {exc}"
 
     # ── Operations ─────────────────────────────────────────────────────────
 
@@ -166,12 +171,13 @@ class MemoryPalaceTool(Tool):
         room: str,
         metadata: dict | None,
     ) -> str:
-        if not content.strip():
+        content = (content or "").strip()
+        if not content:
             return "Error: 'content' must not be empty."
 
-        wing = wing.strip() or "default"
-        hall = hall.strip() or "general"
-        room = room.strip() or "main"
+        wing = (wing or "").strip() or "default"
+        hall = (hall or "").strip() or "general"
+        room = (room or "").strip() or "main"
 
         self._palace.setdefault(wing, {})
         self._palace[wing].setdefault(hall, {})
@@ -261,34 +267,47 @@ class MemoryPalaceTool(Tool):
         self._save()
         return f"🗑️ Memory palace cleared. {count} memories deleted."
 
-    def _delete(self, wing: str, hall: str, room: str) -> str:
-        """Remove a room (if hall+room given), a hall (if only hall given), or a wing."""
-        # If room is non-default, delete just the room
-        if wing in self._palace:
-            if hall in self._palace[wing]:
-                if room != "main" and room in self._palace[wing][hall]:
-                    count = len(self._palace[wing][hall].pop(room))
-                    if not self._palace[wing][hall]:
-                        del self._palace[wing][hall]
-                    if not self._palace[wing]:
-                        del self._palace[wing]
-                    self._save()
-                    return f"Deleted room '{wing}/{hall}/{room}' ({count} memories)."
-                elif hall != "general":
-                    count = sum(len(m) for m in self._palace[wing].pop(hall).values())
-                    if not self._palace[wing]:
-                        del self._palace[wing]
-                    self._save()
-                    return f"Deleted hall '{wing}/{hall}' ({count} memories)."
-            elif wing != "default":
-                count = sum(
-                    len(mems)
-                    for rooms in self._palace.pop(wing).values()
-                    for mems in rooms.values()
-                )
-                self._save()
-                return f"Deleted wing '{wing}' ({count} memories)."
-        return f"Path '{wing}/{hall}/{room}' not found in the palace."
+    def _delete(self, target: str, wing: str, hall: str, room: str) -> str:
+        """Remove a room, hall, or wing by explicit target level."""
+        if not target:
+            return "Error: 'target' is required for delete (wing | hall | room)."
+
+        if target == "wing":
+            if wing not in self._palace:
+                return f"Wing '{wing}' not found."
+            count = sum(
+                len(mems)
+                for rooms in self._palace.pop(wing).values()
+                for mems in rooms.values()
+            )
+            self._save()
+            return f"Deleted wing '{wing}' ({count} memories)."
+
+        if target == "hall":
+            if wing not in self._palace or hall not in self._palace[wing]:
+                return f"Hall '{wing}/{hall}' not found."
+            count = sum(len(m) for m in self._palace[wing].pop(hall).values())
+            if not self._palace[wing]:
+                del self._palace[wing]
+            self._save()
+            return f"Deleted hall '{wing}/{hall}' ({count} memories)."
+
+        if target == "room":
+            if (
+                wing not in self._palace
+                or hall not in self._palace[wing]
+                or room not in self._palace[wing][hall]
+            ):
+                return f"Room '{wing}/{hall}/{room}' not found."
+            count = len(self._palace[wing][hall].pop(room))
+            if not self._palace[wing][hall]:
+                del self._palace[wing][hall]
+            if not self._palace[wing]:
+                del self._palace[wing]
+            self._save()
+            return f"Deleted room '{wing}/{hall}/{room}' ({count} memories)."
+
+        return f"Unknown target '{target}'. Use: wing | hall | room."
 
     # ── Persistence ────────────────────────────────────────────────────────
 
