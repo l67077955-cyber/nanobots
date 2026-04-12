@@ -494,6 +494,8 @@ class MailboxHub:
         _POLL_INTERVAL = 5.0
         deadline = _time.time() + effective_timeout
 
+        _MAX_EXTENSIONS = 12  # max 12 × 5s = 60s extra beyond original timeout
+        _extensions = 0
         try:
             while True:
                 remaining = deadline - _time.time()
@@ -503,19 +505,28 @@ class MailboxHub:
                     # are busy processing — not yet in _waiting).  If so, extend
                     # the deadline to avoid premature idle-exit.
                     busy_repliers = self._get_busy_expected_repliers(agent_name)
-                    if busy_repliers:
+                    if busy_repliers and _extensions < _MAX_EXTENSIONS:
+                        _extensions += 1
                         extension = _POLL_INTERVAL
                         deadline = _time.time() + extension
                         logger.info(
                             "MailboxHub.wait: {} deadline extended +{}s "
-                            "(busy repliers: {})",
+                            "(busy repliers: {}, extension {}/{})",
                             agent_name, extension, busy_repliers,
+                            _extensions, _MAX_EXTENSIONS,
                         )
                         continue
-                    logger.info(
-                        "MailboxHub.wait: timeout for {} ({}s)",
-                        agent_name, effective_timeout,
-                    )
+                    if busy_repliers:
+                        logger.warning(
+                            "MailboxHub.wait: {} giving up after {} extensions "
+                            "— busy repliers {} never responded",
+                            agent_name, _MAX_EXTENSIONS, busy_repliers,
+                        )
+                    else:
+                        logger.info(
+                            "MailboxHub.wait: timeout for {} ({}s)",
+                            agent_name, effective_timeout,
+                        )
                     return None
                 try:
                     poll = min(remaining, _POLL_INTERVAL)
