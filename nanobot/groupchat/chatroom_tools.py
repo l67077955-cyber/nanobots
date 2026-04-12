@@ -731,7 +731,8 @@ class WaitTool(Tool):
     def description(self) -> str:
         return (
             "Wait for a message from another agent. "
-            "Use this after sending a message with chatroom_send to wait for a reply. "
+            "Call with no arguments to wait for any teammate (default: all). "
+            "Use after chatroom_send to wait for a reply. "
             "Has a hard timeout of 120 seconds per call. "
             "Returns the message content, or a timeout notice."
         )
@@ -751,7 +752,7 @@ class WaitTool(Tool):
                     "type": "string",
                     "description": (
                         "Optional: only wait for a message from this specific agent. "
-                        "Leave empty to accept messages from anyone."
+                        "Default (empty): accept messages from anyone (all teammates)."
                     ),
                 },
             },

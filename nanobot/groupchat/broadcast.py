@@ -589,8 +589,10 @@ async def broadcast_round(
                 if isinstance(raw_to, list):
                     to_list = [str(t).strip() for t in raw_to if t]
                 elif isinstance(raw_to, str):
-                    to_list = [raw_to.strip()]
+                    to_list = [s for s in [raw_to.strip()] if s]
                 else:
+                    to_list = []
+                if not to_list:
                     to_list = ["?"]
                 # Stash to-list for _on_tool_result to check (Leader interrupt logic)
                 _last_chatroom_send_to.clear()
