@@ -619,7 +619,7 @@ async def broadcast_round(
             elif tool_name == "wait":
                 await _flush_searches()
                 from_who = args.get("from_agent", "")
-                line = f"{name}: wait({'来自 ' + from_who if from_who else '消息'})"
+                line = f"{name}: wait({'来自 ' + from_who if from_who else '所有人'})"
                 _tool_lines.append(line)
             elif tool_name in ("web_search", "web_fetch"):
                 # Buffer search tools — will be flushed together
