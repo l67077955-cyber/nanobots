@@ -1099,14 +1099,6 @@ async def broadcast_round(
                         
                     await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
                     logger.info("Broadcast: displayed {} cycle {} output ({} chars)", name, cycle, len(content))
-                    
-                    # ── 新增：Leader 的普通文本输出（进展[n]）也触发全员打断 ──
-                    if is_leader:
-                        interrupted = mailbox.interrupt_busy_agents(name)
-                        if interrupted > 0:
-                            logger.info("Broadcast: 👑 Leader 进展汇报触发全员打断 (%d agents)", interrupted)
-                            # 可选：显示一条提示（推荐保留）
-                            await engine._send(f"⚡ Leader 进展已推送 → 全员唤醒继续下一轮")
                 
                 # If leader called end_discussion this cycle, exit immediately.
                 if is_leader and "end_discussion" in (result.tools_used or []):
