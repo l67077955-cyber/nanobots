@@ -579,23 +579,30 @@ async def broadcast_round(
             # Full args logging to server log
             logger.info(
                 "broadcast [{}] tool_call: {}({})",
-                name, tool_name, _json.dumps(args, ensure_ascii=False),
+                name, tool_name, _json.dumps(args, ensure_ascii=False)[:300],
             )
             if tool_name == "chatroom_send":
                 # Flush any buffered searches before showing chatroom_send
                 await _flush_searches()
-                to = args.get("to", "?")
+                # Normalize `to` → to_list (handles str / list / None uniformly)
+                raw_to = args.get("to", "?")
+                if isinstance(raw_to, list):
+                    to_list = [str(t).strip() for t in raw_to if t]
+                elif isinstance(raw_to, str):
+                    to_list = [raw_to.strip()]
+                else:
+                    to_list = ["?"]
                 # Stash to-list for _on_tool_result to check (Leader interrupt logic)
-                _to_list = to if isinstance(to, list) else ([to] if to else [])
                 _last_chatroom_send_to.clear()
-                _last_chatroom_send_to.extend(_to_list)
+                _last_chatroom_send_to.extend(to_list)
                 msg_full = (args.get("message", "") or "")
-                to_str = ", ".join(to) if isinstance(to, list) else str(to)
-                # Calculate cost for display
-                if to_str.lower() == "all":
+                to_str = ", ".join(to_list)
+                # Calculate cost for display (use normalized to_list)
+                to_lower = [t.lower() for t in to_list]
+                if "all" in to_lower:
                     cost = len([a for a in agents if a != name])
                 else:
-                    cost = len(to) if isinstance(to, list) else 1
+                    cost = len(to_list)
                 line = f"{name}: chatroom_send({to_str}) [cost={cost}]"
                 _tool_lines.append(line)
                 # Build stats suffix: token + latency
@@ -603,8 +610,8 @@ async def broadcast_round(
                 tok_t = _cycle_usage.get("total_tokens", 0)
                 stats_suffix = ""
                 if tok_t > 0:
-                    p = _cycle_usage["prompt_tokens"]
-                    c = _cycle_usage["completion_tokens"]
+                    p = _cycle_usage.get("prompt_tokens", 0)
+                    c = _cycle_usage.get("completion_tokens", 0)
                     stats_suffix = "\n" + _d.format_token_stats(p, c, elapsed=elapsed)
                 await engine._send(_d.chatroom_send_msg(name, to_str, msg_full + stats_suffix, leader=leader_name))
             elif tool_name == "wait":
@@ -664,9 +671,8 @@ async def broadcast_round(
                     # ── Leader 实时打断特权 ──
                     # 消息成功投递且目标包含 Leader 或 All → 立即打断 Leader
                     # 让 Leader 实时感知队友汇报，不必等当前 tool_loop 跑完
-                    _targets = _last_chatroom_send_to
-                    _targets_lower = [t.lower() for t in _targets]
-                    if leader_name in _targets or "all" in _targets_lower:
+                    _targets_lower = [t.lower() for t in _last_chatroom_send_to]
+                    if leader_name.lower() in _targets_lower or "all" in _targets_lower:
                         _interrupted = mailbox.interrupt_busy_agents(name)
                         if _interrupted > 0:
                             logger.info(
