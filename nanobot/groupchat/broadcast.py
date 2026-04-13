@@ -660,31 +660,62 @@ async def broadcast_round(
             )
             # Thread visualization: show status after chatroom_send
             if tool_name == "chatroom_send" and result:
-                if "BLOCKED:" in result or "threads]" in result:
-                    if "BLOCKED:" in result:
-                        await engine._send(
-                            f"✗ {name} dropped ── "
-                            f"{_d.thread_bar(pool.used, pool.capacity)}"
-                        )
-                    else:
-                        await engine._send(
-                            f"  {_d.thread_bar(pool.used, pool.capacity)}"
-                        )
-                elif leader_name and leader_name != name:
-                    # ── Leader 实时打断特权 ──
-                    # 消息成功投递且目标包含 Leader 或 All → 立即打断 Leader
-                    # 让 Leader 实时感知队友汇报，不必等当前 tool_loop 跑完
+                if "BLOCKED:" in result:
+                    await engine._send(
+                        f"✗ {name} dropped ── "
+                        f"{_d.thread_bar(pool.used, pool.capacity)}"
+                    )
+                elif "threads]" in result:
+                    # 消息成功投递 — 显示线程条
+                    await engine._send(
+                        f"  {_d.thread_bar(pool.used, pool.capacity)}"
+                    )
+                    # ── 双向实时打断：不论方向，成功投递后 interrupt 目标 busy agent ──
+                    # 队友 → Leader：让 Leader 立刻感知汇报
+                    # Leader → 队友：让队友立刻响应指令，而非等 auto-wait 的 5s poll
                     _targets_lower = [t.lower() for t in _last_chatroom_send_to]
-                    if leader_name.lower() in _targets_lower or "all" in _targets_lower:
-                        _interrupted = mailbox.interrupt_busy_agents(name)
-                        if _interrupted > 0:
+                    if leader_name and ("all" in _targets_lower or any(
+                        t != name.lower() for t in _targets_lower
+                    )):
+                        # 对每个实际收件人触发 interrupt（如果他们在 tool_loop 内 busy）
+                        _interrupted_count = 0
+                        for _tgt in _last_chatroom_send_to:
+                            if _tgt.lower() == "all":
+                                # All broadcast: interrupt all busy agents except sender
+                                _interrupted_count += mailbox.interrupt_busy_agents(name)
+                                break
+                            else:
+                                # Targeted: interrupt specific recipient if busy
+                                if mailbox._try_interrupt(_tgt, name):
+                                    _interrupted_count += 1
+                        if _interrupted_count > 0:
+                            _dir = "队友" if name != leader_name else "Leader"
+                            _recv_str = ", ".join(_last_chatroom_send_to)
                             logger.info(
-                                "Broadcast: 队友 {} 消息触发 Leader({}) 实时打断",
-                                name, leader_name,
+                                "Broadcast: {} {} → {} 实时打断 {} 个 busy agent",
+                                _dir, name, _recv_str, _interrupted_count,
                             )
-                            await engine._send(
-                                f"⚡ {leader_name} 被 {name} 的汇报实时打断..."
-                            )
+                            if name != leader_name:
+                                # 只有队友→Leader 的方向才显示打断提示（避免刷屏）
+                                if leader_name and leader_name.lower() in _targets_lower:
+                                    await engine._send(
+                                        f"⚡ {leader_name} 被 {name} 的汇报实时打断..."
+                                    )
+                else:
+                    # 其他返回值（不含 BLOCKED 或 threads]）
+                    if leader_name and leader_name != name:
+                        # 非 leader 发消息的兜底
+                        _targets_lower = [t.lower() for t in _last_chatroom_send_to]
+                        if leader_name.lower() in _targets_lower or "all" in _targets_lower:
+                            _interrupted = mailbox.interrupt_busy_agents(name)
+                            if _interrupted > 0:
+                                logger.info(
+                                    "Broadcast: 队友 {} 消息触发 Leader({}) 实时打断",
+                                    name, leader_name,
+                                )
+                                await engine._send(
+                                    f"⚡ {leader_name} 被 {name} 的汇报实时打断..."
+                                )
             # Show wait results
             elif tool_name == "wait" and result and not result.startswith("⏰"):
                 await engine._send(_d.chatroom_wait_msg(name, result, leader=leader_name))
