@@ -18,27 +18,29 @@ from nanobot.groupchat.mailbox import MailboxHub, ConversationPool, SpeakQueue
 
 
 class SearchPool:
-    """Per-agent search credit pool for broadcast mode.
+    """Per-agent tool-call credit pool for broadcast mode.
 
     - Each agent gets individual credits (initial_per_agent)
-    - Each search costs 1 credit from the agent's own quota
-    - Every N outputs by an agent earns 1 credit back for that agent
+    - Each tool call costs 1 credit from the agent's own quota
+    - Each output earns `earn_per_output` credits for that agent (supports float)
     - Leader can transfer credits between agents via transfer()
     """
 
     def __init__(self, agents: list[str], initial_per_agent: int = 2,
-                 earn_interval: int = 4) -> None:
+                 earn_per_output: float = 0.25) -> None:
         self._agents = agents
         self._initial = initial_per_agent
-        self._earn_interval = earn_interval
+        self._earn_per_output = earn_per_output
         self._lock = threading.Lock()
-        # Per-agent quotas
-        self._credits: dict[str, int] = {a: initial_per_agent for a in agents}
-        self._searches: dict[str, int] = {a: 0 for a in agents}
+        # Per-agent quotas (float for fractional accumulation)
+        self._credits: dict[str, float] = {a: float(initial_per_agent) for a in agents}
+        # Fractional accumulator: sub-integer credits that haven't been awarded yet
+        self._fractional: dict[str, float] = {a: 0.0 for a in agents}
+        self._tool_calls: dict[str, int] = {a: 0 for a in agents}
         self._outputs: dict[str, int] = {a: 0 for a in agents}
 
     @property
-    def pool(self) -> int:
+    def pool(self) -> float:
         """Total remaining credits across all agents."""
         return sum(self._credits.values())
 
@@ -49,18 +51,27 @@ class SearchPool:
     def spend(self, agent: str) -> bool:
         """Spend 1 credit from agent's own quota. Returns False if empty."""
         with self._lock:
-            if self._credits.get(agent, 0) <= 0:
+            if self._credits.get(agent, 0.0) < 1.0:
                 return False
-            self._credits[agent] -= 1
-            self._searches[agent] = self._searches.get(agent, 0) + 1
+            self._credits[agent] -= 1.0
+            self._tool_calls[agent] = self._tool_calls.get(agent, 0) + 1
             return True
 
     def on_output(self, agent: str) -> None:
-        """Record an agent output. Every earn_interval outputs earns +1 credit for that agent."""
+        """Record an agent output. Each output earns earn_per_output credits.
+
+        Supports float rates: e.g. 0.5 means every 2 outputs earns 1 credit.
+        Sub-integer earnings accumulate in a fractional buffer and are flushed
+        to the credit balance as whole-number credits.
+        """
         with self._lock:
             self._outputs[agent] = self._outputs.get(agent, 0) + 1
-            if self._outputs[agent] % self._earn_interval == 0:
-                self._credits[agent] = self._credits.get(agent, 0) + 1
+            # Accumulate fractional credit
+            self._fractional[agent] = self._fractional.get(agent, 0.0) + self._earn_per_output
+            whole = int(self._fractional[agent])
+            if whole >= 1:
+                self._fractional[agent] -= whole
+                self._credits[agent] = self._credits.get(agent, 0.0) + whole
 
     def transfer(self, from_agent: str, to_agent: str, amount: int) -> tuple[bool, str]:
         """Transfer credits from one agent to another. Returns (success, message)."""
@@ -72,35 +83,41 @@ class SearchPool:
             available = self._credits[from_agent]
             if amount <= 0:
                 return False, "转移数量必须大于0"
-            actual = min(amount, available)
+            actual = min(amount, int(available))
             if actual == 0:
                 return False, f"{from_agent} 没有可用额度"
             self._credits[from_agent] -= actual
             self._credits[to_agent] += actual
-            return True, f"✅ 转移 {actual} 额度: {from_agent}({self._credits[from_agent]}) → {to_agent}({self._credits[to_agent]})"
+            fa = int(self._credits[from_agent])
+            ta = int(self._credits[to_agent])
+            return True, f"✅ 转移 {actual} 额度: {from_agent}({fa}) → {to_agent}({ta})"
 
     def agent_credits(self, agent: str) -> int:
-        """Remaining credits for this agent."""
-        return self._credits.get(agent, 0)
+        """Remaining whole credits for this agent."""
+        return int(self._credits.get(agent, 0.0))
 
+    def agent_tool_calls(self, agent: str) -> int:
+        """How many tool calls this agent has made."""
+        return self._tool_calls.get(agent, 0)
+
+    # backward-compat alias
     def agent_searches(self, agent: str) -> int:
-        """How many searches this agent has done."""
-        return self._searches.get(agent, 0)
+        return self.agent_tool_calls(agent)
 
     def status(self) -> str:
         """Return pool status string with per-agent breakdown."""
         parts = []
         for a in self._agents:
-            c = self._credits.get(a, 0)
-            s = self._searches.get(a, 0)
-            parts.append(f"{a}:{c}💰({s}搜)")
+            c = int(self._credits.get(a, 0))
+            t = self._tool_calls.get(a, 0)
+            parts.append(f"{a}:{c}💰({t}用)")
         return " | ".join(parts)
 
     def agent_status(self, agent: str) -> str:
         """Return status for a single agent."""
-        c = self._credits.get(agent, 0)
-        s = self._searches.get(agent, 0)
-        return f"{c} credits remaining ({s} searches used)"
+        c = int(self._credits.get(agent, 0))
+        t = self._tool_calls.get(agent, 0)
+        return f"{c} credits remaining ({t} tool calls used)"
 
 
 class CachedSearchTool(Tool):

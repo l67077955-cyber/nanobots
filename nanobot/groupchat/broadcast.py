@@ -281,15 +281,16 @@ async def broadcast_round(
 
     agent_tool_registries: dict[str, ToolRegistry] = {}
 
-    # ── Shared search cache + pool ──
+    # ── Shared tool cache + pool ──
     _search_cache: dict[str, tuple[str, str]] = {}
-    # SearchPool: use context_points_per_agent if set, else search_initial
+    # SearchPool (ToolPool): use context_points_per_agent if set, else tool_initial
     points_per_agent = gc_settings.get("context_points_per_agent", 0)
-    search_initial = points_per_agent if points_per_agent > 0 else gc_settings["search_initial"]
+    tool_initial = gc_settings.get("tool_initial", gc_settings.get("search_initial", 2))
+    search_initial = points_per_agent if points_per_agent > 0 else tool_initial
     search_pool = SearchPool(
         agents=list(exec_agents),
         initial_per_agent=search_initial,
-        earn_interval=gc_settings["search_earn_interval"],
+        earn_per_output=gc_settings.get("tool_earn_per_output", 0.25),
     )
 
     # ── Shared leader gate (enforces 1-msg-then-wait for non-leaders) ──

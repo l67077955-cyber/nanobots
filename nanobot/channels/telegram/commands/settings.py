@@ -84,17 +84,17 @@ class SettingsCommandsMixin:
     # ── Groupchat Settings ─────────────────────────────────────
 
     GC_SETTINGS_DEFAULTS = {
-        "search_initial": 2,           # search pool = agents × N
-        "search_earn_interval": 4,     # every N outputs earns +1 credit
-        "allocate_timeout": 15,        # seconds before message is dropped
-        "context_pool_capacity": 0,    # 0 = auto (n × (n-1)), >0 = custom capacity
-        "context_points_per_agent": 0, # 0 = disabled, >0 = custom points per agent
+        "tool_initial": 2,               # tool pool = agents × N
+        "tool_earn_per_output": 0.25,    # credits earned per output (float ok, e.g. 0.5 = 1 credit per 2 outputs)
+        "allocate_timeout": 15,          # seconds before message is dropped
+        "context_pool_capacity": 0,      # 0 = auto (n × (n-1)), >0 = custom capacity
+        "context_points_per_agent": 0,   # 0 = disabled, >0 = custom points per agent
     }
     GC_SETTINGS_LABELS = {
-        "search_initial":           "初始搜索额度 (每 agent × N)",
-        "search_earn_interval":     "每 N 次对话返还 1 搜索额度",
-        "allocate_timeout":         "消息分配超时 (秒)",
-        "context_pool_capacity":    "对话池容量 (0=自动, >0=自定义)",
+        "tool_initial":           "初始工具额度 (每 agent × N)",
+        "tool_earn_per_output":   "每次输出获得工具额度 (0.5=输出2次获地1点)",
+        "allocate_timeout":       "消息分配超时 (秒)",
+        "context_pool_capacity":  "对话池容量 (0=自动, >0=自定义)",
         "context_points_per_agent": "对话池点数 (0=禁用, >0=每agent点数)",
     }
 
@@ -108,6 +108,15 @@ class SettingsCommandsMixin:
         if p.exists():
             try:
                 saved = json.loads(p.read_text())
+                # Migrate old key names forward
+                if "search_initial" in saved and "tool_initial" not in saved:
+                    saved["tool_initial"] = saved.pop("search_initial")
+                if "search_earn_interval" in saved and "tool_earn_per_output" not in saved:
+                    old = saved.pop("search_earn_interval")
+                    saved["tool_earn_per_output"] = round(1.0 / old, 4) if old else 0.25
+                if "tool_earn_interval" in saved and "tool_earn_per_output" not in saved:
+                    old = saved.pop("tool_earn_interval")
+                    saved["tool_earn_per_output"] = round(1.0 / old, 4) if old else 0.25
                 defaults.update(saved)
             except Exception:
                 pass
@@ -143,9 +152,9 @@ class SettingsCommandsMixin:
             auto_cap = active * (active - 1)
             cap = pool_points if pool_points > 0 else auto_cap
             pool_mode = f"手动({pool_points})" if pool_points > 0 else "自动"
-            search_pool = active * settings.get("search_initial", 1)
+            tool_pool = active * settings.get("tool_initial", 1)
             lines.append(f"\n  对话池: {pool_mode} → {cap} threads" + (f" (auto={auto_cap})" if pool_points > 0 else ""))
-            lines.append(f"  搜索池: {active} agents × {settings.get('search_initial', 1)} = {search_pool} points")
+            lines.append(f"  工具池: {active} agents × {settings.get('tool_initial', 1)} = {tool_pool} points")
 
         await update.message.reply_text(
             "\n".join(lines),
