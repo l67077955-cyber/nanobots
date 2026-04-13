@@ -7,6 +7,7 @@ to each other (or broadcast to all) and wait for replies.
 from __future__ import annotations
 
 import asyncio
+import random
 import time as _time
 from dataclasses import dataclass, field
 from typing import Any
@@ -491,9 +492,10 @@ class MailboxHub:
         # Register as waiting (only if no message was immediately available)
         self._waiting.add(agent_name)
         if self._waiting >= self._active_agents and len(self._active_agents) > 0:
-            logger.info("MailboxHub: all {} agents waiting — conversation done",
+            logger.info("MailboxHub: all {} agents waiting — nudging random agent",
                         len(self._active_agents))
             self._all_waiting.set()
+            self._nudge_random_agent(reason="all-waiting")
 
         # Use the caller-provided timeout directly (no hard caps)
         effective_timeout = timeout
@@ -605,6 +607,33 @@ class MailboxHub:
                 busy.add(other)
         return busy
 
+    def _nudge_random_agent(self, reason: str = "all-waiting") -> None:
+        """Inject a nudge message to a random waiting agent.
+
+        Called when all active agents are simultaneously waiting, which is
+        a deadlock.  Picks one agent at random and injects a system message
+        so it re-enters tool_loop and can either progress or end_discussion.
+        """
+        candidates = list(self._active_agents)
+        if not candidates:
+            return
+        chosen = random.choice(candidates)
+        nudge = AgentMessage(
+            sender="系统",
+            content=(
+                "[全员空闲提醒] 所有队友都在等待中，没有新消息。\n"
+                "请主动推进任务：总结当前进展、提出下一步行动，"
+                "或（如果你是 Leader）调用 end_discussion 结束群聊。"
+            ),
+            targets=[chosen],
+        )
+        q = self._queues.get(chosen)
+        if q is not None:
+            q.put_nowait(nudge)
+            logger.info(
+                "MailboxHub: nudged {} to break {} deadlock", chosen, reason,
+            )
+
     def mark_agent_done(self, agent_name: str) -> None:
         """Mark an agent as finished (no longer active)."""
         self._active_agents.discard(agent_name)
@@ -621,3 +650,4 @@ class MailboxHub:
         # Re-check: if remaining active agents are all waiting
         if self._active_agents and self._waiting >= self._active_agents:
             self._all_waiting.set()
+            self._nudge_random_agent(reason="agent-done")
