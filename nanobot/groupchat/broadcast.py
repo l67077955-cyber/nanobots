@@ -891,9 +891,33 @@ async def broadcast_round(
 
                             except Exception as _rec_exc:
                                 logger.warning("Broadcast: {} recovery also failed: {}", name, _rec_exc)
-                            # Recovery failed — fall through to hard exit
-                            await engine._send(f"⚠️ {name} 超时且恢复失败，跳过本轮")
+
+                            # ── Recovery failed — send placeholder and stay alive ──
+                            # Instead of hard-exiting, pretend the agent produced a
+                            # brief status message so downstream flow continues.
+                            _placeholder = (
+                                f"⏳ [{name}] 当前模型响应超时，我仍在线。"
+                                f"等待队友消息后将继续工作。"
+                            )
+                            content = _placeholder
+                            engine._add_message(name, _placeholder)
+                            mailbox.send(name, ["All"], _placeholder)
+                            await engine._send(
+                                _d.chatroom_send_msg(
+                                    name, "超时占位", _placeholder, max_len=1000, leader=leader_name
+                                )
+                            )
+                            await tracker.set_state(name, "waiting", detail="timeout recovery")
+                            logger.warning(
+                                "Broadcast: {} timeout recovery failed, injecting placeholder and continuing",
+                                name,
+                            )
+                            # Reset recovery counter so next timeout also gets a retry chance
+                            _timeout_recovery_count = 0
+                            continue  # enter auto-wait, agent stays alive
+
                         else:
+                            # Repeated timeout (shouldn't normally reach here due to counter reset above)
                             err_short_disp = f"LLM 超时 ({_base_timeout}s)"
                             await tracker.set_state(name, "error", reason=err_short_disp[:40])
                             await engine._send(f"  ✗ {name} timeout ({latency:.1f}s): {err_short_disp}")
