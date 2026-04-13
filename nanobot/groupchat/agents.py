@@ -165,6 +165,7 @@ def _scan_agents_dir(
         tools_cfg = None  # Will be dict or None
         tools_enabled = False
         workspace_scope = "workspace"  # default
+        reasoning_effort = None
         if config_file.exists():
             try:
                 acfg = json.loads(config_file.read_text())
@@ -178,6 +179,8 @@ def _scan_agents_dir(
                 tools_enabled = acfg.get("tools_enabled", False)
                 # Per-agent workspace scope
                 workspace_scope = acfg.get("workspace", "workspace")
+                # Reasoning effort (set via /think command)
+                reasoning_effort = acfg.get("reasoning_effort")
             except Exception:
                 pass
 
@@ -188,6 +191,8 @@ def _scan_agents_dir(
         agent_data: dict[str, Any] = {"model": model, "prompt": prompt, "tools_enabled": tools_enabled}
         if tools_cfg is not None:
             agent_data["tools"] = tools_cfg
+        if reasoning_effort:
+            agent_data["reasoning_effort"] = reasoning_effort
 
         # Per-agent workspace scope and agent directory
         agent_data["workspace_scope"] = workspace_scope
