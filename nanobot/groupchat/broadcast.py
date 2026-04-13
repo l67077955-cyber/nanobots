@@ -954,16 +954,26 @@ async def broadcast_round(
                 if is_interrupted:
                     # Clear the event so it can be set again by a future message
                     _interrupt_event.clear()
+                    # Reset interrupt counter so newer messages can re-interrupt
+                    # this agent in subsequent cycles (freshness guarantee).
+                    mailbox._interrupt_counts[name] = 0
                     # (agent is already idle — the try/finally around tool_loop handled it)
 
-                    # Read the pending interrupt message from mailbox (non-blocking fast-path)
+                    # Drain the entire queue and use the LATEST message so the
+                    # agent always responds to the most recent state, not a
+                    # stale message that happened to arrive first (FIFO).
                     _intr_q = mailbox._queues.get(name)
-                    _intr_msg = None
-                    if _intr_q and not _intr_q.empty():
-                        try:
-                            _intr_msg = _intr_q.get_nowait()
-                        except Exception:
-                            pass
+                    _intr_all: list = []
+                    if _intr_q:
+                        while not _intr_q.empty():
+                            try:
+                                _intr_all.append(_intr_q.get_nowait())
+                            except Exception:
+                                break
+                    # Latest message is the one we respond to; earlier ones
+                    # become background context.
+                    _intr_msg = _intr_all[-1] if _intr_all else None
+                    _intr_earlier = _intr_all[:-1] if len(_intr_all) > 1 else []
 
                     # UI: show who interrupted whom, with distinct label for user vs agent
                     _sender_name = _intr_msg.sender if _intr_msg else "teammate"
@@ -1008,11 +1018,26 @@ async def broadcast_round(
                     if content:
                         messages.append({"role": "assistant", "content": content})
 
-                    # Inject the interrupt message as a "user" message from the sender
+                    # Inject the interrupt message as a "user" message from the sender.
+                    # If multiple messages accumulated, inject earlier ones as
+                    # summarised context first, then the LATEST as the primary
+                    # message so the LLM responds to the newest state.
+                    if _intr_earlier:
+                        _earlier_lines = "\n".join(
+                            f"- [{m.sender}]: {m.content[:200]}" for m in _intr_earlier
+                        )
+                        messages.append({
+                            "role": "system",
+                            "content": (
+                                f"[打断期间积压的 {len(_intr_earlier)} 条较早消息（仅供参考）]\n"
+                                f"{_earlier_lines}\n"
+                                f"请重点关注下面的最新消息。"
+                            ),
+                        })
                     if _intr_msg:
                         messages.append({
                             "role": "user",
-                            "content": f"[{_intr_msg.sender}]: {_intr_msg.content}",
+                            "content": f"[{_intr_msg.sender} — 最新消息]: {_intr_msg.content}",
                         })
                     else:
                         # Fallback: no message in queue (already consumed by auto-wait?)

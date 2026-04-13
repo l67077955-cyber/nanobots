@@ -261,7 +261,8 @@ class MailboxHub:
         # tool_loop checks this between operations and exits gracefully.
         self._interrupt_events: dict[str, asyncio.Event] = {}
         # Counts how many times each agent has been interrupted this round.
-        # Hard limit: 1 interrupt per agent per round.
+        # Hard limit: 3 interrupts per agent per round (raised from 1 so that
+        # newer messages can re-trigger interrupts for freshness).
         self._interrupt_counts: dict[str, int] = {}
         # Agents currently inside tool_loop (busy — eligible for interruption).
         self._busy_agents: set[str] = set()
@@ -326,10 +327,10 @@ class MailboxHub:
             return False
         if target not in self._busy_agents:
             return False
-        if self._interrupt_counts.get(target, 0) >= 1:
+        if self._interrupt_counts.get(target, 0) >= 3:
             logger.debug(
-                "MailboxHub: interrupt skipped for {} (already interrupted once this round)",
-                target,
+                "MailboxHub: interrupt skipped for {} (already interrupted {} times this round)",
+                target, self._interrupt_counts.get(target, 0),
             )
             return False
         # Trigger the interrupt
@@ -350,6 +351,11 @@ class MailboxHub:
         this does **not** increment ``_interrupt_counts`` so it doesn't
         consume the per-round agent—agent interrupt quota.
 
+        Also resets each interrupted agent's interrupt count so that
+        subsequent messages can still trigger fresh interrupts — this
+        ensures the agent always responds to the *latest* high-priority
+        message, not a stale one.
+
         Returns:
             Number of agents whose interrupt event was set.
         """
@@ -358,9 +364,12 @@ class MailboxHub:
             evt = self.get_interrupt_event(agent)
             if not evt.is_set():
                 evt.set()
+                # Reset interrupt counter so the agent can be interrupted
+                # again by newer messages after it re-enters tool_loop.
+                self._interrupt_counts[agent] = 0
                 count += 1
                 logger.info(
-                    "MailboxHub: ⚡ user interrupt set for busy agent {} (sender={})",
+                    "MailboxHub: ⚡ user interrupt set for busy agent {} (sender={}, counter reset)",
                     agent, sender,
                 )
         if count:
