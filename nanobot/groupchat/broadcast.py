@@ -692,11 +692,16 @@ async def broadcast_round(
             elif tool_name in ("web_search", "web_fetch") and result:
                 brief = _d.tool_result_brief(name, tool_name, result)
                 if tool_name == "web_search" and search_pool:
-                    brief += f"  🔍 {search_pool.status()}"
+                    # Refund credits immediately after tool completes
+                    search_pool.on_output(name)
+                    brief += f"  🔧 {search_pool.status()}"
                 _pending_searches.append(brief)
             elif tool_name == "exec" and result:
                 await _flush_searches()
                 brief = _d.tool_result_brief(name, tool_name, result)
+                # Refund credits immediately after tool completes
+                if search_pool:
+                    search_pool.on_output(name)
                 await engine._send(brief)
 
         # ── Determine tool definitions ──
