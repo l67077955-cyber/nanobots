@@ -896,8 +896,8 @@ async def broadcast_round(
                             # Instead of hard-exiting, pretend the agent produced a
                             # brief status message so downstream flow continues.
                             _placeholder = (
-                                f"⏳ [{name}] 模型响应有点慢（超时），我还在后台继续思考。\n"
-                                f"请队友继续推进，我稍后会把结果发出来。"
+                                f"⏳ [{name}] 当前模型响应超时，我仍在线。"
+                                f"等待队友消息后将继续工作。"
                             )
                             content = _placeholder
                             engine._add_message(name, _placeholder)
@@ -906,14 +906,6 @@ async def broadcast_round(
                                 _d.chatroom_send_msg(
                                     name, "超时占位", _placeholder, max_len=1000, leader=leader_name
                                 )
-                            )
-                            # Prune conversation history to reduce context for next activation
-                            conv_msgs = messages[_sys_msg_count:]
-                            if len(conv_msgs) > 15:
-                                messages[_sys_msg_count:] = conv_msgs[-15:]
-                                logger.info(
-                                    "Broadcast: {} pruned {} msgs after timeout recovery",
-                                    name, len(conv_msgs) - 15,
                                 )
                             await tracker.set_state(name, "waiting", detail="timeout recovery")
                             logger.warning(
