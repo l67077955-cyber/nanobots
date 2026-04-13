@@ -2316,6 +2316,18 @@ class CallbacksMixin:
                 if cfg is not None:
                     cfg["reasoning_effort"] = effort
                     updated.append(name)
+                    # Persist to disk
+                    cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
+                    if cfg_path.exists():
+                        try:
+                            disk_cfg = json.loads(cfg_path.read_text())
+                            if effort:
+                                disk_cfg["reasoning_effort"] = effort
+                            else:
+                                disk_cfg.pop("reasoning_effort", None)
+                            cfg_path.write_text(json.dumps(disk_cfg, indent=2, ensure_ascii=False))
+                        except Exception as e:
+                            logger.warning("Failed to persist reasoning_effort for {}: {}", name, e)
 
             effort_display = effort or "off"
             names_str = ", ".join(updated)
