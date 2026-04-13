@@ -2278,6 +2278,7 @@ class CallbacksMixin:
 
             effort_options = [
                 ("❌ 关闭", "off"),
+                ("🔄 自动", "auto"),
                 ("🔅 低", "low"),
                 ("🔆 中", "medium"),
                 ("✨ 高", "high"),
