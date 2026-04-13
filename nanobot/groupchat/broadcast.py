@@ -1002,17 +1002,10 @@ async def broadcast_round(
                         search_pool.on_output(name)
                         # Don't re-display partial content — it may be incomplete/mid-thought
 
-                    # Prune conversation tail before re-entry (same as normal reactivation)
-                    _CONV_KEEP_TURNS = 6
-                    _max_conv = _CONV_KEEP_TURNS * 3
-                    conv_msgs = messages[_sys_msg_count:]
-                    if len(conv_msgs) > _max_conv:
-                        dropped = len(conv_msgs) - _max_conv
-                        messages[_sys_msg_count:] = conv_msgs[-_max_conv:]
-                        logger.debug(
-                            "Broadcast: {} pruned {} messages after interrupt",
-                            name, dropped,
-                        )
+                    # NOTE: Do NOT prune messages here.  Keeping the full
+                    # prefix intact guarantees prompt-cache hits on the next
+                    # LLM call.  Pruning would shift the prefix and force a
+                    # full recompute, wasting cached tokens.
 
                     # Inject any partial content so LLM knows what it said already
                     if content:
