@@ -20,5 +20,16 @@
         }
       ]
     }
+  },
+  "项目知识": {
+    "nanobot架构": {
+      "bug清单20260418": [
+        {
+          "content": "nanobot groupchat代码审查bug发现：\n1. MailboxHub共享状态无锁（_active_agents/_interrupt_counts/_waiting/_busy_agents/_expected_replies），broadcast.py L996/L1418直接修改，存在竞态风险\n2. SearchPool用threading.Lock而非asyncio.Lock（chatroom_tools.py L34），在async上下文中用同步锁\n3. _run_one闭包捕获可变外部变量+nonlocal total无锁\n修改优先级：BUG1高（加asyncio.Lock）、BUG2中（改asyncio.Lock）、BUG3低",
+          "timestamp": 1776516838.5343032,
+          "metadata": {}
+        }
+      ]
+    }
   }
 }
