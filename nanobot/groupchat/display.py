@@ -51,21 +51,20 @@ def _shorten_path(path: str, max_parts: int = 2) -> str:
 
 
 # ── Tool Labels ──────────────────────────────────────────────
-# Concise verb labels instead of emoji spam.
 TOOL_LABELS: dict[str, str] = {
-    "web_search": "search",
-    "web_fetch": "fetch",
-    "exec": "exec",
-    "read_file": "read",
-    "write_file": "write",
-    "edit_file": "edit",
-    "list_dir": "ls",
-    "chatroom_send": "send",
-    "wait": "wait",
-    "yield_turn": "yield",
-    "manage_agent": "manage",
-    "end_discussion": "end",
-    "transfer_credits": "transfer",
+    "web_search": "🔍",
+    "web_fetch": "🌐",
+    "exec": "⚡",
+    "read_file": "📄",
+    "write_file": "✏️",
+    "edit_file": "📝",
+    "list_dir": "📁",
+    "chatroom_send": "📤",
+    "wait": "⏳",
+    "yield_turn": "🔄",
+    "manage_agent": "🔧",
+    "end_discussion": "🏁",
+    "transfer_credits": "💰",
 }
 
 
