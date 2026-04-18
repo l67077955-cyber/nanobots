@@ -13,6 +13,7 @@ from litellm import acompletion
 from loguru import logger
 
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from nanobot.providers.cache_probe import estimate_cache_ratio
 from nanobot.providers.registry import find_by_model, find_gateway
 
 # Standard chat-completion message keys.
@@ -172,8 +173,17 @@ class LiteLLMProvider(LLMProvider):
         return f"{canonical_prefix}/{remainder}"
 
     def _supports_cache_control(self, model: str) -> bool:
-        """Return True when the provider supports cache_control on content blocks."""
+        """Return True when the provider supports cache_control on content blocks.
+        
+        Gateways (e.g. OpenRouter) may support prompt caching for some backend
+        models (Anthropic) but not others (Zhipu/GLM).  We require BOTH the
+        gateway AND the underlying model's native provider to opt in.
+        """
         if self._gateway is not None:
+            # Gateway says yes — but does the *underlying* model's provider?
+            native_spec = find_by_model(model)
+            if native_spec is not None and not native_spec.supports_prompt_caching:
+                return False
             return self._gateway.supports_prompt_caching
         spec = find_by_model(model)
         return spec is not None and spec.supports_prompt_caching
@@ -233,6 +243,7 @@ class LiteLLMProvider(LLMProvider):
         response: Any | None = None,
         error: Exception | None = None,
         latency: float = 0.0,
+        cache_headers: dict | None = None,
     ) -> None:
         """Log every LLM request to ~/.nanobot/request_logs/YYYY-MM-DD.jsonl.
 
@@ -300,6 +311,8 @@ class LiteLLMProvider(LLMProvider):
             record["total_chars"] = total_chars
             record["msg_count"] = len(msgs_log)
             record["latency"] = round(latency, 2)
+            if cache_headers:
+                record["cache_probe"] = cache_headers
 
             # ── Response ──
             if error:
@@ -348,6 +361,7 @@ class LiteLLMProvider(LLMProvider):
         finish_reason: str,
         usage: dict,
         latency: float,
+        cache_headers: dict | None = None,
     ) -> None:
         """Log a completed streaming request (no raw response object available)."""
         import json as _json
@@ -410,6 +424,8 @@ class LiteLLMProvider(LLMProvider):
             record["total_chars"] = total_chars
             record["msg_count"] = len(msgs_log)
             record["latency"] = round(latency, 2)
+            if cache_headers:
+                record["cache_probe"] = cache_headers
 
             # Response
             record["status"] = "ok"
@@ -633,6 +649,18 @@ class LiteLLMProvider(LLMProvider):
 
         if self._supports_cache_control(original_model):
             messages, tools = self._apply_cache_control(messages, tools)
+            # Estimate cache hit ratio from breakpoints
+            try:
+                _probe = estimate_cache_ratio(messages, tools)
+                self._last_cache_headers = _probe.request_headers
+                logger.debug(
+                    "cache probe ({}): {}", original_model, _probe.summary
+                )
+            except Exception as _pe:
+                logger.debug("cache probe failed: {}", _pe)
+                self._last_cache_headers = {}
+        else:
+            self._last_cache_headers = {}
 
         max_tokens = max(1, max_tokens)
 
@@ -753,10 +781,12 @@ class LiteLLMProvider(LLMProvider):
         t0 = _time.time()
         try:
             response = await acompletion(**kwargs)
-            self._log_request(kwargs, response=response, latency=_time.time() - t0)
+            self._log_request(kwargs, response=response, latency=_time.time() - t0,
+                              cache_headers=getattr(self, "_last_cache_headers", None))
             return self._parse_response(response)
         except Exception as e:
-            self._log_request(kwargs, error=e, latency=_time.time() - t0)
+            self._log_request(kwargs, error=e, latency=_time.time() - t0,
+                              cache_headers=getattr(self, "_last_cache_headers", None))
 
             # Auto-detect tool message incompatibility:
             # If 502 and request contained tool-role messages, flag this
@@ -866,7 +896,8 @@ class LiteLLMProvider(LLMProvider):
         try:
             response = await acompletion(**kwargs)
         except Exception as e:
-            self._log_request(kwargs, error=e, latency=_time.time() - t0)
+            self._log_request(kwargs, error=e, latency=_time.time() - t0,
+                              cache_headers=getattr(self, "_last_cache_headers", None))
             sc = getattr(e, "status_code", None)
 
             # Auto-detect tool message incompatibility
@@ -1072,7 +1103,9 @@ class LiteLLMProvider(LLMProvider):
             finish_reason = "tool_calls"
 
         # Log the completed stream request
-        self._log_stream_request(kwargs, full_content, parsed_tool_calls, finish_reason, usage, _time.time() - t0)
+        self._log_stream_request(kwargs, full_content, parsed_tool_calls, finish_reason, usage,
+                                 _time.time() - t0,
+                                 cache_headers=getattr(self, "_last_cache_headers", None))
 
         # Build provider_meta list for logging
         _provider_meta = []

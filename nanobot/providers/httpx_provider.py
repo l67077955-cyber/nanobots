@@ -18,6 +18,8 @@ import httpx
 import json_repair
 from loguru import logger
 
+from nanobot.providers.cache_probe import estimate_cache_ratio
+
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from nanobot.providers.registry import find_by_model, find_gateway
 
@@ -180,7 +182,17 @@ class HttpxProvider(LLMProvider):
         return sanitized
 
     def _supports_cache_control(self, model: str) -> bool:
+        """Return True when the provider supports cache_control on content blocks.
+        
+        Gateways (e.g. OpenRouter) may support prompt caching for some backend
+        models (Anthropic) but not others (Zhipu/GLM).  We require BOTH the
+        gateway AND the underlying model's native provider to opt in.
+        """
         if self._gateway is not None:
+            # Gateway says yes — but does the *underlying* model's provider?
+            native_spec = find_by_model(model)
+            if native_spec is not None and not native_spec.supports_prompt_caching:
+                return False
             return self._gateway.supports_prompt_caching
         spec = find_by_model(model)
         return spec is not None and spec.supports_prompt_caching
@@ -188,35 +200,73 @@ class HttpxProvider(LLMProvider):
     def _apply_cache_control(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
-        """Return copies with cache_control injected for Anthropic.
+        """Return copies with cache_control injected for Anthropic prompt caching.
 
-        Anthropic (and Azure) support at most 4 cache_control breakpoints total.
-        tools gets 1 breakpoint, leaving at most 3 for system messages.
-        We mark only the last N system messages to stay within this limit.
+        Strategy (up to 4 breakpoints):
+
+        BP-tools: Last tool definition — caches entire tool list (stable).
+        BP1: Last message of the initial contiguous system-only prefix — covers
+             the entire static system-prompt block, the most stable part of every
+             request.  Anchored to the *first* non-system boundary, so later
+             dynamic system messages (timestamps, nudges) injected mid-conversation
+             do NOT shift this breakpoint.
+        BP2: Message just before the most recent user message — caches the
+             accumulated conversation history up to the current turn.
+
+        Anchoring to semantic boundaries (not "last N system messages") prevents
+        the cache invalidation that occurred when dynamically injected system
+        messages shifted breakpoint positions every turn.
         """
         _MAX_CACHE_BLOCKS = 4
-        sys_quota = _MAX_CACHE_BLOCKS - (1 if tools else 0)
+        remaining = _MAX_CACHE_BLOCKS
+        cacheable: set[int] = set()
 
-        sys_indices = [i for i, m in enumerate(messages) if m.get("role") == "system"]
-        cacheable = set(sys_indices[-sys_quota:]) if sys_quota > 0 else set()
-
-        new_messages = []
-        for i, msg in enumerate(messages):
-            if i in cacheable:
-                content = msg["content"]
-                if isinstance(content, str):
-                    new_content = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
-                else:
-                    new_content = list(content)
-                    new_content[-1] = {**new_content[-1], "cache_control": {"type": "ephemeral"}}
-                new_messages.append({**msg, "content": new_content})
-            else:
-                new_messages.append(msg)
-
+        # BP-tools: last tool definition
         new_tools = tools
-        if tools:
+        if tools and remaining > 0:
             new_tools = list(tools)
             new_tools[-1] = {**new_tools[-1], "cache_control": {"type": "ephemeral"}}
+            remaining -= 1
+
+        # BP1: end of stable system-prompt prefix (before first user/assistant msg)
+        first_non_system = next(
+            (i for i, m in enumerate(messages) if m.get("role") != "system"),
+            len(messages),
+        )
+        if first_non_system > 0 and remaining > 0:
+            cacheable.add(first_non_system - 1)
+            remaining -= 1
+
+        # BP2: end of conversation history (just before the latest user turn)
+        user_indices = [i for i, m in enumerate(messages) if m.get("role") == "user"]
+        if len(user_indices) >= 2 and remaining > 0:
+            history_end = user_indices[-1] - 1
+            if history_end >= 0 and history_end not in cacheable:
+                cacheable.add(history_end)
+                remaining -= 1
+
+        # Apply cache_control markers
+        new_messages: list[dict[str, Any]] = []
+        for i, msg in enumerate(messages):
+            if i not in cacheable:
+                new_messages.append(msg)
+                continue
+            content = msg.get("content")
+            if content is None:
+                new_messages.append(msg)
+                continue
+            if isinstance(content, str):
+                new_content: list[dict[str, Any]] = [
+                    {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+                ]
+            elif isinstance(content, list) and content:
+                new_content = list(content)
+                new_content[-1] = {**new_content[-1], "cache_control": {"type": "ephemeral"}}
+            else:
+                new_messages.append(msg)
+                continue
+            new_messages.append({**msg, "content": new_content})
+
         return new_messages, new_tools
 
     @staticmethod
@@ -278,8 +328,20 @@ class HttpxProvider(LLMProvider):
         original_model = model
 
         # Apply cache control for Anthropic models
+        cache_headers: dict = {}
         if self._supports_cache_control(original_model):
             messages, tools = self._apply_cache_control(messages, tools)
+            # Estimate cache hit ratio from breakpoints
+            try:
+                _probe = estimate_cache_ratio(messages, tools)
+                cache_headers = _probe.request_headers
+                logger.debug(
+                    "cache probe ({}): {}", original_model, _probe.summary
+                )
+            except Exception as _pe:
+                logger.debug("cache probe failed: {}", _pe)
+        # Store for _log_request access (ephemeral per-call)
+        self._last_cache_headers = cache_headers
 
         # Sanitize messages
         messages = self._sanitize_empty_content(messages)
@@ -415,6 +477,7 @@ class HttpxProvider(LLMProvider):
         response_data: dict | None = None,
         error: Exception | None = None,
         latency: float = 0.0,
+        cache_headers: dict | None = None,
     ) -> None:
         """Log every LLM request to ~/.nanobot/request_logs/YYYY-MM-DD.jsonl."""
         try:
@@ -462,6 +525,8 @@ class HttpxProvider(LLMProvider):
             record["total_chars"] = total_chars
             record["msg_count"] = len(msgs_log)
             record["latency"] = round(latency, 2)
+            if cache_headers:
+                record["cache_probe"] = cache_headers
 
             # Response
             if error:
@@ -549,6 +614,7 @@ class HttpxProvider(LLMProvider):
                     model=raw_model, api_base=target_base, max_tokens=max_tokens,
                     stream=False, params=self.sampling_params, tools_count=len(tools or []),
                     messages=body["messages"], metadata=metadata, error=error_exc, latency=latency,
+                    cache_headers=getattr(self, "_last_cache_headers", None),
                 )
 
                 # Auto-detect tool message incompatibility
@@ -598,6 +664,7 @@ class HttpxProvider(LLMProvider):
                 model=raw_model, api_base=target_base, max_tokens=max_tokens,
                 stream=False, params=self.sampling_params, tools_count=len(tools or []),
                 messages=body["messages"], metadata=metadata, response_data=data, latency=latency,
+                cache_headers=getattr(self, "_last_cache_headers", None),
             )
             return self._parse_response(data)
 
@@ -608,6 +675,7 @@ class HttpxProvider(LLMProvider):
                 stream=False, params=self.sampling_params, tools_count=len(tools or []),
                 messages=body.get("messages", messages), metadata=metadata,
                 error=e, latency=latency,
+                cache_headers=getattr(self, "_last_cache_headers", None),
             )
             return LLMResponse(
                 content=f"Error calling LLM: {e}",
