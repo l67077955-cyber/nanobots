@@ -7,7 +7,7 @@ import pytest
 
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
-from nanobot.channels.telegram import TELEGRAM_REPLY_CONTEXT_MAX_LEN, TelegramChannel
+from nanobot.channels.telegram import TelegramChannel
 from nanobot.channels.telegram import TelegramConfig
 
 
@@ -540,16 +540,6 @@ def test_extract_reply_context_with_caption_only() -> None:
     assert TelegramChannel._extract_reply_context(message) == "[Reply to: Photo caption]"
 
 
-def test_extract_reply_context_truncation() -> None:
-    """Reply text is truncated at TELEGRAM_REPLY_CONTEXT_MAX_LEN."""
-    long_text = "x" * (TELEGRAM_REPLY_CONTEXT_MAX_LEN + 100)
-    reply = SimpleNamespace(text=long_text, caption=None)
-    message = SimpleNamespace(reply_to_message=reply)
-    result = TelegramChannel._extract_reply_context(message)
-    assert result is not None
-    assert result.startswith("[Reply to: ")
-    assert result.endswith("...]")
-    assert len(result) == len("[Reply to: ]") + TELEGRAM_REPLY_CONTEXT_MAX_LEN + len("...")
 
 
 def test_extract_reply_context_no_text_returns_none() -> None:

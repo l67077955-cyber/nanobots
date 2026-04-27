@@ -18,9 +18,9 @@ from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import TelegramConfig
-from nanobot.groupchat.engine import GroupChatEngine
-from nanobot.groupchat import display as _d
-from nanobot.groupchat.prompt_builder import (
+from nanobot.groupchat.orchestra.engine import GroupChatEngine
+from nanobot.groupchat.display import display as _d
+from nanobot.groupchat.history.prompt_builder import (
     PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
     GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
 )
@@ -66,6 +66,7 @@ class TelegramChannel(
         BotCommand("new", "Start a new conversation"),
         BotCommand("clear", "Clear conversation history"),
         BotCommand("stop", "Stop the current task"),
+        BotCommand("cancel", "Cancel current interaction"),
         BotCommand("agents", "List available agents"),
         BotCommand("addagent", "Add agent to chat"),
         BotCommand("removeagent", "Remove agent"),
@@ -178,6 +179,7 @@ class TelegramChannel(
         self._app.add_handler(CommandHandler("new", self._forward_command))
         self._app.add_handler(CommandHandler("clear", self._forward_command))
         self._app.add_handler(CommandHandler("stop", self._forward_command))
+        self._app.add_handler(CommandHandler("cancel", self._on_cancel))
         self._app.add_handler(CommandHandler("help", self._on_help))
         # Agent management commands
         self._app.add_handler(CommandHandler("agents", self._on_agents))
@@ -205,7 +207,6 @@ class TelegramChannel(
         self._app.add_handler(CommandHandler("providers", self._on_providers))
         self._app.add_handler(CommandHandler("speedtest", self._on_speedtest))
         self._app.add_handler(CommandHandler("groupchat", self._on_groupchat))
-        self._app.add_handler(CommandHandler("think", self._on_think))
         self._app.add_handler(CallbackQueryHandler(self._on_callback))
 
         # Add message handler for text, photos, voice, documents
@@ -437,7 +438,8 @@ class TelegramChannel(
             "🐈 nanobot commands:\n"
             "/new — 新对话\n"
             "/clear — 清空上下文\n"
-            "/stop — 停止当前任务\n\n"
+            "/stop — 停止当前任务\n"
+            "/cancel — 取消交互操作\n\n"
             "🎭 Agent 管理:\n"
             "/agents — 查看所有 agent\n"
             "/addagent <name> — 加入 agent\n"
@@ -467,7 +469,6 @@ class TelegramChannel(
             "/summary — 生成对话总结\n\n"
             "⚙️ 群聊设置：\n"
             "/groupchat — 对话池/搜索预算等参数\n"
-            "/think [agent] [on|off|low|medium|high] — 设置 agent 思考模式\n\n"
             "💡 加入 agent 后直接发消息即可对话\n"
             "2+ agent 自动进入群聊模式"
         )
@@ -530,3 +531,17 @@ class TelegramChannel(
                 "message_thread_id": update.message.message_thread_id,
             },
         ))
+
+    async def _on_cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /cancel command to abort interactive edits."""
+        if not update.message or not update.effective_user:
+            return
+        sender = self._sender_id(update.effective_user)
+        if not self.is_allowed(sender):
+            return
+        chat_id = str(update.message.chat_id)
+        if chat_id in self._edit_state:
+            del self._edit_state[chat_id]
+            await update.message.reply_text("❌ 已取消")
+        else:
+            await update.message.reply_text("ℹ️ 当前没有进行中的交互操作。")

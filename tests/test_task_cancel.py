@@ -197,7 +197,7 @@ class TestSubagentCancellation:
         async def fake_execute(self, name, arguments):
             return "tool result"
 
-        monkeypatch.setattr("nanobot.agent.tools.registry.ToolRegistry.execute", fake_execute)
+        monkeypatch.setattr("nanobot.tools.registry.ToolRegistry.execute", fake_execute)
 
         await mgr._run_subagent("sub-1", "do task", "label", {"channel": "test", "chat_id": "c1"})
 

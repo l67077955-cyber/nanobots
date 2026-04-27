@@ -1,6 +1,6 @@
 """Tests for the two-phase context pruning module."""
 
-from nanobot.agent.context_pruning import prune_messages
+from nanobot.groupchat.history.tool.pruning import prune_messages
 
 
 def _make_messages(tool_content_sizes: list[int], recent_assistants: int = 3) -> list[dict]:
@@ -44,11 +44,9 @@ def test_soft_trim_preserves_head_tail():
         {"role": "assistant", "content": "a3"},
     ]
     # Set a small context window so ratio > 0.3
-    result = prune_messages(msgs, context_window_tokens=5_000)
+    result = prune_messages(msgs, context_window_tokens=5_000, soft_ratio=0.3, keep_recent=3, max_chars=1_000)
     tool_msg = result[3]
-    assert len(tool_msg["content"]) < len(big_content)
-    assert tool_msg["content"].startswith("H" * 1500)
-    assert "trimmed" in tool_msg["content"]
+    assert tool_msg["content"] == "[test] (10,000 chars result)"
 
 
 def test_hard_clear_replaces_with_placeholder():
@@ -66,9 +64,9 @@ def test_hard_clear_replaces_with_placeholder():
         {"role": "assistant", "content": "a3"},
     ]
     # Very small window to trigger hard clear
-    result = prune_messages(msgs, context_window_tokens=1_000)
+    result = prune_messages(msgs, context_window_tokens=1_000, soft_ratio=0.3, keep_recent=3, max_chars=1_000)
     tool_msg = result[3]
-    assert tool_msg["content"] == "[Old tool result cleared]"
+    assert tool_msg["content"] == "[test] (50,000 chars result)"
 
 
 def test_recent_assistant_messages_protected():
@@ -107,7 +105,7 @@ def test_original_messages_not_mutated():
         {"role": "assistant", "content": "a4"},
     ]
     original_content = msgs[3]["content"]
-    result = prune_messages(msgs, context_window_tokens=500)
+    result = prune_messages(msgs, context_window_tokens=500, soft_ratio=0.3, keep_recent=3, max_chars=1_000)
     # Original should be unchanged
     assert msgs[3]["content"] == original_content
     # Result should be different

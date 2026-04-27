@@ -53,17 +53,12 @@ class LiteLLMProvider(LLMProvider):
         # api_key / api_base are fallback for auto-detection.
         self._gateway = find_gateway(provider_name, api_key, api_base)
 
-        # Runtime auto-detected provider capabilities.
-        # Providers that need tool messages flattened (discovered on first 502).
-        self._compat_flatten: set[str] = set()
-        # Providers that reject specific params (discovered on first 400).
-        # Maps provider_name → set of kwargs keys to drop.
-        self._compat_drop_params: dict[str, set[str]] = {
-            # xAI/Grok models reject presence_penalty, frequency_penalty, repetition_penalty
+        # Runtime auto-detected provider capabilities (inherited from LLMProvider)
+        # Pre-seed known param incompatibilities
+        self._compat_drop_params.update({
             "xai": {"presence_penalty", "frequency_penalty", "repetition_penalty", "top_k", "min_p", "top_a"},
-            # Anthropic/Claude (via 闲鱼api proxy) also rejects these OpenAI-specific params
             "闲鱼api": {"presence_penalty", "frequency_penalty", "repetition_penalty", "top_k", "min_p", "top_a"},
-        }
+        })
 
         # Configure environment variables
         if api_key:
@@ -343,6 +338,20 @@ class LiteLLMProvider(LLMProvider):
                         "completion": response.usage.completion_tokens,
                         "total": response.usage.total_tokens,
                     }
+                # ── Extract OpenRouter / provider IDs from hidden params ──
+                try:
+                    _hidden = getattr(response, "_hidden_params", None) or {}
+                    _ah = _hidden.get("additional_headers", {}) or {}
+                    for hdr, field_name in [
+                        ("x-openrouter-generation-id", "generation_id"),
+                        ("x-request-id", "request_id"),
+                        ("x-openrouter-provider", "or_provider"),
+                    ]:
+                        val = _ah.get(hdr)
+                        if val:
+                            record[field_name] = val
+                except Exception:
+                    pass
             else:
                 record["status"] = "unknown"
 
@@ -440,6 +449,12 @@ class LiteLLMProvider(LLMProvider):
                 ]
             if usage:
                 record["usage"] = usage
+
+            # ── OpenRouter / provider IDs from _stream_meta ──
+            if _stream_meta.get("_or_gen_id"):
+                record["generation_id"] = _stream_meta["_or_gen_id"]
+            if _stream_meta.get("_or_provider"):
+                record["or_provider"] = _stream_meta["_or_provider"]
 
             with open(log_file, "a", encoding="utf-8") as f:
                 f.write(_json.dumps(record, ensure_ascii=False, default=str) + "\n")
@@ -550,66 +565,6 @@ class LiteLLMProvider(LLMProvider):
 
         return {"api_base": None, "api_key": None, "model": None, "provider_name": None}
 
-    @staticmethod
-    def _flatten_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Convert tool-protocol messages to plain text for incompatible APIs.
-
-        Transforms:
-        - assistant messages with ``tool_calls`` → appends "[调用 name(args)]"
-          to content and removes the ``tool_calls`` key.
-        - tool-role messages → "assistant" with "[name 结果]: content".
-
-        This allows providers that don't support the OpenAI tool-message
-        protocol (e.g. 闲鱼api) to receive tool results as normal text.
-        """
-        out: list[dict[str, Any]] = []
-        for m in messages:
-            role = m.get("role", "")
-
-            # Assistant message with tool_calls → flatten into content
-            if role == "assistant" and m.get("tool_calls"):
-                content = m.get("content") or ""
-                tc_lines: list[str] = []
-                for tc in m["tool_calls"]:
-                    fn = tc.get("function", {})
-                    name = fn.get("name", "unknown")
-                    args = fn.get("arguments", "")
-                    # Compact args preview
-                    if isinstance(args, str) and len(args) > 100:
-                        args = args[:100] + "…"
-                    tc_lines.append(f"[调用 {name}({args})]")
-                if tc_lines:
-                    content = (content + "\n" + "\n".join(tc_lines)).strip()
-                out.append({
-                    k: v for k, v in {
-                        "role": "assistant",
-                        "content": content,
-                        "name": m.get("name"),
-                    }.items() if v is not None
-                })
-                continue
-
-            # Tool result → convert to assistant message
-            if role == "tool":
-                tc_id = m.get("tool_call_id", "")
-                # Try to find the tool name from the preceding assistant tool_calls
-                tool_name = "tool"
-                for prev in reversed(out):
-                    # The original tool_calls have been flattened already,
-                    # but we can extract the name from the "[调用 name(...)]" text
-                    if prev.get("role") == "assistant" and tc_id:
-                        # The name was embedded by the flatten above
-                        break
-                result_text = m.get("content") or ""
-                out.append({
-                    "role": "assistant",
-                    "content": f"[工具结果]:\n{result_text}",
-                })
-                continue
-
-            # Normal message — pass through
-            out.append(m)
-        return out
 
     def _build_kwargs(
         self,
@@ -737,21 +692,35 @@ class LiteLLMProvider(LLMProvider):
 
         if pm_provider_name == "openrouter" or (not pm_provider_name and "openrouter" in (model or "")):
             import hashlib
-            # Stable cache key based on system prompt prefix to improve cache hit rate
-            system_text = ""
-            for msg in messages:
-                if msg.get("role") == "system" and isinstance(msg.get("content"), str):
-                    system_text = msg["content"][:2000]
-                    break
-            cache_key = hashlib.md5(system_text.encode()).hexdigest()[:16] if system_text else None
+            # Stable cache key: prefer session_id for intra-session cache hits
+            # Fallback to system prompt prefix hash for sessionless requests
+            cache_key = None
+            session_id = (metadata or {}).get("log_session")
+            if session_id:
+                cache_key = hashlib.md5(f"{session_id}:{model}".encode()).hexdigest()[:16]
+            else:
+                system_text = ""
+                for msg in messages:
+                    if msg.get("role") == "system":
+                        content = msg.get("content")
+                        if isinstance(content, str):
+                            system_text = content[:2000]
+                        elif isinstance(content, list):
+                            system_text = "".join(
+                                b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
+                            )[:2000]
+                        if system_text:
+                            break
+                if system_text:
+                    cache_key = hashlib.md5(system_text.encode()).hexdigest()[:16]
             extra = {
                 "provider": {
                     "sort": "latency",
-                    "order": ["nebius", "mistral", "groq", "fireworks"],
+                    "order": ["nebius", "mistral", "groq", "fireworks", "deepseek"],
                     "allow_fallbacks": True,
                 }
             }
-            if cache_key:
+            if cache_key and self._supports_cache_control(original_model):
                 extra["prompt_cache_key"] = f"nanobot-{cache_key}"
             kwargs["extra_body"] = extra
 
@@ -788,75 +757,32 @@ class LiteLLMProvider(LLMProvider):
             self._log_request(kwargs, error=e, latency=_time.time() - t0,
                               cache_headers=getattr(self, "_last_cache_headers", None))
 
-            # Auto-detect tool message incompatibility:
-            # If 502 and request contained tool-role messages, flag this
-            # provider for flatten and re-raise so chat_with_retry retries.
             sc = getattr(e, "status_code", None)
             has_tool_msgs = any(m.get("role") == "tool" for m in messages)
-            if sc == 502 and has_tool_msgs:
-                resolved = self._resolve_pm_overrides(model or self.default_model)
-                prov = resolved.get("provider_name")
-                if prov and prov not in self._compat_flatten:
-                    self._compat_flatten.add(prov)
-                    logger.warning(
-                        "Auto-detected tool incompatibility for '{}', will flatten on retry", prov
-                    )
-                    raise  # Let chat_with_retry retry with flattened messages
-
-            # Auto-detect unsupported params:
-            # If 400 and error mentions a param name, drop it and retry immediately.
-            if sc == 400:
-                err_msg = str(e)
-                # Map of possible param names in error messages → kwargs key
-                _PARAM_MAP = {
-                    "presencePenalty": "presence_penalty",
-                    "presence_penalty": "presence_penalty",
-                    "frequencyPenalty": "frequency_penalty",
-                    "frequency_penalty": "frequency_penalty",
-                    "repetitionPenalty": "repetition_penalty",
-                    "repetition_penalty": "repetition_penalty",
-                    "top_k": "top_k", "topK": "top_k",
-                    "top_p": "top_p", "topP": "top_p",
-                    "min_p": "min_p", "minP": "min_p",
-                    "top_a": "top_a", "topA": "top_a",
-                }
-                # Penalty params that should be dropped together
-                _PENALTY_GROUP = {"presence_penalty", "frequency_penalty", "repetition_penalty"}
-
-                resolved = self._resolve_pm_overrides(model or self.default_model)
-                prov = resolved.get("provider_name")
-                # Fallback: derive provider key from model name
-                if not prov:
-                    _m = model or self.default_model or ""
-                    prov = _m.split("/")[0] if "/" in _m else _m.split("-")[0] if "-" in _m else _m
-                    if prov:
-                        logger.debug("Using fallback provider key: {}", prov)
-
+            
+            resolved = self._resolve_pm_overrides(model or self.default_model)
+            prov = resolved.get("provider_name")
+            if not prov:
+                _m = model or self.default_model or ""
+                prov = _m.split("/")[0] if "/" in _m else _m.split("-")[0] if "-" in _m else _m
                 if prov:
-                    detected = set()
-                    for err_name, kwarg_key in _PARAM_MAP.items():
-                        if err_name in err_msg and kwarg_key in kwargs:
-                            detected.add(kwarg_key)
-                    # If any penalty param is unsupported, proactively drop ALL of them
-                    # to avoid multiple retry round-trips
-                    if detected & _PENALTY_GROUP:
-                        detected = detected | {p for p in _PENALTY_GROUP if p in kwargs}
-                    if detected:
-                        drops = self._compat_drop_params.setdefault(prov, set())
-                        new_drops = detected - drops
-                        if new_drops:
-                            drops.update(new_drops)
-                            logger.warning(
-                                "Auto-detected unsupported params for '{}': {}, retrying immediately",
-                                prov, new_drops,
-                            )
-                            # Retry immediately — _build_kwargs will now drop the bad params
-                            return await self.chat(
-                                messages=messages, tools=tools, model=model,
-                                max_tokens=max_tokens, temperature=temperature,
-                                reasoning_effort=reasoning_effort,
-                                metadata=metadata, api_base=api_base, api_key=api_key,
-                            )
+                    logger.debug("Using fallback provider key: {}", prov)
+
+            needs_flatten, needs_param = self._detect_compat_issues(
+                provider_key=prov,
+                status_code=sc,
+                error_text=str(e),
+                has_tool_msgs=has_tool_msgs,
+                kwargs=kwargs,
+            )
+
+            if needs_flatten or needs_param:
+                return await self.chat(
+                    messages=messages, tools=tools, model=model,
+                    max_tokens=max_tokens, temperature=temperature,
+                    reasoning_effort=reasoning_effort,
+                    metadata=metadata, api_base=api_base, api_key=api_key,
+                )
 
             return LLMResponse(
                 content=f"Error calling LLM: {str(e)}",
@@ -899,69 +825,32 @@ class LiteLLMProvider(LLMProvider):
             self._log_request(kwargs, error=e, latency=_time.time() - t0,
                               cache_headers=getattr(self, "_last_cache_headers", None))
             sc = getattr(e, "status_code", None)
-
-            # Auto-detect tool message incompatibility
             has_tool_msgs = any(m.get("role") == "tool" for m in messages)
-            if sc == 502 and has_tool_msgs:
-                resolved = self._resolve_pm_overrides(model or self.default_model)
-                prov = resolved.get("provider_name")
-                if prov and prov not in self._compat_flatten:
-                    self._compat_flatten.add(prov)
-                    logger.warning(
-                        "Auto-detected tool incompatibility for '{}' (stream), will flatten on retry", prov
-                    )
-
-            # Auto-detect unsupported params (same as chat()):
-            # Raise so _stream_call falls back to non-streaming chat_with_retry
-            # which will call chat() → the params are now in _compat_drop_params.
-            if sc == 400:
-                err_msg = str(e)
-                _PARAM_MAP = {
-                    "presencePenalty": "presence_penalty",
-                    "presence_penalty": "presence_penalty",
-                    "frequencyPenalty": "frequency_penalty",
-                    "frequency_penalty": "frequency_penalty",
-                    "repetitionPenalty": "repetition_penalty",
-                    "repetition_penalty": "repetition_penalty",
-                    "top_k": "top_k", "topK": "top_k",
-                    "top_p": "top_p", "topP": "top_p",
-                    "min_p": "min_p", "minP": "min_p",
-                    "top_a": "top_a", "topA": "top_a",
-                }
-                _PENALTY_GROUP = {"presence_penalty", "frequency_penalty", "repetition_penalty"}
-
-                resolved = self._resolve_pm_overrides(model or self.default_model)
-                prov = resolved.get("provider_name")
-                if not prov:
-                    _m = model or self.default_model or ""
-                    prov = _m.split("/")[0] if "/" in _m else _m.split("-")[0] if "-" in _m else _m
+            
+            resolved = self._resolve_pm_overrides(model or self.default_model)
+            prov = resolved.get("provider_name")
+            if not prov:
+                _m = model or self.default_model or ""
+                prov = _m.split("/")[0] if "/" in _m else _m.split("-")[0] if "-" in _m else _m
                 if prov:
-                    detected = set()
-                    for err_name, kwarg_key in _PARAM_MAP.items():
-                        if err_name in err_msg and kwarg_key in kwargs:
-                            detected.add(kwarg_key)
-                    # Proactively drop all penalty params together
-                    if detected & _PENALTY_GROUP:
-                        detected = detected | {p for p in _PENALTY_GROUP if p in kwargs}
-                    if detected:
-                        drops = self._compat_drop_params.setdefault(prov, set())
-                        new_drops = detected - drops
-                        if new_drops:
-                            drops.update(new_drops)
-                            logger.warning(
-                                "Auto-detected unsupported params for '{}' (stream): {}, "
-                                "retrying immediately",
-                                prov, new_drops,
-                            )
-                            # Retry immediately — _build_kwargs will now drop the bad params
-                            async for item in self.chat_stream(
-                                messages=messages, tools=tools, model=model,
-                                max_tokens=max_tokens,
-                                reasoning_effort=reasoning_effort,
-                                metadata=metadata, api_base=api_base, api_key=api_key,
-                            ):
-                                yield item
-                            return
+                    logger.debug("Using fallback provider key: {}", prov)
+
+            needs_flatten, needs_param = self._detect_compat_issues(
+                provider_key=prov,
+                status_code=sc,
+                error_text=str(e),
+                has_tool_msgs=has_tool_msgs,
+                kwargs=kwargs,
+            )
+
+            if needs_flatten or needs_param:
+                async for item in self.chat_stream(
+                    messages=messages, tools=tools, model=model,
+                    max_tokens=max_tokens, reasoning_effort=reasoning_effort,
+                    metadata=metadata, api_base=api_base, api_key=api_key,
+                ):
+                    yield item
+                return
 
             yield LLMResponse(content=f"Error calling LLM: {str(e)}", finish_reason="error")
             return

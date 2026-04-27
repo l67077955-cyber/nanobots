@@ -1,10 +1,10 @@
-"""Tests for nanobot.agent.tools.summarizer."""
+"""Tests for nanobot.tools.summarizer."""
 
 from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 
-from nanobot.agent.tools.summarizer import (
+from nanobot.tools.summarizer import (
     summarize_tool_output,
     _head_tail_truncate,
 )
@@ -41,7 +41,7 @@ async def test_long_output_summarized() -> None:
     mock_usage = {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
 
     with patch(
-        "nanobot.agent.tools.summarizer._call_reader",
+        "nanobot.tools.summarizer._call_reader",
         new_callable=AsyncMock,
         return_value=("Summary: lots of x's", mock_usage),
     ):
@@ -60,7 +60,7 @@ async def test_summarize_failure_fallback() -> None:
     """When LLM call fails, falls back to head+tail truncation."""
     long_output = "y" * 10_000
 
-    with patch("nanobot.agent.tools.summarizer._call_reader", side_effect=Exception("API down")):
+    with patch("nanobot.tools.summarizer._call_reader", side_effect=Exception("API down")):
         result, was_summarized = await summarize_tool_output(
             "exec", long_output, threshold=500,
         )
@@ -78,7 +78,7 @@ async def test_summary_longer_than_original_falls_back() -> None:
     mock_usage = {"prompt_tokens": 50, "completion_tokens": 100, "total_tokens": 150}
 
     with patch(
-        "nanobot.agent.tools.summarizer._call_reader",
+        "nanobot.tools.summarizer._call_reader",
         new_callable=AsyncMock,
         return_value=("z" * 2000, mock_usage),
     ):

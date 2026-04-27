@@ -1,0 +1,225 @@
+"""Context pruning for tool results.
+
+Prunes old tool-result messages to keep the prompt within token budgets.
+When token limits are exceeded, replaces old voluminous tool outputs with
+a concise 1-line summary (e.g. `[exec] ran 'npm test' -> exit 0, 47 lines`).
+
+Only tool-result messages *before* the last ``keep_recent`` assistant turns
+are eligible for pruning. User and assistant messages are never modified.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from typing import Any
+
+CHARS_PER_TOKEN = 4  # conservative estimate
+
+# ── Defaults ──────────────────────────────────────────────────────────────
+
+DEFAULT_SOFT_RATIO = 0.3     # start pruning when > 30% of window
+DEFAULT_KEEP_RECENT = 3      # protect last N assistant turns
+DEFAULT_MAX_CHARS = 1_000    # prune tool outputs larger than this
+
+
+def _estimate_message_chars(msg: dict[str, Any]) -> int:
+    """Estimate character count for a single message."""
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        total = 0
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    total += len(block.get("text", ""))
+                elif block.get("type") == "image_url":
+                    total += 8_000  # image estimate
+        return total
+    return 0
+
+
+def _estimate_total_chars(messages: list[dict[str, Any]]) -> int:
+    return sum(_estimate_message_chars(m) for m in messages)
+
+
+def _find_cutoff_index(messages: list[dict[str, Any]], keep_recent: int) -> int:
+    """Find index before which tool results can be pruned.
+    Returns the index of the Nth-from-last assistant message.
+    Everything before this index is eligible for pruning.
+    """
+    if keep_recent <= 0:
+        return len(messages)
+
+    count = 0
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "assistant":
+            count += 1
+            if count >= keep_recent:
+                return i
+    return 0
+
+
+def _build_tool_map(messages: list[dict[str, Any]]) -> dict[str, tuple[str, str]]:
+    """Map tool_call_id to (tool_name, tool_arguments) from assistant messages."""
+    result: dict[str, tuple[str, str]] = {}
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            for tc in msg.get("tool_calls") or []:
+                if isinstance(tc, dict):
+                    fn = tc.get("function", {})
+                    tcid = tc.get("id", "")
+                    name = fn.get("name", "")
+                    args = fn.get("arguments", "")
+                    if tcid and name:
+                        result[tcid] = (name, args)
+    return result
+
+
+def _summarize_tool_result(tool_name: str, tool_args: str, tool_content: str) -> str:
+    """Create an informative 1-line summary of a tool call + result.
+
+    Returns strings like::
+        [exec] ran `npm test` -> exit 0, 47 lines output
+        [read_file] read config.py (1,200 chars)
+    """
+    try:
+        args = json.loads(tool_args) if tool_args else {}
+    except (json.JSONDecodeError, TypeError):
+        args = {}
+
+    content = tool_content or ""
+    content_len = len(content)
+    line_count = content.count("\n") + 1 if content.strip() else 0
+
+    if tool_name == "exec":
+        cmd = args.get("command", "")
+        if len(cmd) > 80:
+            cmd = cmd[:77] + "..."
+        exit_match = re.search(r'(?:exit[_ ]?code|returncode)\s*[:=]\s*(-?\d+)', content, re.IGNORECASE)
+        exit_code = exit_match.group(1) if exit_match else "?"
+        return f"[exec] ran `{cmd}` -> exit {exit_code}, {line_count} lines output"
+
+    if tool_name == "read_file":
+        path = args.get("path", "?")
+        return f"[read_file] read {path} ({content_len:,} chars)"
+
+    if tool_name in ("write_file", "edit_file"):
+        path = args.get("path", "?")
+        return f"[{tool_name}] modified {path} ({content_len:,} chars result)"
+
+    if tool_name in ("web_search", "smart_search"):
+        query = args.get("query", "?")
+        return f"[{tool_name}] query='{query}' ({content_len:,} chars result)"
+
+    if tool_name in ("web_fetch", "smart_fetch"):
+        url = args.get("url", "?")
+        return f"[{tool_name}] fetched {url} ({content_len:,} chars result)"
+
+    if tool_name == "list_dir":
+        path = args.get("dir", args.get("path", "."))
+        return f"[list_dir] scanned {path} ({content_len:,} chars result)"
+
+    if tool_name in ("chatroom_send", "wait"):
+        return f"[{tool_name}] ({content_len:,} chars result)"
+
+    # Generic fallback
+    first_arg = ""
+    for k, v in list(args.items())[:2]:
+        sv = str(v)[:40]
+        first_arg += f" {k}={sv}"
+    return f"[{tool_name}]{first_arg} ({content_len:,} chars result)"
+
+
+def prune_messages(
+    messages: list[dict[str, Any]],
+    context_window_tokens: int,
+    *,
+    soft_ratio: float | None = None,
+    keep_recent: int | None = None,
+    max_chars: int | None = None,
+) -> list[dict[str, Any]]:
+    """Prune old tool-result messages to fit within the context window.
+
+    Returns a new list (shallow copy) with pruned messages. User/assistant messages
+    are never modified. Only tool results before the last ``keep_recent`` assistant
+    turns are pruned by substituting large outputs with a single generic summary line.
+    """
+    try:
+        from nanobot.groupchat.history import history_settings as hs
+        if soft_ratio is None:
+            soft_ratio = hs.pruning_soft_ratio()
+        if keep_recent is None:
+            keep_recent = hs.pruning_keep_recent()
+        if max_chars is None:
+            max_chars = hs.pruning_soft_max_chars()
+    except Exception:
+        pass
+
+    if soft_ratio is None:
+        soft_ratio = DEFAULT_SOFT_RATIO
+    if keep_recent is None:
+        keep_recent = DEFAULT_KEEP_RECENT
+    if max_chars is None:
+        max_chars = DEFAULT_MAX_CHARS
+
+    if not messages or context_window_tokens <= 0:
+        return messages
+
+    char_window = context_window_tokens * CHARS_PER_TOKEN
+    total_chars = _estimate_total_chars(messages)
+    ratio = total_chars / char_window
+
+    if ratio < soft_ratio:
+        return messages
+
+    cutoff = _find_cutoff_index(messages, keep_recent)
+    if cutoff <= 0:
+        return messages
+
+    prunable: list[int] = []
+    for i in range(cutoff):
+        if messages[i].get("role") == "tool":
+            content = messages[i].get("content", "")
+            if isinstance(content, str) and len(content) > max_chars:
+                prunable.append(i)
+
+    if not prunable:
+        return messages
+
+    result = list(messages)
+    tool_map = _build_tool_map(messages)
+
+    for i in prunable:
+        content = result[i].get("content", "")
+        if not isinstance(content, str) or len(content) <= max_chars:
+            continue
+            
+        tcid = result[i].get("tool_call_id", "")
+        tool_name, tool_args = tool_map.get(tcid, ("unknown_tool", ""))
+        
+        summary = _summarize_tool_result(tool_name, tool_args, content)
+        result[i] = {**result[i], "content": summary}
+
+    return result
+
+
+def prune_conversation_tail(
+    messages: list[dict[str, Any]],
+    sys_msg_count: int,
+    keep_turns: int = 6
+) -> int:
+    """Prune old conversation turns from the tail to prevent unbounded growth.
+    
+    Mutates the `messages` list in-place by preserving the `sys_msg_count` prefix
+    and keeping only the last `keep_turns * 3` messages of the conversation.
+    Returns the number of messages dropped.
+    """
+    max_conv = keep_turns * 3
+    conv_msgs = messages[sys_msg_count:]
+    if len(conv_msgs) > max_conv:
+        dropped = len(conv_msgs) - max_conv
+        messages[sys_msg_count:] = conv_msgs[-max_conv:]
+        return dropped
+    return 0

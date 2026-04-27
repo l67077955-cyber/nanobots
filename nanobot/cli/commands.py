@@ -281,7 +281,6 @@ def gateway(
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
 ):
     """Start the nanobot gateway."""
-    from nanobot.agent.loop import AgentLoop
     from nanobot.bus.queue import MessageBus
     from nanobot.channels.manager import ChannelManager
     from nanobot.config.paths import get_cron_dir
@@ -305,32 +304,14 @@ def gateway(
     provider = _make_provider(config)
     session_manager = SessionManager(config.workspace_path)
 
-    # Create cron service first (callback set after agent creation)
+    # Create cron service first (callback set after engine creation)
     cron_store_path = get_cron_dir() / "jobs.json"
     cron = CronService(cron_store_path)
-
-    # Create agent with cron service
-    agent = AgentLoop(
-        bus=bus,
-        provider=provider,
-        workspace=config.workspace_path,
-        model=config.agents.defaults.model,
-        max_iterations=config.agents.defaults.max_tool_iterations,
-        context_window_tokens=config.agents.defaults.context_window_tokens,
-        web_search_config=config.tools.web.search,
-        web_proxy=config.tools.web.proxy or None,
-        exec_config=config.tools.exec,
-        cron_service=cron,
-        restrict_to_workspace=config.tools.restrict_to_workspace,
-        session_manager=session_manager,
-        mcp_servers=config.tools.mcp_servers,
-        channels_config=config.channels,
-    )
 
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
-        from nanobot.agent.tools.message import MessageTool
+        from nanobot.tools.message import MessageTool
         from nanobot.utils.evaluator import evaluate_response
 
         reminder_note = (
@@ -339,20 +320,11 @@ def gateway(
             f"Scheduled instruction: {job.payload.message}"
         )
 
-        response = await agent.process_direct(
-            reminder_note,
-            session_key=f"cron:{job.id}",
-            channel=job.payload.channel or "cli",
-            chat_id=job.payload.to or "direct",
-        )
-
-        message_tool = agent.tools.get("message")
-        if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
-            return response
+        response = await gc_engine.direct_chat(reminder_note)
 
         if job.payload.deliver and job.payload.to and response:
             should_notify = await evaluate_response(
-                response, job.payload.message, provider, agent.model,
+                response, job.payload.message, provider, config.agents.defaults.model,
             )
             if should_notify:
                 from nanobot.bus.events import OutboundMessage
@@ -370,7 +342,7 @@ def gateway(
     channels = ChannelManager(config, bus)
 
     # Always create GroupChatEngine (unified prompt building)
-    from nanobot.groupchat.engine import GroupChatEngine
+    from nanobot.groupchat.orchestra.engine import GroupChatEngine
     gc_engine = GroupChatEngine(
         config=config.groupchat,
         provider=provider,
@@ -425,21 +397,9 @@ def gateway(
         # Fallback keeps prior behavior but remains explicit.
         return "cli", "direct"
 
-    # Create heartbeat service
     async def on_heartbeat_execute(tasks: str) -> str:
-        """Phase 2: execute heartbeat tasks through the full agent loop."""
-        channel, chat_id = _pick_heartbeat_target()
-
-        async def _silent(*_args, **_kwargs):
-            pass
-
-        return await agent.process_direct(
-            tasks,
-            session_key="heartbeat",
-            channel=channel,
-            chat_id=chat_id,
-            on_progress=_silent,
-        )
+        """Phase 2: execute heartbeat tasks through the group chat engine."""
+        return await gc_engine.direct_chat(tasks)
 
     async def on_heartbeat_notify(response: str) -> None:
         """Deliver a heartbeat response to the user's channel."""
@@ -453,7 +413,7 @@ def gateway(
     heartbeat = HeartbeatService(
         workspace=config.workspace_path,
         provider=provider,
-        model=agent.model,
+        model=config.agents.defaults.model,
         on_execute=on_heartbeat_execute,
         on_notify=on_heartbeat_notify,
         interval_s=hb_cfg.interval_s,
@@ -476,8 +436,8 @@ def gateway(
             await cron.start()
             await heartbeat.start()
             await asyncio.gather(
-                agent.run(),
                 channels.start_all(),
+                asyncio.Event().wait(),  # Keep event loop running
             )
         except KeyboardInterrupt:
             console.print("\nShutting down...")
@@ -486,10 +446,8 @@ def gateway(
             console.print("\n[red]Error: Gateway crashed unexpectedly[/red]")
             console.print(traceback.format_exc())
         finally:
-            await agent.close_mcp()
             heartbeat.stop()
             cron.stop()
-            agent.stop()
             await channels.stop_all()
 
     asyncio.run(run())

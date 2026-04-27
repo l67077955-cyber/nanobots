@@ -3,7 +3,7 @@
 import httpx
 import pytest
 
-from nanobot.agent.tools.web import WebSearchTool
+from nanobot.tools.web import WebSearchTool
 from nanobot.config.schema import WebSearchConfig
 
 
@@ -73,8 +73,8 @@ async def test_duckduckgo_search(monkeypatch):
         def text(self, query, max_results=5):
             return [{"title": "DDG Result", "href": "https://ddg.example", "body": "From DuckDuckGo"}]
 
-    monkeypatch.setattr("nanobot.agent.tools.web.DDGS", MockDDGS, raising=False)
-    import nanobot.agent.tools.web as web_mod
+    monkeypatch.setattr("nanobot.tools.web.DDGS", MockDDGS, raising=False)
+    import nanobot.tools.web as web_mod
     monkeypatch.setattr(web_mod, "DDGS", MockDDGS, raising=False)
 
     from ddgs import DDGS

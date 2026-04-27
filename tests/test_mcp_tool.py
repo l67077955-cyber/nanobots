@@ -7,8 +7,8 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from nanobot.agent.tools.mcp import MCPToolWrapper, connect_mcp_servers
-from nanobot.agent.tools.registry import ToolRegistry
+from nanobot.tools.mcp import MCPToolWrapper, connect_mcp_servers
+from nanobot.tools.registry import ToolRegistry
 from nanobot.config.schema import MCPServerConfig
 
 
@@ -262,7 +262,7 @@ async def test_connect_mcp_servers_enabled_tools_warns_on_unknown_entries(
     def _warning(message: str, *args: object) -> None:
         warnings.append(message.format(*args))
 
-    monkeypatch.setattr("nanobot.agent.tools.mcp.logger.warning", _warning)
+    monkeypatch.setattr("nanobot.tools.mcp.logger.warning", _warning)
 
     stack = AsyncExitStack()
     await stack.__aenter__()

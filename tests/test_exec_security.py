@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from nanobot.agent.tools.shell import ExecTool
+from nanobot.tools.shell import ExecTool
 
 
 def _fake_resolve_private(hostname, port, family=0, type_=0):

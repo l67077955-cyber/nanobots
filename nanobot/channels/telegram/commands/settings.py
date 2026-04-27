@@ -13,7 +13,7 @@ from telegram.ext import ContextTypes
 
 from loguru import logger
 
-from nanobot.groupchat.prompt_builder import (
+from nanobot.groupchat.history.prompt_builder import (
     PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
     GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
 )
@@ -66,7 +66,7 @@ class SettingsCommandsMixin:
 
     async def _send_hyperparams_keyboard(self, chat_id: str, params: dict) -> None:
         """Send hyperparams display with edit/delete buttons."""
-        lines = ["⚙️ 当前超参数:\n"]
+        lines = ["⚙️ 默认超参数设置\n", "💡 新创建的 agent 将自动使用此配置\n"]
         buttons = []
         for k, v in params.items():
             lines.append(f"  {k}: {v}")
@@ -253,7 +253,7 @@ class SettingsCommandsMixin:
 
         # Agents detail
         pm = self._load_pm()
-        from nanobot.groupchat.engine import GroupChatEngine
+        from nanobot.groupchat.orchestra.engine import GroupChatEngine
         lines.append("👥 Agent 详情:")
         for name, info in engine.registry.items():
             active = "🟢" if name in engine._active_agents else "⚪"
@@ -416,78 +416,160 @@ class SettingsCommandsMixin:
 
     async def _prompt_show_components(self, query) -> None:
         """Helper: refresh global prompt order view via callback."""
+        from telegram.error import BadRequest
         engine = self._groupchat_engine
         text, markup = self._build_prompt_order_view(engine)
-        await query.edit_message_text(text[:4096], reply_markup=markup)
+        try:
+            await query.edit_message_text(text[:4096], reply_markup=markup)
+        except BadRequest as e:
+            if "Message is not modified" not in str(e):
+                raise
 
     # ── Group Config Commands ───────────────────────────────
 
     async def _on_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Display history management flow with interactive settings."""
+        """Display history management as a precise visual pipeline conversation."""
         if not update.message or not update.effective_user:
             return
         if not self.is_allowed(self._sender_id(update.effective_user)):
             return
 
-        from nanobot.groupchat import history_settings as hs
+        from nanobot.groupchat.history import history_settings as hs
         settings = hs.get_all()
         tr = settings["tool_results"]
         hist = settings["history"]
         cp = settings.get("context_pruning", {})
 
-        # Current stats
         engine = self._groupchat_engine
         current_msgs = len(engine._history) if engine else 0
         current_chars = sum(len(m.get("content", "")) for m in (engine._history if engine else []))
+        compress_trigger = int(hist["max_messages"] * hist.get("compress_ratio", 0.8))
+        ctx_chars_limit = settings["context_window_tokens"] * 4  # rough chars estimate
 
-        summarize_status = "✅ 开启" if tr["summarize_enabled"] else "❌ 关闭"
-        html_detect_status = "✅ 开启" if tr.get("html_detect_enabled", True) else "❌ 关闭"
+        ai_on = tr["summarize_enabled"]
+        html_on = tr.get("html_detect_enabled", True)
+        prune_soft_budget = int(ctx_chars_limit * cp.get("soft_ratio", 0.3))
+        prune_hard_budget = int(ctx_chars_limit * cp.get("hard_ratio", 0.5))
+
+        # ── Estimate compiled LLM context size per active agent ──
+        # engine._history only stores final turn messages (user + agent final replies).
+        # Tool calls live inside agent messages as appended text logs, not separate entries.
+        # Actual LLM context = system prompts + history_to_messages(history).
+        compiled_info = ""
+        if engine and getattr(engine, "_active_agents", None):
+            from nanobot.groupchat.history.prompt_builder import PromptBuilder
+            parts = []
+            for a in engine._active_agents:
+                try:
+                    compiled = PromptBuilder.history_to_messages(
+                        engine._history, current_agent=a
+                    )
+                    c_chars = sum(len(m.get("content") or "") for m in compiled)
+                    parts.append(f"{a}~{c_chars:,}字")
+                except Exception:
+                    parts.append(f"{a}:?")
+            compiled_info = " | ".join(parts)
+
+        status_line = (
+            f"📊 历史轮次(不含工具调用): {current_msgs}/{hist['max_messages']}条"
+            f" | {current_chars:,}/{hist['max_context_chars']:,}字\n"
+            f"📌 编译后上下文(估): {compiled_info if compiled_info else '(engine未启动)'}"
+        )
 
         text = (
-            "📊 历史管理流程\n\n"
-            "━━ 全局设置 ━━\n"
-            f"  上下文窗口 → {settings['context_window_tokens']:,} tokens\n"
-            f"  工具结果截断 → {settings['tool_result_max_chars']:,} 字符\n\n"
-            "━━ Stage 1: 工具输出截断 ━━\n"
-            f"  exec       → 最大 {tr['exec_max_chars']:,} 字符\n"
-            f"  web_fetch  → 最大 {tr['web_fetch_max_chars']:,} 字符\n"
-            f"  web_search → 最大 {tr['web_search_max_chars']:,} 字符\n"
-            f"  HTML 检测  → {html_detect_status}\n\n"
-            "━━ Stage 2: AI 总结压缩 ━━\n"
-            f"  触发阈值   → {tr['summarize_threshold']:,} 字符\n"
-            f"  总结模型   → {tr['summarize_model']}\n"
-            f"  最大输入   → {tr.get('summarize_max_input_chars', 8000):,} 字符\n"
-            f"  最大输出   → {tr.get('summarize_max_output_chars', 4000):,} tokens\n"
-            f"  广播模式   → {tr.get('broadcast_result_max_chars', 20000):,} 字符\n"
-            f"  直接模式   → {tr.get('direct_result_max_chars', 8000):,} 字符\n"
-            f"  状态       → {summarize_status}\n\n"
-            "━━ Stage 3: 历史存储 ━━\n"
-            f"  最大消息数 → {hist['max_messages']} 条\n"
-            f"  最大上下文 → {hist['max_context_chars']:,} 字符\n"
-            f"  压缩比例   → {hist.get('compress_ratio', 0.8)}\n"
-            f"  压缩摘要   → {hist.get('compress_max_summary_tokens', 600)} tokens\n"
-            f"  当前消息数 → {current_msgs} 条\n"
-            f"  当前上下文 → {current_chars:,} 字符\n\n"
-            "━━ Stage 4: 迭代上下文裁剪 ━━\n"
-            f"  软裁剪比例 → {cp.get('soft_ratio', 0.3)}\n"
-            f"  硬裁剪比例 → {cp.get('hard_ratio', 0.5)}\n"
-            f"  保护最近   → {cp.get('keep_recent', 3)} 轮\n"
-            f"  软裁剪阈值 → {cp.get('soft_max_chars', 4000):,} 字符\n"
-            f"  保留头部   → {cp.get('soft_head_chars', 1500):,} 字符\n"
-            f"  保留尾部   → {cp.get('soft_tail_chars', 1500):,} 字符\n"
+            "─── 上下文管线 · 实时演示 ───\n"
+            f"全局: context_window={settings['context_window_tokens']:,} tokens"
+            f" | tool_result_max={settings['tool_result_max_chars']:,} 字符\n"
+            f"历史: max_messages={hist['max_messages']}条(仅用户+agent最终回复)"
+            f" | max_context_chars={hist['max_context_chars']:,}\n"
+            f"ℹ️  工具调用结果以文本追加在agent消息内，不计入条数\n"
+            f"{status_line}\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "\n"
+            "👤 用户: 帮我搜索特朗普的图片并下载\n"
+            f" └─ 🛡 [头部永久保护] 此消息不压缩不截断\n"
+            "\n"
+            "── 轮次 1 ──\n"
+            "🤖 Agent: 我来搜索… → web_search(query='特朗普图片')\n"
+            "\n"
+            f"📡 web_search 返回 12,000 字符:\n"
+            f" └─ [截断①] web_search_max_chars={tr['web_search_max_chars']:,}\n"
+            f"    原始 12,000 > {tr['web_search_max_chars']:,} → 仅保留前后各一半\n"
+            f" └─ [截断②] tool_result_max_chars={settings['tool_result_max_chars']:,}\n"
+            f"    全局硬上限，截断后结果不超此值\n"
+            f" └─ [AI压缩] summarize_enabled={'✅' if ai_on else '❌'}"
+            f" | 触发阈值=>{tr['summarize_threshold']:,}字符\n"
+            f"    {'✅ 触发: ' if ai_on else '🚫 未触发(已关闭): '}"
+            f"model={tr['summarize_model']}"
+            f" | 最大输入={tr.get('summarize_max_input_chars', 8000):,}"
+            f" | 最大输出={tr.get('summarize_max_output_chars', 4000):,}tokens\n"
+            f"    → 摘要注入上下文(广播模式最大={tr.get('broadcast_result_max_chars', 20000):,}"
+            f" | 直接模式最大={tr.get('direct_result_max_chars', 8000):,})\n"
+            f" └─ [HTML检测] html_detect={'✅' if html_on else '❌'}"
+            f"  {'(若返回HTML会注入警告)' if html_on else '(已关闭)'}\n"
+            "\n"
+            "── 轮次 2 ──\n"
+            "🤖 Agent: 现在执行下载 → exec(python send_photo.py)\n"
+            "\n"
+            f"💻 exec 返回报错 3,000 字符:\n"
+            f" └─ [截断①] exec_max_chars={tr['exec_max_chars']:,}\n"
+            f"    3,000 < {tr['exec_max_chars']:,} → 未触发截断，完整保留\n"
+            f" └─ [AI压缩] 3,000 < {tr['summarize_threshold']:,} → 未触发AI压缩\n"
+            "\n"
+            f"── [上下文裁剪] tool_loop 第2次迭代起自动检查 ──\n"
+            f" 软裁剪: 上下文>{prune_soft_budget:,}字符({cp.get('soft_ratio',0.3)}×窗口)\n"
+            f"   → 对超过soft_max_chars={cp.get('soft_max_chars',4000):,}的旧工具结果\n"
+            f"     保留头部{cp.get('soft_head_chars',1500):,}字符 + 尾部{cp.get('soft_tail_chars',1500):,}字符\n"
+            f" 硬裁剪: 上下文>{prune_hard_budget:,}字符({cp.get('hard_ratio',0.5)}×窗口)\n"
+            f"   → 旧工具结果替换为精简摘要(仅保留路径/错误/kv)\n"
+            f" 保护: 最近{cp.get('keep_recent',3)}轮的工具结果不裁剪\n"
+            "\n"
+            f"── [历史记忆压缩] 消息数>={compress_trigger}条触发 ──\n"
+            f"   compress_ratio={hist.get('compress_ratio',0.8)} × max_messages={hist['max_messages']}"
+            f" = {compress_trigger}条时触发\n"
+            f"   🛡 头部保护: 首条消息+首条用户消息 → 永不压缩\n"
+            f"   🗜 压缩中间段 → model={tr['summarize_model']}"
+            f" | max_tokens={hist.get('compress_max_summary_tokens',600)}\n"
+            f"   🛡 尾部保护: 最近6轮完整保留\n"
+            "\n"
+            "── 超过总限制时 ──\n"
+            f"   max_messages={hist['max_messages']}条 或 max_context_chars={hist['max_context_chars']:,}字符\n"
+            f"   → 从最早消息开始丢弃(tool_call与result配对一起丢)\n"
+            f"\n{status_line}\n"
         )
 
         buttons = [
             [
-                InlineKeyboardButton("🌐 全局设置", callback_data="hs_global"),
-                InlineKeyboardButton("📝 工具截断", callback_data="hs_stage1"),
+                InlineKeyboardButton(
+                    f"🌐 全局: ctx={settings['context_window_tokens']:,}tok / max_result={settings['tool_result_max_chars']:,}",
+                    callback_data="hs_global",
+                )
             ],
             [
-                InlineKeyboardButton("🤖 AI总结", callback_data="hs_stage2"),
-                InlineKeyboardButton("📚 历史限制", callback_data="hs_stage3"),
+                InlineKeyboardButton(
+                    f"✂️ 工具截断: exec={tr['exec_max_chars']:,} fetch={tr['web_fetch_max_chars']:,} search={tr['web_search_max_chars']:,}",
+                    callback_data="hs_stage1",
+                )
             ],
             [
-                InlineKeyboardButton("✂️ 上下文裁剪", callback_data="hs_stage4"),
+                InlineKeyboardButton(
+                    f"🧠 AI压缩: {'✅' if ai_on else '❌'} 阈值={tr['summarize_threshold']:,} 模型={tr['summarize_model'].split('/')[-1]}",
+                    callback_data="hs_stage2",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    f"📚 历史: max={hist['max_messages']}条/{hist['max_context_chars']:,}字 压缩@{compress_trigger}条",
+                    callback_data="hs_stage3",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    f"🔪 迭代裁剪: soft@{cp.get('soft_ratio',0.3)} hard@{cp.get('hard_ratio',0.5)} 保留最近{cp.get('keep_recent',3)}轮",
+                    callback_data="hs_stage4",
+                )
+            ],
+            [
                 InlineKeyboardButton("🔄 重载配置", callback_data="hs_reload"),
             ],
         ]
@@ -515,21 +597,4 @@ class SettingsCommandsMixin:
             "🌐 全部 Agent", callback_data="think_agent:__all__"
         )])
         return "\n".join(lines), buttons
-
-    async def _on_think(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /think command — shows interactive button panel."""
-        if not update.message or not update.effective_user:
-            return
-        if not self.is_allowed(self._sender_id(update.effective_user)):
-            return
-
-        engine = self._groupchat_engine
-        if not engine:
-            await update.message.reply_text("⚠️ 未配置群聊引擎")
-            return
-
-        text, buttons = self._build_think_status_panel(engine)
-        await update.message.reply_text(
-            text, reply_markup=InlineKeyboardMarkup(buttons)
-        )
 

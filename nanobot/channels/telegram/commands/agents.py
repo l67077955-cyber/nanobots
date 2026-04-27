@@ -83,7 +83,7 @@ class AgentCommandsMixin:
             leader = _d.agent_badge(name, self._groupchat_engine.leader)
             model = info.get("model", "?")
             # Tools summary
-            from nanobot.groupchat.engine import GroupChatEngine
+            from nanobot.groupchat.orchestra.engine import GroupChatEngine
             tools_cfg = info.get("tools")
             if isinstance(tools_cfg, dict):
                 on = [k for k, v in tools_cfg.items() if v and k in GroupChatEngine.TOOL_NAMES]
@@ -264,6 +264,8 @@ class AgentCommandsMixin:
             [InlineKeyboardButton("📝 修改提示词", callback_data=f"ef:{agent_name}:persona")],
             [InlineKeyboardButton("🤖 更换模型/提供商", callback_data=f"ef:{agent_name}:model")],
             [InlineKeyboardButton("🔧 工具权限设置", callback_data=f"ef:{agent_name}:tools")],
+            [InlineKeyboardButton("⚙️ 超参数设置", callback_data=f"ef:{agent_name}:hyperparams")],
+            [InlineKeyboardButton("🧠 思考强度", callback_data=f"ef:{agent_name}:reasoning_effort")],
             [InlineKeyboardButton("🗑️ 删除 Agent", callback_data=f"da:{agent_name}")],
             [InlineKeyboardButton("❌ 取消", callback_data=f"ef:{agent_name}:cancel")],
         ])

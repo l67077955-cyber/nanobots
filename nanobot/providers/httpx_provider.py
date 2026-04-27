@@ -59,9 +59,7 @@ class HttpxProvider(LLMProvider):
         # Detect gateway / local deployment.
         self._gateway = find_gateway(provider_name, api_key, api_base)
 
-        # Runtime auto-detected provider capabilities.
-        self._compat_flatten: set[str] = set()
-        self._compat_drop_params: dict[str, set[str]] = {}
+        # Runtime auto-detected provider capabilities (inherited from LLMProvider)
 
         # Sampling parameters — modifiable at runtime via /hyperparams
         defaults = {
@@ -617,41 +615,23 @@ class HttpxProvider(LLMProvider):
                     cache_headers=getattr(self, "_last_cache_headers", None),
                 )
 
-                # Auto-detect tool message incompatibility
+                # Auto-detect compatibility issues
                 has_tool_msgs = any(m.get("role") == "tool" for m in messages)
-                if r.status_code == 502 and has_tool_msgs and prov_name:
-                    if prov_name not in self._compat_flatten:
-                        self._compat_flatten.add(prov_name)
-                        logger.warning("Auto-detected tool incompatibility for '{}', retrying with flatten", prov_name)
-                        body = self._build_body(messages=messages, model=raw_model, provider_name=prov_name, tools=tools, max_tokens=max_tokens, stream=False)
-                        r2 = await client.post(url, json=body, headers=headers)
-                        if r2.status_code == 200:
-                            data = r2.json()
-                            self._log_request(model=raw_model, api_base=target_base, max_tokens=max_tokens, stream=False, params=self.sampling_params, tools_count=len(tools or []), messages=body["messages"], metadata=metadata, response_data=data, latency=_time.time() - t0)
-                            return self._parse_response(data)
+                needs_flatten, needs_param = self._detect_compat_issues(
+                    provider_key=prov_name,
+                    status_code=r.status_code,
+                    error_text=error_text,
+                    has_tool_msgs=has_tool_msgs,
+                    kwargs=self.sampling_params,
+                )
 
-                # Auto-detect unsupported params
-                if r.status_code == 400 and prov_name:
-                    _PARAM_NAMES_IN_ERRORS = (
-                        "presencePenalty", "presence_penalty",
-                        "frequencyPenalty", "frequency_penalty",
-                        "repetitionPenalty", "repetition_penalty",
-                        "top_k", "topK", "top_p", "topP",
-                        "min_p", "minP", "top_a", "topA",
-                    )
-                    if any(name in error_text for name in _PARAM_NAMES_IN_ERRORS):
-                        all_sampling = set(self.sampling_params.keys())
-                        drops = self._compat_drop_params.setdefault(prov_name, set())
-                        new_drops = all_sampling - drops
-                        if new_drops:
-                            drops.update(new_drops)
-                            logger.warning("Auto-detected param issues for '{}', retrying without sampling params", prov_name)
-                            body = self._build_body(messages=messages, model=raw_model, provider_name=prov_name, tools=tools, max_tokens=max_tokens, stream=False)
-                            r2 = await client.post(url, json=body, headers=headers)
-                            if r2.status_code == 200:
-                                data = r2.json()
-                                self._log_request(model=raw_model, api_base=target_base, max_tokens=max_tokens, stream=False, params=self.sampling_params, tools_count=len(tools or []), messages=body["messages"], metadata=metadata, response_data=data, latency=_time.time() - t0)
-                                return self._parse_response(data)
+                if needs_flatten or needs_param:
+                    body = self._build_body(messages=messages, model=raw_model, provider_name=prov_name, tools=tools, max_tokens=max_tokens, stream=False)
+                    r2 = await client.post(url, json=body, headers=headers)
+                    if r2.status_code == 200:
+                        data = r2.json()
+                        self._log_request(model=raw_model, api_base=target_base, max_tokens=max_tokens, stream=False, params=self.sampling_params, tools_count=len(tools or []), messages=body["messages"], metadata=metadata, response_data=data, latency=_time.time() - t0)
+                        return self._parse_response(data)
 
                 return LLMResponse(
                     content=f"Error calling LLM: HTTP {r.status_code} - {error_text}",

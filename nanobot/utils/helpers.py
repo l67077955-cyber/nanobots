@@ -3,7 +3,7 @@
 import json
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +74,13 @@ def ensure_dir(path: Path) -> Path:
 def timestamp() -> str:
     """Current ISO timestamp."""
     return datetime.now().isoformat()
+
+
+CST = timezone(timedelta(hours=8))
+
+def cn_now() -> datetime:
+    """Return current time in China Standard Time (UTC+8)."""
+    return datetime.now(CST)
 
 
 def current_time_str() -> str:

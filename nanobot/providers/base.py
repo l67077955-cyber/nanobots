@@ -103,6 +103,10 @@ class LLMProvider(ABC):
         self.api_base = api_base
         self.generation: GenerationSettings = GenerationSettings()
         self._retry_delays = retry_delays or self._DEFAULT_RETRY_DELAYS
+        
+        # Provider compatibility state
+        self._compat_flatten: set[str] = set()
+        self._compat_drop_params: dict[str, set[str]] = {}
 
     @staticmethod
     def _sanitize_empty_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -199,6 +203,115 @@ class LLMProvider(ABC):
     def _is_transient_error(cls, content: str | None) -> bool:
         err = (content or "").lower()
         return any(marker in err for marker in cls._TRANSIENT_ERROR_MARKERS)
+
+    def _detect_compat_issues(
+        self,
+        provider_key: str | None,
+        status_code: int | None,
+        error_text: str,
+        has_tool_msgs: bool,
+        kwargs: dict[str, Any] | None = None,
+    ) -> tuple[bool, bool]:
+        """
+        Analyze an API error and update compat state.
+        Returns (needs_flatten_retry, needs_param_retry)
+        """
+        if not provider_key:
+            return False, False
+            
+        flatten_retry = False
+        param_retry = False
+        
+        # 502: Provider proxy rejects tool_calls payload
+        if status_code == 502 and has_tool_msgs:
+            if provider_key not in self._compat_flatten:
+                self._compat_flatten.add(provider_key)
+                logger.warning("Auto-detected tool incompatibility for '{}', will flatten on retry", provider_key)
+                flatten_retry = True
+
+        # 400: Provider rejects specific generation parameters
+        if status_code == 400:
+            _PARAM_MAP = {
+                "presencePenalty": "presence_penalty",
+                "presence_penalty": "presence_penalty",
+                "frequencyPenalty": "frequency_penalty",
+                "frequency_penalty": "frequency_penalty",
+                "repetitionPenalty": "repetition_penalty",
+                "repetition_penalty": "repetition_penalty",
+                "top_k": "top_k", "topK": "top_k",
+                "top_p": "top_p", "topP": "top_p",
+                "min_p": "min_p", "minP": "min_p",
+                "top_a": "top_a", "topA": "top_a",
+            }
+            _PENALTY_GROUP = {"presence_penalty", "frequency_penalty", "repetition_penalty"}
+            
+            detected = set()
+            for err_name, kwarg_key in _PARAM_MAP.items():
+                if err_name in error_text:
+                    if not kwargs or kwarg_key in kwargs:
+                        detected.add(kwarg_key)
+            
+            if detected & _PENALTY_GROUP:
+                if kwargs:
+                    detected = detected | {p for p in _PENALTY_GROUP if p in kwargs}
+                else:
+                    detected = detected | _PENALTY_GROUP
+                
+            if detected:
+                drops = self._compat_drop_params.setdefault(provider_key, set())
+                new_drops = detected - drops
+                if new_drops:
+                    drops.update(new_drops)
+                    logger.warning(
+                        "Auto-detected unsupported params for '{}': {}, retrying",
+                        provider_key, new_drops,
+                    )
+                    param_retry = True
+                    
+        return flatten_retry, param_retry
+
+    @staticmethod
+    def _flatten_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Convert tool-protocol messages to plain text for incompatible APIs."""
+        out: list[dict[str, Any]] = []
+        for m in messages:
+            role = m.get("role", "")
+
+            # Assistant message with tool_calls → flatten into content
+            if role == "assistant" and m.get("tool_calls"):
+                content = m.get("content") or ""
+                tc_lines: list[str] = []
+                for tc in m["tool_calls"]:
+                    fn = tc.get("function", {})
+                    name = fn.get("name", "unknown")
+                    args = fn.get("arguments", "")
+                    # Compact args preview
+                    if isinstance(args, str) and len(args) > 100:
+                        args = args[:100] + "…"
+                    tc_lines.append(f"[调用 {name}({args})]")
+                if tc_lines:
+                    content = (content + "\n" + "\n".join(tc_lines)).strip()
+                out.append({
+                    k: v for k, v in {
+                        "role": "assistant",
+                        "content": content,
+                        "name": m.get("name"),
+                    }.items() if v is not None
+                })
+                continue
+
+            # Tool result → convert to assistant message
+            if role == "tool":
+                result_text = m.get("content") or ""
+                out.append({
+                    "role": "assistant",
+                    "content": f"[工具结果]:\n{result_text}",
+                })
+                continue
+
+            # Normal message — pass through
+            out.append(m)
+        return out
 
     @staticmethod
     def _strip_image_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
