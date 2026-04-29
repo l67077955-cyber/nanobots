@@ -533,10 +533,8 @@ async def broadcast_round(
                 f"    查看当前宫殿结构（Wing/Hall/Room 及记忆数量）\n"
                 f"- memory_palace(action='delete', wing=..., hall=..., room=...)\n"
                 f"    删除指定路径的记忆\n\n"
-                f"## 搜索额度管理\n"
-                f"每个 agent 有独立的搜索额度（{search_pool.status()}）。\n"
-                f"没有 web_search 的 agent 的额度闲置，你可以用 transfer_credits 把他们的额度\n"
-                f"划拨给有搜索能力的 agent（包括你自己）。\n\n"
+                f"每个 agent 有独立的搜索额度，详见下方的 [本轮状态汇总]。\n"
+                f"你可以用 transfer_credits 把闲置额度划拨给需要的队友。\n\n"
                 f"## 工作流程\n"
                 f"1. 先用 memory_palace(action='search') 检索是否有相关历史记忆\n"
                 f"2. 分析问题，决定如何分工\n"
@@ -600,8 +598,11 @@ async def broadcast_round(
         perm_insert_idx = max(len(messages) - 1, 0)
         messages.insert(perm_insert_idx, {
             "role": "system",
-            "content": "[团队工具权限] 待更新",
+            "content": "[团队工具权限及搜索额度见消息末尾 [本轮状态汇总]]",
         })
+
+        # The volatile state message is always the last one (added by PromptBuilder)
+        volatile_msg_idx = len(messages) - 1
 
         # ── Edit-in-place display (broadcast mode) ──
         # Each tool call gets one message (🟡), then edited with result (🟢/🔴).
@@ -717,19 +718,29 @@ async def broadcast_round(
                 else:
                     tool_defs = list(broadcast_defs)
 
-                # ── Update team tool permissions prompt dynamically ──
+                # ── Update volatile status summary (Permissions + Credits) ──
                 perm_lines = []
                 for a in exec_agents:
                     on = engine.get_agent_enabled_tool_names(a)
                     extra = " ← 你" if a == name else (" 👑Leader" if a == leader_name else "")
                     perm_lines.append(f"  {a}: {', '.join(on) if on else '(无工具)'}{extra}")
                 
-                messages[perm_insert_idx]["content"] = (
-                    "[团队工具权限]\n"
-                    + "\n".join(perm_lines) + "\n\n"
+                status_summary = (
+                    f"\n\n### [本轮状态汇总]\n"
+                    f"**搜索额度**: {search_pool.status()}\n"
+                    f"**工具权限**:\n" + "\n".join(perm_lines) + "\n\n"
                     "注意：没有 web_search/web_fetch 权限时，也禁止用 exec 执行 curl/wget 等网络命令。\n"
                     "如需搜索，请通过 chatroom_send 请求有搜索权限的队友帮忙。"
                 )
+                
+                # Append to the volatile user message (the last message)
+                # This ensures the system messages remain stable and cacheable.
+                orig_volatile = messages[volatile_msg_idx]["content"]
+                if "### [本轮状态汇总]" in orig_volatile:
+                    # Strip previous summary if retrying/looping
+                    orig_volatile = orig_volatile.split("### [本轮状态汇总]")[0].strip()
+                
+                messages[volatile_msg_idx]["content"] = orig_volatile + status_summary
 
                 _cycle_t0 = _t.time()
                 _cycle_usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}

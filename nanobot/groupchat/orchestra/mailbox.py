@@ -74,19 +74,19 @@ class ConversationPool:
             return False
 
         n = len(recipients)
-
-        # Check real available slots (user force-alloc may have drained them).
-        # Pre-deduct immediately (before any await) so concurrent coroutines see
-        # the reservation and don't double-commit the same slots.
-        if self._available < n:
+        if n > self._capacity:
             logger.warning(
-                "ConversationPool: {} rejected — not enough slots "
-                "({} needed, {} available)",
-                sender, n, self._available,
+                "ConversationPool: {} rejected — requested {} slots exceeds capacity {}",
+                sender, n, self._capacity,
             )
             return False
 
-        self._available -= n  # reserve slots before yielding to event loop
+        # If pool is full right now, log that we are waiting.
+        if self._available < n:
+            logger.debug(
+                "ConversationPool: {} waiting for slots ({} needed, {} available)",
+                sender, n, self._available,
+            )
 
         acquired = 0
         try:
@@ -95,21 +95,24 @@ class ConversationPool:
                     self._sem.acquire(), timeout=self.ALLOCATE_TIMEOUT,
                 )
                 acquired += 1
+                # Deduct from available as we acquire
+                self._available -= 1
+                
                 # Re-check: user priority may have been set while waiting
                 if not self._user_priority.is_set():
                     for _ in range(acquired):
                         self._sem.release()
-                    self._available += n  # restore reservation
+                        self._available += 1
                     logger.info(
                         "ConversationPool: {} interrupted — user priority",
                         sender,
                     )
                     return False
         except asyncio.TimeoutError:
-            # Release any partially acquired slots and restore reservation
+            # Release any partially acquired slots and restore available
             for _ in range(acquired):
                 self._sem.release()
-            self._available += n
+                self._available += 1
             logger.warning(
                 "ConversationPool: {} failed to allocate {} slots "
                 "(acquired {}, pool full)",
@@ -134,10 +137,6 @@ class ConversationPool:
         User messages go directly into the pool, even if it exceeds
         capacity. Agents still follow normal wait/timeout/drop logic.
         _user_priority blocks agents during delivery.
-
-        Drains available semaphore slots first to keep _available and
-        _sem in sync. Only overflows _available for slots the semaphore
-        couldn't provide.
         """
         self._user_priority.clear()
         n = len(recipients)
@@ -148,7 +147,6 @@ class ConversationPool:
                 self._pending[r].append("User")
 
         # Acquire semaphore slots where available to keep _available in sync.
-        # Semaphore.locked() is True when _value == 0 (no slots left).
         acquired = 0
         for _ in range(n):
             if not self._sem.locked():
@@ -160,15 +158,15 @@ class ConversationPool:
                     break
             else:
                 break
-        # Only decrement _available by the overflow (slots semaphore couldn't provide)
-        overflow = n - acquired
-        self._available -= overflow
+        
+        # Always decrement _available by total n to keep it in sync with semaphore permits + overflow
+        self._available -= n
 
         self._user_priority.set()
         logger.info(
             "ConversationPool: user allocated {} slots "
-            "({} from sem, {} overflow, {} available), priority OFF",
-            n, acquired, overflow, self._available,
+            "({} from sem, overflow={}, {} available), priority OFF",
+            n, acquired, n - acquired, self._available,
         )
 
     def release_unread(self, agent_name: str) -> int:
@@ -193,12 +191,17 @@ class ConversationPool:
     def mark_replied(self, agent_name: str, to_sender: str) -> None:
         """Mark that agent replied to a message from to_sender.
 
-        The slot stays consumed (active conversation continues).
-        Only removes one pending entry (one reply per received message).
+        Releases the slot because the reply will allocate its own new slot(s).
         """
         pending = self._pending.get(agent_name, [])
         if to_sender in pending:
             pending.remove(to_sender)
+            self._sem.release()
+            self._available += 1
+            logger.debug(
+                "ConversationPool: {} replied to {} (released 1 slot, {} available)",
+                agent_name, to_sender, self._available,
+            )
 
     @property
     def available(self) -> int:

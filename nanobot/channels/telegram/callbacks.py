@@ -1136,7 +1136,7 @@ class CallbacksMixin:
                 await self._send_order_keyboard(chat_id, self._groupchat_engine.active_agents)
 
         # ── Prompt orchestration callbacks ──
-        elif data.startswith("pr:"):
+        elif data in ("pr:refresh", "pr:"):
             # Refresh global prompt order view
             await self._prompt_show_components(query)
 
