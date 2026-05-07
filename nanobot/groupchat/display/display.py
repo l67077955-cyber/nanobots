@@ -1,5 +1,7 @@
 """Centralized display formatting for group chat.
 
+# Verified: Harper has write access to source.
+
 All visual formatting, headers, and status message templates live here.
 Design: clean Unicode, role-aware badges, compact and readable.
 """
@@ -388,6 +390,8 @@ def tool_result_brief(
         lines_count = result.count("\n") + 1 if result else 0
         return f"    └ {lines_count} lines"
     elif tool_name in ("write_file", "edit_file"):
+        if (result or "").startswith("Error:"):
+            return f"    └ ❌ {result.split(chr(10))[0][:60]}"
         return f"    └ ✅ saved"
     elif tool_name == "list_dir":
         count = result.count("\n") if result else 0

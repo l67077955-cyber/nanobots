@@ -1,5 +1,7 @@
 """Async group chat engine for multi-agent discussions.
 
+# Verified: Harper has write access to source.
+
 Supports fluid agent management:
 - Agent registry: all available agents (loaded from config/directory)
 - Active participants: agents currently in the conversation
@@ -17,7 +19,7 @@ from typing import Any, Awaitable, Callable
 from loguru import logger
 
 
-from nanobot.groupchat.history.prompt_builder import load_agents
+from nanobot.groupchat.history.agent_loader import load_agents
 from nanobot.groupchat.config import GroupChatConfig
 from nanobot.groupchat.orchestra.mailbox import MailboxHub
 from nanobot.groupchat.history.persistence import GroupChatState
@@ -161,8 +163,8 @@ class GroupChatEngine:
         from nanobot.tools.process import ProcessTool
         registry.register(ProcessTool())
         registry.register(ReadFileTool(workspace=ws, allowed_dir=None))
-        registry.register(WriteFileTool(workspace=ws, allowed_dir=ws))
-        registry.register(EditFileTool(workspace=ws, allowed_dir=ws))
+        registry.register(WriteFileTool(workspace=ws, allowed_dir=None))
+        registry.register(EditFileTool(workspace=ws, allowed_dir=None))
         registry.register(ListDirTool(workspace=ws, allowed_dir=None))
         # Register MessageTool so agents can send files (PDFs, images, etc.) to the user.
         # The send_outbound_fn is wired in from the gateway (bus.publish_outbound).

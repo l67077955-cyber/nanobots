@@ -308,6 +308,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
+        supports_prompt_caching=True,
     ),
     # Gemini: needs "gemini/" prefix for LiteLLM.
     ProviderSpec(

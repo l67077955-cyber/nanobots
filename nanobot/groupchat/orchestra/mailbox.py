@@ -19,9 +19,10 @@ from loguru import logger
 class AgentMessage:
     """A single inter-agent message."""
 
-    sender: str
-    content: str
-    targets: list[str]  # ["All"] for broadcast, or specific names
+    id: int = 0
+    sender: str = ""
+    content: str = ""
+    targets: list[str] = field(default_factory=list)  # ["All"] for broadcast, or specific names
     timestamp: float = field(default_factory=_time.time)
 
     def __str__(self) -> str:
@@ -270,6 +271,8 @@ class MailboxHub:
         self._interrupt_counts: dict[str, int] = {}
         # Agents currently inside tool_loop (busy — eligible for interruption).
         self._busy_agents: set[str] = set()
+        # Auto-incrementing message ID for quote_message support
+        self._next_msg_id: int = 0
 
     def create(self, agent_name: str) -> None:
         """Create a mailbox for an agent (idempotent)."""
@@ -291,6 +294,7 @@ class MailboxHub:
         self._active_agents = set(active_agents) if active_agents else set(self._queues.keys())
         self._expected_replies.clear()
         self._global_start = _time.time()
+        self._next_msg_id = 0
         # Reset interrupt state for the new round
         self._interrupt_counts.clear()
         self._busy_agents.clear()
@@ -395,7 +399,10 @@ class MailboxHub:
         Returns:
             Number of mailboxes the message was delivered to.
         """
-        msg = AgentMessage(sender=sender, content=content, targets=targets)
+        msg = AgentMessage(
+            id=self._next_msg_id, sender=sender, content=content, targets=targets,
+        )
+        self._next_msg_id += 1
         self._history.append(msg)
 
         delivered = 0
@@ -581,6 +588,13 @@ class MailboxHub:
     def history(self) -> list[AgentMessage]:
         """All messages sent this round."""
         return list(self._history)
+
+    def get_message(self, msg_id: int) -> AgentMessage | None:
+        """Look up a message by its ID. Returns None if not found."""
+        for msg in self._history:
+            if msg.id == msg_id:
+                return msg
+        return None
 
     @property
     def agent_names(self) -> list[str]:

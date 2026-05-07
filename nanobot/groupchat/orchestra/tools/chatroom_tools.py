@@ -1080,6 +1080,7 @@ class EndDiscussionTool(Tool):
         # single unified termination message (avoids duplicate notifications).
         self._engine._leader_end_reason = reason
         self._end_event.set()
+        self._engine._running = False
         return f"✅ 讨论已结束{reason_str}，即将进入总结阶段"
 
 
@@ -1259,3 +1260,105 @@ class TransferCreditsTool(Tool):
             await self._engine._send(f"🔄 {msg}")
             return f"{msg}\n当前额度: {self._pool.status()}"
         return f"Error: {msg}"
+
+class QuoteMessageTool(Tool):
+    """Quote a historical message by its ID.
+
+    Returns the full content of a previously sent/received message,
+    so agents can reference it without copying the text manually.
+    """
+
+    def __init__(self, mailbox: Any) -> None:
+        self._mailbox = mailbox
+
+    def set_agent(self, name: str) -> None:
+        pass  # no per-agent state needed
+
+    @property
+    def name(self) -> str:
+        return "quote_message"
+
+    @property
+    def description(self) -> str:
+        return (
+            "引用历史消息的完整内容。通过消息ID获取之前发送/收到的消息原文。"
+            "用途：在总结或记忆store时引用消息，避免复制粘贴浪费token。"
+            "先用 list_messages() 查看消息列表获取ID，再用 quote_message(id=N) 获取内容。"
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "要引用的消息ID",
+                },
+            },
+            "required": ["id"],
+        }
+
+    async def execute(self, id: int = 0, **kwargs: Any) -> str:
+        msg = self._mailbox.get_message(id)
+        if msg is None:
+            return f"Error: 消息ID {id} 不存在"
+        targets_str = ", ".join(msg.targets)
+        return f"[ID:{msg.id} | {msg.sender} → {targets_str}]:\n{msg.content}"
+
+
+class ListMessagesTool(Tool):
+    """List historical messages with IDs for quoting.
+
+    Shows a compact index of all messages sent this round so agents
+    can find the right ID to pass to quote_message().
+    """
+
+    def __init__(self, mailbox: Any) -> None:
+        self._mailbox = mailbox
+
+    def set_agent(self, name: str) -> None:
+        pass  # no per-agent state needed
+
+    @property
+    def name(self) -> str:
+        return "list_messages"
+
+    @property
+    def description(self) -> str:
+        return (
+            "列出当前轮次的所有历史消息（含ID、发送者、内容摘要）。"
+            "用于查找要引用的消息ID，然后用 quote_message(id=N) 获取完整内容。"
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "最多返回多少条（默认20，最新消息在后）",
+                },
+                "sender": {
+                    "type": "string",
+                    "description": "可选：只看某个发送者的消息",
+                },
+            },
+            "required": [],
+        }
+
+    async def execute(self, limit: int = 20, sender: str = "", **kwargs: Any) -> str:
+        history = self._mailbox.history
+        if sender:
+            history = [m for m in history if m.sender == sender]
+        recent = history[-limit:] if len(history) > limit else history
+        if not recent:
+            return "当前无历史消息"
+        lines = []
+        for m in recent:
+            preview = m.content[:80].replace("\n", " ")
+            if len(m.content) > 80:
+                preview += "…"
+            lines.append(f"  ID:{m.id} [{m.sender}] {preview}")
+        return "历史消息列表（最新在后）：\n" + "\n".join(lines)

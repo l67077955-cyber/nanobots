@@ -618,13 +618,32 @@ async def tool_loop(
                     usage.get("completion_tokens", "?"),
                 )
 
-            # Handle error responses
+            # Handle error responses — retry once via non-streaming fallback
             if response.finish_reason == "error":
                 logger.error("LLM returned error: {}", (content or "")[:200])
-                result.content = content or "Error calling LLM."
-                result.finish_reason = "error"
-                result.status_code = getattr(response, "status_code", None)
-                break
+                # Retry once: same params, non-streaming guaranteed
+                try:
+                    retried = await provider.chat_with_retry(
+                        messages=messages,
+                        tools=tool_defs,
+                        model=model,
+                        max_tokens=max_tokens,
+                        metadata=metadata,
+                        reasoning_effort=reasoning_effort,
+                    )
+                    if retried.finish_reason != "error":
+                        response = retried
+                        raw_content = response.content
+                        content = _strip_think(raw_content)
+                        logger.info("tool_loop: error-retry succeeded")
+                    else:
+                        raise RuntimeError(retried.content or "Retry also errored")
+                except Exception as retry_err:
+                    logger.error("tool_loop: error-retry also failed: {}", retry_err)
+                    result.content = content or f"Error calling LLM after retry: {retry_err}"
+                    result.finish_reason = "error"
+                    result.status_code = getattr(response, "status_code", None)
+                    break
 
 
             # Append to messages (with reasoning if present)

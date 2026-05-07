@@ -77,6 +77,8 @@ class LiteLLMProvider(LLMProvider):
         # Drop unsupported parameters for providers (e.g., gpt-5 rejects some params)
         litellm.drop_params = True
         litellm.modify_params = True
+        # Enable response headers so we can extract OpenRouter trace/cache info
+        litellm.return_response_headers = True
 
         # Langfuse tracing via LiteLLM OTEL callback (langfuse v3+/v4 compatible)
         if os.environ.get("LANGFUSE_PUBLIC_KEY"):
@@ -346,6 +348,7 @@ class LiteLLMProvider(LLMProvider):
                         ("x-openrouter-generation-id", "generation_id"),
                         ("x-request-id", "request_id"),
                         ("x-openrouter-provider", "or_provider"),
+                        ("x-openrouter-caching", "or_caching"),
                     ]:
                         val = _ah.get(hdr)
                         if val:
@@ -450,11 +453,6 @@ class LiteLLMProvider(LLMProvider):
             if usage:
                 record["usage"] = usage
 
-            # ── OpenRouter / provider IDs from _stream_meta ──
-            if _stream_meta.get("_or_gen_id"):
-                record["generation_id"] = _stream_meta["_or_gen_id"]
-            if _stream_meta.get("_or_provider"):
-                record["or_provider"] = _stream_meta["_or_provider"]
 
             with open(log_file, "a", encoding="utf-8") as f:
                 f.write(_json.dumps(record, ensure_ascii=False, default=str) + "\n")
@@ -645,7 +643,7 @@ class LiteLLMProvider(LLMProvider):
                 prov_cfg = pm.get("providers", {}).get(pm_provider_name, {})
                 _needs_flatten = prov_cfg.get("flattenTools", False)
             if _needs_flatten:
-                kwargs["messages"] = self._flatten_tool_messages(kwargs["messages"])
+                kwargs["messages"] = self._flatten_tool_messages(kwargs["messages"], flatten_tools=True)
 
         # Auto-detected param drops — providers that reject specific params.
         # Populated at runtime when a 400 error mentions the param name.

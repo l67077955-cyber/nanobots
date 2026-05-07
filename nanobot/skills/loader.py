@@ -13,11 +13,11 @@ BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
 # Single SKILL.md files larger than this are skipped and only noted in the footer.
 MAX_SINGLE_SKILL_CHARS: int = 20_000
 # Total character budget for the non-always-on summary block.
-MAX_SKILLS_SUMMARY_CHARS: int = 12_500
+MAX_SKILLS_SUMMARY_CHARS: int = 8_000
 # Total budget for always-on skills (cumulative, enforced inside load_skills_for_context).
-MAX_ALWAYS_SKILLS_CHARS: int = 9_200
+MAX_ALWAYS_SKILLS_CHARS: int = 5600
 # Per-skill inline truncation limit for always-on skills.
-MAX_ALWAYS_SKILL_INLINE: int = 1_300
+MAX_ALWAYS_SKILL_INLINE: int = 700
 
 
 def build_skills_section(workspace: Path) -> str:
@@ -201,8 +201,8 @@ class SkillsLoader:
 
         Returns:
             Compact one-line-per-skill summary, capped at MAX_SKILLS_SUMMARY_CHARS.
-            Skills whose SKILL.md exceeds MAX_SINGLE_SKILL_CHARS are skipped and
-            counted in the footer note so the agent knows they exist.
+            Large skills (>MAX_SINGLE_SKILL_CHARS) get a description line with
+            a read_file pointer; remaining budget is filled with normal skills.
         """
         all_skills = self.list_skills(filter_unavailable=False)
         if not all_skills:
@@ -211,23 +211,37 @@ class SkillsLoader:
         exclude = exclude or set()
         lines: list[str] = []
         total_chars = 0
-        skipped_large: list[str] = []
         skipped_budget: list[str] = []
 
+        # --- Pass 1: large skills first (they were previously invisible) ---
         for s in all_skills:
             name = s["name"]
             if name in exclude:
                 continue
-
-            # Skip single skills that are too large to ever inline sanely.
             skill_path = Path(s["path"])
             try:
                 skill_size = skill_path.stat().st_size
             except OSError:
                 skill_size = 0
             if skill_size > MAX_SINGLE_SKILL_CHARS:
-                skipped_large.append(name)
+                desc = self._get_skill_description(name)
+                line = f"- {name}: {desc} [large: read_file skills/{name}/SKILL.md]"
+                if total_chars + len(line) + 1 <= MAX_SKILLS_SUMMARY_CHARS:
+                    lines.append(line)
+                    total_chars += len(line) + 1
+
+        # --- Pass 2: normal skills fill remaining budget ---
+        for s in all_skills:
+            name = s["name"]
+            if name in exclude:
                 continue
+            skill_path = Path(s["path"])
+            try:
+                skill_size = skill_path.stat().st_size
+            except OSError:
+                skill_size = 0
+            if skill_size > MAX_SINGLE_SKILL_CHARS:
+                continue  # already handled in pass 1
 
             desc = self._get_skill_description(name)
             skill_meta = self._get_skill_meta(name)
@@ -238,7 +252,6 @@ class SkillsLoader:
                 status = f" [unavailable: {missing}]" if missing else " [unavailable]"
             line = f"- {name}: {desc}{status}"
 
-            # Enforce total character budget.
             if total_chars + len(line) + 1 > MAX_SKILLS_SUMMARY_CHARS:
                 skipped_budget.append(name)
                 continue
@@ -247,12 +260,11 @@ class SkillsLoader:
             total_chars += len(line) + 1  # +1 for newline
 
         # Footer: let the agent know there are more skills it can load on demand.
-        hidden = skipped_large + skipped_budget
-        if hidden:
+        if skipped_budget:
             lines.append(
-                f"\n(还有 {len(hidden)} 个技能因体积/数量限制未展示: "
-                + ", ".join(hidden[:8])
-                + (f" 等" if len(hidden) > 8 else "")
+                f"\n(还有 {len(skipped_budget)} 个技能因数量限制未展示: "
+                + ", ".join(skipped_budget[:8])
+                + (f" 等" if len(skipped_budget) > 8 else "")
                 + "。需要时请用 `read_file skills/<名称>/SKILL.md` 按需加载。)"
             )
 
@@ -336,12 +348,31 @@ class SkillsLoader:
         if content.startswith("---"):
             match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
             if match:
-                # Simple YAML parsing
+                # YAML parsing with multiline string support (| and >)
                 metadata = {}
-                for line in match.group(1).split("\n"):
+                lines = match.group(1).split("\n")
+                i = 0
+                while i < len(lines):
+                    line = lines[i]
                     if ":" in line:
                         key, value = line.split(":", 1)
-                        metadata[key.strip()] = value.strip().strip('"\'')
+                        key = key.strip()
+                        value = value.strip()
+                        # Handle multiline strings
+                        if value in ("|", ">"):
+                            # Collect subsequent indented lines
+                            sub_lines = []
+                            i += 1
+                            while i < len(lines) and (lines[i].startswith("  ") or lines[i] == ""):
+                                sub_lines.append(lines[i].rstrip())
+                                i += 1
+                            i -= 1  # compensate for loop increment
+                            # Join and dedent
+                            joined = "\n".join(sub_lines).strip()
+                            metadata[key] = joined
+                        else:
+                            metadata[key] = value.strip('"\'')
+                    i += 1
                 return metadata
 
         return None

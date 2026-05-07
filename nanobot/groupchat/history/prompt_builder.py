@@ -19,6 +19,10 @@ import platform
 
 from nanobot.utils.helpers import cn_now as _cn_now
 
+from nanobot.groupchat.history.component_manager import get_system_warning
+from nanobot.groupchat.history.message_converter import history_to_messages
+from nanobot.groupchat.history.context_validator import validate_context
+
 
 # ── Constants ─────────────────────────────────────────────────
 
@@ -426,6 +430,35 @@ class PromptBuilder:
         from nanobot.skills.loader import build_skills_section
         return build_skills_section(self._workspace)
 
+
+    # ── Delegation to extracted modules (backward compat) ──
+
+    @staticmethod
+    def history_to_messages(
+        history: list[dict],
+        current_agent: str = "",
+        max_chars: int = 0,
+        pin_first_user: bool = True,
+        relevant_agents: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Delegate to message_converter.history_to_messages."""
+        return history_to_messages(
+            history,
+            current_agent=current_agent,
+            max_chars=max_chars,
+            pin_first_user=pin_first_user,
+            relevant_agents=relevant_agents,
+        )
+
+    @staticmethod
+    def _validate_context(
+        messages: list[dict],
+        agent_name: str = "",
+        skipped: int = 0,
+    ) -> list[str]:
+        """Delegate to context_validator.validate_context."""
+        return validate_context(messages, agent_name=agent_name, skipped=skipped)
+
     @staticmethod
     def get_component_template(key: str) -> str:
         # ~/.nanobot/prompts/{key}.md is authoritative — always checked first.
@@ -439,43 +472,6 @@ class PromptBuilder:
                 pass
         # Fall back to in-code defaults.
         return TEMPLATES.get(key, "")
-
-    @staticmethod
-    def get_system_warning(warning_type: str, **kwargs) -> str:
-        """Get standard system warning messages for the group chat orchestra."""
-        warnings = {
-            "idle": (
-                "[⚠️ 你（{name}）还没有采取任何行动！]\n"
-                "你必须立即使用工具（web_search, web_fetch, exec 等）来回答用户的最新问题。\n"
-                "不要直接从之前的对话中回答 — 用户需要新的搜索结果。\n"
-                "禁止调用 wait() — 先执行工作再交流。"
-            ),
-            "no_text_after_tools": (
-                "[⚠️ 你（{name}）完成了工具调用，但没有输出任何文字！]\n"
-                "请用自然语言总结工具执行结果，写出你的结论，让 Leader 和队友能看到你的输出。\n"
-                "禁止再调用工具，直接输出文字。"
-            ),
-            "leader_no_text_after_tools": (
-                "[⚠️ 你（{name}）完成了管理操作，但没有输出任何文字！]\n"
-                "请立即整合所有队友的发现，给出完整、结构化的最终答案。\n"
-                "这是你作为 Leader 的核心职责，禁止再调用工具，直接输出文字。"
-            ),
-            "leader_end_without_text": (
-                "[⚠️ 你调用了 end_discussion，但还没有给出最终答案！]\n"
-                "请立即整合所有队友的发现，给出完整、结构化的最终回复给用户。\n"
-                "这是用户唯一能看到的内容，禁止再调用任何工具，直接输出文字。"
-            ),
-            "leader_wait_timeout": (
-                "[最终综合] 等待超时，队友已全部完成。\n"
-                "请立即综合所有发现，给出完整、结构化的最终答案给用户。\n"
-                "禁止再调用工具，直接输出文字。"
-            ),
-        }
-        
-        tpl = warnings.get(warning_type, "[System Warning]")
-        for k, v in kwargs.items():
-            tpl = tpl.replace(f"{{{k}}}", str(v))
-        return tpl
 
     # ── Prompt building ──
 
@@ -522,7 +518,7 @@ class PromptBuilder:
         for key in order:
             if key == "history":
                 from nanobot.groupchat.history.history_settings import max_context_chars
-                messages.extend(self.history_to_messages(
+                messages.extend(history_to_messages(
                     history, agent_name,
                     max_chars=max_context_chars(),
                     relevant_agents=relevant_agents,
@@ -599,157 +595,6 @@ class PromptBuilder:
         return messages
 
     @staticmethod
-    def history_to_messages(
-        history: list[dict],
-        current_agent: str = "",
-        max_chars: int = 0,
-        pin_first_user: bool = True,          # 保留參數，向後相容
-        relevant_agents: list[str] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Convert history dicts into LLM API messages.
-
-        新策略（2026.4 推薦）：
-        - 自動偵測輸入格式：支援 groupchat (sender) 和 LLM (role) 兩種
-        - 強制保留：第1條消息 + 所有 user 消息 + 所有 system 消息
-        - 僅在中間裁剪 assistant 消息，從尾部補齊最近對話
-        - 單 Agent 模式現在也會走此邏輯
-        """
-        def _to_msg(m: dict[str, str]) -> dict[str, Any]:
-            sender, content = m["sender"], m["content"]
-            if sender == "用户":
-                return {"role": "user", "content": content}
-            elif sender == "系统":
-                return {"role": "system", "content": content}
-            elif sender == current_agent:
-                return {
-                    "role": "assistant",
-                    "content": content,
-                    "name": sender.replace(" ", "_"),
-                }
-            else:
-                return {
-                    "role": "user",
-                    "content": f"[{sender}]: {content}",
-                    "name": sender.replace(" ", "_"),
-                }
-
-        if not history:
-            return []
-
-        # ── 自動偵測格式 ──
-        first = history[0]
-        is_groupchat = "sender" in first
-
-        allowed = {"用户", "系统"} | set(relevant_agents or [])
-        msgs_full = history if not is_groupchat else [
-            _to_msg(m) for m in history 
-            if relevant_agents is None or m["sender"] in allowed
-        ]
-
-        if not max_chars or not msgs_full:
-            return msgs_full
-
-        # ── 強制保留核心消息 ──
-        critical: list[dict[str, Any]] = []
-        for i, m in enumerate(msgs_full):
-            if m["role"] in ("user", "system") or i == 0:
-                critical.append(m)
-
-        # ── 預算計算 ──
-        used_chars = sum(len(m.get("content", "")) for m in critical)
-        budget = max_chars - used_chars
-
-        # ── 從尾部補齊 ──
-        tail: list[dict[str, Any]] = []
-        for m in reversed(msgs_full):
-            if m in critical:
-                continue
-            c = len(m.get("content", ""))
-            if budget - c < 0:
-                break
-            tail.insert(0, m)
-            budget -= c
-
-        # ── 重建最終列表（保持時序） ──
-        result: list[dict[str, Any]] = []
-        seen = set()
-        for m in msgs_full:
-            m_id = id(m)
-            if (m in critical or m in tail) and m_id not in seen:
-                result.append(m)
-                seen.add(m_id)
-
-        # ── 插入省略提示 ──
-        skipped = len(msgs_full) - len(result)
-        if skipped > 0:
-            insert_pos = 0
-            result.insert(insert_pos, {
-                "role": "system",
-                "content": "[...earlier messages omitted...]",
-            })
-
-        # ── 自检: 上下文完整性验证 ──
-        PromptBuilder._validate_context(result, current_agent, skipped)
-
-        return result
-
-    @staticmethod
-    def _validate_context(
-        messages: list[dict],
-        agent_name: str = "",
-        skipped: int = 0,
-    ) -> list[str]:
-        warnings: list[str] = []
-        tag = f"[ctx/{agent_name or '?'}]"
-        
-        def _warn(msg: str):
-            warnings.append(msg)
-            logger.warning("{}", msg)
-
-        if not messages:
-            _warn(f"{tag} 上下文为空")
-            return warnings
-
-        # ── 1. 顺序检查 ──
-        prev_role = None
-        for i, m in enumerate(messages):
-            role = m.get("role", "?")
-            if role == "assistant" and prev_role == "assistant":
-                _warn(f"{tag} 顺序异常: 连续两条 assistant 消息 (index {i-1}→{i})")
-            if role == "tool" and prev_role not in ("assistant", "tool"):
-                _warn(f"{tag} 顺序异常: tool result 在 index {i} 前无 assistant 消息")
-            prev_role = role
-
-        # ── 2. 可见性检查: 孤立的 tool result ──
-        declared_ids = {
-            tc.get("id", "") 
-            for m in messages if m.get("role") == "assistant"
-            for tc in (m.get("tool_calls") or []) if isinstance(tc, dict)
-        }
-        for i, m in enumerate(messages):
-            if m.get("role") == "tool":
-                tcid = m.get("tool_call_id", "")
-                if tcid and tcid not in declared_ids:
-                    _warn(f"{tag} 可见性异常: tool result index {i} 的 tool_call_id={tcid[:12]} 找不到对应 tool_call")
-
-        # ── 3. 压缩检查: 保留了至少一条 user 消息 ──
-        if not any(m.get("role") == "user" for m in messages):
-            _warn(f"{tag} 压缩异常: 上下文中没有任何 user 消息")
-
-        # ── 4. 压缩检查: 逻辑矛盾 ──
-        if skipped == 0 and any("[...earlier messages omitted...]" in (m.get("content") or "") for m in messages):
-            _warn(f"{tag} 压缩异常: 存在省略提示但 skipped=0")
-
-        # ── 5. 总字符统计 ──
-        total_chars = sum(len(m.get("content") or "") for m in messages)
-        logger.debug(
-            "{} context ok: {} msgs, {} chars, {} skipped, {} warnings",
-            tag, len(messages), total_chars, skipped, len(warnings),
-        )
-
-        return warnings
-
-    @staticmethod
     def _expand_template_vars(text: str, tpl_vars: dict[str, str]) -> str:
         for key, val in tpl_vars.items():
             text = text.replace(key, val)
@@ -821,232 +666,4 @@ def _persist_agent_file(
             logger.info("Persisted {} for agent {} ({} chars)", filename, agent_name, len(content))
             return
     logger.warning("Could not find agent dir for {}", agent_name)
-
-"""Response cleanup utilities for group chat.
-
-Pure functions for stripping model artifacts from LLM responses:
-think blocks, fake tool calls, agent name prefixes, etc.
-"""
-
-
-import re
-
-
-
-
-"""Agent configuration loader for group chat.
-
-Loads agent personas from:
-1. Config-defined agents (inline persona or file path)
-2. Directory scan (agents/<name>/workspace/SOUL.md or character.json)
-"""
-
-
-import json
-from pathlib import Path
-from typing import Any
-
-from loguru import logger
-
-from nanobot.groupchat.config import GroupChatConfig
-
-
-def load_agents(config: GroupChatConfig, workspace: Path) -> dict[str, dict[str, Any]]:
-    """Load agent configurations from config and/or agents directory.
-
-    Returns:
-        Dict of agent_name -> {"model": str, "prompt": str}
-    """
-    agents: dict[str, dict[str, Any]] = {}
-    excluded = {name.lower() for name in config.excluded_agents}
-
-    # 1. Load from config.agents (explicit definitions)
-    for name, agent_cfg in config.agents.items():
-        if name.lower() in excluded:
-            logger.info("Groupchat: skipping excluded agent {}", name)
-            continue
-
-        prompt = _resolve_persona(agent_cfg.persona, agent_cfg.character_json, workspace)
-        if prompt:
-            agents[name] = {"model": agent_cfg.model, "prompt": prompt}
-            logger.info("Groupchat: loaded agent {} (model={})", name, agent_cfg.model)
-
-    # 2. Scan agents_dir for auto-discovery
-    if config.agents_dir:
-        agents_dir = Path(config.agents_dir).expanduser()
-        if not agents_dir.is_absolute():
-            agents_dir = workspace / config.agents_dir
-        if agents_dir.exists():
-            _scan_agents_dir(agents_dir, agents, excluded, config)
-
-    if not agents:
-        logger.warning("Groupchat: no agents loaded!")
-
-    return agents
-
-
-def _resolve_persona(persona_path: str, character_json: str, workspace: Path) -> str | None:
-    """Resolve persona text from path or inline content."""
-    if not persona_path:
-        if character_json:
-            return _load_character_json(Path(character_json).expanduser(), workspace)
-        return None
-
-    # Check if it's inline text (not a path)
-    if "\n" in persona_path or len(persona_path) > 200:
-        return persona_path
-
-    # Resolve as file path
-    path = Path(persona_path).expanduser()
-    if not path.is_absolute():
-        path = workspace / persona_path
-    if path.exists():
-        return path.read_text().strip()
-
-    logger.warning("Groupchat: persona file not found: {}", path)
-    return None
-
-
-def _load_character_json(path: Path, workspace: Path) -> str | None:
-    """Load SillyTavern character.json as persona text."""
-    if not path.is_absolute():
-        path = workspace / path
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text())
-        # Try nanobot's built-in parser first
-        try:
-            from nanobot.sillytavern.character_card import (
-                build_character_prompt,
-                parse_character_card,
-            )
-            parsed, err, spec = parse_character_card(path.read_text())
-            if parsed and not err:
-                return build_character_prompt(parsed, include_post_history=True)
-        except ImportError:
-            pass
-        # Fallback: extract description/personality directly
-        parts = []
-        for key in ("description", "personality", "scenario", "first_mes"):
-            if data.get(key):
-                parts.append(data[key])
-        return "\n\n".join(parts) if parts else None
-    except Exception as e:
-        logger.warning("Groupchat: failed to load character.json {}: {}", path, e)
-        return None
-
-
-def _scan_agents_dir(
-    agents_dir: Path,
-    agents: dict[str, dict[str, Any]],
-    excluded: set[str],
-    config: GroupChatConfig,
-) -> None:
-    """Scan agents directory for auto-discovery of agents."""
-    global_hyperparams = {}
-    defaults_file = agents_dir / "_defaults.json"
-    if defaults_file.exists():
-        try:
-            global_hyperparams = json.loads(defaults_file.read_text()).get("hyperparams", {})
-        except Exception:
-            pass
-
-    for d in sorted(agents_dir.iterdir()):
-        if not d.is_dir():
-            continue
-
-        name = d.name.capitalize()
-        if d.name.lower() in excluded or name.lower() in excluded:
-            logger.info("Groupchat: skipping excluded agent {}", name)
-            continue
-        if name in agents:
-            continue  # Already loaded from explicit config
-
-        # Check for system agent (role: system in config.json)
-        config_file = d / "config.json"
-        if config_file.exists():
-            try:
-                _cfg = json.loads(config_file.read_text())
-                if _cfg.get("role") == "system":
-                    model = _cfg.get("model", "?")
-                    desc = _cfg.get("description", "系统 agent")
-                    tools_enabled = _cfg.get("tools_enabled", False)
-                    agent_data = {
-                        "model": model, "prompt": "", "role": "system",
-                        "description": desc, "tools_enabled": tools_enabled,
-                        "workspace_scope": "workspace", "agent_dir": str(d),
-                    }
-                    if isinstance(_cfg.get("tools"), dict):
-                        agent_data["tools"] = _cfg["tools"]
-                    
-                    hyperparams = _cfg.get("hyperparams")
-                    if _cfg.get("reasoning_effort"):
-                        hyperparams = hyperparams or {}
-                        hyperparams.setdefault("reasoning_effort", _cfg["reasoning_effort"])
-                    if hyperparams:
-                        agent_data["hyperparams"] = hyperparams
-
-                    agents[name] = agent_data
-                    logger.info("Groupchat: discovered system agent {} (model={}, {})", name, model, desc)
-                    continue
-            except Exception:
-                pass
-
-        ws = d / "workspace"
-        soul_file = ws / "SOUL.md" if ws.exists() else d / "SOUL.md"
-        prompt = soul_file.read_text().strip() if soul_file.exists() else _load_character_json(d / "character.json", agents_dir)
-
-        if not prompt:
-            continue
-
-        # Read model from agent's config.json
-        model = "minimax/minimax-m2.5"  # default
-        config_file = d / "config.json"
-        tools_cfg = None  # Will be dict or None
-        tools_enabled = False
-        workspace_scope = "workspace"  # default
-        hyperparams = None  # Per-agent sampling overrides
-        if config_file.exists():
-            try:
-                acfg = json.loads(config_file.read_text())
-                # Top-level 'model' takes priority (written by /editagent)
-                model = acfg.get("model", model)
-                # Granular tools config: {web_search: true, exec: false, ...}
-                if isinstance(acfg.get("tools"), dict):
-                    tools_cfg = acfg["tools"]
-                # Legacy: tools_enabled: true/false
-                tools_enabled = acfg.get("tools_enabled", False)
-                # Per-agent workspace scope
-                workspace_scope = acfg.get("workspace", "workspace")
-                # Per-agent hyperparams (temperature, top_p, max_tokens, reasoning_effort, etc.)
-                hyperparams = acfg.get("hyperparams") or (dict(global_hyperparams) if global_hyperparams else None)
-                if acfg.get("reasoning_effort"):
-                    hyperparams = hyperparams or {}
-                    hyperparams.setdefault("reasoning_effort", acfg["reasoning_effort"])
-            except Exception:
-                pass
-
-        # Special name handling
-        if d.name == "grok":
-            name = "Grok"
-
-        agent_data: dict[str, Any] = {"model": model, "prompt": prompt, "tools_enabled": tools_enabled}
-        if tools_cfg is not None:
-            agent_data["tools"] = tools_cfg
-        if hyperparams:
-            agent_data["hyperparams"] = hyperparams
-
-        # Per-agent workspace scope and agent directory
-        agent_data["workspace_scope"] = workspace_scope
-        agent_data["agent_dir"] = str(d)
-
-        for key, filename in [("examples", "EXAMPLES.md"), ("instructions", "INSTRUCTIONS.md")]:
-            f = ws / filename if ws.exists() else d / filename
-            if f.exists():
-                agent_data[key] = f.read_text().strip()
-                logger.info("Groupchat: loaded {} for {}", filename, name)
-
-        agents[name] = agent_data
-        logger.info("Groupchat: discovered agent {} (model={})", name, model)
 

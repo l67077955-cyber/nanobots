@@ -15,7 +15,7 @@ from typing import Any
 
 from loguru import logger
 
-from nanobot.groupchat.utils import cn_now as _cn_now
+from nanobot.utils.helpers import cn_now as _cn_now
 
 
 _NANOBOT_DIR = Path.home() / ".nanobot"

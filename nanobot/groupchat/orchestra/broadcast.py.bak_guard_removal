@@ -489,7 +489,6 @@ async def broadcast_round(
         messages = engine._build_agent_prompt(name, relevant_agents=None)
 
         is_leader = (name == leader_name)
-        _leader_ended_discussion = False
 
         # ── Inject broadcast coordination hint from template ──
         teammates = [a for a in agents if a != name]
@@ -674,6 +673,7 @@ async def broadcast_round(
         # Tracks how many timeout-recovery attempts this agent has made.
         # Hard cap at 1 to prevent recovery loops.
         _timeout_recovery_count = 0
+        _leader_ended_discussion = False
 
         try:
             while True:
@@ -1082,6 +1082,41 @@ async def broadcast_round(
                         "content": get_system_warning("leader_no_text_after_tools", name=name)
                     })
                     continue  # re-enter tool_loop to produce synthesis text
+
+                # ── 关键修复3：Leader end_discussion 但没有文字输出时强制合成 ──
+                if is_leader and _leader_ended_discussion and not content:
+                    logger.warning(
+                        "Broadcast: leader {} called end_discussion without text (cycle {}), forcing synthesis",
+                        name, cycle,
+                    )
+                    messages.append({
+                        "role": "system",
+                        "content": get_system_warning("leader_end_without_text", name=name)
+                    })
+                    continue  # 重新生成最终答案
+
+                # ── Guard 4: Leader end_discussion with suspiciously short content after research ──
+                _short_content_threshold = 150  # chars
+                if (is_leader and _leader_ended_discussion
+                        and content and len(content.strip()) < _short_content_threshold
+                        and (set(all_tools_used) & _substantive_tools)
+                        and _short_content_retry < 2):
+                    _short_content_retry += 1
+                    logger.warning(
+                        'Broadcast: leader {} end_discussion with short content ({} chars) after research, forcing synthesis (retry {}/2)',
+                        name, len(content.strip()), _short_content_retry,
+                    )
+                    messages.append({
+                        'role': 'system',
+                        'content': (
+                            '[⚠️ 你（{name}）的最终回复太短了（仅 {chars} 字符），'
+                            '但你使用了搜索/抓取工具进行了大量研究！]\n'
+                            '用户需要看到你的完整发现，不是一句总结引用。\n'
+                            '请立即输出包含所有关键发现的详细答案。\n'
+                            '禁止再调用任何工具，直接输出文字。'
+                        ).format(name=name, chars=len(content.strip())) if content else '',
+                    })
+                    continue  # re-enter tool_loop for proper synthesis
 
                 # ── Auto-wait: enter idle state ──
                 # Display the agent's final text for this cycle.

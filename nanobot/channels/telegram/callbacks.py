@@ -94,98 +94,287 @@ class CallbacksMixin:
         logger.debug("Callback received: data={} from={}", query.data, query.from_user.id if query.from_user else "?")
         await query.answer()
 
-        data = query.data
-        chat_id = str(query.message.chat_id)
+        try:
+            data = query.data
+            chat_id = str(query.message.chat_id)
 
-        if data.startswith("add:"):
-            name = data[4:]
-            self._ensure_gc_send(chat_id)
-            result = self._groupchat_engine.add_agent(name)
-            await query.edit_message_text(result)
+            if data.startswith("add:"):
+                name = data[4:]
+                self._ensure_gc_send(chat_id)
+                result = self._groupchat_engine.add_agent(name)
+                await query.edit_message_text(result)
 
-        elif data.startswith("rm:"):
-            name = data[3:]
-            result = self._groupchat_engine.remove_agent(name)
-            await query.edit_message_text(result)
+            elif data.startswith("rm:"):
+                name = data[3:]
+                result = self._groupchat_engine.remove_agent(name)
+                await query.edit_message_text(result)
 
-        elif data.startswith("edit:"):
-            name = data[5:]
-            agent = self._groupchat_engine.registry.get(name)
-            if not agent:
-                await query.edit_message_text(f"❌ Agent '{name}' 不存在")
-                return
-            await query.edit_message_text(
-                self._edit_menu_text(name),
-                reply_markup=self._edit_menu_buttons(name),
-            )
+            elif data.startswith("edit:"):
+                name = data[5:]
+                agent = self._groupchat_engine.registry.get(name)
+                if not agent:
+                    await query.edit_message_text(f"❌ Agent '{name}' 不存在")
+                    return
+                await query.edit_message_text(
+                    self._edit_menu_text(name),
+                    reply_markup=self._edit_menu_buttons(name),
+                )
 
-        elif data.startswith("da:"):
-            # da:AgentName — show delete confirmation
-            name = data[3:]
-            agent = self._groupchat_engine.registry.get(name)
-            if not agent:
-                await query.edit_message_text(f"❌ Agent '{name}' 不存在")
-                return
-            await query.edit_message_text(
-                f"🗑️ 删除 Agent: {name}\n\n"
-                f"模型: {agent.get('model', '?')}\n\n"
-                "⚠️ 此操作将永久删除该 agent 的配置文件，无法恢复！\n"
-                "确认删除吗？",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✅ 确认删除", callback_data=f"dac:{name}:yes")],
-                    [InlineKeyboardButton("❌ 取消", callback_data=f"edit:{name}")],
-                ]),
-            )
+            elif data.startswith("da:"):
+                # da:AgentName — show delete confirmation
+                name = data[3:]
+                agent = self._groupchat_engine.registry.get(name)
+                if not agent:
+                    await query.edit_message_text(f"❌ Agent '{name}' 不存在")
+                    return
+                await query.edit_message_text(
+                    f"🗑️ 删除 Agent: {name}\n\n"
+                    f"模型: {agent.get('model', '?')}\n\n"
+                    "⚠️ 此操作将永久删除该 agent 的配置文件，无法恢复！\n"
+                    "确认删除吗？",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✅ 确认删除", callback_data=f"dac:{name}:yes")],
+                        [InlineKeyboardButton("❌ 取消", callback_data=f"edit:{name}")],
+                    ]),
+                )
 
-        elif data.startswith("dac:"):
-            # dac:AgentName:yes/no — confirm or cancel delete
-            parts = data.split(":", 2)
-            if len(parts) < 3:
-                return
-            name, confirm = parts[1], parts[2]
-            if confirm != "yes":
-                await query.edit_message_text("❌ 已取消")
-                return
-            engine = self._groupchat_engine
-            if not engine or name not in engine.registry:
-                await query.edit_message_text(f"❌ Agent '{name}' 不存在")
-                return
+            elif data.startswith("dac:"):
+                # dac:AgentName:yes/no — confirm or cancel delete
+                parts = data.split(":", 2)
+                if len(parts) < 3:
+                    return
+                name, confirm = parts[1], parts[2]
+                if confirm != "yes":
+                    await query.edit_message_text("❌ 已取消")
+                    return
+                engine = self._groupchat_engine
+                if not engine or name not in engine.registry:
+                    await query.edit_message_text(f"❌ Agent '{name}' 不存在")
+                    return
             
-            deleted_dir = engine.delete_agent(name)
+                deleted_dir = engine.delete_agent(name)
             
-            msg = f"🗑️ Agent '{name}' 已删除"
-            if deleted_dir:
-                msg += f"\n📁 配置目录已删除"
-            await query.edit_message_text(msg)
+                msg = f"🗑️ Agent '{name}' 已删除"
+                if deleted_dir:
+                    msg += f"\n📁 配置目录已删除"
+                await query.edit_message_text(msg)
 
-        elif data.startswith("ef:"):
-            # ef:AgentName:field
-            parts = data.split(":", 2)
-            if len(parts) < 3:
-                return
-            name, field = parts[1], parts[2]
-            if field == "cancel":
-                self._edit_state.pop(chat_id, None)
-                await query.edit_message_text("❌ 已取消")
-                return
-            if field == "tools":
-                # Show per-tool toggle buttons
+            elif data.startswith("ef:"):
+                # ef:AgentName:field
+                parts = data.split(":", 2)
+                if len(parts) < 3:
+                    return
+                name, field = parts[1], parts[2]
+                if field == "cancel":
+                    self._edit_state.pop(chat_id, None)
+                    await query.edit_message_text("❌ 已取消")
+                    return
+                if field == "tools":
+                    # Show per-tool toggle buttons
+                    from nanobot.groupchat.orchestra.engine import GroupChatEngine
+                    agent = self._groupchat_engine.registry.get(name, {})
+                    tools_cfg = agent.get("tools")
+                    # Migrate legacy tools_enabled to granular dict
+                    if not isinstance(tools_cfg, dict) or "web_search" not in tools_cfg:
+                        all_on = agent.get("tools_enabled", False)
+                        tools_cfg = {t: all_on for t in GroupChatEngine.TOOL_NAMES}
+                        agent["tools"] = tools_cfg
+
+                    labels = {
+                        "web_search": "🔍 网页搜索",
+                        "web_fetch": "🌐 网页抓取",
+                        "exec": "⚡ 执行命令",
+                        "read_file": "📄 读文件",
+                        "write_file": "✍️ 写文件",
+                        "edit_file": "✂️ 编辑文件",
+                        "list_dir": "📁 列目录",
+                    }
+                    buttons = []
+                    for t in GroupChatEngine.TOOL_NAMES:
+                        on = tools_cfg.get(t, False)
+                        icon = "✅" if on else "❌"
+                        label = labels.get(t, t)
+                        buttons.append([InlineKeyboardButton(
+                            f"{icon} {label}",
+                            callback_data=f"tf:{name}:{t}"
+                        )])
+                    buttons.append([InlineKeyboardButton("✅ 全开", callback_data=f"tf:{name}:__all_on"),
+                                    InlineKeyboardButton("❌ 全关", callback_data=f"tf:{name}:__all_off")])
+                    buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
+                    await query.edit_message_text(
+                        f"🔧 {name} 工具权限设置:",
+                        reply_markup=InlineKeyboardMarkup(buttons)
+                    )
+                    return
+                elif field == "hyperparams":
+                    # Per-agent hyperparams (same UX as /hyperparams but per-agent)
+                    agent = self._groupchat_engine.registry.get(name, {})
+                    agent_hp = agent.get("hyperparams") or {}
+                    await self._send_agent_hyperparams_keyboard(chat_id, name, agent_hp)
+                    return
+                elif field == "reasoning_effort":
+                    # Show effort level selection (reuse think panel logic)
+                    agent = self._groupchat_engine.registry.get(name, {})
+                    current = agent.get("reasoning_effort") or "off"
+                    levels = [("off", "默认(自动)"), ("low", "低"), ("medium", "中"), ("high", "高")]
+                    buttons = []
+                    for lvl, lbl in levels:
+                        icon = "✅" if lvl == current else "⭕"
+                        buttons.append([InlineKeyboardButton(
+                            f"{icon} {lbl} ({lvl})",
+                            callback_data=f"ef_re:{name}:{lvl}"
+                        )])
+                    buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
+                    await query.edit_message_text(
+                        f"🧠 {name} 思考强度 (当前: {current}):",
+                        reply_markup=InlineKeyboardMarkup(buttons)
+                    )
+                    return
+                self._edit_state[chat_id] = {"agent": name, "field": field}
+                if field == "persona":
+                    current = self._groupchat_engine.registry.get(name, {}).get("prompt", "")
+                    await query.edit_message_text(f"📄 当前人设:\n\n{current[:3000]}")
+                    await self._gc_send(chat_id, "请输入新人设内容:")
+                elif field == "model":
+                    # Show provider selection keyboard
+                    pm = self._load_pm()
+                    provs = list(pm.get("providers", {}).keys())
+                    if provs:
+                        buttons = [[InlineKeyboardButton(f"🏢 {p}", callback_data=f"em_prov:{name}:{p}")] for p in provs]
+                        buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=f"em_manual:{name}")])
+                        await query.edit_message_text("🤖 选择提供商:", reply_markup=InlineKeyboardMarkup(buttons))
+                    else:
+                        await query.edit_message_text("请输入新模型名 (如 anthropic/claude-sonnet-4-5):")
+                else:
+                    prompts = {"name": "新名字"}
+                    await query.edit_message_text(f"请输入{prompts.get(field, field)}:")
+
+            elif data.startswith("log:"):
+                mode = data[4:]
+                engine = self._groupchat_engine
+                if not engine or (not engine.history.messages and not engine.request_log):
+                    await query.edit_message_text("📭 无日志")
+                    return
+                rlog = engine.request_log
+                history = engine.history.messages
+                if mode == "brief":
+                    # Brief: last 5 requests
+                    entries = rlog[-5:] if rlog else []
+                    lines = [f"📋 最近请求 ({len(entries)}/{len(rlog)}):\n"]
+                    for r in entries:
+                        err = " ❌" if r.get("error") else ""
+                        lines.append(f"[{r['time']}] {r['agent']} → {r['model']} | msgs:{r['msgs']} reply:{r['reply_len']}字{err}")
+                    if history:
+                        lines.append(f"\n💬 对话: {len(history)} 条")
+                    await query.edit_message_text("\n".join(lines))
+                else:
+                    # Full: all requests + chat
+                    lines = [f"📜 完整日志 ({len(rlog)} 请求, {len(history)} 对话):\n"]
+                    lines.append("── 请求记录 ──")
+                    for i, r in enumerate(rlog, 1):
+                        err = f" | ❌ {r['error'][:50]}" if r.get("error") else ""
+                        lines.append(f"{i}. [{r['time']}] {r['mode']} | {r['agent']} → {r['model']} | msgs:{r['msgs']} max:{r['max_tokens']} reply:{r['reply_len']}字{err}")
+                    lines.append("\n── 对话记录 ──")
+                    for m in history[-10:]:
+                        text = m['content'][:100] + "..." if len(m['content']) > 100 else m['content']
+                        lines.append(f"[{m['sender']}]: {text}")
+                    full = "\n".join(lines)
+                    await query.edit_message_text(full[:4096])
+
+            elif data.startswith("ef_re:"):
+                # ef_re:AgentName:level — set reasoning effort
+                parts = data.split(":", 2)
+                if len(parts) < 3:
+                    return
+                name, lvl = parts[1], parts[2]
+                engine = self._groupchat_engine
+                if not engine or name not in engine.registry:
+                    await query.edit_message_text(f"❌ Agent '{name}' 不存在")
+                    return
+
+                effort: str | None = None if lvl == "off" else lvl
+                cfg = engine.registry[name]
+                cfg["reasoning_effort"] = effort
+
+                # Persist to disk
+                cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
+                if cfg_path.exists():
+                    try:
+                        file_cfg = json.loads(cfg_path.read_text())
+                        file_cfg["reasoning_effort"] = effort
+                        cfg_path.write_text(json.dumps(file_cfg, indent=2, ensure_ascii=False))
+                    except Exception:
+                        pass
+
+                # Refresh the menu
+                current = effort or "off"
+                levels = [("off", "默认(自动)"), ("low", "低"), ("medium", "中"), ("high", "高")]
+                buttons = []
+                for l_lvl, lbl in levels:
+                    icon = "✅" if l_lvl == current else "⭕"
+                    buttons.append([InlineKeyboardButton(
+                        f"{icon} {lbl} ({l_lvl})",
+                        callback_data=f"ef_re:{name}:{l_lvl}"
+                    )])
+                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
+                await query.edit_message_text(
+                    f"🧠 {name} 思考强度 (当前: {current}):",
+                    reply_markup=InlineKeyboardMarkup(buttons)
+                )
+
+            elif data.startswith("tf:"):
+                # tf:AgentName:tool_name — toggle individual tool
+                parts = data.split(":", 2)
+                if len(parts) < 3:
+                    return
+                name, tool = parts[1], parts[2]
                 from nanobot.groupchat.orchestra.engine import GroupChatEngine
                 agent = self._groupchat_engine.registry.get(name, {})
                 tools_cfg = agent.get("tools")
-                # Migrate legacy tools_enabled to granular dict
                 if not isinstance(tools_cfg, dict) or "web_search" not in tools_cfg:
+                    # Legacy or missing config — rebuild from tools_enabled flag
                     all_on = agent.get("tools_enabled", False)
                     tools_cfg = {t: all_on for t in GroupChatEngine.TOOL_NAMES}
                     agent["tools"] = tools_cfg
 
+                if tool == "__all_on":
+                    for t in tools_cfg:
+                        tools_cfg[t] = True
+                elif tool == "__all_off":
+                    for t in tools_cfg:
+                        tools_cfg[t] = False
+                elif tool in tools_cfg:
+                    tools_cfg[tool] = not tools_cfg[tool]
+
+                # Persist to config.json
+                agent_entry = self._groupchat_engine.registry.get(name, {})
+                if agent_entry.get("_default"):
+                    # Default agent (Nanobot): save tool toggles to separate file
+                    tools_path = Path.home() / ".nanobot" / "nanobot_tools.json"
+                    try:
+                        tools_path.write_text(json.dumps(tools_cfg, indent=2, ensure_ascii=False))
+                    except Exception:
+                        pass
+                else:
+                    cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
+                    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+                    cfg = {}
+                    if cfg_path.exists():
+                        try:
+                            cfg = json.loads(cfg_path.read_text())
+                        except Exception:
+                            pass
+                    cfg["tools"] = tools_cfg
+                    try:
+                        cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+                    except Exception:
+                        pass
+
+                # Refresh buttons by re-triggering tools menu
                 labels = {
-                    "web_search": "🔍 网页搜索",
-                    "web_fetch": "🌐 网页抓取",
-                    "exec": "⚡ 执行命令",
-                    "read_file": "📄 读文件",
-                    "write_file": "✍️ 写文件",
-                    "edit_file": "✂️ 编辑文件",
+                    "web_search": "🔍 网页搜索", "web_fetch": "🌐 网页抓取",
+                    "exec": "⚡ 执行命令", "read_file": "📄 读文件",
+                    "write_file": "✍️ 写文件", "edit_file": "✂️ 编辑文件",
                     "list_dir": "📁 列目录",
                 }
                 buttons = []
@@ -194,8 +383,7 @@ class CallbacksMixin:
                     icon = "✅" if on else "❌"
                     label = labels.get(t, t)
                     buttons.append([InlineKeyboardButton(
-                        f"{icon} {label}",
-                        callback_data=f"tf:{name}:{t}"
+                        f"{icon} {label}", callback_data=f"tf:{name}:{t}"
                     )])
                 buttons.append([InlineKeyboardButton("✅ 全开", callback_data=f"tf:{name}:__all_on"),
                                 InlineKeyboardButton("❌ 全关", callback_data=f"tf:{name}:__all_off")])
@@ -204,1504 +392,1327 @@ class CallbacksMixin:
                     f"🔧 {name} 工具权限设置:",
                     reply_markup=InlineKeyboardMarkup(buttons)
                 )
-                return
-            elif field == "hyperparams":
-                # Per-agent hyperparams (same UX as /hyperparams but per-agent)
-                agent = self._groupchat_engine.registry.get(name, {})
-                agent_hp = agent.get("hyperparams") or {}
-                await self._send_agent_hyperparams_keyboard(chat_id, name, agent_hp)
-                return
-            elif field == "reasoning_effort":
-                # Show effort level selection (reuse think panel logic)
-                agent = self._groupchat_engine.registry.get(name, {})
-                current = agent.get("reasoning_effort") or "off"
-                levels = [("off", "默认(自动)"), ("low", "低"), ("medium", "中"), ("high", "高")]
+
+            elif data.startswith("log_pg:"):
+                page = int(data[7:])
+                logs = self._groupchat_engine.request_log
+                text, markup = self._build_log_page_v2(logs, page)
+                await query.edit_message_text(text, reply_markup=markup)
+
+            elif data.startswith("rlog_pg:"):
+                page = int(data[8:])
+                logs = self._load_request_logs()
+                text, markup = self._build_log_page_v2(logs, page)
+                await query.edit_message_text(text, reply_markup=markup)
+
+            elif data.startswith("rlogs_pg:"):
+                # Search-filtered pagination
+                page = int(data[9:])
+                logs = self._load_request_logs()
+                kw = getattr(self, "_log_search", {}).get(chat_id, "")
+                if kw:
+                    logs = self._filter_logs(logs, kw)
+                text, markup = self._build_log_page_v2(logs, page, keyword=kw)
+                await query.edit_message_text(text, reply_markup=markup)
+
+            elif data.startswith("rlogp:"):
+                # Persistent log prompt viewer: rlogp:<idx>:<msg_page>
+                parts = data[6:].split(":")
+                idx = int(parts[0])
+                msg_page = int(parts[1]) if len(parts) > 1 else 0
+                logs = self._load_request_logs()
+                if idx >= len(logs):
+                    await query.edit_message_text("⚠️ 记录不存在")
+                    return
+                r = logs[idx]
+                msgs = r.get("messages", [])
+                if not msgs:
+                    await query.edit_message_text("📭 无消息记录")
+                    return
+
+                per_page = 2
+                total_pages = max(1, (len(msgs) + per_page - 1) // per_page)
+                msg_page = max(0, min(msg_page, total_pages - 1))
+                start_m = msg_page * per_page
+                end_m = min(start_m + per_page, len(msgs))
+
+                model_short = (r.get("model") or "?").split("/")[-1][:20]
+                lines = [f"📝 请求内容 #{idx+1} {model_short} (第{msg_page+1}/{total_pages}页, 共{len(msgs)}条消息)\n"]
+                for mi in range(start_m, end_m):
+                    m = msgs[mi]
+                    role = m.get("role", "?")
+                    name = m.get("name", "")
+                    c_len = m.get("content_len", 0)
+                    content = m.get("content")
+                    tc_id = m.get("tool_call_id", "")
+                    name_str = f" [{name}]" if name else ""
+                    tc_str = f" tcid={tc_id[:9]}" if tc_id else ""
+                    lines.append(f"── [{mi+1}] {role}{name_str} ({c_len}字){tc_str} ──")
+                    if isinstance(content, str) and content:
+                        lines.append(content[:800])
+                        if len(content) > 800:
+                            lines.append(f"…(还有{len(content)-800}字)")
+                    elif isinstance(content, list):
+                        # Content blocks
+                        for block in content[:3]:
+                            if isinstance(block, dict):
+                                lines.append(str(block.get("text", ""))[:400])
+                    elif content is None:
+                        lines.append("(null)")
+                    else:
+                        lines.append("(空)")
+                    if m.get("tool_calls"):
+                        tc_list = m["tool_calls"]
+                        for tc in (tc_list if isinstance(tc_list, list) else []):
+                            fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                            lines.append(f"  🔧 {fn.get('name', '?')}({str(fn.get('arguments', ''))[:100]})")
+                    lines.append("")
+
+                text = "\n".join(lines)
+                nav = []
+                if msg_page > 0:
+                    nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"rlogp:{idx}:{msg_page-1}"))
+                if msg_page < total_pages - 1:
+                    nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"rlogp:{idx}:{msg_page+1}"))
                 buttons = []
-                for lvl, lbl in levels:
-                    icon = "✅" if lvl == current else "⭕"
-                    buttons.append([InlineKeyboardButton(
-                        f"{icon} {lbl} ({lvl})",
-                        callback_data=f"ef_re:{name}:{lvl}"
-                    )])
-                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
+                if nav:
+                    buttons.append(nav)
+                buttons.append([InlineKeyboardButton("⬅️ 返回详情", callback_data=f"rlog:{idx}")])
+                await query.edit_message_text(text[:4096], reply_markup=InlineKeyboardMarkup(buttons))
+
+            elif data.startswith("rlog_dl:"):
+                # Download full log as JSON file — includes live context snapshot
+                idx = int(data[8:])
+                logs = self._load_request_logs()
+                if idx >= len(logs):
+                    await query.answer("⚠️ 记录不存在")
+                    return
+                r = logs[idx]
+                import io as _io
+                import datetime as _dt
+
+                # ── Build live context snapshot for each active agent ──
+                context_snapshot: dict = {}
+                engine = self._groupchat_engine
+                if engine:
+                    from nanobot.groupchat.history.prompt_builder import PromptBuilder
+                    raw_history = engine.history.messages
+                    active = engine.active_agents
+                    registry = getattr(engine, "registry", {})
+                    leader = engine.leader
+                    round_num = getattr(engine, "_round", 0)
+
+                    context_snapshot["raw_history"] = raw_history
+                    context_snapshot["raw_history_count"] = len(raw_history)
+                    context_snapshot["raw_history_chars"] = sum(
+                        len(m.get("content", "")) for m in raw_history
+                    )
+                    context_snapshot["active_agents"] = active
+                    context_snapshot["leader"] = leader
+                    context_snapshot["round"] = round_num
+                    context_snapshot["per_agent_compiled"] = {}
+                    context_snapshot["per_agent_validation"] = {}
+
+                    for agent_name in active:
+                        if agent_name not in registry:
+                            continue
+                        try:
+                            compiled = PromptBuilder.history_to_messages(
+                                raw_history,
+                                current_agent=agent_name,
+                            )
+                            validation = PromptBuilder._validate_context(
+                                compiled, agent_name
+                            )
+                            context_snapshot["per_agent_compiled"][agent_name] = [
+                                {
+                                    "role": m.get("role"),
+                                    "name": m.get("name"),
+                                    "content_len": len(m.get("content") or ""),
+                                    "content_preview": (m.get("content") or "")[:300],
+                                    "has_tool_calls": bool(m.get("tool_calls")),
+                                    "tool_call_id": m.get("tool_call_id"),
+                                }
+                                for m in compiled
+                            ]
+                            context_snapshot["per_agent_validation"][agent_name] = validation
+                        except Exception as snap_err:
+                            context_snapshot["per_agent_compiled"][agent_name] = f"ERROR: {snap_err}"
+                            context_snapshot["per_agent_validation"][agent_name] = [str(snap_err)]
+
+                # ── Merge into output ──
+                output = dict(r)
+                output["__context_snapshot__"] = context_snapshot
+                output["__snapshot_ts__"] = _dt.datetime.now().isoformat()
+
+                agent = (r.get("agent") or "unknown").replace("/", "_")[:20]
+                ts_str = (r.get("ts") or "unknown").replace(" ", "_").replace(":", "")
+                filename = f"log_{idx+1}_{agent}_{ts_str}.json"
+                content = json.dumps(output, ensure_ascii=False, indent=2, default=str)
+                buf = _io.BytesIO(content.encode("utf-8"))
+                buf.name = filename
+                await query.answer("📤 正在发送文件…")
+                agent_count = len(context_snapshot.get("active_agents", []))
+                history_count = context_snapshot.get("raw_history_count", 0)
+                await query.message.reply_document(
+                    document=buf,
+                    filename=filename,
+                    caption=(
+                        f"📋 请求日志 #{idx+1} — {r.get('agent', '?')} [{(r.get('model') or '?').split('/')[-1][:20]}]\n"
+                        f"📊 上下文快照: {history_count}条历史 / {agent_count}个Agent已编译"
+                    ),
+                )
+
+            elif data.startswith("rlog:"):
+                # Persistent log detail — brief summary + download confirmation
+                idx = int(data[5:])
+                logs = self._load_request_logs()
+                if idx >= len(logs):
+                    await query.edit_message_text("⚠️ 记录不存在")
+                    return
+                r = logs[idx]
+
+                model = (r.get("model") or "?").split("/")[-1][:25]
+                agent = r.get("agent") or "?"
+                ts = r.get("ts") or "?"
+                status = "✅" if r.get("status") == "ok" else "❌"
+                latency = r.get("latency", 0)
+                usage = r.get("usage") or {}
+                total_tok = usage.get("total", 0)
+                cost = r.get("cost")
+                cost_str = f"  💰${cost:.4f}" if cost else ""
+                msgs = r.get("messages", [])
+                msg_count = len(msgs)
+                tc_count = r.get("tools_count", 0)
+                has_tc = f"  🔧{tc_count}tools" if tc_count else ""
+                preview = r.get("reply_preview", "")
+                preview_str = f"\n\n[回复预览]\n{preview[:200]}…" if len(preview) > 200 else (f"\n\n[回复预览]\n{preview}" if preview else "")
+
+                # OpenRouter IDs
+                gen_id = r.get("generation_id", "")
+                req_id = r.get("request_id", "")
+                or_prov = r.get("or_provider", "")
+                id_lines = ""
+                if gen_id:
+                    id_lines += f"\n🔑 Generation: {gen_id}"
+                if req_id:
+                    id_lines += f"\n📋 Request: {req_id}"
+                if or_prov:
+                    id_lines += f"\n🌐 Provider: {or_prov}"
+
+                # Token breakdown
+                prompt_tok = usage.get("prompt", usage.get("prompt_tokens", 0)) or 0
+                comp_tok = usage.get("completion", usage.get("completion_tokens", 0)) or 0
+                total_chars = r.get("total_chars", 0)
+                chars_per_tok = round(total_chars / prompt_tok, 1) if prompt_tok else "?"
+
+                text = (
+                    f"📋 请求 #{idx+1}\n"
+                    f"{status} {agent} [{model}]\n"
+                    f"⏱ {ts}  {latency}s\n"
+                    f"📊 {prompt_tok}p + {comp_tok}c = {total_tok}tok  {msg_count}msgs{has_tc}{cost_str}"
+                    f"\n📝 输入: {total_chars:,}字 ≈ {prompt_tok}tok ({chars_per_tok}字/tok)"
+                    f"{id_lines}"
+                    f"{preview_str}"
+                )
+
+                page = idx // 8
+                buttons = [
+                    [InlineKeyboardButton("🔍 上下文 Token 明细", callback_data=f"rlogctx:{idx}:0")],
+                    [InlineKeyboardButton("📥 下载完整日志", callback_data=f"rlog_dl:{idx}")],
+                    [InlineKeyboardButton("⬅️ 返回列表", callback_data=f"rlog_pg:{page}")],
+                ]
+                await query.edit_message_text(text[:4096], reply_markup=InlineKeyboardMarkup(buttons))
+
+            elif data.startswith("rlogctx:"):
+                # Per-message token breakdown panel: rlogctx:<idx>:<page>
+                parts = data[8:].split(":")
+                idx = int(parts[0])
+                ctx_page = int(parts[1]) if len(parts) > 1 else 0
+                logs = self._load_request_logs()
+                if idx >= len(logs):
+                    await query.edit_message_text("⚠️ 记录不存在")
+                    return
+                r = logs[idx]
+                msgs = r.get("messages", [])
+                usage = r.get("usage") or {}
+                prompt_tok = usage.get("prompt", usage.get("prompt_tokens", 0)) or 0
+                comp_tok = usage.get("completion", usage.get("completion_tokens", 0)) or 0
+                total_tok = usage.get("total", usage.get("total_tokens", 0)) or 0
+                total_chars = r.get("total_chars", 0)
+                gen_id = r.get("generation_id", "")
+                req_id = r.get("request_id", "")
+
+                # Calibrated chars-per-token ratio using real usage data
+                if prompt_tok and total_chars:
+                    cpt = total_chars / prompt_tok
+                else:
+                    cpt = 3.5  # conservative default for Chinese+code
+
+                MSGS_PER_PAGE = 5
+                total_pages = max(1, (len(msgs) + MSGS_PER_PAGE - 1) // MSGS_PER_PAGE)
+                ctx_page = max(0, min(ctx_page, total_pages - 1))
+                start_m = ctx_page * MSGS_PER_PAGE
+                end_m = min(start_m + MSGS_PER_PAGE, len(msgs))
+
+                agent = r.get("agent") or "?"
+                model_short = (r.get("model") or "?").split("/")[-1][:18]
+
+                lines = [
+                    f"🔍 上下文Token分析 #{idx+1} {agent}[{model_short}]",
+                    f"📊 实际: {prompt_tok}p + {comp_tok}c = {total_tok}tok",
+                ]
+                if gen_id:
+                    lines.append(f"🔑 OR Gen: {gen_id}")
+                if req_id:
+                    lines.append(f"📋 Req: {req_id}")
+                lines.append(f"第{ctx_page+1}/{total_pages}页 | 消息{start_m+1}–{end_m}/{len(msgs)}")
+                lines.append("")
+
+                role_icons = {"system": "🟦", "user": "👤", "assistant": "🤖", "tool": "🔧"}
+                running_chars = 0
+
+                for mi in range(start_m, end_m):
+                    m = msgs[mi]
+                    role = m.get("role", "?")
+                    icon = role_icons.get(role, "❓")
+                    name = m.get("name", "")
+                    tc_id = m.get("tool_call_id", "")
+                    c_len = m.get("content_len") or len(str(m.get("content") or ""))
+                    running_chars += c_len
+                    est_tok = round(c_len / cpt)
+                    running_tok = round(running_chars / cpt)
+
+                    # Detect special message types
+                    content_str = str(m.get("content") or "")
+                    markers = []
+                    if "[...earlier messages omitted...]" in content_str:
+                        markers.append("⚠️省略")
+                    if "早期对话摘要" in content_str:
+                        markers.append("🗄AI摘要")
+                    if m.get("tool_calls"):
+                        tc_list = m["tool_calls"] if isinstance(m["tool_calls"], list) else []
+                        names = ",".join(
+                            (tc.get("function", {}) if isinstance(tc, dict) else {}).get("name", "?")
+                            for tc in tc_list
+                        )[:30]
+                        markers.append(f"📤调用:{names}")
+                    marker_str = " " + " ".join(markers) if markers else ""
+                    name_str = f"[{name}]" if name else ""
+                    tc_str = f" tc={tc_id[:8]}" if tc_id else ""
+
+                    lines.append(
+                        f"[{mi+1:02d}]{icon}{role}{name_str}{tc_str}"
+                        f"\n  {c_len}字≈{est_tok}tok | 累计~{running_tok}tok{marker_str}"
+                    )
+                    # Short content preview
+                    preview = content_str[:100].replace("\n", " ").strip()
+                    if preview:
+                        if len(content_str) > 100:
+                            preview += f"…(+{len(content_str)-100}字)"
+                        lines.append(f"  ↳ {preview}")
+                    lines.append("")
+
+                # Footer accounting
+                lines.append("─" * 22)
+                est_total = round(total_chars / cpt)
+                delta = prompt_tok - est_total
+                lines.append(f"估算: {total_chars:,}字 ÷ {cpt:.1f} = ~{est_total:,}tok")
+                if prompt_tok:
+                    sign = "+" if delta >= 0 else ""
+                    lines.append(f"实际: {prompt_tok}tok  差值: {sign}{delta}tok (工具定义/格式开销)")
+                if gen_id:
+                    lines.append("💡 可在 openrouter.ai/activity 用Generation ID查询")
+
+                text = "\n".join(lines)
+                nav = []
+                if ctx_page > 0:
+                    nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"rlogctx:{idx}:{ctx_page-1}"))
+                if ctx_page < total_pages - 1:
+                    nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"rlogctx:{idx}:{ctx_page+1}"))
+                buttons = []
+                if nav:
+                    buttons.append(nav)
+                buttons.append([InlineKeyboardButton("⬅️ 返回详情", callback_data=f"rlog:{idx}")])
+                await query.edit_message_text(text[:4096], reply_markup=InlineKeyboardMarkup(buttons))
+
+            elif data.startswith("logd:"):
+                idx = int(data[5:])
+                logs = self._groupchat_engine.request_log
+                if idx >= len(logs):
+                    await query.edit_message_text("⚠️ 记录不存在")
+                    return
+                r = logs[idx]
+                tokens = r.get("tokens", {})
+                calls = r.get("calls", [])
+                tools = r.get("tools", [])
+
+                def _trunc(s: str, limit: int) -> str:
+                    """Truncate with remaining char count."""
+                    if len(s) <= limit:
+                        return s
+                    return s[:limit] + f"…(还有{len(s)-limit}字)"
+
+                lines = [
+                    f"--- LLM Call #{idx+1} ---",
+                    f"agent={r.get('agent','?')} model={r.get('model','?')} mode={r.get('mode','?')}",
+                    f"time={r.get('time','?')} latency={r.get('latency',0)}s iter={r.get('iterations',1)} max_tokens={r.get('max_tokens','?')}",
+                    f"tokens: prompt={tokens.get('prompt',0)} compl={tokens.get('completion',0)} total={tokens.get('total',0)}",
+                ]
+
+                # Show HTTP status code if error
+                sc = r.get("status_code")
+                if sc:
+                    lines.append(f"http_status={sc}")
+
+                # Sampling params — compact single line
+                sp = r.get("sampling_params", {})
+                if sp:
+                    sp_str = " ".join(f"{k}={v}" for k, v in sp.items() if v)
+                    if sp_str:
+                        lines.append(f"params: {sp_str}")
+
+                # Tools
+                tools_avail = r.get("tools_available")
+                tool_names_list = r.get("tool_names", [])
+                if tools_avail is not None:
+                    lines.append(f"tools: {','.join(tool_names_list) if tool_names_list else 'none'} | used: {','.join(tools) if tools else 'none'}")
+
+                # Messages summary — compact
+                msgs_snap = r.get("messages_snapshot", [])
+                if msgs_snap:
+                    role_counts = {}
+                    for m in msgs_snap:
+                        role = m.get("role", "?")
+                        role_counts[role] = role_counts.get(role, 0) + 1
+                    total_chars = sum(m.get("content_len", 0) for m in msgs_snap)
+                    rc_str = " ".join(f"{r}={c}" for r, c in role_counts.items())
+                    lines.append(f"msgs: {len(msgs_snap)} ({rc_str}) chars={total_chars}")
+
+                # Per-iteration with retry details
+                if calls:
+                    lines.append("\n[iterations]")
+                    for c in calls[:10]:
+                        t = c.get("tools", [])
+                        t_str = f" tools=[{','.join(t)}]" if t else ""
+                        tok = c.get("tokens", {}).get("total_tokens", 0)
+                        lines.append(
+                            f"  i{c['iter']}: {c.get('latency',0)}s {tok}tok "
+                            f"finish={c.get('finish','?')}{t_str}"
+                        )
+                        # Per-retry details
+                        rl = c.get("retry_log", [])
+                        for ra in rl:
+                            lines.append(
+                                f"    retry#{ra['attempt']} [{ra.get('ts','')}] "
+                                f"HTTP {ra.get('status','?')} wait={ra.get('delay',0)}s "
+                                f"err={_trunc(ra.get('error',''), 80)}"
+                            )
+
+                # Tool call details
+                tcd = r.get("tool_calls_detail", [])
+                if tcd:
+                    lines.append(f"\n[tool_calls] ({len(tcd)})")
+                    for i, tc in enumerate(tcd[:10]):
+                        ts = tc.get("timestamp", "")
+                        dur = tc.get("duration", "?")
+                        ok = tc.get("success", True)
+                        status = "OK" if ok else "FAIL"
+                        lines.append(f"  {i+1}. [{ts}] {tc['name']} i{tc.get('iteration','?')} {dur}s {status}")
+                        lines.append(f"     args={_trunc(tc.get('args',''), 100)}")
+                        if ok:
+                            rp = tc.get('result_preview', '')
+                            if rp:
+                                lines.append(f"     => {_trunc(rp.replace(chr(10), ' '), 100)} ({tc.get('result_len',0)}字)")
+                        else:
+                            lines.append(f"     err={_trunc(tc.get('error',''), 120)}")
+                    if len(tcd) > 10:
+                        lines.append(f"  ...+{len(tcd)-10} more")
+
+                # I/O
+                inp = r.get("input_preview", "")
+                out = r.get("output", "")
+                if inp:
+                    lines.append(f"\n[input] {_trunc(inp, 200)}")
+                if out:
+                    lines.append(f"[output] {_trunc(out, 300)}")
+                if r.get("error"):
+                    lines.append(f"[error] {_trunc(r['error'], 300)}")
+                lines.append(f"reply_len={r.get('reply_len', 0)}")
+                text = "\n".join(lines)
+                page = idx // 8
+                buttons = []
+                if msgs_snap:
+                    buttons.append([InlineKeyboardButton("📝 完整 Prompt", callback_data=f"logp:{idx}:0")])
+                buttons.append([InlineKeyboardButton("⬅️ 返回列表", callback_data=f"log_pg:{page}")])
                 await query.edit_message_text(
-                    f"🧠 {name} 思考强度 (当前: {current}):",
+                    text[:4096],
                     reply_markup=InlineKeyboardMarkup(buttons)
                 )
-                return
-            self._edit_state[chat_id] = {"agent": name, "field": field}
-            if field == "persona":
-                current = self._groupchat_engine.registry.get(name, {}).get("prompt", "")
-                await query.edit_message_text(f"📄 当前人设:\n\n{current[:3000]}")
-                await self._gc_send(chat_id, "请输入新人设内容:")
-            elif field == "model":
-                # Show provider selection keyboard
-                pm = self._load_pm()
-                provs = list(pm.get("providers", {}).keys())
-                if provs:
-                    buttons = [[InlineKeyboardButton(f"🏢 {p}", callback_data=f"em_prov:{name}:{p}")] for p in provs]
-                    buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=f"em_manual:{name}")])
-                    await query.edit_message_text("🤖 选择提供商:", reply_markup=InlineKeyboardMarkup(buttons))
-                else:
-                    await query.edit_message_text("请输入新模型名 (如 anthropic/claude-sonnet-4-5):")
-            else:
-                prompts = {"name": "新名字"}
-                await query.edit_message_text(f"请输入{prompts.get(field, field)}:")
 
-        elif data.startswith("log:"):
-            mode = data[4:]
-            engine = self._groupchat_engine
-            if not engine or (not engine.history.messages and not engine.request_log):
-                await query.edit_message_text("📭 无日志")
-                return
-            rlog = engine.request_log
-            history = engine.history.messages
-            if mode == "brief":
-                # Brief: last 5 requests
-                entries = rlog[-5:] if rlog else []
-                lines = [f"📋 最近请求 ({len(entries)}/{len(rlog)}):\n"]
-                for r in entries:
-                    err = " ❌" if r.get("error") else ""
-                    lines.append(f"[{r['time']}] {r['agent']} → {r['model']} | msgs:{r['msgs']} reply:{r['reply_len']}字{err}")
-                if history:
-                    lines.append(f"\n💬 对话: {len(history)} 条")
-                await query.edit_message_text("\n".join(lines))
-            else:
-                # Full: all requests + chat
-                lines = [f"📜 完整日志 ({len(rlog)} 请求, {len(history)} 对话):\n"]
-                lines.append("── 请求记录 ──")
-                for i, r in enumerate(rlog, 1):
-                    err = f" | ❌ {r['error'][:50]}" if r.get("error") else ""
-                    lines.append(f"{i}. [{r['time']}] {r['mode']} | {r['agent']} → {r['model']} | msgs:{r['msgs']} max:{r['max_tokens']} reply:{r['reply_len']}字{err}")
-                lines.append("\n── 对话记录 ──")
-                for m in history[-10:]:
-                    text = m['content'][:100] + "..." if len(m['content']) > 100 else m['content']
-                    lines.append(f"[{m['sender']}]: {text}")
-                full = "\n".join(lines)
-                await query.edit_message_text(full[:4096])
+            elif data.startswith("logp:"):
+                # Prompt detail viewer: logp:<log_idx>:<msg_page>
+                parts = data[5:].split(":")
+                idx = int(parts[0])
+                msg_page = int(parts[1]) if len(parts) > 1 else 0
+                logs = self._groupchat_engine.request_log
+                if idx >= len(logs):
+                    await query.edit_message_text("⚠️ 记录不存在")
+                    return
+                r = logs[idx]
+                msgs_snap = r.get("messages_snapshot", [])
+                if not msgs_snap:
+                    await query.edit_message_text("📭 无消息记录")
+                    return
 
-        elif data.startswith("ef_re:"):
-            # ef_re:AgentName:level — set reasoning effort
-            parts = data.split(":", 2)
-            if len(parts) < 3:
-                return
-            name, lvl = parts[1], parts[2]
-            engine = self._groupchat_engine
-            if not engine or name not in engine.registry:
-                await query.edit_message_text(f"❌ Agent '{name}' 不存在")
-                return
+                per_page = 3  # messages per page
+                total_pages = max(1, (len(msgs_snap) + per_page - 1) // per_page)
+                msg_page = max(0, min(msg_page, total_pages - 1))
+                start = msg_page * per_page
+                end = min(start + per_page, len(msgs_snap))
 
-            effort: str | None = None if lvl == "off" else lvl
-            cfg = engine.registry[name]
-            cfg["reasoning_effort"] = effort
-
-            # Persist to disk
-            cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
-            if cfg_path.exists():
-                try:
-                    file_cfg = json.loads(cfg_path.read_text())
-                    file_cfg["reasoning_effort"] = effort
-                    cfg_path.write_text(json.dumps(file_cfg, indent=2, ensure_ascii=False))
-                except Exception:
-                    pass
-
-            # Refresh the menu
-            current = effort or "off"
-            levels = [("off", "默认(自动)"), ("low", "低"), ("medium", "中"), ("high", "高")]
-            buttons = []
-            for l_lvl, lbl in levels:
-                icon = "✅" if l_lvl == current else "⭕"
-                buttons.append([InlineKeyboardButton(
-                    f"{icon} {lbl} ({l_lvl})",
-                    callback_data=f"ef_re:{name}:{l_lvl}"
-                )])
-            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
-            await query.edit_message_text(
-                f"🧠 {name} 思考强度 (当前: {current}):",
-                reply_markup=InlineKeyboardMarkup(buttons)
-            )
-
-        elif data.startswith("tf:"):
-            # tf:AgentName:tool_name — toggle individual tool
-            parts = data.split(":", 2)
-            if len(parts) < 3:
-                return
-            name, tool = parts[1], parts[2]
-            from nanobot.groupchat.orchestra.engine import GroupChatEngine
-            agent = self._groupchat_engine.registry.get(name, {})
-            tools_cfg = agent.get("tools")
-            if not isinstance(tools_cfg, dict) or "web_search" not in tools_cfg:
-                # Legacy or missing config — rebuild from tools_enabled flag
-                all_on = agent.get("tools_enabled", False)
-                tools_cfg = {t: all_on for t in GroupChatEngine.TOOL_NAMES}
-                agent["tools"] = tools_cfg
-
-            if tool == "__all_on":
-                for t in tools_cfg:
-                    tools_cfg[t] = True
-            elif tool == "__all_off":
-                for t in tools_cfg:
-                    tools_cfg[t] = False
-            elif tool in tools_cfg:
-                tools_cfg[tool] = not tools_cfg[tool]
-
-            # Persist to config.json
-            agent_entry = self._groupchat_engine.registry.get(name, {})
-            if agent_entry.get("_default"):
-                # Default agent (Nanobot): save tool toggles to separate file
-                tools_path = Path.home() / ".nanobot" / "nanobot_tools.json"
-                try:
-                    tools_path.write_text(json.dumps(tools_cfg, indent=2, ensure_ascii=False))
-                except Exception:
-                    pass
-            else:
-                cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
-                cfg_path.parent.mkdir(parents=True, exist_ok=True)
-                cfg = {}
-                if cfg_path.exists():
-                    try:
-                        cfg = json.loads(cfg_path.read_text())
-                    except Exception:
-                        pass
-                cfg["tools"] = tools_cfg
-                try:
-                    cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
-                except Exception:
-                    pass
-
-            # Refresh buttons by re-triggering tools menu
-            labels = {
-                "web_search": "🔍 网页搜索", "web_fetch": "🌐 网页抓取",
-                "exec": "⚡ 执行命令", "read_file": "📄 读文件",
-                "write_file": "✍️ 写文件", "edit_file": "✂️ 编辑文件",
-                "list_dir": "📁 列目录",
-            }
-            buttons = []
-            for t in GroupChatEngine.TOOL_NAMES:
-                on = tools_cfg.get(t, False)
-                icon = "✅" if on else "❌"
-                label = labels.get(t, t)
-                buttons.append([InlineKeyboardButton(
-                    f"{icon} {label}", callback_data=f"tf:{name}:{t}"
-                )])
-            buttons.append([InlineKeyboardButton("✅ 全开", callback_data=f"tf:{name}:__all_on"),
-                            InlineKeyboardButton("❌ 全关", callback_data=f"tf:{name}:__all_off")])
-            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
-            await query.edit_message_text(
-                f"🔧 {name} 工具权限设置:",
-                reply_markup=InlineKeyboardMarkup(buttons)
-            )
-
-        elif data.startswith("log_pg:"):
-            page = int(data[7:])
-            logs = self._groupchat_engine.request_log
-            text, markup = self._build_log_page_v2(logs, page)
-            await query.edit_message_text(text, reply_markup=markup)
-
-        elif data.startswith("rlog_pg:"):
-            page = int(data[8:])
-            logs = self._load_request_logs()
-            text, markup = self._build_log_page_v2(logs, page)
-            await query.edit_message_text(text, reply_markup=markup)
-
-        elif data.startswith("rlogs_pg:"):
-            # Search-filtered pagination
-            page = int(data[9:])
-            logs = self._load_request_logs()
-            kw = getattr(self, "_log_search", {}).get(chat_id, "")
-            if kw:
-                logs = self._filter_logs(logs, kw)
-            text, markup = self._build_log_page_v2(logs, page, keyword=kw)
-            await query.edit_message_text(text, reply_markup=markup)
-
-        elif data.startswith("rlogp:"):
-            # Persistent log prompt viewer: rlogp:<idx>:<msg_page>
-            parts = data[6:].split(":")
-            idx = int(parts[0])
-            msg_page = int(parts[1]) if len(parts) > 1 else 0
-            logs = self._load_request_logs()
-            if idx >= len(logs):
-                await query.edit_message_text("⚠️ 记录不存在")
-                return
-            r = logs[idx]
-            msgs = r.get("messages", [])
-            if not msgs:
-                await query.edit_message_text("📭 无消息记录")
-                return
-
-            per_page = 2
-            total_pages = max(1, (len(msgs) + per_page - 1) // per_page)
-            msg_page = max(0, min(msg_page, total_pages - 1))
-            start_m = msg_page * per_page
-            end_m = min(start_m + per_page, len(msgs))
-
-            model_short = (r.get("model") or "?").split("/")[-1][:20]
-            lines = [f"📝 请求内容 #{idx+1} {model_short} (第{msg_page+1}/{total_pages}页, 共{len(msgs)}条消息)\n"]
-            for mi in range(start_m, end_m):
-                m = msgs[mi]
-                role = m.get("role", "?")
-                name = m.get("name", "")
-                c_len = m.get("content_len", 0)
-                content = m.get("content")
-                tc_id = m.get("tool_call_id", "")
-                name_str = f" [{name}]" if name else ""
-                tc_str = f" tcid={tc_id[:9]}" if tc_id else ""
-                lines.append(f"── [{mi+1}] {role}{name_str} ({c_len}字){tc_str} ──")
-                if isinstance(content, str) and content:
-                    lines.append(content[:800])
-                    if len(content) > 800:
-                        lines.append(f"…(还有{len(content)-800}字)")
-                elif isinstance(content, list):
-                    # Content blocks
-                    for block in content[:3]:
-                        if isinstance(block, dict):
-                            lines.append(str(block.get("text", ""))[:400])
-                elif content is None:
-                    lines.append("(null)")
-                else:
-                    lines.append("(空)")
-                if m.get("tool_calls"):
-                    tc_list = m["tool_calls"]
-                    for tc in (tc_list if isinstance(tc_list, list) else []):
-                        fn = tc.get("function", {}) if isinstance(tc, dict) else {}
-                        lines.append(f"  🔧 {fn.get('name', '?')}({str(fn.get('arguments', ''))[:100]})")
-                lines.append("")
-
-            text = "\n".join(lines)
-            nav = []
-            if msg_page > 0:
-                nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"rlogp:{idx}:{msg_page-1}"))
-            if msg_page < total_pages - 1:
-                nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"rlogp:{idx}:{msg_page+1}"))
-            buttons = []
-            if nav:
-                buttons.append(nav)
-            buttons.append([InlineKeyboardButton("⬅️ 返回详情", callback_data=f"rlog:{idx}")])
-            await query.edit_message_text(text[:4096], reply_markup=InlineKeyboardMarkup(buttons))
-
-        elif data.startswith("rlog_dl:"):
-            # Download full log as JSON file — includes live context snapshot
-            idx = int(data[8:])
-            logs = self._load_request_logs()
-            if idx >= len(logs):
-                await query.answer("⚠️ 记录不存在")
-                return
-            r = logs[idx]
-            import io as _io
-            import datetime as _dt
-
-            # ── Build live context snapshot for each active agent ──
-            context_snapshot: dict = {}
-            engine = self._groupchat_engine
-            if engine:
-                from nanobot.groupchat.history.prompt_builder import PromptBuilder
-                raw_history = engine.history.messages
-                active = engine.active_agents
-                registry = getattr(engine, "registry", {})
-                leader = engine.leader
-                round_num = getattr(engine, "_round", 0)
-
-                context_snapshot["raw_history"] = raw_history
-                context_snapshot["raw_history_count"] = len(raw_history)
-                context_snapshot["raw_history_chars"] = sum(
-                    len(m.get("content", "")) for m in raw_history
-                )
-                context_snapshot["active_agents"] = active
-                context_snapshot["leader"] = leader
-                context_snapshot["round"] = round_num
-                context_snapshot["per_agent_compiled"] = {}
-                context_snapshot["per_agent_validation"] = {}
-
-                for agent_name in active:
-                    if agent_name not in registry:
-                        continue
-                    try:
-                        compiled = PromptBuilder.history_to_messages(
-                            raw_history,
-                            current_agent=agent_name,
-                        )
-                        validation = PromptBuilder._validate_context(
-                            compiled, agent_name
-                        )
-                        context_snapshot["per_agent_compiled"][agent_name] = [
-                            {
-                                "role": m.get("role"),
-                                "name": m.get("name"),
-                                "content_len": len(m.get("content") or ""),
-                                "content_preview": (m.get("content") or "")[:300],
-                                "has_tool_calls": bool(m.get("tool_calls")),
-                                "tool_call_id": m.get("tool_call_id"),
-                            }
-                            for m in compiled
-                        ]
-                        context_snapshot["per_agent_validation"][agent_name] = validation
-                    except Exception as snap_err:
-                        context_snapshot["per_agent_compiled"][agent_name] = f"ERROR: {snap_err}"
-                        context_snapshot["per_agent_validation"][agent_name] = [str(snap_err)]
-
-            # ── Merge into output ──
-            output = dict(r)
-            output["__context_snapshot__"] = context_snapshot
-            output["__snapshot_ts__"] = _dt.datetime.now().isoformat()
-
-            agent = (r.get("agent") or "unknown").replace("/", "_")[:20]
-            ts_str = (r.get("ts") or "unknown").replace(" ", "_").replace(":", "")
-            filename = f"log_{idx+1}_{agent}_{ts_str}.json"
-            content = json.dumps(output, ensure_ascii=False, indent=2, default=str)
-            buf = _io.BytesIO(content.encode("utf-8"))
-            buf.name = filename
-            await query.answer("📤 正在发送文件…")
-            agent_count = len(context_snapshot.get("active_agents", []))
-            history_count = context_snapshot.get("raw_history_count", 0)
-            await query.message.reply_document(
-                document=buf,
-                filename=filename,
-                caption=(
-                    f"📋 请求日志 #{idx+1} — {r.get('agent', '?')} [{(r.get('model') or '?').split('/')[-1][:20]}]\n"
-                    f"📊 上下文快照: {history_count}条历史 / {agent_count}个Agent已编译"
-                ),
-            )
-
-        elif data.startswith("rlog:"):
-            # Persistent log detail — brief summary + download confirmation
-            idx = int(data[5:])
-            logs = self._load_request_logs()
-            if idx >= len(logs):
-                await query.edit_message_text("⚠️ 记录不存在")
-                return
-            r = logs[idx]
-
-            model = (r.get("model") or "?").split("/")[-1][:25]
-            agent = r.get("agent") or "?"
-            ts = r.get("ts") or "?"
-            status = "✅" if r.get("status") == "ok" else "❌"
-            latency = r.get("latency", 0)
-            usage = r.get("usage") or {}
-            total_tok = usage.get("total", 0)
-            cost = r.get("cost")
-            cost_str = f"  💰${cost:.4f}" if cost else ""
-            msgs = r.get("messages", [])
-            msg_count = len(msgs)
-            tc_count = r.get("tools_count", 0)
-            has_tc = f"  🔧{tc_count}tools" if tc_count else ""
-            preview = r.get("reply_preview", "")
-            preview_str = f"\n\n[回复预览]\n{preview[:200]}…" if len(preview) > 200 else (f"\n\n[回复预览]\n{preview}" if preview else "")
-
-            # OpenRouter IDs
-            gen_id = r.get("generation_id", "")
-            req_id = r.get("request_id", "")
-            or_prov = r.get("or_provider", "")
-            id_lines = ""
-            if gen_id:
-                id_lines += f"\n🔑 Generation: {gen_id}"
-            if req_id:
-                id_lines += f"\n📋 Request: {req_id}"
-            if or_prov:
-                id_lines += f"\n🌐 Provider: {or_prov}"
-
-            # Token breakdown
-            prompt_tok = usage.get("prompt", usage.get("prompt_tokens", 0)) or 0
-            comp_tok = usage.get("completion", usage.get("completion_tokens", 0)) or 0
-            total_chars = r.get("total_chars", 0)
-            chars_per_tok = round(total_chars / prompt_tok, 1) if prompt_tok else "?"
-
-            text = (
-                f"📋 请求 #{idx+1}\n"
-                f"{status} {agent} [{model}]\n"
-                f"⏱ {ts}  {latency}s\n"
-                f"📊 {prompt_tok}p + {comp_tok}c = {total_tok}tok  {msg_count}msgs{has_tc}{cost_str}"
-                f"\n📝 输入: {total_chars:,}字 ≈ {prompt_tok}tok ({chars_per_tok}字/tok)"
-                f"{id_lines}"
-                f"{preview_str}"
-            )
-
-            page = idx // 8
-            buttons = [
-                [InlineKeyboardButton("🔍 上下文 Token 明细", callback_data=f"rlogctx:{idx}:0")],
-                [InlineKeyboardButton("📥 下载完整日志", callback_data=f"rlog_dl:{idx}")],
-                [InlineKeyboardButton("⬅️ 返回列表", callback_data=f"rlog_pg:{page}")],
-            ]
-            await query.edit_message_text(text[:4096], reply_markup=InlineKeyboardMarkup(buttons))
-
-        elif data.startswith("rlogctx:"):
-            # Per-message token breakdown panel: rlogctx:<idx>:<page>
-            parts = data[8:].split(":")
-            idx = int(parts[0])
-            ctx_page = int(parts[1]) if len(parts) > 1 else 0
-            logs = self._load_request_logs()
-            if idx >= len(logs):
-                await query.edit_message_text("⚠️ 记录不存在")
-                return
-            r = logs[idx]
-            msgs = r.get("messages", [])
-            usage = r.get("usage") or {}
-            prompt_tok = usage.get("prompt", usage.get("prompt_tokens", 0)) or 0
-            comp_tok = usage.get("completion", usage.get("completion_tokens", 0)) or 0
-            total_tok = usage.get("total", usage.get("total_tokens", 0)) or 0
-            total_chars = r.get("total_chars", 0)
-            gen_id = r.get("generation_id", "")
-            req_id = r.get("request_id", "")
-
-            # Calibrated chars-per-token ratio using real usage data
-            if prompt_tok and total_chars:
-                cpt = total_chars / prompt_tok
-            else:
-                cpt = 3.5  # conservative default for Chinese+code
-
-            MSGS_PER_PAGE = 5
-            total_pages = max(1, (len(msgs) + MSGS_PER_PAGE - 1) // MSGS_PER_PAGE)
-            ctx_page = max(0, min(ctx_page, total_pages - 1))
-            start_m = ctx_page * MSGS_PER_PAGE
-            end_m = min(start_m + MSGS_PER_PAGE, len(msgs))
-
-            agent = r.get("agent") or "?"
-            model_short = (r.get("model") or "?").split("/")[-1][:18]
-
-            lines = [
-                f"🔍 上下文Token分析 #{idx+1} {agent}[{model_short}]",
-                f"📊 实际: {prompt_tok}p + {comp_tok}c = {total_tok}tok",
-            ]
-            if gen_id:
-                lines.append(f"🔑 OR Gen: {gen_id}")
-            if req_id:
-                lines.append(f"📋 Req: {req_id}")
-            lines.append(f"第{ctx_page+1}/{total_pages}页 | 消息{start_m+1}–{end_m}/{len(msgs)}")
-            lines.append("")
-
-            role_icons = {"system": "🟦", "user": "👤", "assistant": "🤖", "tool": "🔧"}
-            running_chars = 0
-
-            for mi in range(start_m, end_m):
-                m = msgs[mi]
-                role = m.get("role", "?")
-                icon = role_icons.get(role, "❓")
-                name = m.get("name", "")
-                tc_id = m.get("tool_call_id", "")
-                c_len = m.get("content_len") or len(str(m.get("content") or ""))
-                running_chars += c_len
-                est_tok = round(c_len / cpt)
-                running_tok = round(running_chars / cpt)
-
-                # Detect special message types
-                content_str = str(m.get("content") or "")
-                markers = []
-                if "[...earlier messages omitted...]" in content_str:
-                    markers.append("⚠️省略")
-                if "早期对话摘要" in content_str:
-                    markers.append("🗄AI摘要")
-                if m.get("tool_calls"):
-                    tc_list = m["tool_calls"] if isinstance(m["tool_calls"], list) else []
-                    names = ",".join(
-                        (tc.get("function", {}) if isinstance(tc, dict) else {}).get("name", "?")
-                        for tc in tc_list
-                    )[:30]
-                    markers.append(f"📤调用:{names}")
-                marker_str = " " + " ".join(markers) if markers else ""
-                name_str = f"[{name}]" if name else ""
-                tc_str = f" tc={tc_id[:8]}" if tc_id else ""
-
-                lines.append(
-                    f"[{mi+1:02d}]{icon}{role}{name_str}{tc_str}"
-                    f"\n  {c_len}字≈{est_tok}tok | 累计~{running_tok}tok{marker_str}"
-                )
-                # Short content preview
-                preview = content_str[:100].replace("\n", " ").strip()
-                if preview:
-                    if len(content_str) > 100:
-                        preview += f"…(+{len(content_str)-100}字)"
-                    lines.append(f"  ↳ {preview}")
-                lines.append("")
-
-            # Footer accounting
-            lines.append("─" * 22)
-            est_total = round(total_chars / cpt)
-            delta = prompt_tok - est_total
-            lines.append(f"估算: {total_chars:,}字 ÷ {cpt:.1f} = ~{est_total:,}tok")
-            if prompt_tok:
-                sign = "+" if delta >= 0 else ""
-                lines.append(f"实际: {prompt_tok}tok  差值: {sign}{delta}tok (工具定义/格式开销)")
-            if gen_id:
-                lines.append("💡 可在 openrouter.ai/activity 用Generation ID查询")
-
-            text = "\n".join(lines)
-            nav = []
-            if ctx_page > 0:
-                nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"rlogctx:{idx}:{ctx_page-1}"))
-            if ctx_page < total_pages - 1:
-                nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"rlogctx:{idx}:{ctx_page+1}"))
-            buttons = []
-            if nav:
-                buttons.append(nav)
-            buttons.append([InlineKeyboardButton("⬅️ 返回详情", callback_data=f"rlog:{idx}")])
-            await query.edit_message_text(text[:4096], reply_markup=InlineKeyboardMarkup(buttons))
-
-        elif data.startswith("logd:"):
-            idx = int(data[5:])
-            logs = self._groupchat_engine.request_log
-            if idx >= len(logs):
-                await query.edit_message_text("⚠️ 记录不存在")
-                return
-            r = logs[idx]
-            tokens = r.get("tokens", {})
-            calls = r.get("calls", [])
-            tools = r.get("tools", [])
-
-            def _trunc(s: str, limit: int) -> str:
-                """Truncate with remaining char count."""
-                if len(s) <= limit:
-                    return s
-                return s[:limit] + f"…(还有{len(s)-limit}字)"
-
-            lines = [
-                f"--- LLM Call #{idx+1} ---",
-                f"agent={r.get('agent','?')} model={r.get('model','?')} mode={r.get('mode','?')}",
-                f"time={r.get('time','?')} latency={r.get('latency',0)}s iter={r.get('iterations',1)} max_tokens={r.get('max_tokens','?')}",
-                f"tokens: prompt={tokens.get('prompt',0)} compl={tokens.get('completion',0)} total={tokens.get('total',0)}",
-            ]
-
-            # Show HTTP status code if error
-            sc = r.get("status_code")
-            if sc:
-                lines.append(f"http_status={sc}")
-
-            # Sampling params — compact single line
-            sp = r.get("sampling_params", {})
-            if sp:
-                sp_str = " ".join(f"{k}={v}" for k, v in sp.items() if v)
-                if sp_str:
-                    lines.append(f"params: {sp_str}")
-
-            # Tools
-            tools_avail = r.get("tools_available")
-            tool_names_list = r.get("tool_names", [])
-            if tools_avail is not None:
-                lines.append(f"tools: {','.join(tool_names_list) if tool_names_list else 'none'} | used: {','.join(tools) if tools else 'none'}")
-
-            # Messages summary — compact
-            msgs_snap = r.get("messages_snapshot", [])
-            if msgs_snap:
-                role_counts = {}
-                for m in msgs_snap:
+                lines = [f"📝 Prompt 详情 #{idx+1} (第{msg_page+1}/{total_pages}页, 共{len(msgs_snap)}条消息)\n"]
+                for i in range(start, end):
+                    m = msgs_snap[i]
                     role = m.get("role", "?")
-                    role_counts[role] = role_counts.get(role, 0) + 1
-                total_chars = sum(m.get("content_len", 0) for m in msgs_snap)
-                rc_str = " ".join(f"{r}={c}" for r, c in role_counts.items())
-                lines.append(f"msgs: {len(msgs_snap)} ({rc_str}) chars={total_chars}")
-
-            # Per-iteration with retry details
-            if calls:
-                lines.append("\n[iterations]")
-                for c in calls[:10]:
-                    t = c.get("tools", [])
-                    t_str = f" tools=[{','.join(t)}]" if t else ""
-                    tok = c.get("tokens", {}).get("total_tokens", 0)
-                    lines.append(
-                        f"  i{c['iter']}: {c.get('latency',0)}s {tok}tok "
-                        f"finish={c.get('finish','?')}{t_str}"
-                    )
-                    # Per-retry details
-                    rl = c.get("retry_log", [])
-                    for ra in rl:
-                        lines.append(
-                            f"    retry#{ra['attempt']} [{ra.get('ts','')}] "
-                            f"HTTP {ra.get('status','?')} wait={ra.get('delay',0)}s "
-                            f"err={_trunc(ra.get('error',''), 80)}"
-                        )
-
-            # Tool call details
-            tcd = r.get("tool_calls_detail", [])
-            if tcd:
-                lines.append(f"\n[tool_calls] ({len(tcd)})")
-                for i, tc in enumerate(tcd[:10]):
-                    ts = tc.get("timestamp", "")
-                    dur = tc.get("duration", "?")
-                    ok = tc.get("success", True)
-                    status = "OK" if ok else "FAIL"
-                    lines.append(f"  {i+1}. [{ts}] {tc['name']} i{tc.get('iteration','?')} {dur}s {status}")
-                    lines.append(f"     args={_trunc(tc.get('args',''), 100)}")
-                    if ok:
-                        rp = tc.get('result_preview', '')
-                        if rp:
-                            lines.append(f"     => {_trunc(rp.replace(chr(10), ' '), 100)} ({tc.get('result_len',0)}字)")
+                    name = m.get("name", "")
+                    content_len = m.get("content_len", 0)
+                    content = m.get("content", "")
+                    name_str = f" [{name}]" if name else ""
+                    lines.append(f"── [{i+1}] {role}{name_str} ({content_len}字) ──")
+                    # Show content, truncated to fit in Telegram
+                    if content:
+                        lines.append(content[:800])
                     else:
-                        lines.append(f"     err={_trunc(tc.get('error',''), 120)}")
-                if len(tcd) > 10:
-                    lines.append(f"  ...+{len(tcd)-10} more")
+                        lines.append("(空)")
+                    lines.append("")
 
-            # I/O
-            inp = r.get("input_preview", "")
-            out = r.get("output", "")
-            if inp:
-                lines.append(f"\n[input] {_trunc(inp, 200)}")
-            if out:
-                lines.append(f"[output] {_trunc(out, 300)}")
-            if r.get("error"):
-                lines.append(f"[error] {_trunc(r['error'], 300)}")
-            lines.append(f"reply_len={r.get('reply_len', 0)}")
-            text = "\n".join(lines)
-            page = idx // 8
-            buttons = []
-            if msgs_snap:
-                buttons.append([InlineKeyboardButton("📝 完整 Prompt", callback_data=f"logp:{idx}:0")])
-            buttons.append([InlineKeyboardButton("⬅️ 返回列表", callback_data=f"log_pg:{page}")])
-            await query.edit_message_text(
-                text[:4096],
-                reply_markup=InlineKeyboardMarkup(buttons)
-            )
-
-        elif data.startswith("logp:"):
-            # Prompt detail viewer: logp:<log_idx>:<msg_page>
-            parts = data[5:].split(":")
-            idx = int(parts[0])
-            msg_page = int(parts[1]) if len(parts) > 1 else 0
-            logs = self._groupchat_engine.request_log
-            if idx >= len(logs):
-                await query.edit_message_text("⚠️ 记录不存在")
-                return
-            r = logs[idx]
-            msgs_snap = r.get("messages_snapshot", [])
-            if not msgs_snap:
-                await query.edit_message_text("📭 无消息记录")
-                return
-
-            per_page = 3  # messages per page
-            total_pages = max(1, (len(msgs_snap) + per_page - 1) // per_page)
-            msg_page = max(0, min(msg_page, total_pages - 1))
-            start = msg_page * per_page
-            end = min(start + per_page, len(msgs_snap))
-
-            lines = [f"📝 Prompt 详情 #{idx+1} (第{msg_page+1}/{total_pages}页, 共{len(msgs_snap)}条消息)\n"]
-            for i in range(start, end):
-                m = msgs_snap[i]
-                role = m.get("role", "?")
-                name = m.get("name", "")
-                content_len = m.get("content_len", 0)
-                content = m.get("content", "")
-                name_str = f" [{name}]" if name else ""
-                lines.append(f"── [{i+1}] {role}{name_str} ({content_len}字) ──")
-                # Show content, truncated to fit in Telegram
-                if content:
-                    lines.append(content[:800])
-                else:
-                    lines.append("(空)")
-                lines.append("")
-
-            text = "\n".join(lines)
-            nav = []
-            if msg_page > 0:
-                nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"logp:{idx}:{msg_page-1}"))
-            if msg_page < total_pages - 1:
-                nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"logp:{idx}:{msg_page+1}"))
-            buttons = []
-            if nav:
-                buttons.append(nav)
-            buttons.append([InlineKeyboardButton("⬅️ 返回详情", callback_data=f"logd:{idx}")])
-            await query.edit_message_text(
-                text[:4096],
-                reply_markup=InlineKeyboardMarkup(buttons)
-            )
-
-        elif data.startswith("sl:"):
-            name = data[3:]
-            result = self._groupchat_engine.set_leader(name)
-            await query.edit_message_text(result)
-
-        elif data.startswith("lg:"):
-            name = data[3:]
-            self._ensure_gc_send(chat_id)
-            result = self._groupchat_engine.load_group(name)
-            await query.edit_message_text(result)
-
-        elif data.startswith("dg:"):
-            name = data[3:]
-            result = self._groupchat_engine.delete_group(name)
-            await query.edit_message_text(result)
-
-        elif data.startswith("hp:"):
-            key = data[3:]
-            provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
-            params = getattr(provider, 'sampling_params', None) if provider else None
-            if params and key in params:
-                self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key}
+                text = "\n".join(lines)
+                nav = []
+                if msg_page > 0:
+                    nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"logp:{idx}:{msg_page-1}"))
+                if msg_page < total_pages - 1:
+                    nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"logp:{idx}:{msg_page+1}"))
+                buttons = []
+                if nav:
+                    buttons.append(nav)
+                buttons.append([InlineKeyboardButton("⬅️ 返回详情", callback_data=f"logd:{idx}")])
                 await query.edit_message_text(
-                    f"✏️ 修改 {key}\n"
-                    f"当前值: {params[key]}\n\n"
-                    f"请输入新值 (数字):"
+                    text[:4096],
+                    reply_markup=InlineKeyboardMarkup(buttons)
                 )
 
-        elif data.startswith("hp_del:"):
-            key = data[7:]
-            provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
-            params = getattr(provider, 'sampling_params', None) if provider else None
-            if params and key in params:
-                del params[key]
-                # Persist
-                hp_path = Path.home() / ".nanobot" / "hyperparams.json"
-                try:
-                    hp_path.write_text(json.dumps(params, indent=2))
-                    logger.info("Persisted hyperparams (del {}) to {}", key, hp_path)
-                except Exception as e:
-                    logger.error("Failed to persist hyperparams: {}", e)
-                    await self._gc_send(chat_id, f"⚠️ 参数已生效但持久化失败: {e}")
-                await query.edit_message_text(f"🗑 已删除 {key}")
+            elif data.startswith("sl:"):
+                name = data[3:]
+                result = self._groupchat_engine.set_leader(name)
+                await query.edit_message_text(result)
+
+            elif data.startswith("lg:"):
+                name = data[3:]
+                self._ensure_gc_send(chat_id)
+                result = self._groupchat_engine.load_group(name)
+                await query.edit_message_text(result)
+
+            elif data.startswith("dg:"):
+                name = data[3:]
+                result = self._groupchat_engine.delete_group(name)
+                await query.edit_message_text(result)
+
+            elif data.startswith("hp:"):
+                key = data[3:]
+                provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
+                params = getattr(provider, 'sampling_params', None) if provider else None
+                if params and key in params:
+                    self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key}
+                    await query.edit_message_text(
+                        f"✏️ 修改 {key}\n"
+                        f"当前值: {params[key]}\n\n"
+                        f"请输入新值 (数字):"
+                    )
+
+            elif data.startswith("hp_del:"):
+                key = data[7:]
+                provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
+                params = getattr(provider, 'sampling_params', None) if provider else None
+                if params and key in params:
+                    del params[key]
+                    # Persist
+                    hp_path = Path.home() / ".nanobot" / "hyperparams.json"
+                    try:
+                        hp_path.write_text(json.dumps(params, indent=2))
+                        logger.info("Persisted hyperparams (del {}) to {}", key, hp_path)
+                    except Exception as e:
+                        logger.error("Failed to persist hyperparams: {}", e)
+                        await self._gc_send(chat_id, f"⚠️ 参数已生效但持久化失败: {e}")
+                    await query.edit_message_text(f"🗑 已删除 {key}")
+                    await self._send_hyperparams_keyboard(chat_id, params)
+
+            elif data == "hp_add":
+                # Show common params to add
+                provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
+                params = getattr(provider, 'sampling_params', None) if provider else {}
+                common = ["temperature", "top_p", "top_k", "min_p", "top_a",
+                          "frequency_penalty", "presence_penalty", "repetition_penalty"]
+                available = [p for p in common if p not in params]
+                buttons = []
+                for p in available:
+                    buttons.append([InlineKeyboardButton(f"➕ {p}", callback_data=f"hp_new:{p}")])
+                buttons.append([InlineKeyboardButton("✏️ 自定义参数名", callback_data="hp_custom")])
+                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="hp_back")])
+                await query.edit_message_text(
+                    "➕ 选择要添加的参数:",
+                    reply_markup=InlineKeyboardMarkup(buttons)
+                )
+
+            elif data.startswith("hp_new:"):
+                key = data[7:]
+                self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key, "hp_is_new": True}
+                await query.edit_message_text(f"➕ 添加 {key}\n\n请输入值 (数字):")
+
+            elif data == "hp_custom":
+                self._edit_state[chat_id] = {"field": "hp_add_custom"}
+                await query.edit_message_text("✏️ 请输入参数名:")
+
+            elif data == "hp_back":
+                provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
+                params = getattr(provider, 'sampling_params', None) if provider else {}
+                await query.edit_message_text("⚙️ 返回...")
                 await self._send_hyperparams_keyboard(chat_id, params)
 
-        elif data == "hp_add":
-            # Show common params to add
-            provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
-            params = getattr(provider, 'sampling_params', None) if provider else {}
-            common = ["temperature", "top_p", "top_k", "min_p", "top_a",
-                      "frequency_penalty", "presence_penalty", "repetition_penalty"]
-            available = [p for p in common if p not in params]
-            buttons = []
-            for p in available:
-                buttons.append([InlineKeyboardButton(f"➕ {p}", callback_data=f"hp_new:{p}")])
-            buttons.append([InlineKeyboardButton("✏️ 自定义参数名", callback_data="hp_custom")])
-            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="hp_back")])
-            await query.edit_message_text(
-                "➕ 选择要添加的参数:",
-                reply_markup=InlineKeyboardMarkup(buttons)
-            )
-
-        elif data.startswith("hp_new:"):
-            key = data[7:]
-            self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key, "hp_is_new": True}
-            await query.edit_message_text(f"➕ 添加 {key}\n\n请输入值 (数字):")
-
-        elif data == "hp_custom":
-            self._edit_state[chat_id] = {"field": "hp_add_custom"}
-            await query.edit_message_text("✏️ 请输入参数名:")
-
-        elif data == "hp_back":
-            provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
-            params = getattr(provider, 'sampling_params', None) if provider else {}
-            await query.edit_message_text("⚙️ 返回...")
-            await self._send_hyperparams_keyboard(chat_id, params)
-
-        # ── Agent Hyperparams (ahp:) ──────────────────────────
-        elif data.startswith("ahp:"):
-            # ahp:AgentName:key
-            parts = data.split(":", 2)
-            if len(parts) < 3:
-                return
-            a_name, key = parts[1], parts[2]
-            agent = self._groupchat_engine.registry.get(a_name, {}) if self._groupchat_engine else {}
-            agent_hp = agent.get("hyperparams") or {}
-            if key in agent_hp:
-                self._edit_state[chat_id] = {"field": "ahp_value", "agent": a_name, "hp_key": key}
-                await query.edit_message_text(
-                    f"✏️ 修改 {a_name} 的 {key}\n"
-                    f"当前值: {agent_hp[key]}\n\n"
-                    f"请输入新值 (数字):"
-                )
-
-        elif data.startswith("ahp_del:"):
-            # ahp_del:AgentName:key
-            parts = data.split(":", 2)
-            if len(parts) < 3:
-                return
-            a_name, key = parts[1], parts[2]
-            if self._groupchat_engine and a_name in self._groupchat_engine.registry:
-                agent = self._groupchat_engine.registry[a_name]
+            # ── Agent Hyperparams (ahp:) ──────────────────────────
+            elif data.startswith("ahp:"):
+                # ahp:AgentName:key
+                parts = data.split(":", 2)
+                if len(parts) < 3:
+                    return
+                a_name, key = parts[1], parts[2]
+                agent = self._groupchat_engine.registry.get(a_name, {}) if self._groupchat_engine else {}
                 agent_hp = agent.get("hyperparams") or {}
                 if key in agent_hp:
-                    del agent_hp[key]
-                    agent["hyperparams"] = agent_hp
-                    # Persist to config.json
-                    cfg_path = Path.home() / ".nanobot" / "agents" / a_name.lower() / "config.json"
-                    if cfg_path.exists():
-                        try:
-                            cfg = json.loads(cfg_path.read_text())
-                            cfg.setdefault("hyperparams", {})
-                            cfg["hyperparams"].pop(key, None)
-                            cfg_path.write_text(json.dumps(cfg, indent=2))
-                        except Exception as e:
-                            logger.error("Failed to persist agent hyperparams: {}", e)
-                    await query.edit_message_text(f"🗑 已删除 {a_name} 的 {key}")
-                    await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
+                    self._edit_state[chat_id] = {"field": "ahp_value", "agent": a_name, "hp_key": key}
+                    await query.edit_message_text(
+                        f"✏️ 修改 {a_name} 的 {key}\n"
+                        f"当前值: {agent_hp[key]}\n\n"
+                        f"请输入新值 (数字):"
+                    )
 
-        elif data.startswith("ahp_sync:"):
-            # ahp_sync:AgentName
-            a_name = data[9:]
-            if self._groupchat_engine and a_name in self._groupchat_engine.registry:
-                global_hp = {}
-                hp_path = Path.home() / ".nanobot" / "hyperparams.json"
-                if hp_path.exists():
-                    try:
-                        saved = json.loads(hp_path.read_text())
-                        if isinstance(saved, dict):
-                            global_hp = saved
-                    except Exception:
-                        pass
-                if not global_hp:
-                    provider = getattr(self._groupchat_engine, 'provider', None)
-                    if provider and hasattr(provider, 'sampling_params'):
-                        global_hp = dict(provider.sampling_params)
-
-                if global_hp:
+            elif data.startswith("ahp_del:"):
+                # ahp_del:AgentName:key
+                parts = data.split(":", 2)
+                if len(parts) < 3:
+                    return
+                a_name, key = parts[1], parts[2]
+                if self._groupchat_engine and a_name in self._groupchat_engine.registry:
                     agent = self._groupchat_engine.registry[a_name]
                     agent_hp = agent.get("hyperparams") or {}
-                    agent_hp.update(global_hp)
-                    agent["hyperparams"] = agent_hp
-                    cfg_path = Path.home() / ".nanobot" / "agents" / a_name.lower() / "config.json"
-                    if cfg_path.exists():
+                    if key in agent_hp:
+                        del agent_hp[key]
+                        agent["hyperparams"] = agent_hp
+                        # Persist to config.json
+                        cfg_path = Path.home() / ".nanobot" / "agents" / a_name.lower() / "config.json"
+                        if cfg_path.exists():
+                            try:
+                                cfg = json.loads(cfg_path.read_text())
+                                cfg.setdefault("hyperparams", {})
+                                cfg["hyperparams"].pop(key, None)
+                                cfg_path.write_text(json.dumps(cfg, indent=2))
+                            except Exception as e:
+                                logger.error("Failed to persist agent hyperparams: {}", e)
+                        await query.edit_message_text(f"🗑 已删除 {a_name} 的 {key}")
+                        await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
+
+            elif data.startswith("ahp_sync:"):
+                # ahp_sync:AgentName
+                a_name = data[9:]
+                if self._groupchat_engine and a_name in self._groupchat_engine.registry:
+                    global_hp = {}
+                    hp_path = Path.home() / ".nanobot" / "hyperparams.json"
+                    if hp_path.exists():
                         try:
-                            cfg = json.loads(cfg_path.read_text())
-                            cfg["hyperparams"] = agent_hp
-                            cfg_path.write_text(json.dumps(cfg, indent=2))
-                        except Exception as e:
-                            logger.error("Failed to persist agent hyperparams: {}", e)
-                    await query.answer("✅ 已复制全局超参数")
-                    await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
-                else:
-                    await query.answer("⚠️ 全局超参数为空", show_alert=True)
+                            saved = json.loads(hp_path.read_text())
+                            if isinstance(saved, dict):
+                                global_hp = saved
+                        except Exception:
+                            pass
+                    if not global_hp:
+                        provider = getattr(self._groupchat_engine, 'provider', None)
+                        if provider and hasattr(provider, 'sampling_params'):
+                            global_hp = dict(provider.sampling_params)
 
-        elif data.startswith("ahp_add:"):
-            # ahp_add:AgentName
-            a_name = data[8:]
-            agent = self._groupchat_engine.registry.get(a_name, {}) if self._groupchat_engine else {}
-            agent_hp = agent.get("hyperparams") or {}
-            common = ["temperature", "top_p", "top_k", "min_p", "top_a",
-                      "frequency_penalty", "presence_penalty", "repetition_penalty"]
-            available = [p for p in common if p not in agent_hp]
-            buttons = []
-            for p in available:
-                buttons.append([InlineKeyboardButton(f"➕ {p}", callback_data=f"ahp_new:{a_name}:{p}")])
-            buttons.append([InlineKeyboardButton("✏️ 自定义参数名", callback_data=f"ahp_custom:{a_name}")])
-            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ahp_back:{a_name}")])
-            await query.edit_message_text(
-                f"➕ 为 {a_name} 添加参数:",
-                reply_markup=InlineKeyboardMarkup(buttons)
-            )
+                    if global_hp:
+                        agent = self._groupchat_engine.registry[a_name]
+                        agent_hp = agent.get("hyperparams") or {}
+                        agent_hp.update(global_hp)
+                        agent["hyperparams"] = agent_hp
+                        cfg_path = Path.home() / ".nanobot" / "agents" / a_name.lower() / "config.json"
+                        if cfg_path.exists():
+                            try:
+                                cfg = json.loads(cfg_path.read_text())
+                                cfg["hyperparams"] = agent_hp
+                                cfg_path.write_text(json.dumps(cfg, indent=2))
+                            except Exception as e:
+                                logger.error("Failed to persist agent hyperparams: {}", e)
+                        await query.answer("✅ 已复制全局超参数")
+                        await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
+                    else:
+                        await query.answer("⚠️ 全局超参数为空", show_alert=True)
 
-        elif data.startswith("ahp_new:"):
-            # ahp_new:AgentName:key
-            parts = data.split(":", 2)
-            if len(parts) < 3:
-                return
-            a_name, key = parts[1], parts[2]
-            self._edit_state[chat_id] = {"field": "ahp_value", "agent": a_name, "hp_key": key, "hp_is_new": True}
-            await query.edit_message_text(f"➕ 为 {a_name} 添加 {key}\n\n请输入值 (数字):")
-
-        elif data.startswith("ahp_custom:"):
-            # ahp_custom:AgentName
-            a_name = data[11:]
-            self._edit_state[chat_id] = {"field": "ahp_add_custom", "agent": a_name}
-            await query.edit_message_text("✏️ 请输入参数名:")
-
-        elif data.startswith("ahp_back:"):
-            # ahp_back:AgentName
-            a_name = data[9:]
-            agent = self._groupchat_engine.registry.get(a_name, {}) if self._groupchat_engine else {}
-            agent_hp = agent.get("hyperparams") or {}
-            await query.edit_message_text("⚙️ 返回...")
-            await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
-
-        elif data.startswith("gc:"):
-            key = data[3:]
-            settings = self._load_gc_settings()
-            label = self.GC_SETTINGS_LABELS.get(key, key)
-            val = settings.get(key, self.GC_SETTINGS_DEFAULTS.get(key, "?"))
-            self._edit_state[chat_id] = {"field": "gc_value", "gc_key": key}
-            await query.edit_message_text(
-                f"✏️ 修改 {label}\n"
-                f"当前值: {val}\n\n"
-                f"请输入新值 (整数):"
-            )
-
-        elif data.startswith("ord:"):
-            val = data[4:]
-            if val == "done":
-                agents = self._groupchat_engine.active_agents
-                # Persist final order
-                self._groupchat_engine.save_active()
-                # Auto-update saved group
-                gname = getattr(self._groupchat_engine, '_current_group_name', None)
-                if gname:
-                    groups = self._groupchat_engine.load_groups()
-                    if gname in groups:
-                        groups[gname] = list(agents)
-                        self._groupchat_engine.save_groups(groups)
-                order_str = " → ".join(agents)
-                await query.edit_message_text(f"📢 发言顺序:\n{order_str}")
-            else:
-                idx = int(val)
-                agents = self._groupchat_engine.active_agents
-                if 0 < idx < len(agents):
-                    # Swap with previous
-                    agents[idx], agents[idx-1] = agents[idx-1], agents[idx]
-                    self._groupchat_engine.reorder_agents(list(agents))
-                # Refresh keyboard
-                await query.edit_message_text("📢 更新中...")
-                await self._send_order_keyboard(chat_id, self._groupchat_engine.active_agents)
-
-        # ── Prompt orchestration callbacks ──
-        elif data in ("pr:refresh", "pr:"):
-            # Refresh global prompt order view
-            await self._prompt_show_components(query)
-
-        elif data.startswith("pre:"):
-            # Edit global template: pre:__global__:component_key
-            parts = data[4:].split(":", 1)
-            if len(parts) == 2:
-                _, key = parts
-                engine = self._groupchat_engine
-                content = PromptBuilder.get_component_template(key)
-                label = _COMPONENT_LABELS.get(key, key)
-                self._edit_state[chat_id] = {"field": "prompt_edit", "agent": "__global__", "key": key}
-                preview = (content[:3500] + "…") if len(content) > 3500 else (content or "(空)")
+            elif data.startswith("ahp_add:"):
+                # ahp_add:AgentName
+                a_name = data[8:]
+                agent = self._groupchat_engine.registry.get(a_name, {}) if self._groupchat_engine else {}
+                agent_hp = agent.get("hyperparams") or {}
+                common = ["temperature", "top_p", "top_k", "min_p", "top_a",
+                          "frequency_penalty", "presence_penalty", "repetition_penalty"]
+                available = [p for p in common if p not in agent_hp]
+                buttons = []
+                for p in available:
+                    buttons.append([InlineKeyboardButton(f"➕ {p}", callback_data=f"ahp_new:{a_name}:{p}")])
+                buttons.append([InlineKeyboardButton("✏️ 自定义参数名", callback_data=f"ahp_custom:{a_name}")])
+                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ahp_back:{a_name}")])
                 await query.edit_message_text(
-                    f"✏️ 编辑全局模板 - {label}\n\n"
-                    f"当前内容 ({len(content or '')}字):\n"
-                    f"{preview}\n\n"
-                    f"💡 模板变量: {{{{agent}}}} {{{{members}}}} {{{{datetime}}}} {{{{round}}}} {{{{tools}}}} {{{{others}}}}\n"
-                    f"请回复新内容 (完整替换):",
+                    f"➕ 为 {a_name} 添加参数:",
+                    reply_markup=InlineKeyboardMarkup(buttons)
+                )
+
+            elif data.startswith("ahp_new:"):
+                # ahp_new:AgentName:key
+                parts = data.split(":", 2)
+                if len(parts) < 3:
+                    return
+                a_name, key = parts[1], parts[2]
+                self._edit_state[chat_id] = {"field": "ahp_value", "agent": a_name, "hp_key": key, "hp_is_new": True}
+                await query.edit_message_text(f"➕ 为 {a_name} 添加 {key}\n\n请输入值 (数字):")
+
+            elif data.startswith("ahp_custom:"):
+                # ahp_custom:AgentName
+                a_name = data[11:]
+                self._edit_state[chat_id] = {"field": "ahp_add_custom", "agent": a_name}
+                await query.edit_message_text("✏️ 请输入参数名:")
+
+            elif data.startswith("ahp_back:"):
+                # ahp_back:AgentName
+                a_name = data[9:]
+                agent = self._groupchat_engine.registry.get(a_name, {}) if self._groupchat_engine else {}
+                agent_hp = agent.get("hyperparams") or {}
+                await query.edit_message_text("⚙️ 返回...")
+                await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
+
+            elif data.startswith("gc:"):
+                key = data[3:]
+                settings = self._load_gc_settings()
+                label = self.GC_SETTINGS_LABELS.get(key, key)
+                val = settings.get(key, self.GC_SETTINGS_DEFAULTS.get(key, "?"))
+                self._edit_state[chat_id] = {"field": "gc_value", "gc_key": key}
+                await query.edit_message_text(
+                    f"✏️ 修改 {label}\n"
+                    f"当前值: {val}\n\n"
+                    f"请输入新值 (整数):"
+                )
+
+            elif data.startswith("ord:"):
+                val = data[4:]
+                if val == "done":
+                    agents = self._groupchat_engine.active_agents
+                    # Persist final order
+                    self._groupchat_engine.save_active()
+                    # Auto-update saved group
+                    gname = getattr(self._groupchat_engine, '_current_group_name', None)
+                    if gname:
+                        groups = self._groupchat_engine.load_groups()
+                        if gname in groups:
+                            groups[gname] = list(agents)
+                            self._groupchat_engine.save_groups(groups)
+                    order_str = " → ".join(agents)
+                    await query.edit_message_text(f"📢 发言顺序:\n{order_str}")
+                else:
+                    idx = int(val)
+                    agents = self._groupchat_engine.active_agents
+                    if 0 < idx < len(agents):
+                        # Swap with previous
+                        agents[idx], agents[idx-1] = agents[idx-1], agents[idx]
+                        self._groupchat_engine.reorder_agents(list(agents))
+                    # Refresh keyboard
+                    await query.edit_message_text("📢 更新中...")
+                    await self._send_order_keyboard(chat_id, self._groupchat_engine.active_agents)
+
+            # ── Prompt orchestration callbacks ──
+            elif data in ("pr:refresh", "pr:"):
+                # Refresh global prompt order view
+                await self._prompt_show_components(query)
+
+            elif data.startswith("pre:"):
+                # Edit global template: pre:__global__:component_key
+                parts = data[4:].split(":", 1)
+                if len(parts) == 2:
+                    _, key = parts
+                    engine = self._groupchat_engine
+                    content = PromptBuilder.get_component_template(key)
+                    label = _COMPONENT_LABELS.get(key, key)
+                    self._edit_state[chat_id] = {"field": "prompt_edit", "agent": "__global__", "key": key}
+                    preview = (content[:3500] + "…") if len(content) > 3500 else (content or "(空)")
+                    await query.edit_message_text(
+                        f"✏️ 编辑全局模板 - {label}\n\n"
+                        f"当前内容 ({len(content or '')}字):\n"
+                        f"{preview}\n\n"
+                        f"💡 模板变量: {{{{agent}}}} {{{{members}}}} {{{{datetime}}}} {{{{round}}}} {{{{tools}}}} {{{{others}}}}\n"
+                        f"请回复新内容 (完整替换):",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("❌ 取消", callback_data="prcan")]
+                        ]),
+                    )
+
+            elif data == "prcan":
+                # Cancel edit
+                self._edit_state.pop(chat_id, None)
+                await self._prompt_show_components(query)
+
+            elif data.startswith("pru:") or data.startswith("prd:"):
+                # Move component up/down: pru:<idx> or prd:<idx>
+                direction = -1 if data.startswith("pru:") else 1
+                idx = int(data[4:])
+                engine = self._groupchat_engine
+                order = engine.prompt_builder.get_agent_prompt_order()
+                new_idx = idx + direction
+                if 0 <= new_idx < len(order):
+                    order[idx], order[new_idx] = order[new_idx], order[idx]
+                    engine.prompt_builder.set_default_prompt_order(order)
+                await self._prompt_show_components(query)
+
+            elif data.startswith("pviz:"):
+                # Toggle visibility: pviz:<idx>
+                # Note: query.answer() has already been called globally above.
+                idx = int(data[5:])
+                engine = self._groupchat_engine
+                order = engine.prompt_builder.get_agent_prompt_order()
+                if 0 <= idx < len(order):
+                    key = order[idx]
+                    result = engine.prompt_builder.toggle_component_visibility(key)
+                    vis = engine.prompt_builder.get_component_visibility(key)
+                    vis_label = "全体可见 👁" if vis == "all" else "仅Leader可见 👑"
+                    logger.debug("pviz toggle: {} → {}", key, vis_label)
+                await self._prompt_show_components(query)
+
+            elif data.startswith("prdel:"):
+                # Delete component: prdel:<idx>
+                idx = int(data[6:])
+                engine = self._groupchat_engine
+                result = engine.prompt_builder.remove_prompt_component(idx)
+                await query.answer(result, show_alert=True)
+                await self._prompt_show_components(query)
+
+            elif data == "pradd":
+                # Show available components to add back
+                engine = self._groupchat_engine
+                available = engine.prompt_builder.get_available_components()
+                buttons = []
+                labels = _COMPONENT_LABELS
+                for key in available:
+                    buttons.append([InlineKeyboardButton(
+                        f"➕ {labels.get(key, key)}",
+                        callback_data=f"pradd:{key}"
+                    )])
+                buttons.append([InlineKeyboardButton(
+                    "✏️ 自定义组件名", callback_data="pradd_custom"
+                )])
+                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="pr:refresh")])
+                await query.edit_message_text(
+                    "➕ 选择要添加的组件:\n\n💡 点击 \"✏️ 自定义组件名\" 创建全新组件",
+                    reply_markup=InlineKeyboardMarkup(buttons),
+                )
+
+            elif data.startswith("pradd:"):
+                # Add component back: pradd:<key>
+                key = data[6:]
+                engine = self._groupchat_engine
+                order = engine.prompt_builder.get_agent_prompt_order()
+                if key not in order:
+                    order.append(key)
+                    engine.prompt_builder.set_default_prompt_order(order)
+                await self._prompt_show_components(query)
+
+            elif data == "pradd_custom":
+                # Enter edit state for user to type a custom component name
+                chat_id = str(query.message.chat_id)
+                self._edit_state[chat_id] = {"field": "pradd_custom_name"}
+                await query.edit_message_text(
+                    "✏️ 创建自定义提示词组件\n\n"
+                    "请输入组件名称（如: 角色背景、安全规则、写作风格 等）:\n\n"
+                    "💡 名称会显示在组件列表中，创建后可编辑内容",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("❌ 取消", callback_data="prcan")]
                     ]),
                 )
 
-        elif data == "prcan":
-            # Cancel edit
-            self._edit_state.pop(chat_id, None)
-            await self._prompt_show_components(query)
+            elif data.startswith("prv:"):
+                # Preview full template: prv:<page>
+                page = int(data[4:])
+                engine = self._groupchat_engine
+                order = engine.prompt_builder.get_agent_prompt_order()
+                labels = _COMPONENT_LABELS
 
-        elif data.startswith("pru:") or data.startswith("prd:"):
-            # Move component up/down: pru:<idx> or prd:<idx>
-            direction = -1 if data.startswith("pru:") else 1
-            idx = int(data[4:])
-            engine = self._groupchat_engine
-            order = engine.prompt_builder.get_agent_prompt_order()
-            new_idx = idx + direction
-            if 0 <= new_idx < len(order):
-                order[idx], order[new_idx] = order[new_idx], order[idx]
-                engine.prompt_builder.set_default_prompt_order(order)
-            await self._prompt_show_components(query)
-
-        elif data.startswith("pviz:"):
-            # Toggle visibility: pviz:<idx>
-            # Note: query.answer() has already been called globally above.
-            idx = int(data[5:])
-            engine = self._groupchat_engine
-            order = engine.prompt_builder.get_agent_prompt_order()
-            if 0 <= idx < len(order):
-                key = order[idx]
-                result = engine.prompt_builder.toggle_component_visibility(key)
-                vis = engine.prompt_builder.get_component_visibility(key)
-                vis_label = "全体可见 👁" if vis == "all" else "仅Leader可见 👑"
-                logger.debug("pviz toggle: {} → {}", key, vis_label)
-            await self._prompt_show_components(query)
-
-        elif data.startswith("prdel:"):
-            # Delete component: prdel:<idx>
-            idx = int(data[6:])
-            engine = self._groupchat_engine
-            result = engine.prompt_builder.remove_prompt_component(idx)
-            await query.answer(result, show_alert=True)
-            await self._prompt_show_components(query)
-
-        elif data == "pradd":
-            # Show available components to add back
-            engine = self._groupchat_engine
-            available = engine.prompt_builder.get_available_components()
-            buttons = []
-            labels = _COMPONENT_LABELS
-            for key in available:
-                buttons.append([InlineKeyboardButton(
-                    f"➕ {labels.get(key, key)}",
-                    callback_data=f"pradd:{key}"
-                )])
-            buttons.append([InlineKeyboardButton(
-                "✏️ 自定义组件名", callback_data="pradd_custom"
-            )])
-            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="pr:refresh")])
-            await query.edit_message_text(
-                "➕ 选择要添加的组件:\n\n💡 点击 \"✏️ 自定义组件名\" 创建全新组件",
-                reply_markup=InlineKeyboardMarkup(buttons),
-            )
-
-        elif data.startswith("pradd:"):
-            # Add component back: pradd:<key>
-            key = data[6:]
-            engine = self._groupchat_engine
-            order = engine.prompt_builder.get_agent_prompt_order()
-            if key not in order:
-                order.append(key)
-                engine.prompt_builder.set_default_prompt_order(order)
-            await self._prompt_show_components(query)
-
-        elif data == "pradd_custom":
-            # Enter edit state for user to type a custom component name
-            chat_id = str(query.message.chat_id)
-            self._edit_state[chat_id] = {"field": "pradd_custom_name"}
-            await query.edit_message_text(
-                "✏️ 创建自定义提示词组件\n\n"
-                "请输入组件名称（如: 角色背景、安全规则、写作风格 等）:\n\n"
-                "💡 名称会显示在组件列表中，创建后可编辑内容",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("❌ 取消", callback_data="prcan")]
-                ]),
-            )
-
-        elif data.startswith("prv:"):
-            # Preview full template: prv:<page>
-            page = int(data[4:])
-            engine = self._groupchat_engine
-            order = engine.prompt_builder.get_agent_prompt_order()
-            labels = _COMPONENT_LABELS
-
-            lines: list[str] = []
-            display_num = 0
-            for i, key in enumerate(order):
-                label = labels.get(key, key)
-                if key == "history":
-                    lines.append("━━━━━━━━━━━━━━━━━━━━━━")
-                    lines.append("  💬 聊天记录（运行时自动插入）")
-                    lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+                lines: list[str] = []
+                display_num = 0
+                for i, key in enumerate(order):
+                    label = labels.get(key, key)
+                    if key == "history":
+                        lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+                        lines.append("  💬 聊天记录（运行时自动插入）")
+                        lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+                        lines.append("")
+                        continue
+                    display_num += 1
+                    if key == "persona":
+                        lines.append(f"─── [{display_num}] {label} ───")
+                        lines.append("(→ 运行时加载每个 agent 的 SOUL.md)")
+                        lines.append("")
+                        continue
+                    tpl = PromptBuilder.get_component_template(key)
+                    if not tpl:
+                        lines.append(f"─── [{display_num}] {label} ─── ○ 空 (跳过注入)")
+                        lines.append("")
+                        continue
+                    lines.append(f"─── [{display_num}] {label} ({len(tpl):,}字) ───")
+                    preview = tpl[:400]
+                    if len(tpl) > 400:
+                        preview += "…"
+                    lines.append(preview)
                     lines.append("")
-                    continue
-                display_num += 1
-                if key == "persona":
-                    lines.append(f"─── [{display_num}] {label} ───")
-                    lines.append("(→ 运行时加载每个 agent 的 SOUL.md)")
-                    lines.append("")
-                    continue
-                tpl = PromptBuilder.get_component_template(key)
-                if not tpl:
-                    lines.append(f"─── [{display_num}] {label} ─── ○ 空 (跳过注入)")
-                    lines.append("")
-                    continue
-                lines.append(f"─── [{display_num}] {label} ({len(tpl):,}字) ───")
-                preview = tpl[:400]
-                if len(tpl) > 400:
-                    preview += "…"
-                lines.append(preview)
-                lines.append("")
 
-            full_text = "\n".join(lines)
-            page_size = 3500
-            total_pages = max(1, (len(full_text) + page_size - 1) // page_size)
-            start = page * page_size
-            end = min(start + page_size, len(full_text))
-            page_text = f"🔍 全局 Prompt 模板预览 (第{page+1}/{total_pages}页)\n\n" + full_text[start:end]
+                full_text = "\n".join(lines)
+                page_size = 3500
+                total_pages = max(1, (len(full_text) + page_size - 1) // page_size)
+                start = page * page_size
+                end = min(start + page_size, len(full_text))
+                page_text = f"🔍 全局 Prompt 模板预览 (第{page+1}/{total_pages}页)\n\n" + full_text[start:end]
 
-            nav = []
-            if page > 0:
-                nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"prv:{page-1}"))
-            if page < total_pages - 1:
-                nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"prv:{page+1}"))
-            buttons = []
-            if nav:
-                buttons.append(nav)
-            buttons.append([InlineKeyboardButton("⬅️ 返回组件列表", callback_data="pr:refresh")])
-            await query.edit_message_text(
-                page_text[:4096],
-                reply_markup=InlineKeyboardMarkup(buttons),
-            )
-
-        # ── Provider/Model management callbacks ──
-        elif data == "pm_cancel":
-            self._edit_state.pop(chat_id, None)
-            await query.edit_message_text("❌ 已取消")
-
-        elif data == "st_prov":
-            await self._speedtest_providers(query.message)
-
-        elif data == "st_agent":
-            await self._speedtest_agents(query.message)
-
-        elif data.startswith("pm_newm:"):
-            # User picked a provider for /newmodel
-            prov = data[8:]
-            self._edit_state[chat_id] = {"field": "pm_model_id", "mode": "pm", "provider": prov}
-            await query.edit_message_text(
-                f"🏢 提供商: {prov}\n\n"
-                "请输入模型ID (如 google/gemini-3-flash-preview):"
-            )
-
-        elif data.startswith("pm_delp:"):
-            prov = data[8:]
-            pm = self._load_pm()
-            model_count = len(pm.get("models", {}).get(prov, []))
-            await query.edit_message_text(
-                f"⚠️ 确认删除提供商 **{prov}**？\n\n"
-                f"这将同时删除该提供商下的 **{model_count}** 个模型。\n"
-                f"此操作不可撤销！",
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🗑 确认删除", callback_data=f"pm_delp_yes:{prov}")],
-                    [InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")],
-                ])
-            )
-
-        elif data.startswith("pm_delp_yes:"):
-            prov = data[12:]
-            pm = self._load_pm()
-            pm.get("providers", {}).pop(prov, None)
-            pm.get("models", {}).pop(prov, None)
-            self._save_pm(pm)
-            await query.edit_message_text(f"✅ 提供商 {prov} 及其所有模型已删除")
-
-        elif data.startswith("pm_delm_p:"):
-            prov = data[10:]
-            pm = self._load_pm()
-            models = pm.get("models", {}).get(prov, [])
-            if not models:
-                await query.edit_message_text("⚠️ 该提供商没有模型")
-                return
-            buttons = [[InlineKeyboardButton(f"🗑 {m}", callback_data=f"pm_delm:{prov}:{m}")] for m in models]
-            buttons.append([InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")])
-            await query.edit_message_text(f"🗑 删除 {prov} 的模型:", reply_markup=InlineKeyboardMarkup(buttons))
-
-        elif data.startswith("pm_delm:"):
-            parts = data.split(":", 2)
-            prov, model = parts[1], parts[2]
-            pm = self._load_pm()
-            if prov in pm.get("models", {}):
-                pm["models"][prov] = [m for m in pm["models"][prov] if m != model]
-            self._save_pm(pm)
-            try:
-                await query.answer(f"🗑 已删除 {model}", show_alert=False)
-            except Exception:
-                pass
-            # Refresh model list
-            remaining = pm.get("models", {}).get(prov, [])
-            if remaining:
-                buttons = [[InlineKeyboardButton(f"🗑 {m}", callback_data=f"pm_delm:{prov}:{m}")] for m in remaining]
-                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="pm_cancel")])
-                await query.edit_message_text(f"🗑 删除 {prov} 的模型 ({len(remaining)}):", reply_markup=InlineKeyboardMarkup(buttons))
-            else:
-                await query.edit_message_text(f"✅ {prov} 的模型已全部删除")
-
-        # ── Edit agent model: 2-step provider → model selection ──
-        elif data.startswith("em_prov:"):
-            parts = data.split(":", 2)
-            agent_name, prov = parts[1], parts[2]
-            pm = self._load_pm()
-            models = pm.get("models", {}).get(prov, [])
-            if not models:
-                self._edit_state[chat_id] = {"agent": agent_name, "field": "model", "provider": prov}
+                nav = []
+                if page > 0:
+                    nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"prv:{page-1}"))
+                if page < total_pages - 1:
+                    nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"prv:{page+1}"))
+                buttons = []
+                if nav:
+                    buttons.append(nav)
+                buttons.append([InlineKeyboardButton("⬅️ 返回组件列表", callback_data="pr:refresh")])
                 await query.edit_message_text(
-                    f"🏢 {prov} 暂无已注册模型\n\n"
-                    "请直接输入模型ID:"
+                    page_text[:4096],
+                    reply_markup=InlineKeyboardMarkup(buttons),
                 )
-                return
-            # Cache models for index-based lookup (avoids 64-byte callback limit)
-            if not hasattr(self, "_em_model_cache"):
-                self._em_model_cache = {}
-            self._em_model_cache[f"{agent_name}:{prov}"] = models
-            buttons = []
-            for i, m in enumerate(models):
-                buttons.append([InlineKeyboardButton(f"🤖 {m}", callback_data=f"em_mi:{agent_name}:{prov}:{i}")])
-            buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=f"em_manual:{agent_name}")])
-            await query.edit_message_text(f"🏢 {prov} — 选择模型:", reply_markup=InlineKeyboardMarkup(buttons))
 
-        elif data.startswith("em_mi:") or data.startswith("em_model:"):
-            # em_mi:agent:prov:index — resolve model from index cache
-            if data.startswith("em_mi:"):
-                parts = data.split(":")
-                agent_name, prov, idx = parts[1], parts[2], int(parts[3])
-                cache = getattr(self, "_em_model_cache", {})
-                models = cache.get(f"{agent_name}:{prov}", [])
-                if idx >= len(models):
-                    await query.edit_message_text("⚠️ 模型索引无效，请重新操作")
-                    return
-                model = models[idx]
-            else:
-                parts = data.split(":", 3)
-                agent_name, prov, model = parts[1], parts[2], parts[3]
-            if self._groupchat_engine and agent_name in self._groupchat_engine.registry:
-                self._groupchat_engine.registry[agent_name]["model"] = model
-                # Update config on disk
-                from pathlib import Path as _P
-                agent_entry = self._groupchat_engine.registry[agent_name]
-                if agent_entry.get("_default"):
-                    # Default agent (Nanobot): update config.json
-                    main_cfg_path = _P.home() / ".nanobot" / "config.json"
-                    if main_cfg_path.exists():
-                        cfg = json.loads(main_cfg_path.read_text())
-                        cfg.setdefault("agents", {}).setdefault("defaults", {})["model"] = model
-                        main_cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
-                else:
-                    cfg_path = _P.home() / ".nanobot" / "agents" / agent_name.lower() / "config.json"
-                    if cfg_path.exists():
-                        cfg = json.loads(cfg_path.read_text())
-                        cfg["model"] = model
-                        cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
-                await query.edit_message_text(f"✅ {agent_name} 模型已更新:\n🏢 {prov} / 🤖 {model}")
-            else:
-                await query.edit_message_text(f"❌ Agent '{agent_name}' 不存在")
-            self._edit_state.pop(chat_id, None)
+            # ── Provider/Model management callbacks ──
+            elif data == "pm_cancel":
+                self._edit_state.pop(chat_id, None)
+                await query.edit_message_text("❌ 已取消")
 
-        elif data.startswith("em_manual:"):
-            agent_name = data[10:]
-            self._edit_state[chat_id] = {"agent": agent_name, "field": "model"}
-            await query.edit_message_text("请输入新模型名 (如 anthropic/claude-sonnet-4-5):")
+            elif data == "st_prov":
+                await self._speedtest_providers(query.message)
 
-        # ── Edit provider callbacks ──
-        elif data.startswith("ep_pick:"):
-            prov = data[8:]
-            pm = self._load_pm()
-            info = pm.get("providers", {}).get(prov, {})
-            url = info.get("url", "?")
-            key_preview = info.get("apiKey", "")[:8] + "..." if info.get("apiKey") else "(none)"
-            retry = info.get("retryDelays", [1, 2, 4])
-            retry_str = f"{len(retry)}次 ({','.join(str(d) for d in retry)}s)"
-            buttons = [
-                [InlineKeyboardButton("🔗 修改 URL", callback_data=f"ep_field:{prov}:url")],
-                [InlineKeyboardButton("🔑 修改 API Key", callback_data=f"ep_field:{prov}:key")],
-                [InlineKeyboardButton(f"🔄 重试策略: {retry_str}", callback_data=f"ep_retry:{prov}")],
-                [InlineKeyboardButton("📋 拉取模型列表", callback_data=f"ep_models:{prov}")],
-                [InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")],
-            ]
-            await query.edit_message_text(
-                f"✏️ 编辑提供商: {prov}\n\n"
-                f"🔗 URL: {url}\n"
-                f"🔑 Key: {key_preview}\n"
-                f"🔄 重试: {retry_str}",
-                reply_markup=InlineKeyboardMarkup(buttons),
-            )
+            elif data == "st_agent":
+                await self._speedtest_agents(query.message)
 
-        elif data.startswith("ep_field:"):
-            parts = data.split(":", 2)
-            prov, fld = parts[1], parts[2]
-            self._edit_state[chat_id] = {"field": f"ep_{fld}", "mode": "pm", "prov_name": prov}
-            prompts = {"url": "请输入新的 API Base URL:", "key": "请输入新的 API Key:"}
-            await query.edit_message_text(f"✏️ {prov} — {prompts.get(fld, fld)}")
-
-        elif data.startswith("ep_retry:"):
-            prov = data[9:]
-            # Show retry presets
-            presets = {
-                "std": ("标准 3次", [1, 2, 4]),
-                "strong": ("加强 5次", [1, 2, 4, 8, 16]),
-                "max": ("极限 7次", [1, 2, 4, 8, 16, 32, 60]),
-            }
-            pm = self._load_pm()
-            current = pm.get("providers", {}).get(prov, {}).get("retryDelays", [1, 2, 4])
-            current_str = f"{len(current)}次 ({','.join(str(d) for d in current)}s)"
-            buttons = []
-            for key, (label, delays) in presets.items():
-                mark = " ✓" if delays == current else ""
-                buttons.append([InlineKeyboardButton(
-                    f"🔄 {label} ({','.join(str(d) for d in delays)}s){mark}",
-                    callback_data=f"ep_retry_set:{prov}:{key}",
-                )])
-            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")])
-            await query.edit_message_text(
-                f"🔄 {prov} 重试策略\n\n"
-                f"当前: {current_str}\n\n"
-                f"选择预设:",
-                reply_markup=InlineKeyboardMarkup(buttons),
-            )
-
-        elif data.startswith("ep_retry_set:"):
-            parts = data.split(":", 2)
-            prov, preset = parts[1], parts[2]
-            presets = {
-                "std": [1, 2, 4],
-                "strong": [1, 2, 4, 8, 16],
-                "max": [1, 2, 4, 8, 16, 32, 60],
-            }
-            delays = presets.get(preset, [1, 2, 4])
-            pm = self._load_pm()
-            if prov in pm.get("providers", {}):
-                pm["providers"][prov]["retryDelays"] = delays
-                self._save_pm(pm)
-            # Apply to live provider
-            engine = self._groupchat_engine
-            if engine and hasattr(engine, "provider"):
-                engine.provider._retry_delays = tuple(delays)
-            await query.edit_message_text(
-                f"✅ {prov} 重试策略已更新!\n"
-                f"🔄 {len(delays)}次重试 ({','.join(str(d) for d in delays)}s)\n\n"
-                f"总等待时间: {sum(delays)}s"
-            )
-
-        elif data.startswith("ep_models:"):
-            prov = data[10:]
-            pm = self._load_pm()
-
-            # Use cache if available (for back navigation)
-            cache = getattr(self, "_model_cache", {})
-            if prov in cache:
-                model_ids = cache[prov]
-            else:
-                info = pm.get("providers", {}).get(prov, {})
-                url = info.get("url", "").rstrip("/")
-                api_key = info.get("apiKey", "")
-                if not url or not api_key:
-                    await query.edit_message_text(f"⚠️ {prov} 缺少 URL 或 API Key")
-                    return
-                # Fetch /v1/models
-                import aiohttp
-                import json as _json
-                if "openrouter" in url.lower():
-                    models_url = "https://openrouter.ai/api/v1/models"
-                elif "/v1" in url:
-                    models_url = f"{url}/models"
-                else:
-                    models_url = f"{url}/v1/models"
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        headers = {"Authorization": f"Bearer {api_key}"}
-                        async with session.get(models_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                            body = await resp.text()
-                            if resp.status != 200:
-                                await query.edit_message_text(f"❌ 拉取失败 (HTTP {resp.status})\n{body[:200]}")
-                                return
-                            try:
-                                result = _json.loads(body)
-                            except Exception:
-                                await query.edit_message_text("❌ 拉取失败: 返回非JSON格式")
-                                return
-                except Exception as e:
-                    await query.edit_message_text(f"❌ 拉取失败: {str(e)[:100]}")
-                    return
-
-                model_list = result.get("data", []) if isinstance(result, dict) else []
-                if not model_list:
-                    await query.edit_message_text(f"⚠️ {prov} 无可用模型")
-                    return
-                model_ids = sorted(set(m.get("id", "") for m in model_list if m.get("id")))
-                if not hasattr(self, "_model_cache"):
-                    self._model_cache = {}
-                self._model_cache[prov] = model_ids
-
-            # Show prefix filters
-            prefixes: dict[str, int] = {}
-            for mid in model_ids:
-                pfx = mid.split("/")[0] if "/" in mid else "other"
-                prefixes[pfx] = prefixes.get(pfx, 0) + 1
-            sorted_pfx = sorted(prefixes.items(), key=lambda x: -x[1])
-            lines = [f"📋 {prov} 可用模型 ({len(model_ids)}):\n", "选择厂商前缀筛选:"]
-            buttons = []
-            for pfx, cnt in sorted_pfx[:20]:
-                buttons.append([InlineKeyboardButton(f"📂 {pfx} ({cnt})", callback_data=f"ml_pfx:{prov}:{pfx}")])
-            buttons.append([InlineKeyboardButton("🔍 搜索模型", callback_data=f"ml_srch:{prov}")])
-            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")])
-            await query.edit_message_text(
-                "\n".join(lines)[:4000],
-                reply_markup=InlineKeyboardMarkup(buttons),
-            )
-
-        elif data.startswith("ml_pfx:"):
-            # ml_pfx:provider:prefix or ml_pfx:provider:prefix:page
-            parts = data.split(":")
-            if len(parts) < 3:
-                return
-            prov, prefix = parts[1], parts[2]
-            page = int(parts[3]) if len(parts) > 3 else 0
-            per_page = 15
-            cache = getattr(self, "_model_cache", {})
-            model_ids = cache.get(prov, [])
-            filtered = [m for m in model_ids if m.startswith(f"{prefix}/") or (prefix == "other" and "/" not in m)]
-            pm = self._load_pm()
-            existing = set(pm.get("models", {}).get(prov, []))
-
-            filtered = self._sort_models_newest_first(filtered)
-            total_pages = max(1, (len(filtered) + per_page - 1) // per_page)
-            page = min(page, total_pages - 1)
-            start = page * per_page
-            page_items = filtered[start:start + per_page]
-
-            lines = [f"📋 {prov} / {prefix} ({len(filtered)}) [第{page+1}/{total_pages}页]:\n"]
-            for mid in page_items:
-                if mid in existing:
-                    lines.append(f"  ✅ {mid}")
-                else:
-                    lines.append(f"  ⚪️ {mid}")
-            buttons = self._build_model_buttons_2col(
-                page_items, prov, existing, strip_prefix=prefix,
-            )
-            # Navigation
-            nav = []
-            if page > 0:
-                nav.append(InlineKeyboardButton("⬅️ 上一页", callback_data=f"ml_pfx:{prov}:{prefix}:{page-1}"))
-            if page < total_pages - 1:
-                nav.append(InlineKeyboardButton("➡️ 下一页", callback_data=f"ml_pfx:{prov}:{prefix}:{page+1}"))
-            if nav:
-                buttons.append(nav)
-            buttons.append([InlineKeyboardButton("⬅️ 返回厂商列表", callback_data=f"ep_models:{prov}")])
-            await query.edit_message_text(
-                "\n".join(lines)[:4000],
-                reply_markup=InlineKeyboardMarkup(buttons),
-            )
-
-        elif data.startswith("ml_srch:"):
-            # ml_srch:provider — prompt user to type search keyword
-            prov = data[8:]
-            chat_id = str(query.message.chat_id)
-            self._edit_state[chat_id] = {"action": "model_search", "provider": prov}
-            await query.edit_message_text(f"🔍 搜索 {prov} 模型\n\n请输入关键词 (如 claude, llama, qwen):")
-
-        elif data.startswith("ep_addm:"):
-            # ep_addm:provider:model_id — add model to provider
-            parts = data.split(":", 2)
-            if len(parts) < 3:
-                return
-            prov, model_id = parts[1], parts[2]
-            pm = self._load_pm()
-            if prov not in pm.get("providers", {}):
-                await query.edit_message_text(f"❌ 提供商 {prov} 不存在")
-                return
-            models = pm.setdefault("models", {})
-            prov_models = models.setdefault(prov, [])
-            if model_id in prov_models:
-                await query.edit_message_text(f"⚠️ {model_id} 已存在")
-                return
-            prov_models.append(model_id)
-            self._save_pm(pm)
-            # Reload in provider
-            if self._groupchat_engine:
-                self._groupchat_engine.provider._pm_overrides = None
-            # Toast notification + refresh list locally
-            try:
-                await query.answer(f"✅ 已添加 {model_id}", show_alert=False)
-            except Exception:
-                pass
-            # Rebuild model list from saved pm (no API re-fetch)
-            existing = set(prov_models)
-            all_models = getattr(self, "_model_cache", {}).get(prov, [])
-            if not all_models:
-                # No cache, just show confirmation
+            elif data.startswith("pm_newm:"):
+                # User picked a provider for /newmodel
+                prov = data[8:]
+                self._edit_state[chat_id] = {"field": "pm_model_id", "mode": "pm", "provider": prov}
                 await query.edit_message_text(
-                    f"✅ 已添加 {model_id} 到 {prov}\n"
-                    f"当前 {len(prov_models)} 个模型\n\n"
-                    f"用 /editagent 切换 agent 模型",
+                    f"🏢 提供商: {prov}\n\n"
+                    "请输入模型ID (如 google/gemini-3-flash-preview):"
+                )
+
+            elif data.startswith("pm_delp:"):
+                prov = data[8:]
+                pm = self._load_pm()
+                model_count = len(pm.get("models", {}).get(prov, []))
+                await query.edit_message_text(
+                    f"⚠️ 确认删除提供商 **{prov}**？\n\n"
+                    f"这将同时删除该提供商下的 **{model_count}** 个模型。\n"
+                    f"此操作不可撤销！",
+                    parse_mode="Markdown",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("📋 刷新列表", callback_data=f"ep_models:{prov}")],
-                        [InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")],
+                        [InlineKeyboardButton("🗑 确认删除", callback_data=f"pm_delp_yes:{prov}")],
+                        [InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")],
                     ])
                 )
-                return
-            # Rebuild from cache — stay in same prefix filter
-            prefix = model_id.split("/")[0] if "/" in model_id else "other"
-            filtered = [m for m in all_models if m.startswith(f"{prefix}/") or (prefix == "other" and "/" not in m)]
-            filtered = self._sort_models_newest_first(filtered)
-            lines = [f"📋 {prov} / {prefix} ({len(filtered)}):\n"]
-            page_items = filtered[:30]
-            for mid in page_items:
-                if mid in existing:
-                    lines.append(f"  ✅ {mid}")
+
+            elif data.startswith("pm_delp_yes:"):
+                prov = data[12:]
+                pm = self._load_pm()
+                pm.get("providers", {}).pop(prov, None)
+                pm.get("models", {}).pop(prov, None)
+                self._save_pm(pm)
+                await query.edit_message_text(f"✅ 提供商 {prov} 及其所有模型已删除")
+
+            elif data.startswith("pm_delm_p:"):
+                prov = data[10:]
+                pm = self._load_pm()
+                models = pm.get("models", {}).get(prov, [])
+                if not models:
+                    await query.edit_message_text("⚠️ 该提供商没有模型")
+                    return
+                buttons = [[InlineKeyboardButton(f"🗑 {m}", callback_data=f"pm_delm:{prov}:{m}")] for m in models]
+                buttons.append([InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")])
+                await query.edit_message_text(f"🗑 删除 {prov} 的模型:", reply_markup=InlineKeyboardMarkup(buttons))
+
+            elif data.startswith("pm_delm:"):
+                parts = data.split(":", 2)
+                prov, model = parts[1], parts[2]
+                pm = self._load_pm()
+                if prov in pm.get("models", {}):
+                    pm["models"][prov] = [m for m in pm["models"][prov] if m != model]
+                self._save_pm(pm)
+                try:
+                    await query.answer(f"🗑 已删除 {model}", show_alert=False)
+                except Exception:
+                    pass
+                # Refresh model list
+                remaining = pm.get("models", {}).get(prov, [])
+                if remaining:
+                    buttons = [[InlineKeyboardButton(f"🗑 {m}", callback_data=f"pm_delm:{prov}:{m}")] for m in remaining]
+                    buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="pm_cancel")])
+                    await query.edit_message_text(f"🗑 删除 {prov} 的模型 ({len(remaining)}):", reply_markup=InlineKeyboardMarkup(buttons))
                 else:
-                    lines.append(f"  ⚪️ {mid}")
-            buttons = self._build_model_buttons_2col(page_items, prov, existing, strip_prefix=prefix)
-            if len(filtered) > 30:
-                lines.append(f"  ... 和 {len(filtered) - 30} 个更多")
-            buttons.append([InlineKeyboardButton("⬅️ 返回厂商列表", callback_data=f"ep_models:{prov}")])
-            await query.edit_message_text(
-                "\n".join(lines)[:4000],
-                reply_markup=InlineKeyboardMarkup(buttons),
-            )
+                    await query.edit_message_text(f"✅ {prov} 的模型已全部删除")
 
-        # ── History settings callbacks ──
-        elif data.startswith("hs_"):
-            await self._handle_history_callback(query, data)
+            # ── Edit agent model: 2-step provider → model selection ──
+            elif data.startswith("em_prov:"):
+                parts = data.split(":", 2)
+                agent_name, prov = parts[1], parts[2]
+                pm = self._load_pm()
+                models = pm.get("models", {}).get(prov, [])
+                if not models:
+                    self._edit_state[chat_id] = {"agent": agent_name, "field": "model", "provider": prov}
+                    await query.edit_message_text(
+                        f"🏢 {prov} 暂无已注册模型\n\n"
+                        "请直接输入模型ID:"
+                    )
+                    return
+                # Cache models for index-based lookup (avoids 64-byte callback limit)
+                if not hasattr(self, "_em_model_cache"):
+                    self._em_model_cache = {}
+                self._em_model_cache[f"{agent_name}:{prov}"] = models
+                buttons = []
+                for i, m in enumerate(models):
+                    buttons.append([InlineKeyboardButton(f"🤖 {m}", callback_data=f"em_mi:{agent_name}:{prov}:{i}")])
+                buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=f"em_manual:{agent_name}")])
+                await query.edit_message_text(f"🏢 {prov} — 选择模型:", reply_markup=InlineKeyboardMarkup(buttons))
 
-        # ── Think callbacks ──
-        elif data.startswith("think_"):
-            await self._handle_think_callback(query, data)
+            elif data.startswith("em_mi:") or data.startswith("em_model:"):
+                # em_mi:agent:prov:index — resolve model from index cache
+                if data.startswith("em_mi:"):
+                    parts = data.split(":")
+                    agent_name, prov, idx = parts[1], parts[2], int(parts[3])
+                    cache = getattr(self, "_em_model_cache", {})
+                    models = cache.get(f"{agent_name}:{prov}", [])
+                    if idx >= len(models):
+                        await query.edit_message_text("⚠️ 模型索引无效，请重新操作")
+                        return
+                    model = models[idx]
+                else:
+                    parts = data.split(":", 3)
+                    agent_name, prov, model = parts[1], parts[2], parts[3]
+                if self._groupchat_engine and agent_name in self._groupchat_engine.registry:
+                    self._groupchat_engine.registry[agent_name]["model"] = model
+                    # Update config on disk
+                    from pathlib import Path as _P
+                    agent_entry = self._groupchat_engine.registry[agent_name]
+                    if agent_entry.get("_default"):
+                        # Default agent (Nanobot): update config.json
+                        main_cfg_path = _P.home() / ".nanobot" / "config.json"
+                        if main_cfg_path.exists():
+                            cfg = json.loads(main_cfg_path.read_text())
+                            cfg.setdefault("agents", {}).setdefault("defaults", {})["model"] = model
+                            main_cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+                    else:
+                        cfg_path = _P.home() / ".nanobot" / "agents" / agent_name.lower() / "config.json"
+                        if cfg_path.exists():
+                            cfg = json.loads(cfg_path.read_text())
+                            cfg["model"] = model
+                            cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+                    await query.edit_message_text(f"✅ {agent_name} 模型已更新:\n🏢 {prov} / 🤖 {model}")
+                else:
+                    await query.edit_message_text(f"❌ Agent '{agent_name}' 不存在")
+                self._edit_state.pop(chat_id, None)
+
+            elif data.startswith("em_manual:"):
+                agent_name = data[10:]
+                self._edit_state[chat_id] = {"agent": agent_name, "field": "model"}
+                await query.edit_message_text("请输入新模型名 (如 anthropic/claude-sonnet-4-5):")
+
+            # ── Edit provider callbacks ──
+            elif data.startswith("ep_pick:"):
+                prov = data[8:]
+                pm = self._load_pm()
+                info = pm.get("providers", {}).get(prov, {})
+                url = info.get("url", "?")
+                key_preview = info.get("apiKey", "")[:8] + "..." if info.get("apiKey") else "(none)"
+                retry = info.get("retryDelays", [1, 2, 4])
+                retry_str = f"{len(retry)}次 ({','.join(str(d) for d in retry)}s)"
+                buttons = [
+                    [InlineKeyboardButton("🔗 修改 URL", callback_data=f"ep_field:{prov}:url")],
+                    [InlineKeyboardButton("🔑 修改 API Key", callback_data=f"ep_field:{prov}:key")],
+                    [InlineKeyboardButton(f"🔄 重试策略: {retry_str}", callback_data=f"ep_retry:{prov}")],
+                    [InlineKeyboardButton("📋 拉取模型列表", callback_data=f"ep_models:{prov}")],
+                    [InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")],
+                ]
+                await query.edit_message_text(
+                    f"✏️ 编辑提供商: {prov}\n\n"
+                    f"🔗 URL: {url}\n"
+                    f"🔑 Key: {key_preview}\n"
+                    f"🔄 重试: {retry_str}",
+                    reply_markup=InlineKeyboardMarkup(buttons),
+                )
+
+            elif data.startswith("ep_field:"):
+                parts = data.split(":", 2)
+                prov, fld = parts[1], parts[2]
+                self._edit_state[chat_id] = {"field": f"ep_{fld}", "mode": "pm", "prov_name": prov}
+                prompts = {"url": "请输入新的 API Base URL:", "key": "请输入新的 API Key:"}
+                await query.edit_message_text(f"✏️ {prov} — {prompts.get(fld, fld)}")
+
+            elif data.startswith("ep_retry:"):
+                prov = data[9:]
+                # Show retry presets
+                presets = {
+                    "std": ("标准 3次", [1, 2, 4]),
+                    "strong": ("加强 5次", [1, 2, 4, 8, 16]),
+                    "max": ("极限 7次", [1, 2, 4, 8, 16, 32, 60]),
+                }
+                pm = self._load_pm()
+                current = pm.get("providers", {}).get(prov, {}).get("retryDelays", [1, 2, 4])
+                current_str = f"{len(current)}次 ({','.join(str(d) for d in current)}s)"
+                buttons = []
+                for key, (label, delays) in presets.items():
+                    mark = " ✓" if delays == current else ""
+                    buttons.append([InlineKeyboardButton(
+                        f"🔄 {label} ({','.join(str(d) for d in delays)}s){mark}",
+                        callback_data=f"ep_retry_set:{prov}:{key}",
+                    )])
+                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")])
+                await query.edit_message_text(
+                    f"🔄 {prov} 重试策略\n\n"
+                    f"当前: {current_str}\n\n"
+                    f"选择预设:",
+                    reply_markup=InlineKeyboardMarkup(buttons),
+                )
+
+            elif data.startswith("ep_retry_set:"):
+                parts = data.split(":", 2)
+                prov, preset = parts[1], parts[2]
+                presets = {
+                    "std": [1, 2, 4],
+                    "strong": [1, 2, 4, 8, 16],
+                    "max": [1, 2, 4, 8, 16, 32, 60],
+                }
+                delays = presets.get(preset, [1, 2, 4])
+                pm = self._load_pm()
+                if prov in pm.get("providers", {}):
+                    pm["providers"][prov]["retryDelays"] = delays
+                    self._save_pm(pm)
+                # Apply to live provider
+                engine = self._groupchat_engine
+                if engine and hasattr(engine, "provider"):
+                    engine.provider._retry_delays = tuple(delays)
+                await query.edit_message_text(
+                    f"✅ {prov} 重试策略已更新!\n"
+                    f"🔄 {len(delays)}次重试 ({','.join(str(d) for d in delays)}s)\n\n"
+                    f"总等待时间: {sum(delays)}s"
+                )
+
+            elif data.startswith("ep_models:"):
+                prov = data[10:]
+                pm = self._load_pm()
+
+                # Use cache if available (for back navigation)
+                cache = getattr(self, "_model_cache", {})
+                if prov in cache:
+                    model_ids = cache[prov]
+                else:
+                    info = pm.get("providers", {}).get(prov, {})
+                    url = info.get("url", "").rstrip("/")
+                    api_key = info.get("apiKey", "")
+                    if not url or not api_key:
+                        await query.edit_message_text(f"⚠️ {prov} 缺少 URL 或 API Key")
+                        return
+                    # Fetch /v1/models
+                    import aiohttp
+                    import json as _json
+                    if "openrouter" in url.lower():
+                        models_url = "https://openrouter.ai/api/v1/models"
+                    elif "/v1" in url:
+                        models_url = f"{url}/models"
+                    else:
+                        models_url = f"{url}/v1/models"
+                    try:
+                        async with aiohttp.ClientSession() as session:
+                            headers = {"Authorization": f"Bearer {api_key}"}
+                            async with session.get(models_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                                body = await resp.text()
+                                if resp.status != 200:
+                                    await query.edit_message_text(f"❌ 拉取失败 (HTTP {resp.status})\n{body[:200]}")
+                                    return
+                                try:
+                                    result = _json.loads(body)
+                                except Exception:
+                                    await query.edit_message_text("❌ 拉取失败: 返回非JSON格式")
+                                    return
+                    except Exception as e:
+                        await query.edit_message_text(f"❌ 拉取失败: {str(e)[:100]}")
+                        return
+
+                    model_list = result.get("data", []) if isinstance(result, dict) else []
+                    if not model_list:
+                        await query.edit_message_text(f"⚠️ {prov} 无可用模型")
+                        return
+                    model_ids = sorted(set(m.get("id", "") for m in model_list if m.get("id")))
+                    if not hasattr(self, "_model_cache"):
+                        self._model_cache = {}
+                    self._model_cache[prov] = model_ids
+
+                # Show prefix filters
+                prefixes: dict[str, int] = {}
+                for mid in model_ids:
+                    pfx = mid.split("/")[0] if "/" in mid else "other"
+                    prefixes[pfx] = prefixes.get(pfx, 0) + 1
+                sorted_pfx = sorted(prefixes.items(), key=lambda x: -x[1])
+                lines = [f"📋 {prov} 可用模型 ({len(model_ids)}):\n", "选择厂商前缀筛选:"]
+                buttons = []
+                for pfx, cnt in sorted_pfx[:20]:
+                    buttons.append([InlineKeyboardButton(f"📂 {pfx} ({cnt})", callback_data=f"ml_pfx:{prov}:{pfx}")])
+                buttons.append([InlineKeyboardButton("🔍 搜索模型", callback_data=f"ml_srch:{prov}")])
+                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")])
+                await query.edit_message_text(
+                    "\n".join(lines)[:4000],
+                    reply_markup=InlineKeyboardMarkup(buttons),
+                )
+
+            elif data.startswith("ml_pfx:"):
+                # ml_pfx:provider:prefix or ml_pfx:provider:prefix:page
+                parts = data.split(":")
+                if len(parts) < 3:
+                    return
+                prov, prefix = parts[1], parts[2]
+                page = int(parts[3]) if len(parts) > 3 else 0
+                per_page = 15
+                cache = getattr(self, "_model_cache", {})
+                model_ids = cache.get(prov, [])
+                filtered = [m for m in model_ids if m.startswith(f"{prefix}/") or (prefix == "other" and "/" not in m)]
+                pm = self._load_pm()
+                existing = set(pm.get("models", {}).get(prov, []))
+
+                filtered = self._sort_models_newest_first(filtered)
+                total_pages = max(1, (len(filtered) + per_page - 1) // per_page)
+                page = min(page, total_pages - 1)
+                start = page * per_page
+                page_items = filtered[start:start + per_page]
+
+                lines = [f"📋 {prov} / {prefix} ({len(filtered)}) [第{page+1}/{total_pages}页]:\n"]
+                for mid in page_items:
+                    if mid in existing:
+                        lines.append(f"  ✅ {mid}")
+                    else:
+                        lines.append(f"  ⚪️ {mid}")
+                buttons = self._build_model_buttons_2col(
+                    page_items, prov, existing, strip_prefix=prefix,
+                )
+                # Navigation
+                nav = []
+                if page > 0:
+                    nav.append(InlineKeyboardButton("⬅️ 上一页", callback_data=f"ml_pfx:{prov}:{prefix}:{page-1}"))
+                if page < total_pages - 1:
+                    nav.append(InlineKeyboardButton("➡️ 下一页", callback_data=f"ml_pfx:{prov}:{prefix}:{page+1}"))
+                if nav:
+                    buttons.append(nav)
+                buttons.append([InlineKeyboardButton("⬅️ 返回厂商列表", callback_data=f"ep_models:{prov}")])
+                await query.edit_message_text(
+                    "\n".join(lines)[:4000],
+                    reply_markup=InlineKeyboardMarkup(buttons),
+                )
+
+            elif data.startswith("ml_srch:"):
+                # ml_srch:provider — prompt user to type search keyword
+                prov = data[8:]
+                chat_id = str(query.message.chat_id)
+                self._edit_state[chat_id] = {"action": "model_search", "provider": prov}
+                await query.edit_message_text(f"🔍 搜索 {prov} 模型\n\n请输入关键词 (如 claude, llama, qwen):")
+
+            elif data.startswith("ep_addm:"):
+                # ep_addm:provider:model_id — add model to provider
+                parts = data.split(":", 2)
+                if len(parts) < 3:
+                    return
+                prov, model_id = parts[1], parts[2]
+                pm = self._load_pm()
+                if prov not in pm.get("providers", {}):
+                    await query.edit_message_text(f"❌ 提供商 {prov} 不存在")
+                    return
+                models = pm.setdefault("models", {})
+                prov_models = models.setdefault(prov, [])
+                if model_id in prov_models:
+                    await query.edit_message_text(f"⚠️ {model_id} 已存在")
+                    return
+                prov_models.append(model_id)
+                self._save_pm(pm)
+                # Reload in provider
+                if self._groupchat_engine:
+                    self._groupchat_engine.provider._pm_overrides = None
+                # Toast notification + refresh list locally
+                try:
+                    await query.answer(f"✅ 已添加 {model_id}", show_alert=False)
+                except Exception:
+                    pass
+                # Rebuild model list from saved pm (no API re-fetch)
+                existing = set(prov_models)
+                all_models = getattr(self, "_model_cache", {}).get(prov, [])
+                if not all_models:
+                    # No cache, just show confirmation
+                    await query.edit_message_text(
+                        f"✅ 已添加 {model_id} 到 {prov}\n"
+                        f"当前 {len(prov_models)} 个模型\n\n"
+                        f"用 /editagent 切换 agent 模型",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("📋 刷新列表", callback_data=f"ep_models:{prov}")],
+                            [InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")],
+                        ])
+                    )
+                    return
+                # Rebuild from cache — stay in same prefix filter
+                prefix = model_id.split("/")[0] if "/" in model_id else "other"
+                filtered = [m for m in all_models if m.startswith(f"{prefix}/") or (prefix == "other" and "/" not in m)]
+                filtered = self._sort_models_newest_first(filtered)
+                lines = [f"📋 {prov} / {prefix} ({len(filtered)}):\n"]
+                page_items = filtered[:30]
+                for mid in page_items:
+                    if mid in existing:
+                        lines.append(f"  ✅ {mid}")
+                    else:
+                        lines.append(f"  ⚪️ {mid}")
+                buttons = self._build_model_buttons_2col(page_items, prov, existing, strip_prefix=prefix)
+                if len(filtered) > 30:
+                    lines.append(f"  ... 和 {len(filtered) - 30} 个更多")
+                buttons.append([InlineKeyboardButton("⬅️ 返回厂商列表", callback_data=f"ep_models:{prov}")])
+                await query.edit_message_text(
+                    "\n".join(lines)[:4000],
+                    reply_markup=InlineKeyboardMarkup(buttons),
+                )
+
+            # ── History settings callbacks ──
+            elif data.startswith("hs_"):
+                await self._handle_history_callback(query, data)
+
+            # ── Think callbacks ──
+            elif data.startswith("think_"):
+                await self._handle_think_callback(query, data)
+
+        except Exception as e:
+            logger.exception("Callback error: data={}", data)
+            try:
+                await query.edit_message_text(
+                    f"❌ 按钮处理出错: {e}",
+                    parse_mode=None,
+                )
+            except Exception:
+                pass
 
     # ── Parameter documentation for /history UI ────────────────────────────
     _PARAM_DOCS: dict[str, dict[str, str]] = {

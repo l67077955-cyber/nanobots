@@ -183,15 +183,16 @@ class HttpxProvider(LLMProvider):
         """Return True when the provider supports cache_control on content blocks.
         
         Gateways (e.g. OpenRouter) may support prompt caching for some backend
-        models (Anthropic) but not others (Zhipu/GLM).  We require BOTH the
-        gateway AND the underlying model's native provider to opt in.
+        models (Anthropic, DeepSeek) but not others.
         """
         if self._gateway is not None:
-            # Gateway says yes — but does the *underlying* model's provider?
+            # If the gateway supports it, we allow it unless the native spec 
+            # explicitly forbids it (False). If native_spec is None, we trust the gateway.
             native_spec = find_by_model(model)
-            if native_spec is not None and not native_spec.supports_prompt_caching:
+            if native_spec is not None and native_spec.supports_prompt_caching is False:
                 return False
             return self._gateway.supports_prompt_caching
+        
         spec = find_by_model(model)
         return spec is not None and spec.supports_prompt_caching
 
@@ -268,7 +269,7 @@ class HttpxProvider(LLMProvider):
         return new_messages, new_tools
 
     @staticmethod
-    def _flatten_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _flatten_tool_messages(messages: list[dict[str, Any]], flatten_tools: bool = False) -> list[dict[str, Any]]:
         """Convert tool-protocol messages to plain text for incompatible APIs."""
         out: list[dict[str, Any]] = []
         for m in messages:
@@ -294,8 +295,12 @@ class HttpxProvider(LLMProvider):
                 continue
 
             if role == "tool":
-                result_text = m.get("content") or ""
-                out.append({"role": "assistant", "content": f"[工具结果]:\n{result_text}"})
+                # Only flatten if explicitly requested by the provider config
+                if flatten_tools:
+                    result_text = m.get("content") or ""
+                    out.append({"role": "assistant", "content": f"--- TOOL RESULT ---\n{result_text}"})
+                else:
+                    out.append(m)
                 continue
 
             out.append(m)
@@ -353,7 +358,7 @@ class HttpxProvider(LLMProvider):
                 prov_cfg = pm.get("providers", {}).get(provider_name, {})
                 needs_flatten = prov_cfg.get("flattenTools", False)
             if needs_flatten:
-                messages = self._flatten_tool_messages(messages)
+                messages = self._flatten_tool_messages(messages, flatten_tools=True)
 
         body: dict[str, Any] = {
             "model": model,

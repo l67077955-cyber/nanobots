@@ -271,8 +271,11 @@ class LLMProvider(ABC):
         return flatten_retry, param_retry
 
     @staticmethod
-    def _flatten_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _flatten_tool_messages(messages: list[dict[str, Any]], flatten_tools: bool = False) -> list[dict[str, Any]]:
         """Convert tool-protocol messages to plain text for incompatible APIs."""
+        if not flatten_tools:
+            return messages
+
         out: list[dict[str, Any]] = []
         for m in messages:
             role = m.get("role", "")
@@ -305,7 +308,7 @@ class LLMProvider(ABC):
                 result_text = m.get("content") or ""
                 out.append({
                     "role": "assistant",
-                    "content": f"[工具结果]:\n{result_text}",
+                    "content": f"--- TOOL RESULT ---\n{result_text}\n------------------",
                 })
                 continue
 
