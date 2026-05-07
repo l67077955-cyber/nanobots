@@ -457,7 +457,7 @@ class SettingsCommandsMixin:
         # Actual LLM context = system prompts + history_to_messages(history).
         compiled_info = ""
         if engine and getattr(engine, "_active_agents", None):
-            from nanobot.groupchat.history.prompt_builder import PromptBuilder
+            # PromptBuilder imported at module level (see imports at top)
             parts = []
             for a in engine._active_agents:
                 try:

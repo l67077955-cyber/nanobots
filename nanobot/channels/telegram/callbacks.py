@@ -495,7 +495,7 @@ class CallbacksMixin:
                 context_snapshot: dict = {}
                 engine = self._groupchat_engine
                 if engine:
-                    from nanobot.groupchat.history.prompt_builder import PromptBuilder
+                    # PromptBuilder imported at module level (see imports at top)
                     raw_history = engine.history.messages
                     active = engine.active_agents
                     registry = getattr(engine, "registry", {})

@@ -1066,6 +1066,7 @@ async def broadcast_round(
                     })
                     continue  # re-enter tool_loop to produce text
 
+
                 # ── Leader guard: management-only cycle produced no text ──
                 # Leader used manage_agent / end_discussion / transfer_credits but no
                 # substantive data tool.  The existing guard above won't fire for these
