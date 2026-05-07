@@ -109,7 +109,10 @@ class HistoryContext:
 
         # Step 1: message-count limit — keep most-recent N, always keep head
         if len(self.messages) > limit:
-            tail = self.messages[-limit:]
+            # Reserve slots for head-protected messages
+            head_slots = len(head_msgs)
+            tail_size = max(0, limit - head_slots)
+            tail = self.messages[-tail_size:] if tail_size > 0 else []
             tail_ids = {id(m) for m in tail}
             extra_head = [m for m in head_msgs if id(m) not in tail_ids]
             self.messages = extra_head + tail
