@@ -191,11 +191,7 @@ class HistoryContext:
         if not to_compress:
             return
 
-        head = [
-            self.messages[i]
-            for i in sorted(protected_head_indices)
-            if i < compress_start
-        ]
+        head = self.messages[:compress_start]
         tail = [
             self.messages[i]
             for i in sorted(protected_tail_indices)
@@ -204,6 +200,7 @@ class HistoryContext:
 
         # ── 4a. AI Summarise ──
         if summarize_enabled() and self._provider is not None:
+            max_tok = compress_max_summary_tokens()
             history_text = "\n".join(
                 f"[{m['sender']}]: {m['content']}" for m in to_compress
             )
@@ -211,9 +208,8 @@ class HistoryContext:
                 f"以下是群聊的一段中期历史记录（共 {len(to_compress)} 条）。\n"
                 "请用简洁的中文摘要这些内容，重点保留核心发现、关键决策、重要事实以及已经完成的进度。\n"
                 "如果有具体的数值、文件路径或关键结论，请务必保留。\n"
-                f"摘要不超过 500 字。\n\n{history_text}"
+                f"摘要不超过 {max_tok // 4} 字。\n\n{history_text}"
             )
-            max_tok = compress_max_summary_tokens()
             try:
                 response = await self._provider.chat_with_retry(
                     messages=[{"role": "user", "content": prompt}],
