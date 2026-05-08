@@ -308,14 +308,11 @@ class WebFetchTool(Tool):
 
             if title:
                 text = f"# {title}\n\n{text}"
-            truncated = len(text) > max_chars
-            if truncated:
-                text = text[:max_chars]
             text = f"{_UNTRUSTED_BANNER}\n\n{text}"
 
             return json.dumps({
                 "url": url, "finalUrl": data.get("url", url), "status": r.status_code,
-                "extractor": "jina", "truncated": truncated, "length": len(text),
+                "extractor": "jina", "truncated": False, "length": len(text),
                 "untrusted": True, "text": text,
             }, ensure_ascii=False)
         except Exception as e:
@@ -359,14 +356,11 @@ class WebFetchTool(Tool):
             else:
                 text, extractor = r.text, "raw"
 
-            truncated = len(text) > max_chars
-            if truncated:
-                text = text[:max_chars]
             text = f"{_UNTRUSTED_BANNER}\n\n{text}"
 
             return json.dumps({
                 "url": url, "finalUrl": str(r.url), "status": r.status_code,
-                "extractor": extractor, "truncated": truncated, "length": len(text),
+                "extractor": extractor, "truncated": False, "length": len(text),
                 "untrusted": True, "text": text,
             }, ensure_ascii=False)
         except httpx.ProxyError as e:

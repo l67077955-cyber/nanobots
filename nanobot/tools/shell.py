@@ -212,20 +212,6 @@ class ExecTool(Tool):
 
             result = "\n".join(output_parts) if output_parts else "(no output)"
 
-            # Head + tail truncation to preserve both start and end of output
-            try:
-                from nanobot.groupchat.history.history_settings import exec_max_chars
-                max_len = exec_max_chars()
-            except Exception:
-                max_len = self._MAX_OUTPUT
-            if len(result) > max_len:
-                half = max_len // 2
-                result = (
-                    result[:half]
-                    + f"\n\n... ({len(result) - max_len:,} chars truncated) ...\n\n"
-                    + result[-half:]
-                )
-
             return result
 
         except Exception as e:

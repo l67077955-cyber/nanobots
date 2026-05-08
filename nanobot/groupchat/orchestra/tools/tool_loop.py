@@ -20,7 +20,7 @@ from typing import Any, Awaitable, Callable
 from loguru import logger
 
 from nanobot.tools.registry import ToolRegistry
-from nanobot.groupchat.history.tool_storage import maybe_persist_tool_result
+from nanobot.groupchat.history.result_processor import process_tool_result
 from nanobot.providers.base import LLMProvider, LLMResponse
 from nanobot.utils.helpers import build_assistant_message
 
@@ -165,10 +165,10 @@ async def tool_loop(
     # ── Resolve dynamic defaults ──
     if result_max_chars is None:
         try:
-            from nanobot.groupchat.history.history_settings import summarize_threshold
-            result_max_chars = summarize_threshold()
+            from nanobot.groupchat.history.history_settings import get_tool_result_max_chars
+            result_max_chars = get_tool_result_max_chars()
         except Exception:
-            result_max_chars = 8000
+            result_max_chars = 64_000
 
     if tool_defs is None:
         tool_defs = tool_registry.get_definitions()
@@ -562,16 +562,11 @@ async def tool_loop(
                     if on_tool_result:
                         await on_tool_result(tc.name, tc.id, tool_result)
 
-                    # Append tool result: pass through multimodal lists, persist huge text
-                    if isinstance(tool_result, list):
-                        tool_content = tool_result
-                    else:
-                        tool_content = maybe_persist_tool_result(
-                            content=tool_result or "",
-                            tool_name=tc.name,
-                            tool_call_id=tc.id,
-                            max_chars=result_max_chars,
-                        )
+                    tool_content = process_tool_result(
+                        content=tool_result,
+                        tool_name=tc.name,
+                        tool_call_id=tc.id,
+                    )
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
