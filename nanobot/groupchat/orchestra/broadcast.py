@@ -405,6 +405,16 @@ async def broadcast_round(
     if leader_name and leader_name not in agents:
         leader_name = None
 
+    # Wire leader info into mailbox for listener restriction feature
+    mailbox.set_leader_name(leader_name or "")
+
+    # Push agent ranks into mailbox for interrupt hierarchy
+    ranks_map: dict[str, str] = {}
+    for ag in agents:
+        cfg = engine.registry.get(ag, {})
+        ranks_map[ag] = cfg.get("rank", "pawn")
+    mailbox.set_ranks(ranks_map, leader=leader_name or "")
+
     # ── Clear any leftover session tool overrides ──
     if hasattr(engine, "_session_tools_override"):
         engine._session_tools_override.clear()
@@ -972,19 +982,26 @@ async def broadcast_round(
                     _intr_earlier = _intr_all[:-1] if len(_intr_all) > 1 else []
 
                     # UI: show who interrupted whom, with distinct label for user vs agent
-                    _sender_name = _intr_msg.sender if _intr_msg else "teammate"
+                    # Fallback to mailbox._last_interrupt_sender because the actual message
+                    # may have been consumed by wait() before drain runs.
+                    _sender_name = (_intr_msg.sender if _intr_msg
+                                    else mailbox._last_interrupt_sender.get(name, "teammate"))
+                    # Attach rank badge for debugging interrupt hierarchy violations
+                    def _badge(a: str) -> str:
+                        r = ranks_map.get(a, "?")
+                        return f"{a}[{r}]"
                     await tracker.set_state(name, "interrupted", detail=f"from {_sender_name}")
                     if _sender_name == "用户":
                         await engine._send(
-                            f"⚡ {name} 被【用户消息】打断，正在立即响应..."
+                            f"⚡ {_badge(name)} 被【用户消息】打断，正在立即响应..."
                         )
                     elif is_leader and _sender_name != "用户":
                         await engine._send(
-                            f"⚡ {name}（Leader）被队友 **{_sender_name}** 汇报实时打断，正在响应..."
+                            f"⚡ {_badge(name)}（Leader）被队友 **{_badge(_sender_name)}** 汇报实时打断，正在响应..."
                         )
                     else:
                         await engine._send(
-                            f"⚡ {name} 被 {_sender_name} 的消息打断，正在立即响应..."
+                            f"⚡ {_badge(name)} 被 {_badge(_sender_name)} 的消息打断，正在立即响应..."
                         )
                     logger.info(
                         "Broadcast: ⚡ {} interrupted by {} mid-turn (cycle {})",

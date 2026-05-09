@@ -251,8 +251,12 @@ class AgentCommandsMixin:
             tools_str = "全部开启"
         else:
             tools_str = "全部关闭"
+        rank = agent.get("rank", "pawn")
+        rank_icons = {"pawn": "♟ 兵", "knight": "♞ 马", "bishop": "♝ 象"}
+        rank_str = rank_icons.get(rank, rank)
         return (
             f"✏️ 编辑 {agent_name}\n\n"
+            f"🎖️ 等级: {rank_str}\n"
             f"模型: {agent['model']}\n"
             f"工具: {tools_str}\n"
             f"人设: {agent['prompt'][:100]}..."
@@ -261,6 +265,7 @@ class AgentCommandsMixin:
     def _edit_menu_buttons(self, agent_name: str) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("✏️ 修改名字", callback_data=f"ef:{agent_name}:name")],
+            [InlineKeyboardButton("🎖️ 更改等级", callback_data=f"srr:{agent_name}")],
             [InlineKeyboardButton("📝 修改提示词", callback_data=f"ef:{agent_name}:persona")],
             [InlineKeyboardButton("🤖 更换模型/提供商", callback_data=f"ef:{agent_name}:model")],
             [InlineKeyboardButton("🔧 工具权限设置", callback_data=f"ef:{agent_name}:tools")],

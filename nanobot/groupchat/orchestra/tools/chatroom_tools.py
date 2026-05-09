@@ -870,6 +870,9 @@ class ManageAgentTool(Tool):
         restart   — Re-spawn a disabled agent's task so it actively participates
         set_tools — Change an agent's tool permissions for this session
         set_status — Modify the agent's status message injected into its next cycle
+        set_listener — Restrict which sender an agent can hear (only works within same round)
+                       Pass allowed_sender="" to lift restriction.
+                       By default, restricting to the leader makes the agent ignore all non-leader messages.
     """
 
     def __init__(
@@ -908,14 +911,15 @@ class ManageAgentTool(Tool):
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["disable", "enable", "restart", "set_tools", "set_status"],
+                    "enum": ["disable", "enable", "restart", "set_tools", "set_status", "set_listener"],
                     "description": (
                         "操作类型: "
                         "disable=踢出并取消任务, "
                         "restart=重新拉回并启动任务, "
                         "enable=仅标记为激活(不重启任务), "
                         "set_tools=修改工具权限, "
-                        "set_status=注入状态消息到agent下次循环"
+                        "set_status=注入状态消息到agent下次循环, "
+                        "set_listener=限制某agent只能接收某个sender的消息"
                     ),
                 },
                 "agent": {
@@ -929,6 +933,10 @@ class ManageAgentTool(Tool):
                 "status": {
                     "type": "string",
                     "description": "状态消息 (仅 set_status 时需要), 会作为系统提示注入agent下次循环",
+                },
+                "allowed_sender": {
+                    "type": "string",
+                    "description": "(仅 set_listener 时需要) 指定该agent只能从此sender接收消息。设为空字符串''即可解除限制。默认值：留空表示解除限制。若传入leader名则该agent只听Leader的。",
                 },
             },
             "required": ["action", "agent"],
@@ -1033,6 +1041,17 @@ class ManageAgentTool(Tool):
                 f"[Leader 状态更新] {status}")
             await self._engine._send(f"📋 Leader 已更新 {agent} 状态: {status[:80]}")
             return f"✅ {agent} 状态已更新，消息已注入其收件箱"
+
+        elif action == "set_listener":
+            allowed_sender = kwargs.get("allowed_sender", "")
+            if not allowed_sender:
+                self._mailbox.set_listener_restriction(agent, "")
+                return f"✅ {agent} 的消息监听限制已解除（可接收所有人消息）"
+            self._mailbox.set_listener_restriction(agent, allowed_sender)
+            note = ""
+            if allowed_sender == self._mailbox._leader_name:
+                note = f"，相当于{agent}只会听Leader({allowed_sender})的"
+            return f"✅ {agent} 现只允许接收来自 {allowed_sender} 的消息{note}"
 
         return f"Error: 未知 action '{action}'"
 

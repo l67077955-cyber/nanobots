@@ -137,10 +137,12 @@ def _scan_agents_dir(
                     model = _cfg.get("model", "?")
                     desc = _cfg.get("description", "系统 agent")
                     tools_enabled = _cfg.get("tools_enabled", False)
+                    rank = _cfg.get("rank", "pawn")
                     agent_data = {
                         "model": model, "prompt": "", "role": "system",
                         "description": desc, "tools_enabled": tools_enabled,
                         "workspace_scope": "workspace", "agent_dir": str(d),
+                        "rank": rank,
                     }
                     if isinstance(_cfg.get("tools"), dict):
                         agent_data["tools"] = _cfg["tools"]
@@ -196,7 +198,10 @@ def _scan_agents_dir(
         if d.name == "grok":
             name = "Grok"
 
-        agent_data: dict[str, Any] = {"model": model, "prompt": prompt, "tools_enabled": tools_enabled}
+        # Rank: pawn < knight < bishop (controls who-can-interrupt-whom)
+        rank = acfg.get("rank", "pawn") if config_file.exists() else "pawn"
+        
+        agent_data: dict[str, Any] = {"model": model, "prompt": prompt, "tools_enabled": tools_enabled, "rank": rank}
         if tools_cfg is not None:
             agent_data["tools"] = tools_cfg
         if hyperparams:

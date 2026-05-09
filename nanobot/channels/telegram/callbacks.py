@@ -206,6 +206,22 @@ class CallbacksMixin:
                         reply_markup=InlineKeyboardMarkup(buttons)
                     )
                     return
+                elif field == "rank":
+                    agent = self._groupchat_engine.registry.get(name, {})
+                    current = agent.get("rank", "pawn")
+                    rank_icons = {"pawn": "♟ 兵", "knight": "♞ 马", "bishop": "♝ 象"}
+                    buttons = []
+                    for r in ("pawn", "knight", "bishop"):
+                        icon = "✅ " if r == current else "  "
+                        buttons.append([InlineKeyboardButton(
+                            f"{icon}{rank_icons[r]}", callback_data=f"srr:{name}:{r}"
+                        )])
+                    buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
+                    await query.edit_message_text(
+                        f"🎖️ {name} 等级设置 (当前: {rank_icons.get(current, current)}):",
+                        reply_markup=InlineKeyboardMarkup(buttons)
+                    )
+                    return
                 elif field == "hyperparams":
                     # Per-agent hyperparams (same UX as /hyperparams but per-agent)
                     agent = self._groupchat_engine.registry.get(name, {})
@@ -390,6 +406,43 @@ class CallbacksMixin:
                 buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
                 await query.edit_message_text(
                     f"🔧 {name} 工具权限设置:",
+                    reply_markup=InlineKeyboardMarkup(buttons)
+                )
+
+            elif data.startswith("srr:"):
+                # srr:AgentName:rank — set agent rank
+                parts = data.split(":", 2)
+                if len(parts) < 3:
+                    return
+                name, rank_val = parts[1], parts[2]
+                if rank_val not in ("pawn", "knight", "bishop"):
+                    return
+                agent = self._groupchat_engine.registry.get(name, {})
+                agent["rank"] = rank_val
+                # Persist to config.json (same pattern as tf: handler)
+                cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
+                cfg_path.parent.mkdir(parents=True, exist_ok=True)
+                cfg = {}
+                if cfg_path.exists():
+                    try:
+                        cfg = json.loads(cfg_path.read_text())
+                    except Exception:
+                        pass
+                cfg["rank"] = rank_val
+                try:
+                    cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+                except Exception:
+                    pass
+                rank_icons = {"pawn": "♟ 兵", "knight": "♞ 马", "bishop": "♝ 象"}
+                buttons = []
+                for r in ("pawn", "knight", "bishop"):
+                    icon = "✅ " if r == rank_val else "  "
+                    buttons.append([InlineKeyboardButton(
+                        f"{icon}{rank_icons[r]}", callback_data=f"srr:{name}:{r}"
+                    )])
+                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
+                await query.edit_message_text(
+                    f"🎖️ {name} 等级已设为 {rank_icons[rank_val]}",
                     reply_markup=InlineKeyboardMarkup(buttons)
                 )
 

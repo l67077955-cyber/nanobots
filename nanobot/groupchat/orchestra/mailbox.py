@@ -254,6 +254,9 @@ class MailboxHub:
         # Track which agents are currently waiting
         self._waiting: set[str] = set()
         self._all_waiting = asyncio.Event()
+        # Leader info + listener restrictions
+        self._leader_name: str = ""
+        self._listener_restrictions: dict[str, str] = {}
         # Track which agents are still active (not finished their tool_loop)
         self._active_agents: set[str] = set()
         # Track expected replies: {waiter: {active_agent_that_may_reply, ...}}
@@ -261,10 +264,18 @@ class MailboxHub:
         # agentA's auto-wait deadline is extended while agentB is still busy.
         self._expected_replies: dict[str, set[str]] = {}
 
+        # ── Agent ranks (pawn < knight < bishop) ────────────
+        # Controls interrupt hierarchy: higher rank can interrupt lower rank.
+        # Same rank cannot interrupt each other.
+        self._ranks: dict[str, int] = {}
+        self._leader: str = ""  # Leader always has highest interrupt priority
+
         # ── Forced interrupt state ──────────────────────────
         # Per-agent asyncio.Event: set when a forced interrupt is triggered.
         # tool_loop checks this between operations and exits gracefully.
         self._interrupt_events: dict[str, asyncio.Event] = {}
+        # Records WHO initiated each agent's latest interrupt (survives queue consumption).
+        self._last_interrupt_sender: dict[str, str] = {}
         # Counts how many times each agent has been interrupted this round.
         # Hard limit: 3 interrupts per agent per round (raised from 1 so that
         # newer messages can re-trigger interrupts for freshness).
@@ -273,6 +284,26 @@ class MailboxHub:
         self._busy_agents: set[str] = set()
         # Auto-incrementing message ID for quote_message support
         self._next_msg_id: int = 0
+
+    def set_leader_name(self, leader_name: str) -> None:
+        """Set/update the leader name (may not be known at construction time)."""
+        self._leader_name = leader_name
+
+    def set_listener_restriction(self, agent: str, allowed_sender: str) -> None:
+        """Restrict which sender's messages an agent can receive.
+
+        Args:
+            agent: The agent to restrict.
+            allowed_sender: 'leader' = only leader, 'any' = clear restriction,
+                           or a specific agent name.
+        """
+        if allowed_sender and allowed_sender.lower() == "any":
+            self._listener_restrictions.pop(agent, None)
+        else:
+            resolved = allowed_sender
+            if allowed_sender.lower() == "leader" and self._leader_name:
+                resolved = self._leader_name
+            self._listener_restrictions[agent] = resolved
 
     def create(self, agent_name: str) -> None:
         """Create a mailbox for an agent (idempotent)."""
@@ -298,6 +329,7 @@ class MailboxHub:
         # Reset interrupt state for the new round
         self._interrupt_counts.clear()
         self._busy_agents.clear()
+        self._listener_restrictions.clear()
         for evt in self._interrupt_events.values():
             evt.clear()
         logger.debug("MailboxHub: round started, {} agents", len(self._queues))
@@ -324,6 +356,38 @@ class MailboxHub:
         self._busy_agents.discard(agent_name)
         logger.debug("MailboxHub: {} is now idle", agent_name)
 
+    def set_ranks(self, ranks: dict[str, str], leader: str = "") -> None:
+        """Store agent ranks for interrupt permission checking.
+        
+        Args:
+            ranks: Mapping of agent_name -> rank_string ("pawn", "knight", "bishop")
+            leader: Leader agent name — always gets highest priority regardless of rank.
+        """
+        order = {"pawn": 0, "knight": 1, "bishop": 2}
+        self._ranks.clear()
+        self._leader = leader
+        for name, r in ranks.items():
+            # Leader always gets highest rank (bishop + 1)
+            if name == leader:
+                val = max(order.values()) + 1
+            else:
+                val = order.get(r, 0)
+            self._ranks[name] = val
+            logger.debug("MailboxHub: rank({}) = {} ({})", name, val, r)
+
+    def _can_interrupt(self, sender: str, target: str) -> bool:
+        """Check if sender has sufficient rank to interrupt target.
+        
+        Rules:
+        - Leader CAN interrupt anyone (highest implicit priority)
+        - Higher rank CAN interrupt lower rank
+        - Equal rank CANNOT interrupt each other (they queue)
+        - Unknown rank defaults to 0 (lowest)
+        """
+        s_rank = self._ranks.get(sender, 0)
+        t_rank = self._ranks.get(target, 0)
+        return s_rank > t_rank
+
     def _try_interrupt(self, target: str, sender: str) -> bool:
         """Attempt to interrupt a busy agent.
 
@@ -335,12 +399,22 @@ class MailboxHub:
             return False
         if target not in self._busy_agents:
             return False
+        # Rank check: low-rank agents cannot interrupt higher-or-equal rank
+        if not self._can_interrupt(sender, target):
+            logger.debug(
+                "MailboxHub: interrupt blocked — {} (rank {}) vs {} (rank {})",
+                sender, self._ranks.get(sender, 0),
+                target, self._ranks.get(target, 0),
+            )
+            return False
         if self._interrupt_counts.get(target, 0) >= 3:
             logger.debug(
                 "MailboxHub: interrupt skipped for {} (already interrupted {} times this round)",
                 target, self._interrupt_counts.get(target, 0),
             )
             return False
+        # Record who caused this interrupt (persists beyond queue consumption)
+        self._last_interrupt_sender[target] = sender
         # Trigger the interrupt
         evt = self.get_interrupt_event(target)
         evt.set()
@@ -369,6 +443,7 @@ class MailboxHub:
         """
         count = 0
         for agent in list(self._busy_agents):
+            self._last_interrupt_sender[agent] = sender
             evt = self.get_interrupt_event(agent)
             if not evt.is_set():
                 evt.set()
@@ -410,6 +485,10 @@ class MailboxHub:
             # Broadcast to everyone except sender
             for name, q in self._queues.items():
                 if name != sender:
+                    # Check listener restriction before delivery
+                    restriction = self._listener_restrictions.get(name)
+                    if restriction and sender != restriction and sender != "系统":
+                        continue
                     q.put_nowait(msg)
                     delivered += 1
                     # Trigger interrupt if recipient is busy (max 1/round)
@@ -418,6 +497,10 @@ class MailboxHub:
             for name in targets:
                 q = self._queues.get(name)
                 if q is not None and name != sender:
+                    # Check listener restriction before delivery
+                    restriction = self._listener_restrictions.get(name)
+                    if restriction and sender != restriction and sender != "系统":
+                        continue
                     q.put_nowait(msg)
                     delivered += 1
                     # Trigger interrupt if recipient is busy (max 1/round)
