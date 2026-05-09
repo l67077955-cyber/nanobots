@@ -258,6 +258,7 @@ class CallbacksMixin:
                     if provs:
                         buttons = [[InlineKeyboardButton(f"🏢 {p}", callback_data=f"em_prov:{name}:{p}")] for p in provs]
                         buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=f"em_manual:{name}")])
+                        buttons.append([InlineKeyboardButton("❌ 取消", callback_data=f"edit:{name}")])
                         await query.edit_message_text("🤖 选择提供商:", reply_markup=InlineKeyboardMarkup(buttons))
                     else:
                         await query.edit_message_text("请输入新模型名 (如 anthropic/claude-sonnet-4-5):")
@@ -1032,6 +1033,9 @@ class CallbacksMixin:
                 await query.edit_message_text("⚙️ 返回...")
                 await self._send_hyperparams_keyboard(chat_id, params)
 
+            elif data == "hp_cancel":
+                await query.edit_message_text("❌ 已退出超参数设置")
+
             # ── Agent Hyperparams (ahp:) ──────────────────────────
             elif data.startswith("ahp:"):
                 # ahp:AgentName:key
@@ -1163,31 +1167,6 @@ class CallbacksMixin:
                     f"请输入新值 (整数):"
                 )
 
-            elif data.startswith("ord:"):
-                val = data[4:]
-                if val == "done":
-                    agents = self._groupchat_engine.active_agents
-                    # Persist final order
-                    self._groupchat_engine.save_active()
-                    # Auto-update saved group
-                    gname = getattr(self._groupchat_engine, '_current_group_name', None)
-                    if gname:
-                        groups = self._groupchat_engine.load_groups()
-                        if gname in groups:
-                            groups[gname] = list(agents)
-                            self._groupchat_engine.save_groups(groups)
-                    order_str = " → ".join(agents)
-                    await query.edit_message_text(f"📢 发言顺序:\n{order_str}")
-                else:
-                    idx = int(val)
-                    agents = self._groupchat_engine.active_agents
-                    if 0 < idx < len(agents):
-                        # Swap with previous
-                        agents[idx], agents[idx-1] = agents[idx-1], agents[idx]
-                        self._groupchat_engine.reorder_agents(list(agents))
-                    # Refresh keyboard
-                    await query.edit_message_text("📢 更新中...")
-                    await self._send_order_keyboard(chat_id, self._groupchat_engine.active_agents)
 
             # ── Prompt orchestration callbacks ──
             elif data in ("pr:refresh", "pr:"):

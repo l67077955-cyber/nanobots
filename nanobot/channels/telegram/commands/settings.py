@@ -75,6 +75,7 @@ class SettingsCommandsMixin:
                 InlineKeyboardButton("🗑", callback_data=f"hp_del:{k}"),
             ])
         buttons.append([InlineKeyboardButton("➕ 添加参数", callback_data="hp_add")])
+        buttons.append([InlineKeyboardButton("❌ 退出", callback_data="hp_cancel")])
         text = "\n".join(lines)
         await self._app.bot.send_message(
             chat_id=int(chat_id), text=text,

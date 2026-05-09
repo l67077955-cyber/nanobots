@@ -233,6 +233,7 @@ class AgentCommandsMixin:
             for n in agents:
                 model = self._groupchat_engine.registry[n].get("model", "?")
                 buttons.append([InlineKeyboardButton(f"{n} ({model})", callback_data=f"edit:{n}")])
+            buttons.append([InlineKeyboardButton("❌ 取消", callback_data="cancel_edit")])
             await update.message.reply_text("✏️ 选择要编辑的 Agent:", reply_markup=InlineKeyboardMarkup(buttons))
             return
         matched = self._groupchat_engine.resolve_agent_name(name)
