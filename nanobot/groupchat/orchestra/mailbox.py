@@ -399,6 +399,9 @@ class MailboxHub:
             return False
         if target not in self._busy_agents:
             return False
+        # Record who attempted the interrupt (before rank check, so blocked
+        # attempts are also visible in the UI for debugging hierarchy bugs)
+        self._last_interrupt_sender[target] = sender
         # Rank check: low-rank agents cannot interrupt higher-or-equal rank
         if not self._can_interrupt(sender, target):
             logger.debug(
@@ -443,6 +446,10 @@ class MailboxHub:
         """
         count = 0
         for agent in list(self._busy_agents):
+            if agent == sender:
+                continue
+            if sender != "用户" and not self._can_interrupt(sender, agent):
+                continue
             self._last_interrupt_sender[agent] = sender
             evt = self.get_interrupt_event(agent)
             if not evt.is_set():

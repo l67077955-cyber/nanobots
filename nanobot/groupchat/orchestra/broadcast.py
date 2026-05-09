@@ -986,6 +986,9 @@ async def broadcast_round(
                     # may have been consumed by wait() before drain runs.
                     _sender_name = (_intr_msg.sender if _intr_msg
                                     else mailbox._last_interrupt_sender.get(name, "teammate"))
+                    # Defensive: skip displaying self-interrupt (redundant/noop)
+                    if _sender_name == name:
+                        _sender_name = "teammate"
                     # Attach rank badge for debugging interrupt hierarchy violations
                     def _badge(a: str) -> str:
                         r = ranks_map.get(a, "?")
