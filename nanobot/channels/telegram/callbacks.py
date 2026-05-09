@@ -209,6 +209,9 @@ class CallbacksMixin:
                 elif field == "rank":
                     agent = self._groupchat_engine.registry.get(name, {})
                     current = agent.get("rank", "pawn")
+                    # Defensive: rank may be a list due to config corruption
+                    if isinstance(current, list):
+                        current = current[0] if current else "pawn"
                     rank_icons = {"pawn": "♟ 兵", "knight": "♞ 马", "bishop": "♝ 象"}
                     buttons = []
                     for r in ("pawn", "knight", "bishop"):

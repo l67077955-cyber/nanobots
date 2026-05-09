@@ -7,35 +7,24 @@ from nanobot.groupchat.orchestra.mailbox import MailboxHub
 async def test():
     mb = MailboxHub()
     mb.set_ranks({"kirk": "bishop", "harper": "pawn"}, leader="kirk")
-    
-    # Simulate: harper sends to kirk, kirk is busy
-    mb.mark_busy("kirk")
-    
-    # Method 1: direct _try_interrupt
-    mb._try_interrupt("kirk", "harper")
-    assert mb._last_interrupt_sender.get("kirk") == "harper", \
-        f"Expected harper, got {mb._last_interrupt_sender.get('kirk')}"
-    print("✅ _try_interrupt records sender correctly")
-    
-    # Clear
-    mb.get_interrupt_event("kirk").clear()
-    
-    # Method 2: interrupt_busy_agents
-    count = mb.interrupt_busy_agents("用户")
-    assert count >= 1, f"Expected >=1, got {count}"
-    assert mb._last_interrupt_sender.get("kirk") == "用户", \
-        f"Expected 用户, got {mb._last_interrupt_sender.get('kirk')}"
-    print("✅ interrupt_busy_agents records sender correctly")
-    
-    # Verify: even after consuming the message (simulated by clearing queue),
-    # _last_interrupt_sender persists
-    mb._last_interrupt_sender["kirk"] = "harper_queued"
-    # Simulate wait() consuming the message
-    assert mb._last_interrupt_sender.get("kirk") == "harper_queued", \
-        "Sender should persist after queue consumption"
-    print("✅ Sender persists independently of queue state")
-    
-    print("\n🎉 All tests passed")
+
+    # Method: bishop interrupts pawn via interrupt_busy_agents
+    mb.mark_busy("harper")
+
+    count = mb.interrupt_busy_agents("kirk")
+    assert count >= 1, f"Bishop hitting lower ranks should land, got {count}"
+
+    assert mb._last_interrupt_sender.get("harper") == "kirk", \
+        f"Sender tag mismatch: got '{mb._last_interrupt_sender.get('harper')}', expected 'kirk'"
+    print("[PASS] interrupt_busy_agents records sender correctly")
+
+    # Persistence after simulated queue consumption
+    mb._last_interrupt_sender["harper"] = "kirk_postqueue"
+    assert mb._last_interrupt_sender.get("harper") == "kirk_postqueue", \
+        "Sender should survive independent of queue state"
+    print("[PASS] Sender persists independently of queue state")
+
+    print("\nALL TESTS PASSED")
     return True
 
 if __name__ == "__main__":

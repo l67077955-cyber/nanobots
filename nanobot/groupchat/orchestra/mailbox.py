@@ -367,6 +367,8 @@ class MailboxHub:
         self._ranks.clear()
         self._leader = leader
         for name, r in ranks.items():
+            if isinstance(r, list):
+                r = r[0] if r else "pawn"
             # Leader always gets highest rank (bishop + 1)
             if name == leader:
                 val = max(order.values()) + 1

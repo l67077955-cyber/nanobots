@@ -178,7 +178,8 @@ def _scan_agents_dir(
             try:
                 acfg = json.loads(config_file.read_text())
                 # Top-level 'model' takes priority (written by /editagent)
-                model = acfg.get("model", model)
+                _raw_model = acfg.get("model", model)
+                model = _raw_model[0] if isinstance(_raw_model, list) and _raw_model else _raw_model if isinstance(_raw_model, str) else model
                 # Granular tools config: {web_search: true, exec: false, ...}
                 if isinstance(acfg.get("tools"), dict):
                     tools_cfg = acfg["tools"]
@@ -199,7 +200,8 @@ def _scan_agents_dir(
             name = "Grok"
 
         # Rank: pawn < knight < bishop (controls who-can-interrupt-whom)
-        rank = acfg.get("rank", "pawn") if config_file.exists() else "pawn"
+        _raw_rank = acfg.get("rank", "pawn") if config_file.exists() else "pawn"
+        rank = _raw_rank[0] if isinstance(_raw_rank, list) and _raw_rank else _raw_rank if isinstance(_raw_rank, str) else "pawn"
         
         agent_data: dict[str, Any] = {"model": model, "prompt": prompt, "tools_enabled": tools_enabled, "rank": rank}
         if tools_cfg is not None:

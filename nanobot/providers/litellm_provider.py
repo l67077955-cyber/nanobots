@@ -516,6 +516,8 @@ class LiteLLMProvider(LLMProvider):
 
     def _resolve_pm_overrides(self, model: str) -> dict[str, str | None]:
         """Resolve api_base/api_key/model from ~/.nanobot/providers_models.json."""
+        if not isinstance(model, str):
+            model = model[0] if isinstance(model, list) and model else str(model)
         import json as _json
         from pathlib import Path
         pm_path = Path.home() / ".nanobot" / "providers_models.json"

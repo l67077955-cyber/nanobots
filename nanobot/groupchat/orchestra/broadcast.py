@@ -412,7 +412,9 @@ async def broadcast_round(
     ranks_map: dict[str, str] = {}
     for ag in agents:
         cfg = engine.registry.get(ag, {})
-        ranks_map[ag] = cfg.get("rank", "pawn")
+        r = cfg.get("rank", "pawn")
+        # Defensive: rank may be a list [rank_str, hyperparams_dict] due to config corruption
+        ranks_map[ag] = r[0] if isinstance(r, list) and r else r if isinstance(r, str) else "pawn"
     mailbox.set_ranks(ranks_map, leader=leader_name or "")
 
     # ── Clear any leftover session tool overrides ──

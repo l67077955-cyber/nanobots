@@ -253,6 +253,9 @@ class AgentCommandsMixin:
         else:
             tools_str = "全部关闭"
         rank = agent.get("rank", "pawn")
+        # Defensive: rank may be a list due to config corruption
+        if isinstance(rank, list):
+            rank = rank[0] if rank else "pawn"
         rank_icons = {"pawn": "♟ 兵", "knight": "♞ 马", "bishop": "♝ 象"}
         rank_str = rank_icons.get(rank, rank)
         return (
