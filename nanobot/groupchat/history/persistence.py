@@ -175,3 +175,11 @@ class GroupChatState:
             with open(self._session_dir / "chat_log.txt", "a") as f:
                 f.write(f"[{sender}]: {content}\n---\n")
         self.save_event("message", agent=sender, content=content)
+
+    def save_history(self, messages: list[dict[str, str]]) -> None:
+        """Persist the full message list to session history.json for crash recovery."""
+        if self._session_dir:
+            import json
+            with open(self._session_dir / "history.json", "w", encoding="utf-8") as f:
+                json.dump(messages, f, ensure_ascii=False, indent=2)
+            logger.debug("GroupChatState: persisted {} messages to history.json", len(messages))

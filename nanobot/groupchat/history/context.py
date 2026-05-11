@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from nanobot.groupchat.history.history_settings import get_history_settings
+
 if TYPE_CHECKING:
     from nanobot.groupchat.history.persistence import GroupChatState
 
@@ -42,6 +44,7 @@ class HistoryContext:
         self._state = state
         self._provider = provider
         self.messages: list[dict[str, str]] = []
+        self._lock = asyncio.Lock()
 
     # ── Compatibility shim: allow engine._history to keep working ─────────
     # We expose the messages list directly as a public attribute so that
@@ -49,6 +52,13 @@ class HistoryContext:
     # TODO: remove once all callers are migrated.
 
     # ── Internal helpers ──────────────────────────────────────────────────
+
+    def _persist_history(self) -> None:
+        """Persist the full in-memory message list to disk after compression."""
+        try:
+            self._state.save_history(self.messages)
+        except Exception as e:
+            logger.warning("HistoryContext: failed to persist history: {}", e)
 
     @staticmethod
     def _find_head_indices(history: list[dict]) -> set[int]:
@@ -84,13 +94,14 @@ class HistoryContext:
             f"[{m['sender']}]: {m['content']}" for m in self.messages
         )
 
-    def add_message(self, sender: str, content: str) -> None:
+    async def add_message(self, sender: str, content: str) -> None:
         """Append a message and enforce message-count / char-budget limits.
 
         Head-protection guarantees that the very first message and the first
         user message are never evicted during trimming.
         """
-        self.messages.append({"sender": sender, "content": content})
+        async with self._lock:
+            self.messages.append({"sender": sender, "content": content})
 
         try:
             from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
@@ -128,7 +139,7 @@ class HistoryContext:
                     continue
                 c = len(m.get("content", ""))
                 if available - c < 0:
-                    break
+                    continue
                 tail.insert(0, m)
                 available -= c
 
@@ -149,6 +160,7 @@ class HistoryContext:
         Head-tail protection always runs.  AI summarisation is gated by
         ``summarize_enabled``; if disabled, the middle region is simply dropped.
         """
+        async with self._lock:
         from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
             max_messages,
             summarize_enabled,
@@ -168,7 +180,8 @@ class HistoryContext:
         protected_head_indices = self._find_head_indices(self.messages)
 
         # ── 2. Protected Tail ──
-        keep_recent = 6
+        _settings = get_history_settings()
+        keep_recent = _settings.get("context_pruning", {}).get("keep_recent", 6)
         protected_tail_indices = set(
             range(max(0, total_len - keep_recent), total_len)
         )
@@ -184,7 +197,10 @@ class HistoryContext:
         if compress_start >= compress_end:
             return
 
-        to_compress = self.messages[compress_start:compress_end]
+        to_compress = [
+            m for m in self.messages[compress_start:compress_end]
+            if not m.get("is_summary")
+        ]
         if not to_compress:
             return
 
@@ -225,6 +241,7 @@ class HistoryContext:
                             f"[早期对话摘要（压缩了 {len(to_compress)} 条中间消息）]\n"
                             + summary
                         ),
+                        "is_summary": True,
                     }
                     self.messages = head + [summary_msg] + tail
                     logger.info(
@@ -234,6 +251,7 @@ class HistoryContext:
                         len(head),
                         len(tail),
                     )
+                    self._persist_history()
                     return
             except Exception as e:
                 logger.warning(
@@ -248,3 +266,4 @@ class HistoryContext:
             len(head),
             len(tail),
         )
+        self._persist_history()
