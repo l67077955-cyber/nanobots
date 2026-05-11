@@ -241,6 +241,12 @@ class HistoryContext:
                 )
 
         # ── 4b. Fallback: drop middle region ──
+        if not summarize_enabled():
+            # If AI is disabled, we don't drop messages here; we let add_message's 
+            # hard limits (max_messages) handle it to avoid "disappearing messages" 
+            # that look like a bug.
+            return
+
         self.messages = head + tail
         logger.info(
             "HistoryContext: dropped {} middle messages (head: {}, tail: {})",

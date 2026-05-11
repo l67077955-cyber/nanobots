@@ -145,6 +145,16 @@ class SettingsCommandsMixin:
                 callback_data=f"gc:{key}",
             )])
 
+        # --- AI Summarization Toggle ---
+        from nanobot.groupchat.history.history_settings import summarize_enabled
+        is_enabled = summarize_enabled()
+        status_text = "✅ 已开启" if is_enabled else "❌ 已关闭"
+        lines.append(f"\n  AI 总结: {status_text}")
+        buttons.append([InlineKeyboardButton(
+            f"🤖 AI 总结: {'关闭' if is_enabled else '开启'}",
+            callback_data=f"hs_set:tool_results:summarize_enabled:{'false' if is_enabled else 'true'}"
+        )])
+
         # Show pool capacity preview
         active = len(self._groupchat_engine.active_agents) if self._groupchat_engine else 0
         if active > 0:

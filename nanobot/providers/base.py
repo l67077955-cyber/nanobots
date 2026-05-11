@@ -357,6 +357,7 @@ class LLMProvider(ABC):
         reasoning_effort: object = _SENTINEL,
         metadata: dict[str, Any] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        timeout: float | None = None,
     ) -> LLMResponse:
         """Call chat() with retry on transient provider failures.
 
@@ -386,6 +387,7 @@ class LLMProvider(ABC):
                     reasoning_effort=reasoning_effort,
                     metadata=metadata,
                     tool_choice=tool_choice,
+                    timeout=timeout,
                 )
             except asyncio.CancelledError:
                 raise

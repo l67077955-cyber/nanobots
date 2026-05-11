@@ -86,7 +86,7 @@ class HttpxProvider(LLMProvider):
     def _get_client(self) -> httpx.AsyncClient:
         """Get or create the shared httpx client."""
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=120.0)
+            self._client = httpx.AsyncClient(timeout=90.0)
         return self._client
 
     def get_default_model(self) -> str:
@@ -580,6 +580,7 @@ class HttpxProvider(LLMProvider):
         metadata: dict[str, Any] | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
+        timeout: float | None = None,
     ) -> LLMResponse:
         """Send a chat completion request via httpx (raw JSON)."""
         original_model = model or self.default_model
@@ -607,7 +608,7 @@ class HttpxProvider(LLMProvider):
         t0 = _time.time()
         try:
             client = self._get_client()
-            r = await client.post(url, json=body, headers=headers)
+            r = await client.post(url, json=body, headers=headers, timeout=timeout or 90.0)
             latency = _time.time() - t0
 
             if r.status_code != 200:
@@ -671,13 +672,14 @@ class HttpxProvider(LLMProvider):
 
     _openai_clients: dict[str, Any] = {}  # keyed by base_url:key_prefix
 
-    def _get_openai_client(self, base_url: str, api_key: str):
+    def _get_openai_client(self, base_url: str, api_key: str, timeout: float = 90.0):
         """Get or create an AsyncOpenAI client for streaming."""
         from openai import AsyncOpenAI
         cache_key = f"{base_url}:{api_key[:8]}"
         client = self._openai_clients.get(cache_key)
-        if client is None:
-            client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=120.0)
+        if client is None or getattr(client, "_timeout", 90.0) != timeout:
+            client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
+            client._timeout = timeout  # Store for cache invalidation
             self._openai_clients[cache_key] = client
         return client
 
@@ -691,6 +693,7 @@ class HttpxProvider(LLMProvider):
         metadata: dict[str, Any] | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
+        timeout: float | None = None,
     ):
         """Stream a chat completion using the OpenAI SDK for fast SSE.
 
@@ -723,7 +726,7 @@ class HttpxProvider(LLMProvider):
 
         t0 = _time.time()
         try:
-            oai_client = self._get_openai_client(target_base, target_key)
+            oai_client = self._get_openai_client(target_base, target_key, timeout=timeout or 90.0)
             stream = await oai_client.chat.completions.create(
                 **sdk_body, stream=True, stream_options={"include_usage": True},
                 extra_headers=self.extra_headers or None,

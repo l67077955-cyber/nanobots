@@ -271,6 +271,11 @@ async def tool_loop(
             )
             iter_tool_defs = None
 
+        # ── Dynamic Timeout ──
+        # Base timeout 60s + 1s per 1000 chars of context
+        _current_timeout = min(90.0, max(call_timeout or 0, 60.0 + (_ctx_total / 1000.0)))
+        logger.debug("tool_loop iter {}: using timeout {:.1f}s for {:,} chars", iteration, _current_timeout, _ctx_total)
+
         # Use streaming when available for real-time text display.
         # _stream_call handles fallback to non-streaming if tool_calls
         # have empty names (Claude streaming bug).
@@ -279,6 +284,7 @@ async def tool_loop(
                 _coro = _stream_call(
                     provider, llm_messages, iter_tool_defs, model, max_tokens, metadata,
                     on_content_delta, reasoning_effort=reasoning_effort,
+                    timeout=_current_timeout,
                 )
             else:
                 _coro = provider.chat_with_retry(
@@ -288,6 +294,7 @@ async def tool_loop(
                     max_tokens=max_tokens,
                     metadata=metadata,
                     reasoning_effort=reasoning_effort,
+                    timeout=_current_timeout,
                 )
                 
             if interrupt_event is not None:
@@ -302,7 +309,7 @@ async def tool_loop(
                     done, pending = await asyncio.wait(
                         [intr_task, llm_task],
                         return_when=asyncio.FIRST_COMPLETED,
-                        timeout=call_timeout
+                        timeout=_current_timeout
                     )
                 except asyncio.CancelledError:
                     # Clean up tasks if the main loop is cancelled (e.g. Leader end_discussion)
@@ -334,8 +341,8 @@ async def tool_loop(
                     raise asyncio.TimeoutError()
             else:
                 # Normal path without interrupt support
-                if call_timeout:
-                    response = await asyncio.wait_for(_coro, timeout=call_timeout)
+                if _current_timeout:
+                    response = await asyncio.wait_for(_coro, timeout=_current_timeout)
                 else:
                     response = await _coro
                     
@@ -685,6 +692,7 @@ async def _stream_call(
     on_content_delta: Callable[[str], Awaitable[None]],
     *,
     reasoning_effort: str | None = None,
+    timeout: float | None = None,
 ) -> LLMResponse:
     """Call provider.chat_stream(), forwarding content deltas to the callback.
 
@@ -701,6 +709,7 @@ async def _stream_call(
             model=model,
             max_tokens=max_tokens,
             metadata=metadata,
+            timeout=timeout,
         ):
             if isinstance(item, str):
                 await on_content_delta(item)

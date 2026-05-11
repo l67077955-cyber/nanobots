@@ -163,16 +163,17 @@ async def async_process_tool_result(
         from nanobot.groupchat.history import history_settings as hs
         from nanobot.tools.summarizer import summarize_tool_output
 
-        threshold = hs.summarize_threshold()
-        if len(text) > threshold >= 0:
-            compressed, did_compress = await summarize_tool_output(tool_name, text)
-            if did_compress and compressed and len(compressed) < len(text):
-                saved_pct = round((1 - len(compressed) / len(text)) * 100)
-                logger.info(
-                    "result_processor: AI summarized {} output: {}c → {}c (-{}%)",
-                    tool_name, len(text), len(compressed), saved_pct,
-                )
-                text = compressed
+        if hs.summarize_enabled():
+            threshold = hs.summarize_threshold()
+            if len(text) > threshold >= 0:
+                compressed, did_compress = await summarize_tool_output(tool_name, text)
+                if did_compress and compressed and len(compressed) < len(text):
+                    saved_pct = round((1 - len(compressed) / len(text)) * 100)
+                    logger.info(
+                        "result_processor: AI summarized {} output: {}c → {}c (-{}%)",
+                        tool_name, len(text), len(compressed), saved_pct,
+                    )
+                    text = compressed
     except Exception:
         logger.debug("result_processor: AI summarize skipped for %s", tool_name)
 

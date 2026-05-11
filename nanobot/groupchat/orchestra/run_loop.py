@@ -18,6 +18,10 @@ from nanobot.groupchat.orchestra.broadcast import broadcast_round
 
 async def generate_summary(engine: Any) -> None:
     """Generate a discussion summary using the first active agent's model."""
+    from nanobot.groupchat.history.history_settings import summarize_enabled
+    if not summarize_enabled():
+        return
+
     if not engine._history:
         return
 
