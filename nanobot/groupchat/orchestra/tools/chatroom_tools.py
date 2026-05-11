@@ -100,10 +100,6 @@ class SearchPool:
         """How many tool calls this agent has made."""
         return self._tool_calls.get(agent, 0)
 
-    # backward-compat alias
-    def agent_searches(self, agent: str) -> int:
-        return self.agent_tool_calls(agent)
-
     def status(self) -> str:
         """Return pool status string with per-agent breakdown."""
         parts = []
@@ -572,21 +568,6 @@ class LeaderGate:
         self._leader = leader_name
         # {agent_name: sends_since_leader_spoke}
         self._counts: dict[str, int] = {}
-
-    def try_send(self, agent_name: str) -> bool:
-        """Return True if the agent is allowed to send."""
-        if agent_name == self._leader:
-            return True
-        return self._counts.get(agent_name, 0) < 1
-
-    def record_send(self, agent_name: str) -> None:
-        """Record that agent sent a message."""
-        if agent_name == self._leader:
-            # Leader spoke — reset everyone's counter
-            for k in self._counts:
-                self._counts[k] = 0
-        else:
-            self._counts[agent_name] = self._counts.get(agent_name, 0) + 1
 
     @property
     def leader(self) -> str:

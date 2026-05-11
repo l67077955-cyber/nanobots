@@ -122,25 +122,6 @@ class SessionManager:
         safe_key = safe_filename(key.replace(":", "_"))
         return self.legacy_sessions_dir / f"{safe_key}.jsonl"
 
-    def get_or_create(self, key: str) -> Session:
-        """
-        Get an existing session or create a new one.
-
-        Args:
-            key: Session key (usually channel:chat_id).
-
-        Returns:
-            The session.
-        """
-        if key in self._cache:
-            return self._cache[key]
-
-        session = self._load(key)
-        if session is None:
-            session = Session(key=key)
-
-        self._cache[key] = session
-        return session
 
     def _load(self, key: str) -> Session | None:
         """Load a session from disk."""
@@ -208,9 +189,6 @@ class SessionManager:
 
         self._cache[session.key] = session
 
-    def invalidate(self, key: str) -> None:
-        """Remove a session from the in-memory cache."""
-        self._cache.pop(key, None)
 
     def list_sessions(self) -> list[dict[str, Any]]:
         """

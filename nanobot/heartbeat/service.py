@@ -174,12 +174,3 @@ class HeartbeatService:
         except Exception:
             logger.exception("Heartbeat execution failed")
 
-    async def trigger_now(self) -> str | None:
-        """Manually trigger a heartbeat."""
-        content = self._read_heartbeat_file()
-        if not content:
-            return None
-        action, tasks = await self._decide(content)
-        if action != "run" or not self.on_execute:
-            return None
-        return await self.on_execute(tasks)

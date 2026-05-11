@@ -11,7 +11,6 @@ Supports fluid agent management:
 from __future__ import annotations
 
 import asyncio
-import random
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -660,30 +659,6 @@ class GroupChatEngine:
 
     # ── Tool-augmented chat (matching AgentLoop._run_agent_loop) ───
 
-    # Search intent keywords — only pass tools when user message matches
-    _SEARCH_KEYWORDS = {
-        # Chinese
-        "搜索", "搜一下", "查一下", "查找", "查询", "找一下",
-        "新闻", "最新", "今天", "今日", "实时", "热点",
-        "帮我查", "帮我搜", "帮我找", "上网",
-        # English
-        "search", "look up", "find", "google", "news",
-        "latest", "recent", "today", "current",
-    }
-
-    @staticmethod
-    def _has_search_intent(messages: list[dict[str, Any]]) -> bool:
-        """Check if the latest user message has search intent."""
-        # Find the last user message
-        for msg in reversed(messages):
-            if msg.get("role") == "user":
-                text = msg.get("content", "").lower()
-                for kw in GroupChatEngine._SEARCH_KEYWORDS:
-                    if kw in text:
-                        return True
-                return False
-        return False
-
     def get_agent_enabled_tool_names(self, agent_name: str) -> list[str]:
         """Get the names of tools currently enabled for an agent."""
         agent_cfg = self.registry.get(agent_name, {})
@@ -958,24 +933,6 @@ class GroupChatEngine:
         return self.history.format()
 
 
-    def _pick_next_speaker(self, last_content: str = "") -> str:
-        names = self._active_agents
-        # @mentions
-        for name in names:
-            if f"@{name}" in last_content or f"@{name.lower()}" in last_content:
-                return name
-        # Implicit mentions
-        mentioned = [n for n in names if n.lower() in last_content.lower()
-                     and (not self._history or self._history[-1]["sender"] != n)]
-        if mentioned:
-            return random.choice(mentioned)
-        # Avoid repeat
-        candidates = list(names)
-        if self._history:
-            last_speaker = self._history[-1]["sender"]
-            candidates = [n for n in candidates if n != last_speaker]
-        return random.choice(candidates) if candidates else random.choice(names)
-
     def _build_agent_prompt(
         self,
         agent_name: str,
@@ -997,10 +954,6 @@ class GroupChatEngine:
 
         return messages
 
-    async def _generate_summary(self) -> None:
-        """Generate discussion summary — delegates to run_loop module."""
-        from nanobot.groupchat.orchestra.run_loop import generate_summary
-        await generate_summary(self)
 
     async def _run_loop(self) -> None:
         """Main group chat loop — delegates to run_loop module."""
