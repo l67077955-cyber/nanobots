@@ -179,7 +179,6 @@ def cmd_list(args, store_path: Path) -> None:
         return
     for j in sorted(jobs, key=lambda x: (x.get("state", {}).get("nextRunAtMs") or float("inf"))):
         timing = _format_timing(j["schedule"])
-        msg = j.get("payload", {}).get("message", j.get("name", "?"))
         line = f"- {j['name']} (id: {j['id']}, {timing})"
         state = j.get("state", {})
         if state.get("lastRunAtMs"):

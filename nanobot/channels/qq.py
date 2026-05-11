@@ -23,8 +23,7 @@ except ImportError:
     C2CMessage = None
     GroupMessage = None
 
-if TYPE_CHECKING:
-    from botpy.message import C2CMessage, GroupMessage
+
 
 
 def _make_bot_class(channel: "QQChannel") -> "type[botpy.Client]":
