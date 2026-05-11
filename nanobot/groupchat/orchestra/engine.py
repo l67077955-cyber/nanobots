@@ -813,12 +813,18 @@ class GroupChatEngine:
         return await _direct_chat(self, user_message)
 
     def inject(self, message: str) -> None:
-        """Inject a user message into the chat loop (1+ agents)."""
+        """Inject a user message into the chat loop (1+ agents).
+
+        Also interrupts any busy agents so they see the new input promptly.
+        """
         # Lazy start: if any agents and loop not running, start it now
         if not self._running and len(self._active_agents) >= 1:
             self._start_group_loop()
         if self._running:
             self._input_queue.put_nowait(message)
+            count = self._mailbox.interrupt_busy_agents("用户")
+            if count > 0:
+                logger.info("Interrupted {} busy agent(s) due to user injection", count)
 
     def request_summary(self) -> None:
         """Request a discussion summary."""
