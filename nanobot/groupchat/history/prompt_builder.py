@@ -27,7 +27,7 @@ from nanobot.groupchat.history.context_validator import validate_context
 # ── Constants ─────────────────────────────────────────────────
 
 DEFAULT_PROMPT_ORDER = [
-    "main_prompt", "group_context", "persona", "memory",
+    "main_prompt", "group_context", "persona", "memory", "mempalace_context",
     "tool_instructions", "skills", "broadcast_hint", "examples",
     "history", "instructions", "leader_prompt", "group_nudge",
 ]
@@ -37,6 +37,7 @@ COMPONENT_LABELS: dict[str, str] = {
     "group_context": "群聊上下文 (group_context)",
     "persona": "人设/SOUL (persona)",
     "memory": "长期记忆 (memory)",
+    "mempalace_context": "记忆宫殿检索 (mempalace_context)",
     "tool_instructions": "工具指令 (tool_instructions)",
     "skills": "技能列表 (skills)",
     "broadcast_hint": "广播协调 (broadcast_hint)",
@@ -337,6 +338,7 @@ class PromptBuilder:
         key: str,
         active_agents: list[str],
         leader: str | None = None,
+        history: list[dict[str, str]] | None = None,
     ) -> str:
         # Per-agent .md override (for keys that support it)
         if key in self._PER_AGENT_FILES:
@@ -362,6 +364,8 @@ class PromptBuilder:
             return agent.get("prompt", "")
         elif key == "memory":
             return self.get_component_template("memory")
+        elif key == "mempalace_context":
+            return self._build_mempalace_context(history or [])
         elif key == "tool_instructions":
             return self.get_component_template("tool_instructions")
         elif key == "skills":
@@ -382,6 +386,37 @@ class PromptBuilder:
             return self.get_component_template(key)
         # Custom components: check global template file
         return self.get_component_template(key)
+
+    def _build_mempalace_context(self, history: list[dict[str, str]]) -> str:
+        """Search MemPalace for memories relevant to the latest user message."""
+        if not history:
+            return ""
+        # Extract the most recent user message as search query
+        user_msgs = [m["content"] for m in history if m.get("role") == "user"]
+        if not user_msgs:
+            return ""
+        query = user_msgs[-1].strip()
+        if not query or len(query) < 2:
+            return ""
+        try:
+            from mempalace.mcp_server import tool_search
+            result = tool_search(query, limit=5)
+            results = result.get("results", [])
+            if not results:
+                return ""
+            lines = [f"[记忆宫殿检索 — 查询: {query[:80]}]"]
+            for i, r in enumerate(results, 1):
+                wing = r.get("wing", "?")
+                room = r.get("room", "?")
+                text = r.get("text", "")
+                # Truncate long memories to keep prompt compact
+                if len(text) > 300:
+                    text = text[:300] + "…"
+                lines.append(f"  {i}. [{wing}/{room}] {text}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.debug("mempalace_context search failed: %s", e)
+            return ""
 
     def _build_identity(self) -> str:
         """Build runtime identity section (platform, workspace, guidelines)."""
@@ -535,7 +570,7 @@ class PromptBuilder:
             if vis == "leader" and leader != agent_name:
                 continue
 
-            raw = self._get_component_content(agent_name, agent, key, active_agents, leader)
+            raw = self._get_component_content(agent_name, agent, key, active_agents, leader, history)
             if not raw:
                 continue
 
