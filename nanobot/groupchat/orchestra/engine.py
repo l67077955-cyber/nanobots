@@ -47,6 +47,7 @@ class GroupChatEngine:
     TOOL_NAMES = [
         "web_search", "web_fetch", "exec",
         "read_file", "write_file", "edit_file", "list_dir",
+        "memory_palace",
     ]
 
     def __init__(

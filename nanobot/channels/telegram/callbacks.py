@@ -188,6 +188,7 @@ class CallbacksMixin:
                         "write_file": "✍️ 写文件",
                         "edit_file": "✂️ 编辑文件",
                         "list_dir": "📁 列目录",
+                        "memory_palace": "\U0001f58b️ \u8bb0\u5fc6\u5927\u53a6(MemPalace)",
                     }
                     buttons = []
                     for t in GroupChatEngine.TOOL_NAMES:
@@ -392,6 +393,7 @@ class CallbacksMixin:
                     "exec": "⚡ 执行命令", "read_file": "📄 读文件",
                     "write_file": "✍️ 写文件", "edit_file": "✂️ 编辑文件",
                     "list_dir": "📁 列目录",
+                    "memory_palace": "\U0001f58b\ufe0f \u8bb0\u5fc6\u5927\u53a6(MemPalace)",
                 }
                 buttons = []
                 for t in GroupChatEngine.TOOL_NAMES:
