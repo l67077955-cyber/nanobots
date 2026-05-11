@@ -20,7 +20,7 @@ from typing import Any, Awaitable, Callable
 from loguru import logger
 
 from nanobot.tools.registry import ToolRegistry
-from nanobot.groupchat.history.result_processor import process_tool_result
+from nanobot.groupchat.history.result_processor import async_process_tool_result
 from nanobot.providers.base import LLMProvider, LLMResponse
 from nanobot.utils.helpers import build_assistant_message
 
@@ -562,7 +562,7 @@ async def tool_loop(
                     if on_tool_result:
                         await on_tool_result(tc.name, tc.id, tool_result)
 
-                    tool_content = process_tool_result(
+                    tool_content = await async_process_tool_result(
                         content=tool_result,
                         tool_name=tc.name,
                         tool_call_id=tc.id,

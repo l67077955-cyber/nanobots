@@ -139,6 +139,69 @@ def process_tool_result(
     return truncated_text
 
 
+async def async_process_tool_result(
+    content: Any,
+    tool_name: str,
+    tool_call_id: str,
+    meta: dict | None = None,
+) -> Any:
+    """Async variant of process_tool_result with AI summarization.
+
+    Pipeline: normalize → [AI summarize] → truncate → persist → inject_meta
+
+    Falls back to mechanical truncation on any AI failure.
+    """
+    # Step 1: Normalize
+    processed, is_multimodal = _normalize(content)
+    if is_multimodal:
+        return processed
+
+    text: str = processed
+
+    # Step 2: AI summarization (if over threshold)
+    try:
+        from nanobot.groupchat.history import history_settings as hs
+        from nanobot.tools.summarizer import summarize_tool_output
+
+        threshold = hs.summarize_threshold()
+        if len(text) > threshold >= 0:
+            compressed, did_compress = await summarize_tool_output(tool_name, text)
+            if did_compress and compressed and len(compressed) < len(text):
+                saved_pct = round((1 - len(compressed) / len(text)) * 100)
+                logger.info(
+                    "result_processor: AI summarized {} output: {}c → {}c (-{}%)",
+                    tool_name, len(text), len(compressed), saved_pct,
+                )
+                text = compressed
+    except Exception:
+        logger.debug("result_processor: AI summarize skipped for %s", tool_name)
+
+    # Steps 3–5: Truncate → persist → inject meta (same as sync version)
+    config_key, strategy = _TOOL_CONFIGS.get(tool_name, _FALLBACK_CONFIG)
+    max_chars = _get_max_chars(tool_name)
+    truncated_text, was_truncated = _truncate(text, max_chars, strategy)
+
+    if was_truncated:
+        disk_path = _persist_to_disk(text, tool_name, tool_call_id)
+        if disk_path:
+            truncated_text += f"\n\n[完整结果已落盘: {disk_path}]"
+
+    if meta:
+        meta_lines = []
+        if "exit_code" in meta:
+            meta_lines.append(f"Exit code: {meta['exit_code']}")
+        if "url" in meta:
+            meta_lines.append(f"URL: {meta['url']}")
+        if "query" in meta:
+            meta_lines.append(f"Query: {meta['query']}")
+        if "duration" in meta:
+            meta_lines.append(f"Duration: {meta['duration']:.2f}s")
+        if meta_lines:
+            truncated_text += f"\n\n{' | '.join(meta_lines)}"
+
+    return truncated_text
+
+
 # ── Backward compatibility ──
 def maybe_persist_tool_result(
     content: str,

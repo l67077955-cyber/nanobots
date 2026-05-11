@@ -61,6 +61,7 @@ _DEFAULTS: dict[str, Any] = {
         # History compression: triggered at 80% of max_messages
         "compress_ratio": 0.8,
         "compress_max_summary_tokens": 600,
+        "compression_keep_recent": 6,
     },
 
     # ── Stage 4: iterative context pruning (tool_loop iteration 2+) ──
@@ -201,6 +202,10 @@ def compress_ratio() -> float:
 
 def compress_max_summary_tokens() -> int:
     return int(_load()["history"]["compress_max_summary_tokens"])
+
+
+def compression_keep_recent() -> int:
+    return int(_load()["history"]["compression_keep_recent"])
 
 
 # ── context_pruning getters ──────────────────────────────────────────────
