@@ -360,10 +360,10 @@ class MailboxHub:
         """Store agent ranks for interrupt permission checking.
         
         Args:
-            ranks: Mapping of agent_name -> rank_string ("pawn", "knight", "bishop")
+            ranks: Mapping of agent_name -> rank_string ("pawn", "knight", "bishop", "queen")
             leader: Leader agent name — always gets highest priority regardless of rank.
         """
-        order = {"pawn": 0, "knight": 1, "bishop": 2}
+        order = {"pawn": 0, "knight": 1, "bishop": 2, "queen": 3}
         self._ranks.clear()
         self._leader = leader
         for name, r in ranks.items():

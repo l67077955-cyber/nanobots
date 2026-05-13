@@ -252,7 +252,7 @@ class AgentCommandsMixin:
         else:
             tools_str = "全部关闭"
         rank = agent.get("rank", "pawn")
-        rank_icons = {"pawn": "♟ 兵", "knight": "♞ 马", "bishop": "♝ 象"}
+        rank_icons = {"pawn": "♟ 兵", "knight": "♞ 马", "bishop": "♝ 象", "queen": "♛ 后"}
         rank_str = rank_icons.get(rank, rank)
         return (
             f"✏️ 编辑 {agent_name}\n\n"

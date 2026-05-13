@@ -17,7 +17,11 @@ from loguru import logger
 from nanobot.groupchat.display import display as _d
 from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool
 from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
-from nanobot.groupchat.history.component_manager import get_system_warning
+from nanobot.groupchat.history.component_manager import (
+    get_system_warning,
+    synthesis_quality_check,
+    _MIN_SYNTHESIS_LEN,
+)
 
 
 # ── Tool-name → status state mapping ─────────────────────────
@@ -355,7 +359,7 @@ class BroadcastOrchestrator:
                 mailbox=self.mailbox,
                 spawn_fn=spawn_fn,
             )
-            end_tool = EndDiscussionTool(end_event=self.leader_end_event, engine=self.engine)
+            end_tool = EndDiscussionTool(end_event=self.leader_end_event, engine=self.engine, mailbox=self.mailbox)
             transfer_tool = TransferCreditsTool(search_pool=self.search_pool, engine=self.engine)
             clear_ctx_tool = ClearContextTool(
                 engine=self.engine,
@@ -558,14 +562,19 @@ async def broadcast_round(
                 f"4. 用 wait() 等待队友回复结果\n"
                 f"5. 根据结果：追加任务 / 纠正方向 / 自己补充搜索\n"
                 f"6. 信息充分后，先完成以下两步，再调用 end_discussion()：\n"
-                f"   a. 在最终文字回复中整合所有发现，给出完整答案\n"
-                f"   b. 用 memory_palace(action='store') 将关键结论、发现写入记忆宫殿\n"
+                f"   a. 输出结构化最终总结（必须包含以下部分，禁止省略）：\n"
+                f"      ## 结论\n"
+                f"      （直接回答用户问题的核心结论，1-3句话）\n\n"
+                f"      ## 关键发现\n"
+                f"      （讨论中确认的事实、数据、来源，用列表形式）\n\n"
+                f"      ## 备注\n"
+                f"      （可选：分歧说明、局限、后续建议）\n\n"
+                f"   b. 用 memory_palace(action='store') 将关键结论写入记忆宫殿\n"
                 f"      示例: memory_palace(action='store', content='用户偏好：...', wing='用户', hall='偏好', room='main')\n"
                 f"7. 完成记忆存入后，调用 end_discussion() 结束任务\n\n"
                 f"## 关键规则\n"
                 f"- 发现队友空转或无法完成任务时：果断 end_discussion\n"
                 f"- 可以一次给多个队友同时发任务（并行工作）\n"
-                f"- 你的最终文字回复就是给用户的答案，要完整、结构化\n"
                 f"- ⚠️ 如果你打算自己做搜索/验证，必须先完成工具调用，再调用 end_discussion。\n"
                 f"  end_discussion 一旦触发无法撤销，之后再说'我来搜索'只是文字，不会执行。\n"
                 f"- ⚠️ 原假设被否证时，不要立即结束。应转向：'那么最近的可验证链条是什么？'\n"
@@ -1133,8 +1142,44 @@ async def broadcast_round(
                         logger.info("Broadcast: displayed {} cycle {} output ({} chars) [Local Only]", name, cycle, len(content))
                     # else: chatroom_send already displayed the message — no duplicate needed
                 
-                # If leader called end_discussion this cycle, exit immediately.
+                # If leader called end_discussion this cycle, validate synthesis length & quality.
                 if is_leader and _leader_ended_discussion:
+                    stripped = content.strip() if content else ""
+                    if len(stripped) < _MIN_SYNTHESIS_LEN:
+                        logger.warning(
+                        "Broadcast: leader {} synthesis too short ({} chars < {}), forcing retry",
+                        name, len(stripped), _MIN_SYNTHESIS_LEN,
+                        )
+                        messages.append({
+                        "role": "system",
+                        "content": get_system_warning("leader_end_without_text", name=name),
+                        })
+                        _leader_ended_discussion = False
+                        continue
+                    # Step 2 — content quality guard (catches fluff like "问题已解答，无需补充")
+                    quality_ok, quality_reason = synthesis_quality_check(stripped, tools_used=result.tools_used)
+                    if not quality_ok:
+                        logger.warning(
+                        "Broadcast: leader {} synthesis quality check failed ({})",
+                        name, quality_reason,
+                        )
+                        # Pick the most specific warning template
+                        if "记忆" in quality_reason or "memory" in quality_reason:
+                            _warn = get_system_warning("delivery_gate_memory", name=name)
+                        elif "数据采集" in quality_reason or "工具" in quality_reason:
+                            _warn = get_system_warning("delivery_gate_tools", name=name)
+                        else:
+                            _warn = get_system_warning("leader_end_without_text", name=name)
+                        messages.append({
+                        "role": "system",
+                        "content": (
+                        _warn
+                        + f"\n\n[质量检查失败] {quality_reason}"
+                        "\n请输出包含 ## 结论、## 关键发现 的结构化总结，附带具体数据和来源。"
+                        ),
+                        })
+                        _leader_ended_discussion = False
+                        continue
                     logger.info("Broadcast: leader {} called end_discussion, exiting cycle loop", name)
                     break
 

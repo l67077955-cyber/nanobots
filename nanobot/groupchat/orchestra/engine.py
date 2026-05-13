@@ -1467,6 +1467,13 @@ async def chat_with_tools(
     if agent_sampling:
         sampling = {**sampling, **agent_sampling}
         logger.info("chat_with_tools: agent={} merged hyperparams: {}", agent_name, list(agent_sampling.keys()))
+
+    # Inject merged sampling params into provider so _build_body/_build_kwargs
+    # (which read self.sampling_params) use the per-agent overrides.
+    # Restore original after call to avoid leaking between agents.
+    _orig_sampling = getattr(provider, "sampling_params", None)
+    if _orig_sampling is not None:
+        provider.sampling_params = sampling
     tool_names = [d.get("function", {}).get("name", "?") for d in (tool_defs or [])]
 
     # Per-iteration token usage callback — update shared ref so tool callbacks
@@ -1475,24 +1482,29 @@ async def chat_with_tools(
         _iter_usage_ref.clear()
         _iter_usage_ref.update(usage)
 
-    result = await tool_loop(
-        provider=provider,
-        messages=messages,
-        tool_registry=tool_registry,
-        model=model,
-        max_tokens=max_tokens,
-        max_iterations=max_iterations,
-        tool_defs=effective_defs,
-        metadata=trace_metadata,
-        reasoning_effort=sampling.get("reasoning_effort") if sampling else None,
-        on_tool_start=on_tool_start_override or default_start,
-        on_tool_result=on_tool_result_override or default_result,
-        on_iteration_usage=_on_iter_usage,
-        on_content_delta=on_content_delta,
-        on_content_reset=on_content_reset,
-        clean_response=clean_response,
-        result_max_chars=_direct_result_max,
-    )
+    try:
+        result = await tool_loop(
+            provider=provider,
+            messages=messages,
+            tool_registry=tool_registry,
+            model=model,
+            max_tokens=max_tokens,
+            max_iterations=max_iterations,
+            tool_defs=effective_defs,
+            metadata=trace_metadata,
+            reasoning_effort=sampling.get("reasoning_effort") if sampling else None,
+            on_tool_start=on_tool_start_override or default_start,
+            on_tool_result=on_tool_result_override or default_result,
+            on_iteration_usage=_on_iter_usage,
+            on_content_delta=on_content_delta,
+            on_content_reset=on_content_reset,
+            clean_response=clean_response,
+            result_max_chars=_direct_result_max,
+        )
+    finally:
+        # Restore original sampling params to avoid leaking between agents
+        if _orig_sampling is not None:
+            provider.sampling_params = _orig_sampling
 
     content = result.content or ""
     # Use effective_defs (not original tool_defs) for accurate stats
@@ -1560,6 +1572,16 @@ def build_tool_log(tool_calls_detail: list[dict[str, Any]]) -> str:
         success = tc.get("success", True)
         is_dup = tc.get("duplicate", False)
 
+        # memory_palace store with visible=false: suppress preview in chat log
+        _mp_hidden = False
+        if name == "memory_palace":
+            try:
+                _mp_args = __import__("json").loads(args_raw) if isinstance(args_raw, str) else args_raw
+            except Exception:
+                _mp_args = {}
+            if _mp_args.get("action") == "store" and _mp_args.get("visible") is False:
+                _mp_hidden = True
+
         # Extract the key argument (query / url / command / path) for display
         try:
             args_dict = __import__("json").loads(args_raw) if isinstance(args_raw, str) else args_raw
@@ -1581,6 +1603,8 @@ def build_tool_log(tool_calls_detail: list[dict[str, Any]]) -> str:
 
         if is_dup:
             result_info = "[重复调用,已跳过]"
+        elif _mp_hidden:
+            result_info = "✅ 已存储 (内容已隐藏)"
         elif not success:
             err = tc.get("error", "")
             result_info = f"[失败: {err[:80]}]"

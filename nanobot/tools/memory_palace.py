@@ -188,6 +188,14 @@ class MemoryPalaceTool(Tool):
                     "type": "string",
                     "description": "[store/diary_write] The verbatim text to memorise.",
                 },
+                "visible": {
+                    "type": "boolean",
+                    "description": (
+                        "[store] If true, appends the raw stored content to the return message "
+                        "so user sees exactly what was saved without agent repeating it. "
+                        "Default: false (metadata only)."
+                    ),
+                },
                 "wing": {
                     "type": "string",
                     "description": (
@@ -312,6 +320,7 @@ class MemoryPalaceTool(Tool):
         room: str = "",
         hall: str = "",
         source_file: str = "",
+        visible: bool = False,
         # search
         query: str = "",
         limit: int = 5,
@@ -361,6 +370,7 @@ class MemoryPalaceTool(Tool):
                     return "❌ Error: 'wing' is required for store (e.g. 'wing_code')."
                 if not room:
                     return "❌ Error: 'room' is required for store (e.g. 'api-design')."
+                # visible is already a named parameter
                 result = mp["add_drawer"](
                     wing=wing,
                     room=room,
@@ -372,11 +382,17 @@ class MemoryPalaceTool(Tool):
                     drawer = result.get("drawer_id", "")
                     reason = result.get("reason", "")
                     note = " (already existed, skipped duplicate)" if reason == "already_exists" else ""
+                    if not visible:
+                        return (
+                            f"✅ Stored in {wing}/{room}{note} (hidden)\n"
+                            f"  Drawer ID: {drawer}"
+                        )
                     return (
                         f"✅ Stored in {wing}/{room}{note}\n"
                         f"  Drawer ID: {drawer}\n"
                         f"  Chars: {len(content)}"
                         + (f"\n  Hall: {hall}" if hall else "")
+                        + f"\n\n{content}"
                     )
                 return _fmt(result)
 

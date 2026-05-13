@@ -1063,9 +1063,10 @@ class EndDiscussionTool(Tool):
     All agent tasks are cancelled and the leader enters the synthesis phase.
     """
 
-    def __init__(self, *, end_event: Any, engine: Any) -> None:
+    def __init__(self, *, end_event: Any, engine: Any, mailbox: Any = None) -> None:
         self._end_event = end_event  # asyncio.Event
         self._engine = engine
+        self._mailbox = mailbox
 
     @property
     def name(self) -> str:
@@ -1094,6 +1095,28 @@ class EndDiscussionTool(Tool):
         }
 
     async def execute(self, reason: str = "", **kwargs: Any) -> str:
+        # ── Autowait guard: if any non-leader agent is busy, wait for them ──
+        if self._mailbox is not None:
+            active = getattr(self._mailbox, "_active_agents", set())
+            waiting = getattr(self._mailbox, "_waiting", set())
+            leader = getattr(self._mailbox, "_leader_name", "")
+            # Exclude leader (the caller) — leader is always "executing" when calling this
+            non_waiting = (active - waiting) - {leader}
+            if non_waiting:
+                names = ", ".join(sorted(non_waiting))
+                # Autowait: poll until all non-leader agents enter waiting (max 60s)
+                for _ in range(60):
+                    await asyncio.sleep(1)
+                    waiting = getattr(self._mailbox, "_waiting", set())
+                    remaining = (active - waiting) - {leader}
+                    if not remaining:
+                        break
+                else:
+                    return (
+                        f"❌ Autowait 超时（60s）：以下 agent 仍未进入 waiting：{names}。"
+                        "请稍后再试或手动干预。"
+                    )
+
         reason_str = f"（原因: {reason}）" if reason else ""
         # Store reason so broadcast_round sentinel can include it in the
         # single unified termination message (avoids duplicate notifications).
