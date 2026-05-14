@@ -979,6 +979,11 @@ class GroupChatEngine:
         self,
         agent_name: str,
         relevant_agents: list[str] | None = None,
+        *,
+        agent_idx: int | None = None,
+        total: int | None = None,
+        teammates: list[str] | None = None,
+        user_question: str = "",
     ) -> list[dict[str, Any]]:
         """Build prompt — delegates entirely to PromptBuilder."""
         messages = self._prompt_builder.build_agent_prompt(
@@ -989,6 +994,10 @@ class GroupChatEngine:
             leader=self._leader,
             round_num=self._round,
             relevant_agents=relevant_agents,
+            agent_idx=agent_idx,
+            total=total,
+            teammates=teammates,
+            user_question=user_question,
         )
 
         # Skills are now built by PromptBuilder._build_skills_content()

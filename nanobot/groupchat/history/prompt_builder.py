@@ -485,6 +485,10 @@ class PromptBuilder:
         leader: str | None = None,
         round_num: int = 0,
         relevant_agents: list[str] | None = None,
+        agent_idx: int | None = None,
+        total: int | None = None,
+        teammates: list[str] | None = None,
+        user_question: str = "",
     ) -> list[dict[str, Any]]:
         """Build the full prompt messages list for an agent turn."""
         agent = registry[agent_name]
@@ -503,6 +507,10 @@ class PromptBuilder:
             "{{tools}}": tool_names,
             "{{others}}": ", ".join(other_members),
             "{{identity}}": self._build_identity(),
+            "{{agent_idx}}": str(agent_idx) if agent_idx is not None else "",
+            "{{total}}": str(total) if total is not None else "",
+            "{{teammates}}": ", ".join(teammates) if teammates else "",
+            "{{user_question}}": user_question,
         }
         # Volatile vars — change every turn/minute.  They are available for use
         # in templates but are injected separately at the END of the prompt (after

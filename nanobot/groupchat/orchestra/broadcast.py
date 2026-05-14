@@ -496,17 +496,26 @@ async def broadcast_round(
         agent_cfg = engine.registry[name]
         model = agent_cfg["model"]  # initial; re-read each cycle below
         model_short = model.split("/")[-1]
+
+        # ── Compute teammates list (must be before _build_agent_prompt call) ──
+        teammates = [a for a in agents if a != name]
+
         # In broadcast mode, all agents share the full history (relevant_agents=None).
         # Each agent sees user messages, system messages, and ALL teammates' final replies.
         # Tool call logs are appended as text inside each agent's message, so teammates
         # can read a concise summary of what was done without the full tool protocol overhead.
-        messages = engine._build_agent_prompt(name, relevant_agents=None)
+        messages = engine._build_agent_prompt(
+            name,
+            relevant_agents=None,
+            agent_idx=agent_idx,
+            total=total,
+            teammates=teammates,
+            user_question=user_question,
+        )
 
         is_leader = (name == leader_name)
         _leader_ended_discussion = False
-
-        # ── Inject broadcast coordination hint from template ──
-        teammates = [a for a in agents if a != name]
+        _synthesis_retries = 0  # guard against infinite synthesis retry loops
         # Load from override system (editable via /prompt), fallback to default
         # Removed stale prompt_overrides.json lookup; .md files are the source of truth.
 
@@ -586,21 +595,8 @@ async def broadcast_round(
                 "content": leader_hint,
             })
         else:
-            # ── Non-leader: standard broadcast hint + wait for leader ──
-            hint_template = engine.prompt_builder.get_component_template("broadcast_hint")
-            if hint_template:
-                hint = (
-                    hint_template
-                    .replace("{{agent_idx}}", str(agent_idx + 1))
-                    .replace("{{total}}", str(total))
-                    .replace("{{teammates}}", ", ".join(teammates))
-                    .replace("{{agent}}", name)
-                    .replace("{{user_question}}", user_question)
-                )
-                messages.insert(max(len(messages) - 1, 0), {
-                    "role": "system",
-                    "content": hint,
-                })
+            # ── Non-leader: broadcast_hint already expanded by build_agent_prompt ──
+            pass
 
             # If there's a leader, tell non-leader agents to expect instructions
             if leader_name:
@@ -1155,6 +1151,14 @@ async def broadcast_round(
                         "content": get_system_warning("leader_end_without_text", name=name),
                         })
                         _leader_ended_discussion = False
+                        _synthesis_retries += 1
+                        if _synthesis_retries >= 3:
+                            logger.warning("Broadcast: leader {} synthesis retry exhausted ({} attempts), forcing exit", name, _synthesis_retries)
+                            break
+                        # Restore engine so the retry cycle can execute;
+                        # end_discussion already set _running=False but synthesis
+                        # hasn't produced valid output yet.
+                        engine._running = True
                         continue
                     # Step 2 — content quality guard (catches fluff like "问题已解答，无需补充")
                     quality_ok, quality_reason = synthesis_quality_check(stripped, tools_used=result.tools_used)
@@ -1179,6 +1183,11 @@ async def broadcast_round(
                         ),
                         })
                         _leader_ended_discussion = False
+                        _synthesis_retries += 1
+                        if _synthesis_retries >= 3:
+                            logger.warning("Broadcast: leader {} synthesis quality retry exhausted ({} attempts), forcing exit", name, _synthesis_retries)
+                            break
+                        engine._running = True
                         continue
                     logger.info("Broadcast: leader {} called end_discussion, exiting cycle loop", name)
                     break
