@@ -689,6 +689,10 @@ async def broadcast_round(
         # Tracks how many timeout-recovery attempts this agent has made.
         # Hard cap at 1 to prevent recovery loops.
         _timeout_recovery_count = 0
+        # Tracks consecutive LLM errors to prevent rapid-fire error loops.
+        # After MAX_CONSECUTIVE_ERRORS, the agent exits instead of continuing.
+        _consecutive_error_count = 0
+        MAX_CONSECUTIVE_ERRORS = 3
 
         try:
             while True:
@@ -905,6 +909,17 @@ async def broadcast_round(
                         await tracker.set_state(name, "error", reason=err_short[:40])
                         await engine._send(f"  ✗ {name} failed ({latency:.1f}s): {err_short}")
 
+                        _consecutive_error_count += 1
+                        if _consecutive_error_count >= MAX_CONSECUTIVE_ERRORS:
+                            logger.error(
+                                "Broadcast: {} hit {} consecutive LLM errors, forcing exit",
+                                name, _consecutive_error_count,
+                            )
+                            await engine._send(
+                                f"  ✗ {name} 连续 {_consecutive_error_count} 次 LLM 错误，强制退出"
+                            )
+                            break
+
                         # Keep agent alive instead of killing it (mirrors timeout recovery)
                         _placeholder = (
                             f"⚠️ [{name}] LLM调用出错（{err_short[:60]}），我仍在线。"
@@ -920,13 +935,16 @@ async def broadcast_round(
                         )
                         await tracker.set_state(name, "waiting", detail="error recovery")
                         logger.warning(
-                            "Broadcast: {} LLM error, injecting placeholder and continuing",
-                            name,
+                            "Broadcast: {} LLM error ({}/{}), injecting placeholder and continuing",
+                            name, _consecutive_error_count, MAX_CONSECUTIVE_ERRORS,
                         )
                         continue  # stay alive like timeout branch
 
 
                 _used_chatroom_send = result.tools_used and "chatroom_send" in result.tools_used
+
+                # Reset consecutive error counter on successful cycle
+                _consecutive_error_count = 0
 
                 # Record final text or tool calls in history
                 if content or result.tool_calls_detail:
@@ -1112,7 +1130,9 @@ async def broadcast_round(
                 # Display the agent's final text for this cycle.
                 # If chatroom_send was used, the content was already shown at tool-call
                 # time (line 612) — skip the duplicate "Self/Final" display.
-                if content:
+                # Defer display when leader is in synthesis validation — only show
+                # output that passes the quality gate (prevents spamming failed retries).
+                if content and not (is_leader and _leader_ended_discussion):
                     if not _used_chatroom_send:
                         # Token + latency suffix
                         tok = result.token_usage
@@ -1150,7 +1170,6 @@ async def broadcast_round(
                         "role": "system",
                         "content": get_system_warning("leader_end_without_text", name=name),
                         })
-                        _leader_ended_discussion = False
                         _synthesis_retries += 1
                         if _synthesis_retries >= 3:
                             logger.warning("Broadcast: leader {} synthesis retry exhausted ({} attempts), forcing exit", name, _synthesis_retries)
@@ -1182,13 +1201,34 @@ async def broadcast_round(
                         "\n请输出包含 ## 结论、## 关键发现 的结构化总结，附带具体数据和来源。"
                         ),
                         })
-                        _leader_ended_discussion = False
                         _synthesis_retries += 1
                         if _synthesis_retries >= 3:
                             logger.warning("Broadcast: leader {} synthesis quality retry exhausted ({} attempts), forcing exit", name, _synthesis_retries)
                             break
                         engine._running = True
                         continue
+                    # Synthesis passed validation — now display it
+                    if content and not _used_chatroom_send:
+                        tok = result.token_usage
+                        total_tok = tok.get("total", 0)
+                        tok_suffix = ""
+                        if total_tok > 0:
+                            elapsed = _t.time() - _cycle_t0
+                            cost = result.cost or 0
+                            cache_t = result.cache_tokens or 0
+                            reasoning_t = sum(
+                                (m.get("reasoning_tokens") or 0)
+                                for m in (result.provider_meta or [])
+                                if isinstance(m, dict)
+                            )
+                            tok_suffix = "\n" + _d.format_token_stats(
+                                tok.get("prompt", 0), tok.get("completion", 0),
+                                elapsed=elapsed, cost=cost, cache_tokens=cache_t,
+                                reasoning_tokens=reasoning_t,
+                            )
+                        target_label = f"进展 [{cycle}]"
+                        await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
+                        logger.info("Broadcast: displayed {} synthesis output ({} chars) [post-validation]", name, len(content))
                     logger.info("Broadcast: leader {} called end_discussion, exiting cycle loop", name)
                     break
 

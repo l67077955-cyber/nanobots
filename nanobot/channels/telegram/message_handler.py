@@ -156,12 +156,19 @@ class MessageHandlerMixin:
             if not (buf := self._media_group_buffers.pop(key, None)):
                 return
             content = "\n".join(buf["contents"]) or "[empty message]"
-            await self._handle_message(
-                sender_id=buf["sender_id"], chat_id=buf["chat_id"],
-                content=content, media=list(dict.fromkeys(buf["media"])),
-                metadata=buf["metadata"],
-                session_key=buf.get("session_key"),
-            )
+            # Inject directly into GroupChatEngine (same path as normal messages),
+            # rather than going through BaseChannel._handle_message() →
+            # publish_inbound() which hits a dead consumerless queue.
+            if self._groupchat_engine and self._groupchat_engine.active_agents:
+                self._ensure_gc_send(buf["chat_id"])
+                self._groupchat_engine.inject(content)
+            else:
+                await self._handle_message(
+                    sender_id=buf["sender_id"], chat_id=buf["chat_id"],
+                    content=content, media=list(dict.fromkeys(buf["media"])),
+                    metadata=buf["metadata"],
+                    session_key=buf.get("session_key"),
+                )
         finally:
             self._media_group_tasks.pop(key, None)
 
