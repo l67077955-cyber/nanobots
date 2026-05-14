@@ -414,7 +414,7 @@ class PromptBuilder:
     def add_custom_component(key: str, label: str) -> str:
         """Register a user-defined custom component.
 
-        Adds it to COMPONENT_LABELS, GLOBAL_EDITABLE, and persists the label.
+        Adds it to COMPONENT_LABELS, GLOBAL_EDITABLE, and persists to manifest.
         Does NOT add to the prompt order — caller should do that separately.
         """
         if key in COMPONENT_LABELS:
@@ -422,10 +422,16 @@ class PromptBuilder:
         # Register in module-level dicts
         COMPONENT_LABELS[key] = label
         GLOBAL_EDITABLE.add(key)
-        # Persist
-        custom = _load_custom_labels()
-        custom[key] = label
-        _save_custom_labels(custom)
+        EDITABLE_COMPONENTS.add(key)
+        # Persist to manifest (single source of truth)
+        manifest = _load_manifest()
+        if manifest is None:
+            manifest = {"version": 1, "components": {}}
+        manifest["components"][key] = {
+            "order": 99, "visibility": "all",
+            "label": label, "editable_by": "global", "resolver": None,
+        }
+        _save_manifest(manifest)
         return f"✅ 已创建自定义组件: {label}"
 
     # ── Component content ──
