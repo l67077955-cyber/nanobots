@@ -1,52 +1,16 @@
-"""Main group chat event loop and summary generation.
+"""Main group chat event loop — dispatches to broadcast mode.
 
-Contains the core run loop that processes user input and dispatches
-to broadcast mode, plus the summary generator.
+Leader's final text reply (before end_discussion) serves as the
+synthesis; no separate summary generation stage exists.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 from loguru import logger
 
-from nanobot.groupchat.display import display as _d
-# ── 关键修复：import 移到文件顶部，避免循环内重复 import ──
 from nanobot.groupchat.orchestra.broadcast import broadcast_round
-
-
-async def generate_summary(engine: Any) -> None:
-    """Generate a discussion summary using the first active agent's model."""
-    if not engine._history:
-        return
-
-    # ── 关键修复：防止 _active_agents 为空时 IndexError ──
-    if not engine._active_agents:
-        await engine._send("⚠️ 没有活跃 agent，无法生成总结")
-        return
-
-    agent_name = engine._active_agents[0]
-    model = engine.registry[agent_name]["model"]
-
-    try:
-        response = await engine.provider.chat_with_retry(
-            messages=[
-                {"role": "system", "content": "你是一个讨论总结专家。"},
-                {"role": "user", "content": (
-                    f"话题：{engine._topic}\n\n"
-                    f"群聊记录：\n{engine._format_history()}\n\n"
-                    "请输出简洁总结：1)核心观点 2)分歧点 3)初步结论"
-                )},
-            ],
-            model=model,
-            max_tokens=2000,
-        )
-        summary = response.content or "无法生成总结"
-        await engine._send(f"📋 讨论总结:\n\n{summary}")
-    except Exception as e:
-        logger.error("Summary failed: {}", e)
-        await engine._send(f"⚠️ 总结生成失败: {e}")
 
 
 async def run_loop(engine: Any) -> None:
