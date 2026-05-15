@@ -58,9 +58,15 @@ _DEFAULTS: dict[str, Any] = {
     "history": {
         "max_messages": 50,
         "max_context_chars": 100_000,
-        # History compression: triggered at 80% of max_messages
+        # History compression: triggered at compress_ratio * max_messages
         "compress_ratio": 0.8,
         "compress_max_summary_tokens": 600,
+        # Number of recent messages to keep in tail during compression
+        "compression_keep_recent": 6,
+        # Protect ALL user messages (not just the first) during compression
+        "keep_user_messages": True,
+        # AI summarization toggle for history compression (separate from tool_results)
+        "history_summarize_enabled": True,
     },
 
     # ── Stage 4: iterative context pruning (tool_loop iteration 2+) ──
@@ -201,6 +207,18 @@ def compress_ratio() -> float:
 
 def compress_max_summary_tokens() -> int:
     return int(_load()["history"]["compress_max_summary_tokens"])
+
+
+def compression_keep_recent() -> int:
+    return int(_load()["history"]["compression_keep_recent"])
+
+
+def keep_user_messages() -> bool:
+    return bool(_load()["history"]["keep_user_messages"])
+
+
+def history_summarize_enabled() -> bool:
+    return bool(_load()["history"]["history_summarize_enabled"])
 
 
 # ── context_pruning getters ──────────────────────────────────────────────

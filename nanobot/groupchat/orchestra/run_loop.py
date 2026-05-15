@@ -13,6 +13,71 @@ from loguru import logger
 from nanobot.groupchat.orchestra.broadcast import broadcast_round
 
 
+async def generate_summary(engine: Any) -> None:
+    """Generate and send an AI summary of the entire discussion.
+
+    Called when user sends ``__SUMMARY__`` or when Leader triggers
+    ``end_discussion``.  Uses the same provider + model as history
+    compression (``tool_results.summarize_model``).
+    """
+    from nanobot.groupchat.history.history_settings import (
+        summarize_model as _get_summarize_model,
+        history_summarize_enabled,
+    )
+
+    if not engine._history or not history_summarize_enabled():
+        return
+
+    messages = list(engine._history)
+    if not messages:
+        return
+
+    # Format conversation for summarisation
+    lines = []
+    for m in messages:
+        sender = m.get("sender", "?")
+        content = m.get("content", "")
+        if len(content) > 600:
+            content = content[:600] + "…"
+        lines.append(f"[{sender}] {content}")
+
+    input_text = "\n".join(lines)
+    if len(input_text) > 15000:
+        input_text = input_text[-15000:]
+
+    provider = engine._history._provider if engine._history else None
+    if provider is None:
+        await engine._send(
+            f"📋 讨论总结\n"
+            f"共 {len(messages)} 条消息\n"
+            f"参与: {', '.join(engine._active_agents)}"
+        )
+        return
+
+    model = _get_summarize_model()
+    prompt = (
+        f"以下是群聊的完整讨论记录（共 {len(messages)} 条）。\n"
+        "请用简洁的中文总结核心内容、关键决策和结论。\n"
+        "保留重要的数值、文件路径和具体结论。\n"
+        "控制在 400 字以内。\n\n"
+        f"{input_text}"
+    )
+    try:
+        response = await provider.chat_with_retry(
+            messages=[{"role": "user", "content": prompt}],
+            model=model,
+            max_tokens=600,
+        )
+        summary = (response.content or "").strip()
+        if summary:
+            await engine._send(f"📋 讨论总结\n\n{summary}")
+        else:
+            await engine._send(f"📋 讨论总结\n共 {len(messages)} 条消息")
+    except Exception as e:
+        logger.error("generate_summary failed: {}", e)
+        await engine._send(f"📋 讨论总结\n共 {len(messages)} 条消息（AI 总结生成失败）")
+
+
 async def run_loop(engine: Any) -> None:
     """Main group chat loop — runs while 2+ agents are active.
 
