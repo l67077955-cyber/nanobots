@@ -209,7 +209,6 @@ TEMPLATES: dict[str, str] = {
         "[广播模式 — 多Agent协作]\n"
         "你是 {{agent_idx}}/{{total}} 号成员，代号 {{agent}}\n"
         "队友: {{teammates}}\n\n"
-        "用户请求: {{user_question}}\n\n"
         "## 聊天记录说明\n"
         "历史记录仅包含：你自己的发言、用户消息、系统消息。\n"
         "队友的历史发言不在历史里——他们本轮的消息通过 chatroom_send/wait 实时传达。\n"
@@ -661,7 +660,6 @@ class PromptBuilder:
             "{{agent_idx}}": str(agent_idx) if agent_idx is not None else "",
             "{{total}}": str(total) if total is not None else "",
             "{{teammates}}": ", ".join(teammates) if teammates else "",
-            "{{user_question}}": user_question,
         }
         # Volatile vars — change every turn/minute.  They are available for use
         # in templates but are injected separately at the END of the prompt (after
@@ -707,6 +705,8 @@ class PromptBuilder:
             f"[Current date and time: {volatile_tpl_vars['{{datetime}}']}]"
             f"\n[Round: {volatile_tpl_vars['{{round}}']}]"
         )
+        if user_question:
+            volatile_content = f"用户请求: {user_question}\n\n" + volatile_content
         messages.append({"role": "user", "content": volatile_content})
 
         return messages
