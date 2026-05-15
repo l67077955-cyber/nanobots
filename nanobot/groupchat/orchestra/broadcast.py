@@ -265,7 +265,7 @@ class BroadcastOrchestrator:
         self.total = len(self.exec_agents)
         
         _gc_settings_path = Path.home() / ".nanobot" / "groupchat_settings.json"
-        _gc_defaults = {"search_initial": 2, "search_earn_interval": 4, "allocate_timeout": 15, "call_timeout": 90}
+        _gc_defaults = {"search_initial": 2, "search_earn_interval": 4, "allocate_timeout": 15, "call_timeout": 90, "conv_keep_turns": 3}
         self.gc_settings = dict(_gc_defaults)
         if _gc_settings_path.exists():
             try:
@@ -1279,9 +1279,9 @@ async def broadcast_round(
                 # agent retains context of earlier discussion.
                 from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
                 from nanobot.groupchat.history.history_settings import summarize_model as _summarize_model
-                _CONV_KEEP_TURNS = 6  # keep last 6 reactivation cycles worth of msgs
+                _conv_keep_turns = self.gc_settings.get("conv_keep_turns", 3)  # configurable via groupchat_settings.json
                 dropped = await prune_conversation_tail_with_summary(
-                    messages, _sys_msg_count, _CONV_KEEP_TURNS,
+                    messages, _sys_msg_count, _conv_keep_turns,
                     provider=engine.provider,
                     model=_summarize_model(),
                     agent_name=name,
@@ -1289,7 +1289,7 @@ async def broadcast_round(
                 if dropped > 0:
                     logger.debug(
                         "Broadcast: {} pruned {} conversation messages (kept {})",
-                        name, dropped, _CONV_KEEP_TURNS * 3,
+                        name, dropped, _conv_keep_turns * 3,
                     )
 
                 # Inject agent's own previous output so LLM knows what it already said

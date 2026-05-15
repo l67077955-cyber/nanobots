@@ -208,7 +208,7 @@ def prune_messages(
 def prune_conversation_tail(
     messages: list[dict[str, Any]],
     sys_msg_count: int,
-    keep_turns: int = 6
+    keep_turns: int = 3
 ) -> int:
     """Prune old conversation turns from the tail to prevent unbounded growth.
     
@@ -228,7 +228,7 @@ def prune_conversation_tail(
 async def prune_conversation_tail_with_summary(
     messages: list[dict[str, Any]],
     sys_msg_count: int,
-    keep_turns: int = 6,
+    keep_turns: int = 3,
     *,
     provider: Any = None,
     model: str = "",
@@ -315,24 +315,25 @@ async def prune_conversation_tail_with_summary(
                 "prune_conversation_tail: AI summary failed ({}), falling back to drop", e
             )
 
-    # ── Rebuild messages, replacing any prior summary at sys_msg_count ──
+    # ── Rebuild messages, appending summary to last system msg to preserve prefix cache ──
     if summary_text:
-        summary_msg = {
-            "role": "system",
-            "content": (
-                f"[上下文摘要 — 以下 {dropped_count} 条早期消息已被压缩]\n"
-                + summary_text
-            ),
-        }
-        # Replace existing summary at sys_msg_count if present, else insert
-        if (sys_msg_count < len(messages) and
-                messages[sys_msg_count].get("role") == "system" and
-                isinstance(messages[sys_msg_count].get("content"), str) and
-                messages[sys_msg_count]["content"].startswith("[上下文摘要")):
-            messages[sys_msg_count] = summary_msg
-            messages[sys_msg_count + 1:] = kept_msgs
-        else:
-            messages[sys_msg_count:] = [summary_msg] + kept_msgs
+        summary_block = (
+            f"\n\n[上下文摘要 — 以下 {dropped_count} 条早期消息已被压缩]\n"
+            + summary_text
+        )
+        # Append to the last original system message (sys_msg_count - 1)
+        # instead of inserting a new message, to keep message count stable
+        # for DeepSeek automatic prefix caching.
+        last_sys_idx = sys_msg_count - 1
+        if last_sys_idx >= 0 and messages[last_sys_idx].get("role") == "system":
+            orig_content = messages[last_sys_idx].get("content", "")
+            if isinstance(orig_content, str):
+                # Strip previous summary if present (starts after double newline)
+                parts = orig_content.split("\n\n[上下文摘要", 1)
+                messages[last_sys_idx]["content"] = parts[0] + summary_block
+            else:
+                messages[last_sys_idx]["content"] = str(orig_content) + summary_block
+        messages[sys_msg_count:] = kept_msgs
     else:
         messages[sys_msg_count:] = kept_msgs
 
