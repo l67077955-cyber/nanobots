@@ -223,3 +223,117 @@ def prune_conversation_tail(
         messages[sys_msg_count:] = conv_msgs[-max_conv:]
         return dropped
     return 0
+
+
+async def prune_conversation_tail_with_summary(
+    messages: list[dict[str, Any]],
+    sys_msg_count: int,
+    keep_turns: int = 6,
+    *,
+    provider: Any = None,
+    model: str = "",
+    agent_name: str = "",
+    min_dropped_for_summary: int = 5,
+) -> int:
+    """Prune old conversation turns, summarising dropped messages via LLM first.
+    
+    Unlike ``prune_conversation_tail`` which silently discards, this function:
+    1. Extracts messages that would be dropped
+    2. If dropped < ``min_dropped_for_summary``, silently discards (not worth LLM call)
+    3. Otherwise calls the LLM to produce a structured summary
+    4. Injects the summary as a system message right after ``sys_msg_count``
+       (replacing any prior summary at that position to prevent accumulation)
+    5. Keeps the last ``keep_turns * 3`` messages after the summary
+    
+    Returns the number of messages dropped (excluding the injected summary).
+    """
+    max_conv = keep_turns * 3
+    conv_msgs = messages[sys_msg_count:]
+    if len(conv_msgs) <= max_conv:
+        return 0
+
+    dropped_msgs = conv_msgs[:-max_conv]
+    kept_msgs = conv_msgs[-max_conv:]
+    dropped_count = len(dropped_msgs)
+
+    # ── Small drops: not worth an LLM call ──
+    if dropped_count < min_dropped_for_summary:
+        messages[sys_msg_count:] = kept_msgs
+        return dropped_count
+
+    # ── Build conversation text for summarisation ──
+    lines: list[str] = []
+    for m in dropped_msgs:
+        role = m.get("role", "?")
+        content = m.get("content", "")
+        if isinstance(content, list):
+            text_parts = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text_parts.append(block.get("text", ""))
+            content = " ".join(text_parts)
+        if isinstance(content, str) and content.strip():
+            truncated = content[:2000] + ("..." if len(content) > 2000 else "")
+            lines.append(f"[{role}]: {truncated}")
+
+    if not lines:
+        messages[sys_msg_count:] = kept_msgs
+        return dropped_count
+
+    conversation_text = "\n".join(lines)
+
+    # ── Structured summary prompt ──
+    prompt = (
+        f"以下是群聊中已超出上下文窗口的早期对话（共 {dropped_count} 条消息）。\n"
+        "请用结构化格式摘要，保留关键信息：\n\n"
+        "## 目标\n（本轮讨论要解决什么问题）\n\n"
+        "## 关键进展\n（已完成的重要发现、决策、结论）\n\n"
+        "## 待解决\n（尚未达成共识或需要继续讨论的问题）\n\n"
+        "## 关键数据\n（具体的数值、路径、URL、配置等硬事实）\n\n"
+        "不超过 300 字。\n\n"
+        f"{conversation_text}"
+    )
+
+    summary_text = ""
+    if provider is not None and model:
+        try:
+            from loguru import logger as _logger
+            response = await provider.chat_with_retry(
+                messages=[{"role": "user", "content": prompt}],
+                model=model,
+                max_tokens=600,
+            )
+            summary_text = (response.content or "").strip()
+            if summary_text:
+                _logger.info(
+                    "prune_conversation_tail: AI summarised {} dropped msgs → {} chars",
+                    dropped_count, len(summary_text),
+                )
+        except Exception as e:
+            from loguru import logger as _logger
+            _logger.warning(
+                "prune_conversation_tail: AI summary failed ({}), falling back to drop", e
+            )
+
+    # ── Rebuild messages, replacing any prior summary at sys_msg_count ──
+    if summary_text:
+        summary_msg = {
+            "role": "system",
+            "content": (
+                f"[上下文摘要 — 以下 {dropped_count} 条早期消息已被压缩]\n"
+                + summary_text
+            ),
+        }
+        # Replace existing summary at sys_msg_count if present, else insert
+        if (sys_msg_count < len(messages) and
+                messages[sys_msg_count].get("role") == "system" and
+                isinstance(messages[sys_msg_count].get("content"), str) and
+                messages[sys_msg_count]["content"].startswith("[上下文摘要")):
+            messages[sys_msg_count] = summary_msg
+            messages[sys_msg_count + 1:] = kept_msgs
+        else:
+            messages[sys_msg_count:] = [summary_msg] + kept_msgs
+    else:
+        messages[sys_msg_count:] = kept_msgs
+
+    return dropped_count

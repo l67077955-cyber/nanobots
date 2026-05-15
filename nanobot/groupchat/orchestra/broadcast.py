@@ -1275,9 +1275,17 @@ async def broadcast_round(
                 # ── Prune conversation tail to prevent unbounded growth ──
                 # Keep system-prompt prefix intact; only retain the last
                 # _CONV_KEEP_TURNS conversation turns (3 msgs per turn).
-                from nanobot.groupchat.history.tool_pruning import prune_conversation_tail
+                # Dropped messages are AI-summarised before removal so the
+                # agent retains context of earlier discussion.
+                from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
+                from nanobot.groupchat.history.history_settings import summarize_model as _summarize_model
                 _CONV_KEEP_TURNS = 6  # keep last 6 reactivation cycles worth of msgs
-                dropped = prune_conversation_tail(messages, _sys_msg_count, _CONV_KEEP_TURNS)
+                dropped = await prune_conversation_tail_with_summary(
+                    messages, _sys_msg_count, _CONV_KEEP_TURNS,
+                    provider=engine.provider,
+                    model=_summarize_model(),
+                    agent_name=name,
+                )
                 if dropped > 0:
                     logger.debug(
                         "Broadcast: {} pruned {} conversation messages (kept {})",
@@ -1291,13 +1299,22 @@ async def broadcast_round(
                         "content": content,
                     })
                 # Anti-repeat injection: remind agent not to repeat itself
-                messages.append({
-                    "role": "system",
-                    "content": (
-                        f"[提醒] 你（{name}）已经发表过上述观点。"
-                        f"针对队友的新消息做出回应或补充新观点，不要重复已说的内容。"
-                    ),
-                })
+                # Only inject if not already present (avoid accumulation across rounds)
+                _anti_repeat_tag = f"[提醒] 你（{name}）已经发表过上述观点"
+                _already_injected = any(
+                    m.get("role") == "system"
+                    and isinstance(m.get("content"), str)
+                    and _anti_repeat_tag in m["content"]
+                    for m in messages[-6:]  # check last 6 only — sufficient
+                )
+                if not _already_injected:
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            f"{_anti_repeat_tag}。"
+                            f"针对队友的新消息做出回应或补充新观点，不要重复已说的内容。"
+                        ),
+                    })
                 # Then inject the received teammate message
                 messages.append({
                     "role": "user",
