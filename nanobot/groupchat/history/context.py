@@ -101,15 +101,18 @@ class HistoryContext:
             from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
                 max_messages,
                 max_context_chars,
+                keep_user_messages,
             )
             limit = max_messages()
             char_budget = max_context_chars()
+            _keep_users = keep_user_messages()
         except Exception:
             limit = 150
             char_budget = 0
+            _keep_users = False
 
         # ── Pre-identify protected head before any trimming ──
-        head_indices = self._find_head_indices(self.messages)
+        head_indices = self._find_head_indices(self.messages, keep_all_users=_keep_users)
         head_msgs = [self.messages[i] for i in sorted(head_indices)]
 
         # Step 1: message-count limit — keep most-recent N, always keep head
@@ -121,7 +124,7 @@ class HistoryContext:
 
         # Step 2: char-budget trimming — head is counted but always kept
         if char_budget > 0:
-            head_indices = self._find_head_indices(self.messages)
+            head_indices = self._find_head_indices(self.messages, keep_all_users=_keep_users)
             head_msgs = [self.messages[i] for i in sorted(head_indices)]
             head_chars = sum(len(m.get("content", "")) for m in head_msgs)
             available = max(0, char_budget - head_chars)
@@ -183,30 +186,22 @@ class HistoryContext:
         )
 
         # ── 3. Compressible Middle ──
-        compress_start = (
-            max(protected_head_indices) + 1 if protected_head_indices else 0
-        )
-        compress_end = (
-            min(protected_tail_indices) if protected_tail_indices else total_len
-        )
+        # Use set exclusion instead of contiguous range — head indices may be
+        # non-contiguous when keep_user_messages=True (user messages scattered).
+        all_protected = protected_head_indices | protected_tail_indices
 
-        if compress_start >= compress_end:
-            return
-
-        to_compress = self.messages[compress_start:compress_end]
-        if not to_compress:
-            return
-
-        head = [
-            self.messages[i]
-            for i in sorted(protected_head_indices)
-            if i < compress_start
-        ]
+        head = [self.messages[i] for i in sorted(protected_head_indices)]
         tail = [
             self.messages[i]
             for i in sorted(protected_tail_indices)
-            if i >= compress_end
+            if i not in protected_head_indices
         ]
+        to_compress = [
+            self.messages[i] for i in range(total_len) if i not in all_protected
+        ]
+
+        if not to_compress:
+            return
 
         # ── 4a. AI Summarise ──
         if history_summarize_enabled() and self._provider is not None:
