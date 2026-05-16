@@ -1,7 +1,7 @@
 """Centralized history, summarization, and context-pruning settings.
 
 Loads ``~/.nanobot/history_settings.json`` once and exposes typed getters
-so that shell.py, summarizer.py, tool_loop.py, context_pruning.py,
+so that shell.py, tool_loop.py, context_pruning.py,
 engine.py, broadcast.py, tool_chat.py, and the Telegram UI can all
 read the same configuration without hardcoding defaults.
 
@@ -159,24 +159,8 @@ def web_search_max_chars() -> int:
     return int(_load()["tool_results"]["web_search_max_chars"])
 
 
-def summarize_enabled() -> bool:
-    return bool(_load()["tool_results"]["summarize_enabled"])
-
-
-def summarize_threshold() -> int:
-    return int(_load()["tool_results"]["summarize_threshold"])
-
-
 def summarize_model() -> str:
     return str(_load()["tool_results"]["summarize_model"])
-
-
-def summarize_max_input_chars() -> int:
-    return int(_load()["tool_results"]["summarize_max_input_chars"])
-
-
-def summarize_max_output_chars() -> int:
-    return int(_load()["tool_results"]["summarize_max_output_chars"])
 
 
 def broadcast_result_max_chars() -> int:
