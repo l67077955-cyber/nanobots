@@ -1279,7 +1279,7 @@ async def broadcast_round(
                 # agent retains context of earlier discussion.
                 from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
                 from nanobot.groupchat.history.history_settings import summarize_model as _summarize_model
-                _conv_keep_turns = self.gc_settings.get("conv_keep_turns", 3)  # configurable via groupchat_settings.json
+                _conv_keep_turns = gc_settings.get("conv_keep_turns", 3)  # configurable via groupchat_settings.json
                 dropped = await prune_conversation_tail_with_summary(
                     messages, _sys_msg_count, _conv_keep_turns,
                     provider=engine.provider,
