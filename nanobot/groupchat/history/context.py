@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from nanobot.groupchat.history.message_converter import age_tool_log
+
 if TYPE_CHECKING:
     from nanobot.groupchat.history.persistence import GroupChatState
 
@@ -202,6 +204,15 @@ class HistoryContext:
 
         if not to_compress:
             return
+
+        # ── 3.5 Age tool logs in middle region before summarisation ──
+        # Strip verbose previews from tool call logs to reduce summary input
+        # size and preserve more semantic content in the compressed output.
+        for msg in to_compress:
+            original = msg["content"]
+            aged = age_tool_log(original)
+            if aged != original:
+                msg["content"] = aged
 
         # ── 4a. AI Summarise ──
         if history_summarize_enabled() and self._provider is not None:
