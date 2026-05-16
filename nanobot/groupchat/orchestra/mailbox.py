@@ -31,42 +31,53 @@ class AgentMessage:
 
 
 class ConversationPool:
-    """OS-style resource pool for conversation chain management.
+    """Per-agent conversation pool with independent semaphores.
 
-    Controls message volume by treating conversation chains as a limited
-    resource. Each message consumes slots proportional to its recipient
-    count, naturally penalizing All-broadcasts.
+    Each agent has its own slot budget. Sending a message costs slots from
+    the *sender's* pool (one per recipient). This prevents any single agent
+    from monopolizing the conversation.
 
-    - Pool capacity = agent_count × 3 (configurable)
-    - chatroom_send(to="All") with 3 other agents → costs 3 slots
-    - chatroom_send(to="Harper") → costs 1 slot
-    - When recipient calls wait() without replying → releases 1 slot
-    - When pool is empty → chatroom_send blocks until slots freed
+    - chatroom_send(to="All") with 3 recipients → costs 3 slots from sender
+    - chatroom_send(to="Harper") → costs 1 slot from sender
+    - When recipient calls wait() without replying → releases 1 slot back to sender
+    - When sender's pool is empty → chatroom_send blocks until slots freed
+    - User messages force-allocate from every recipient's pool (never blocked)
     """
 
     ALLOCATE_TIMEOUT = 15.0  # max seconds to wait for slots
 
-    def __init__(self, capacity: int, agents: list[str] | None = None) -> None:
-        self._capacity = capacity
-        self._available = capacity
-        self._sem = asyncio.Semaphore(capacity)
+    def __init__(
+        self,
+        capacity: int = 0,
+        agents: list[str] | None = None,
+        per_agent_capacity: dict[str, int] | None = None,
+    ) -> None:
         self._agents = agents or []
+        # Per-agent capacity: explicit dict wins, else uniform from capacity
+        if per_agent_capacity:
+            self._per_cap = dict(per_agent_capacity)
+        else:
+            uniform = capacity if capacity > 0 else max(len(self._agents) * 3, 1)
+            self._per_cap = {a: uniform for a in self._agents}
+        # Per-agent semaphores and available counters
+        self._sems: dict[str, asyncio.Semaphore] = {
+            a: asyncio.Semaphore(self._per_cap[a]) for a in self._agents
+        }
+        self._available: dict[str, int] = {
+            a: self._per_cap[a] for a in self._agents
+        }
         # Track pending replies: {recipient: [sender1, sender2, ...]}
-        # When recipient wait()s without replying, these are released
         self._pending: dict[str, list[str]] = {a: [] for a in self._agents}
         # User priority: when cleared, agents are blocked from allocating
         self._user_priority = asyncio.Event()
-        self._user_priority.set()  # default: no user priority, agents can proceed
+        self._user_priority.set()
 
     async def allocate(self, sender: str, recipients: list[str]) -> bool:
-        """Allocate slots for a message. Blocks if pool exhausted.
+        """Allocate slots from sender's pool. Blocks if sender's pool exhausted.
 
-        Costs len(recipients) slots. One slot per recipient.
-        Returns True if allocated, False if timeout (pool full too long).
-
-        When user priority is active, agents are immediately rejected.
+        Costs len(recipients) slots from sender's semaphore.
+        Returns True if allocated, False if timeout or user priority active.
         """
-        # Agent: if user has priority, fail immediately
         if not self._user_priority.is_set():
             logger.info(
                 "ConversationPool: {} rejected — user priority active",
@@ -75,45 +86,48 @@ class ConversationPool:
             return False
 
         n = len(recipients)
-        if n > self._capacity:
+        cap = self._per_cap.get(sender, 0)
+        if n > cap:
             logger.warning(
                 "ConversationPool: {} rejected — requested {} slots exceeds capacity {}",
-                sender, n, self._capacity,
+                sender, n, cap,
             )
             return False
 
-        # If pool is full right now, log that we are waiting.
-        if self._available < n:
+        sem = self._sems.get(sender)
+        avail = self._available.get(sender, 0)
+        if sem is None:
+            return False
+
+        if avail < n:
             logger.debug(
                 "ConversationPool: {} waiting for slots ({} needed, {} available)",
-                sender, n, self._available,
+                sender, n, avail,
             )
 
         acquired = 0
         try:
             for _ in range(n):
                 await asyncio.wait_for(
-                    self._sem.acquire(), timeout=self.ALLOCATE_TIMEOUT,
+                    sem.acquire(), timeout=self.ALLOCATE_TIMEOUT,
                 )
                 acquired += 1
-                # Deduct from available as we acquire
-                self._available -= 1
-                
+                self._available[sender] -= 1
+
                 # Re-check: user priority may have been set while waiting
                 if not self._user_priority.is_set():
                     for _ in range(acquired):
-                        self._sem.release()
-                        self._available += 1
+                        sem.release()
+                        self._available[sender] += 1
                     logger.info(
                         "ConversationPool: {} interrupted — user priority",
                         sender,
                     )
                     return False
         except asyncio.TimeoutError:
-            # Release any partially acquired slots and restore available
             for _ in range(acquired):
-                self._sem.release()
-                self._available += 1
+                sem.release()
+                self._available[sender] += 1
             logger.warning(
                 "ConversationPool: {} failed to allocate {} slots "
                 "(acquired {}, pool full)",
@@ -127,97 +141,105 @@ class ConversationPool:
                 self._pending[r].append(sender)
 
         logger.debug(
-            "ConversationPool: {} → {} ({} slots used, {} available)",
-            sender, recipients, n, self._available,
+            "ConversationPool: {} → {} ({} slots from sender, {} available)",
+            sender, recipients, n, self._available.get(sender, 0),
         )
         return True
 
     async def allocate_user(self, recipients: list[str]) -> None:
-        """Force-allocate slots for a user message — never blocked.
+        """Force-allocate 1 slot from each recipient's pool for a user message.
 
-        User messages go directly into the pool, even if it exceeds
-        capacity. Agents still follow normal wait/timeout/drop logic.
+        User messages consume from every recipient's pool so that agents
+        can't bypass limits by only receiving user messages.
         _user_priority blocks agents during delivery.
         """
         self._user_priority.clear()
         n = len(recipients)
-        logger.info("ConversationPool: user force-allocate {} slots", n)
+        logger.info("ConversationPool: user force-allocate {} slots (per-agent)", n)
 
         for r in recipients:
             if r in self._pending:
                 self._pending[r].append("User")
-
-        # Acquire semaphore slots where available to keep _available in sync.
-        acquired = 0
-        for _ in range(n):
-            if not self._sem.locked():
+            # Deduct 1 slot from each recipient's pool
+            sem = self._sems.get(r)
+            if sem:
                 try:
-                    # Non-blocking: only acquire if slot is available right now
-                    await asyncio.wait_for(self._sem.acquire(), timeout=0.01)
-                    acquired += 1
+                    await asyncio.wait_for(sem.acquire(), timeout=0.01)
                 except (asyncio.TimeoutError, Exception):
-                    break
-            else:
-                break
-        
-        # Always decrement _available by total n to keep it in sync with semaphore permits + overflow
-        self._available -= n
+                    pass  # overflow: still decrement _available
+            self._available[r] = self._available.get(r, 0) - 1
 
         self._user_priority.set()
         logger.info(
-            "ConversationPool: user allocated {} slots "
-            "({} from sem, overflow={}, {} available), priority OFF",
-            n, acquired, n - acquired, self._available,
+            "ConversationPool: user allocated 1 slot each from {} recipients, priority OFF",
+            n,
         )
 
     def release_unread(self, agent_name: str) -> int:
-        """Release slots for messages this agent received but didn't reply to.
+        """Release slots back to each pending sender's pool.
 
-        Called when agent calls wait() or finishes a cycle.
+        Called when agent calls wait() without replying.
         Returns number of slots released.
         """
         pending = self._pending.get(agent_name, [])
-        released = len(pending)
-        for _ in range(released):
-            self._sem.release()
+        released = 0
+        for sender in pending:
+            sem = self._sems.get(sender)
+            if sem:
+                sem.release()
+                self._available[sender] = self._available.get(sender, 0) + 1
+                released += 1
         self._pending[agent_name] = []
-        self._available += released
         if released > 0:
             logger.debug(
-                "ConversationPool: {} released {} unread slots ({} available)",
-                agent_name, released, self._available,
+                "ConversationPool: {} released {} unread slots back to senders",
+                agent_name, released,
             )
         return released
 
     def mark_replied(self, agent_name: str, to_sender: str) -> None:
         """Mark that agent replied to a message from to_sender.
 
-        Releases the slot because the reply will allocate its own new slot(s).
+        Releases 1 slot back to to_sender's pool.
         """
         pending = self._pending.get(agent_name, [])
         if to_sender in pending:
             pending.remove(to_sender)
-            self._sem.release()
-            self._available += 1
+            sem = self._sems.get(to_sender)
+            if sem:
+                sem.release()
+                self._available[to_sender] = self._available.get(to_sender, 0) + 1
             logger.debug(
-                "ConversationPool: {} replied to {} (released 1 slot, {} available)",
-                agent_name, to_sender, self._available,
+                "ConversationPool: {} replied to {} (released 1 slot to sender)",
+                agent_name, to_sender,
             )
 
     @property
     def available(self) -> int:
-        """Number of available slots (clamped to >= 0)."""
-        return max(0, self._available)
+        """Total available slots across all agents (clamped to >= 0)."""
+        return max(0, sum(self._available.values()))
 
     @property
     def capacity(self) -> int:
-        """Total pool capacity."""
-        return self._capacity
+        """Total capacity across all agents."""
+        return sum(self._per_cap.values())
 
     @property
     def used(self) -> int:
-        """Number of used slots (clamped to [0, capacity])."""
-        return max(0, min(self._capacity, self._capacity - self._available))
+        """Total used slots across all agents."""
+        return max(0, self.capacity - self.available)
+
+    def agent_available(self, agent: str) -> int:
+        """Available slots for a specific agent."""
+        return max(0, self._available.get(agent, 0))
+
+    def agent_capacity(self, agent: str) -> int:
+        """Capacity for a specific agent."""
+        return self._per_cap.get(agent, 0)
+
+    def agent_used(self, agent: str) -> int:
+        """Used slots for a specific agent."""
+        return max(0, self.agent_capacity(agent) - self.agent_available(agent))
 
 
 # Keep SpeakQueue as alias for backward compat (referenced in imports)

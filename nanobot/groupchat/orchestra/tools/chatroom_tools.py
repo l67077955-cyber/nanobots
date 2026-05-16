@@ -692,8 +692,10 @@ class ChatroomSendTool(Tool):
         if self._pool:
             ok = await self._pool.allocate(self._agent_name, actual_recipients)
             if not ok:
+                my_used = self._pool.agent_used(self._agent_name)
+                my_cap = self._pool.agent_capacity(self._agent_name)
                 return (
-                    f"BLOCKED: pool full ({self._pool.used}/{self._pool.capacity}), "
+                    f"BLOCKED: your pool full ({my_used}/{my_cap}), "
                     "message dropped. Use wait() to free slots, or send to fewer people."
                 )
             # If replying to someone who sent us a message, mark it replied

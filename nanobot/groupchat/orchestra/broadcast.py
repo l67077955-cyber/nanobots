@@ -297,12 +297,27 @@ class BroadcastOrchestrator:
         import os
 
         n = len(self.exec_agents)
+        # Build per-agent capacity from ranks
+        rank_cap = {"pawn": 2, "knight": 3, "bishop": 3, "queen": 4}
+        per_agent_cap: dict[str, int] = {}
+        for ag in self.exec_agents:
+            cfg = self.engine.registry.get(ag, {})
+            rank = cfg.get("rank", "pawn")
+            cap = rank_cap.get(rank, 3)
+            if ag == self.leader_name:
+                cap += 1  # leader gets +1
+            per_agent_cap[ag] = cap
+
         pool_capacity_setting = self.gc_settings.get("context_pool_capacity", 0)
-        pool_capacity = pool_capacity_setting if pool_capacity_setting > 0 else max(n * (n - 1), 2)
-        self.pool = ConversationPool(capacity=pool_capacity, agents=list(self.exec_agents))
+        if pool_capacity_setting > 0:
+            # Override: uniform capacity from settings
+            self.pool = ConversationPool(capacity=pool_capacity_setting, agents=list(self.exec_agents))
+        else:
+            self.pool = ConversationPool(agents=list(self.exec_agents), per_agent_capacity=per_agent_cap)
         self.pool.ALLOCATE_TIMEOUT = float(self.gc_settings["allocate_timeout"])
         
-        await self.engine._send(f"── threads {_d.thread_bar(0, pool_capacity)} ──")
+        total_cap = self.pool.capacity
+        await self.engine._send(f"── threads {_d.thread_bar(0, total_cap)} ──")
 
         self.tracker = AgentStatusTracker(
             agents=self.exec_agents,
