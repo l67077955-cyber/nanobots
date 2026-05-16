@@ -457,8 +457,11 @@ async def broadcast_round(
     # ── Extract user question (for hint injection) ──
     user_question = ""
     for msg in reversed(engine._history):
-        if msg.get("sender") in ("User", "user", "用户", "系统"):
-            user_question = msg.get("content", "")[:300]
+        if msg.get("sender") in ("User", "user", "用户"):
+            content = msg.get("content", "")
+            if content.startswith("["):
+                continue  # skip compressed summary blocks
+            user_question = content[:300]
             break
 
     # ═══════════════════════════════════════════════════════════════
