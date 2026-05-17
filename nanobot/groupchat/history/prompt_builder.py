@@ -26,13 +26,15 @@ from nanobot.groupchat.history.context_validator import validate_context
 
 # ── Constants ─────────────────────────────────────────────────
 
-DEFAULT_PROMPT_ORDER = [
+MANIFEST_PATH = Path.home() / ".nanobot" / "prompt_manifest.json"
+
+# Hardcoded fallback defaults — used ONLY when manifest is missing/corrupt.
+_FALLBACK_ORDER = [
     "main_prompt", "group_context", "persona", "memory",
     "tool_instructions", "skills", "broadcast_hint", "examples",
     "history", "instructions", "leader_prompt", "group_nudge",
 ]
-
-COMPONENT_LABELS: dict[str, str] = {
+_FALLBACK_LABELS: dict[str, str] = {
     "main_prompt": "主提示 (main_prompt)",
     "group_context": "群聊上下文 (group_context)",
     "persona": "人设/SOUL (persona)",
@@ -46,17 +48,81 @@ COMPONENT_LABELS: dict[str, str] = {
     "leader_prompt": "领袖指令 (leader_prompt)",
     "group_nudge": "群聊规范 (group_nudge)",
 }
-
-GLOBAL_EDITABLE: set[str] = {
+_FALLBACK_GLOBAL_EDITABLE: set[str] = {
     "main_prompt", "group_context", "tool_instructions", "skills", "memory",
     "broadcast_hint", "examples", "instructions", "leader_prompt", "group_nudge",
 }
-AGENT_EDITABLE = {"persona"}
-EDITABLE_COMPONENTS = GLOBAL_EDITABLE | AGENT_EDITABLE
+_FALLBACK_AGENT_EDITABLE: set[str] = {"persona"}
+
+# Module-level dicts/sets — populated from manifest at import time.
+# These remain the public API consumed by:
+#   nanobot.channels.telegram.callbacks
+#   nanobot.channels.telegram.commands.settings
+DEFAULT_PROMPT_ORDER: list[str] = list(_FALLBACK_ORDER)
+COMPONENT_LABELS: dict[str, str] = dict(_FALLBACK_LABELS)
+GLOBAL_EDITABLE: set[str] = set(_FALLBACK_GLOBAL_EDITABLE)
+AGENT_EDITABLE: set[str] = set(_FALLBACK_AGENT_EDITABLE)
+EDITABLE_COMPONENTS: set[str] = GLOBAL_EDITABLE | AGENT_EDITABLE
+
+
+def _load_manifest() -> dict | None:
+    """Load prompt_manifest.json if it exists."""
+    if MANIFEST_PATH.exists():
+        try:
+            return json.loads(MANIFEST_PATH.read_text())
+        except Exception:
+            pass
+    return None
+
+
+def _save_manifest(manifest: dict) -> None:
+    """Persist manifest to disk."""
+    MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    sorted_manifest = {
+        "version": manifest.get("version", 1),
+        "components": dict(sorted(manifest["components"].items()))
+    }
+    MANIFEST_PATH.write_text(json.dumps(sorted_manifest, ensure_ascii=False, indent=2) + "\n")
+
+
+def _get_manifest_label(key: str) -> str:
+    """Get component label from manifest, fallback to COMPONENT_LABELS."""
+    manifest = _load_manifest()
+    if manifest and "components" in manifest:
+        comp = manifest["components"].get(key)
+        if comp and "label" in comp:
+            return comp["label"]
+    return COMPONENT_LABELS.get(key, key)
+
+
+def _get_manifest_editable(key: str) -> str:
+    """Get editable status from manifest: 'global', 'agent', or 'none'.
+    Fallback to GLOBAL_EDITABLE/AGENT_EDITABLE if manifest absent.
+    """
+    manifest = _load_manifest()
+    if manifest and "components" in manifest:
+        comp = manifest["components"].get(key)
+        if comp and "editable_by" in comp:
+            return comp["editable_by"]
+    if key in GLOBAL_EDITABLE:
+        return "global"
+    if key in AGENT_EDITABLE:
+        return "agent"
+    return "none"
 
 
 def _load_custom_labels() -> dict[str, str]:
-    """Load user-defined custom component labels from disk."""
+    """Load user-defined custom component labels from disk.
+    Reads from manifest first, fallback to custom_prompt_labels.json.
+    """
+    manifest = _load_manifest()
+    if manifest and "components" in manifest:
+        labels = {}
+        for key, comp in manifest["components"].items():
+            if "label" in comp:
+                labels[key] = comp["label"]
+        if labels:
+            return labels
     f = Path.home() / ".nanobot" / "custom_prompt_labels.json"
     if f.exists():
         try:
@@ -67,21 +133,62 @@ def _load_custom_labels() -> dict[str, str]:
 
 
 def _save_custom_labels(labels: dict[str, str]) -> None:
-    """Persist custom component labels to disk."""
-    f = Path.home() / ".nanobot" / "custom_prompt_labels.json"
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(labels, ensure_ascii=False, indent=2))
+    """Persist custom component labels to disk — writes to manifest."""
+    manifest = _load_manifest()
+    if manifest is None:
+        manifest = {"version": 1, "components": {}}
+    for key, label in labels.items():
+        if key not in manifest["components"]:
+            manifest["components"][key] = {"order": 99, "visibility": "all", "editable_by": "none", "resolver": None}
+        manifest["components"][key]["label"] = label
+    _save_manifest(manifest)
 
 
-def _register_custom_labels() -> None:
-    """Load custom labels from disk and merge into module-level dicts."""
-    for key, label in _load_custom_labels().items():
-        COMPONENT_LABELS[key] = label
-        GLOBAL_EDITABLE.add(key)
+def _sync_from_manifest() -> None:
+    """Populate module-level constants from manifest.
+
+    Single synchronization point — called once at import time.
+    Consumers (nanobot.channels.telegram.callbacks, nanobot.channels.telegram.commands.settings) continue to read the module-level
+    dicts/sets unchanged — zero changes needed on their side.
+    """
+    global DEFAULT_PROMPT_ORDER, COMPONENT_LABELS, GLOBAL_EDITABLE, AGENT_EDITABLE, EDITABLE_COMPONENTS
+
+    manifest = _load_manifest()
+    components = manifest.get("components", {}) if manifest else {}
+
+    if not components:
+        logger.warning("Manifest empty or missing — using hardcoded fallbacks")
+        return
+
+    # Derive order from manifest: sort by `order` field, then by key for ties.
+    sorted_items = sorted(components.items(), key=lambda kv: (kv[1].get("order", 999), kv[0]))
+    DEFAULT_PROMPT_ORDER = [k for k, _ in sorted_items]
+
+    # Rebuild labels, editable sets from manifest metadata.
+    COMPONENT_LABELS = {}
+    GLOBAL_EDITABLE = set()
+    AGENT_EDITABLE = set()
+
+    for key, meta in components.items():
+        label = meta.get("label", key)
+        if label:
+            COMPONENT_LABELS[key] = label
+
+        editable_by = meta.get("editable_by", "none")
+        if editable_by == "global":
+            GLOBAL_EDITABLE.add(key)
+        elif editable_by == "agent":
+            AGENT_EDITABLE.add(key)
+
+    EDITABLE_COMPONENTS = GLOBAL_EDITABLE | AGENT_EDITABLE
+    logger.info(
+        "Synced from manifest: {} components, {} editable",
+        len(DEFAULT_PROMPT_ORDER), len(EDITABLE_COMPONENTS),
+    )
 
 
-# Auto-register on import so custom components survive restarts
-_register_custom_labels()
+# Auto-sync on import — manifest is the single source of truth
+_sync_from_manifest()
 
 
 # ── Template Defaults ─────────────────────────────────────────
@@ -102,7 +209,6 @@ TEMPLATES: dict[str, str] = {
         "[广播模式 — 多Agent协作]\n"
         "你是 {{agent_idx}}/{{total}} 号成员，代号 {{agent}}\n"
         "队友: {{teammates}}\n\n"
-        "用户请求: {{user_question}}\n\n"
         "## 聊天记录说明\n"
         "历史记录仅包含：你自己的发言、用户消息、系统消息。\n"
         "队友的历史发言不在历史里——他们本轮的消息通过 chatroom_send/wait 实时传达。\n"
@@ -175,6 +281,14 @@ class PromptBuilder:
     # ── Order management ──
 
     def _load_prompt_order(self) -> dict[str, list[str]]:
+        """Load prompt order from manifest first, fallback to prompt_order.json."""
+        manifest = _load_manifest()
+        if manifest and "components" in manifest:
+            comps = [(comp.get("order", 999), k) for k, comp in manifest["components"].items()]
+            comps.sort()
+            ordered_keys = [k for _, k in comps]
+            if ordered_keys:
+                return {"default": ordered_keys}
         f = Path.home() / ".nanobot" / "prompt_order.json"
         if f.exists():
             try:
@@ -187,19 +301,39 @@ class PromptBuilder:
         return {}
 
     def _save_prompt_order(self) -> None:
+        """Save prompt order to manifest + legacy file."""
+        manifest = _load_manifest()
+        if manifest is None:
+            manifest = {"version": 1, "components": {}}
+        order_list = self._prompt_order.get("default", [])
+        for idx, key in enumerate(order_list):
+            if key not in manifest["components"]:
+                manifest["components"][key] = {"order": idx, "visibility": "all", "label": key, "editable_by": "none", "resolver": None}
+            else:
+                manifest["components"][key]["order"] = idx
+        # Legacy file for backward compat during transition
         f = Path.home() / ".nanobot" / "prompt_order.json"
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(self._prompt_order, ensure_ascii=False, indent=2))
+        f.write_text(json.dumps(order_list, ensure_ascii=False, indent=2))
+        _save_manifest(manifest)
 
     # ── Visibility management ──
 
     def _load_visibility(self) -> dict[str, str]:
-        """Load per-component visibility settings from disk.
+        """Load per-component visibility settings from manifest first, fallback to prompt_visibility.json.
 
         Returns a dict mapping component key to visibility mode:
         - "all": visible to all agents (default)
         - "leader": visible only to the leader agent
         """
+        manifest = _load_manifest()
+        if manifest and "components" in manifest:
+            vis = {}
+            for key, comp in manifest["components"].items():
+                if "visibility" in comp:
+                    vis[key] = comp["visibility"]
+            if vis:
+                return vis
         f = Path.home() / ".nanobot" / "prompt_visibility.json"
         if f.exists():
             try:
@@ -211,10 +345,20 @@ class PromptBuilder:
         return {}
 
     def _save_visibility(self) -> None:
-        """Persist visibility settings to disk."""
+        """Persist visibility settings to manifest + legacy file."""
+        manifest = _load_manifest()
+        if manifest is None:
+            manifest = {"version": 1, "components": {}}
+        for key, mode in self._visibility.items():
+            if key not in manifest["components"]:
+                manifest["components"][key] = {"order": 99, "visibility": mode, "label": key, "editable_by": "none", "resolver": None}
+            else:
+                manifest["components"][key]["visibility"] = mode
+        # Legacy file for backward compat during transition
         f = Path.home() / ".nanobot" / "prompt_visibility.json"
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(json.dumps(self._visibility, ensure_ascii=False, indent=2))
+        _save_manifest(manifest)
 
     def get_component_visibility(self, key: str) -> str:
         """Get visibility mode for a component. Returns 'all' or 'leader'."""
@@ -271,7 +415,7 @@ class PromptBuilder:
     def add_custom_component(key: str, label: str) -> str:
         """Register a user-defined custom component.
 
-        Adds it to COMPONENT_LABELS, GLOBAL_EDITABLE, and persists the label.
+        Adds it to COMPONENT_LABELS, GLOBAL_EDITABLE, and persists to manifest.
         Does NOT add to the prompt order — caller should do that separately.
         """
         if key in COMPONENT_LABELS:
@@ -279,10 +423,16 @@ class PromptBuilder:
         # Register in module-level dicts
         COMPONENT_LABELS[key] = label
         GLOBAL_EDITABLE.add(key)
-        # Persist
-        custom = _load_custom_labels()
-        custom[key] = label
-        _save_custom_labels(custom)
+        EDITABLE_COMPONENTS.add(key)
+        # Persist to manifest (single source of truth)
+        manifest = _load_manifest()
+        if manifest is None:
+            manifest = {"version": 1, "components": {}}
+        manifest["components"][key] = {
+            "order": 99, "visibility": "all",
+            "label": label, "editable_by": "global", "resolver": None,
+        }
+        _save_manifest(manifest)
         return f"✅ 已创建自定义组件: {label}"
 
     # ── Component content ──
@@ -485,6 +635,10 @@ class PromptBuilder:
         leader: str | None = None,
         round_num: int = 0,
         relevant_agents: list[str] | None = None,
+        agent_idx: int | None = None,
+        total: int | None = None,
+        teammates: list[str] | None = None,
+        user_question: str = "",
     ) -> list[dict[str, Any]]:
         """Build the full prompt messages list for an agent turn."""
         agent = registry[agent_name]
@@ -503,6 +657,9 @@ class PromptBuilder:
             "{{tools}}": tool_names,
             "{{others}}": ", ".join(other_members),
             "{{identity}}": self._build_identity(),
+            "{{agent_idx}}": str(agent_idx) if agent_idx is not None else "",
+            "{{total}}": str(total) if total is not None else "",
+            "{{teammates}}": ", ".join(teammates) if teammates else "",
         }
         # Volatile vars — change every turn/minute.  They are available for use
         # in templates but are injected separately at the END of the prompt (after
@@ -548,6 +705,8 @@ class PromptBuilder:
             f"[Current date and time: {volatile_tpl_vars['{{datetime}}']}]"
             f"\n[Round: {volatile_tpl_vars['{{round}}']}]"
         )
+        if user_question:
+            volatile_content = f"用户请求: {user_question}\n\n" + volatile_content
         messages.append({"role": "user", "content": volatile_content})
 
         return messages

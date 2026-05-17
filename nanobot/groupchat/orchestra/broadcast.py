@@ -17,7 +17,11 @@ from loguru import logger
 from nanobot.groupchat.display import display as _d
 from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool
 from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
-from nanobot.groupchat.history.component_manager import get_system_warning
+from nanobot.groupchat.history.component_manager import (
+    get_system_warning,
+    synthesis_quality_check,
+    _MIN_SYNTHESIS_LEN,
+)
 
 
 # ── Tool-name → status state mapping ─────────────────────────
@@ -261,7 +265,7 @@ class BroadcastOrchestrator:
         self.total = len(self.exec_agents)
         
         _gc_settings_path = Path.home() / ".nanobot" / "groupchat_settings.json"
-        _gc_defaults = {"search_initial": 2, "search_earn_interval": 4, "allocate_timeout": 15, "call_timeout": 90}
+        _gc_defaults = {"search_initial": 2, "search_earn_interval": 4, "allocate_timeout": 15, "call_timeout": 90, "conv_keep_turns": 3}
         self.gc_settings = dict(_gc_defaults)
         if _gc_settings_path.exists():
             try:
@@ -293,12 +297,28 @@ class BroadcastOrchestrator:
         import os
 
         n = len(self.exec_agents)
+        # Build per-agent capacity from ranks
+        rank_cap = {"pawn": 2, "knight": 3, "bishop": 4, "queen": 5}
+        per_agent_cap: dict[str, int] = {}
+        for ag in self.exec_agents:
+            cfg = self.engine.registry.get(ag, {})
+            rank = cfg.get("rank", "pawn")
+            cap = rank_cap.get(rank, 3)
+            if ag == self.leader_name:
+                cap += 1  # leader gets +1
+            per_agent_cap[ag] = cap
+
+        # ConversationPool: rank-based per-agent, with settings fallback
         pool_capacity_setting = self.gc_settings.get("context_pool_capacity", 0)
-        pool_capacity = pool_capacity_setting if pool_capacity_setting > 0 else max(n * (n - 1), 2)
-        self.pool = ConversationPool(capacity=pool_capacity, agents=list(self.exec_agents))
+        if pool_capacity_setting > 0:
+            # Settings override: uniform capacity
+            self.pool = ConversationPool(capacity=pool_capacity_setting, agents=list(self.exec_agents))
+        else:
+            # Rank-based per-agent capacity
+            self.pool = ConversationPool(agents=list(self.exec_agents), per_agent_capacity=per_agent_cap)
         self.pool.ALLOCATE_TIMEOUT = float(self.gc_settings["allocate_timeout"])
         
-        await self.engine._send(f"── threads {_d.thread_bar(0, pool_capacity)} ──")
+        await self.engine._send(f"threads {self.pool.status()}")
 
         self.tracker = AgentStatusTracker(
             agents=self.exec_agents,
@@ -310,7 +330,12 @@ class BroadcastOrchestrator:
 
         points_per_agent = self.gc_settings.get("context_points_per_agent", 0)
         tool_initial = self.gc_settings.get("tool_initial", self.gc_settings.get("search_initial", 2))
-        search_initial = points_per_agent if points_per_agent > 0 else tool_initial
+        if points_per_agent > 0:
+            # Settings override: uniform search credits
+            search_initial = points_per_agent
+        else:
+            # Rank-based per-agent search credits (reuse per_agent_cap from pool)
+            search_initial = per_agent_cap
         self.search_pool = SearchPool(
             agents=list(self.exec_agents),
             initial_per_agent=search_initial,
@@ -355,7 +380,7 @@ class BroadcastOrchestrator:
                 mailbox=self.mailbox,
                 spawn_fn=spawn_fn,
             )
-            end_tool = EndDiscussionTool(end_event=self.leader_end_event, engine=self.engine)
+            end_tool = EndDiscussionTool(end_event=self.leader_end_event, engine=self.engine, mailbox=self.mailbox)
             transfer_tool = TransferCreditsTool(search_pool=self.search_pool, engine=self.engine)
             clear_ctx_tool = ClearContextTool(
                 engine=self.engine,
@@ -431,15 +456,18 @@ async def broadcast_round(
         "mode": "broadcast",
         "leader": leader_name,
     })
-    await engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout), leader=leader_name))
+    await engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout), leader=leader_name, ranks=ranks_map))
 
     orch = BroadcastOrchestrator(agents, engine, mailbox)
 
     # ── Extract user question (for hint injection) ──
     user_question = ""
     for msg in reversed(engine._history):
-        if msg.get("sender") in ("User", "user", "用户", "系统"):
-            user_question = msg.get("content", "")[:300]
+        if msg.get("sender") in ("User", "user", "用户"):
+            content = msg.get("content", "")
+            if content.startswith("["):
+                continue  # skip compressed summary blocks
+            user_question = content[:300]
             break
 
     # ═══════════════════════════════════════════════════════════════
@@ -492,17 +520,26 @@ async def broadcast_round(
         agent_cfg = engine.registry[name]
         model = agent_cfg["model"]  # initial; re-read each cycle below
         model_short = model.split("/")[-1]
+
+        # ── Compute teammates list (must be before _build_agent_prompt call) ──
+        teammates = [a for a in agents if a != name]
+
         # In broadcast mode, all agents share the full history (relevant_agents=None).
         # Each agent sees user messages, system messages, and ALL teammates' final replies.
         # Tool call logs are appended as text inside each agent's message, so teammates
         # can read a concise summary of what was done without the full tool protocol overhead.
-        messages = engine._build_agent_prompt(name, relevant_agents=None)
+        messages = engine._build_agent_prompt(
+            name,
+            relevant_agents=None,
+            agent_idx=agent_idx,
+            total=total,
+            teammates=teammates,
+            user_question=user_question,
+        )
 
         is_leader = (name == leader_name)
         _leader_ended_discussion = False
-
-        # ── Inject broadcast coordination hint from template ──
-        teammates = [a for a in agents if a != name]
+        _synthesis_retries = 0  # guard against infinite synthesis retry loops
         # Load from override system (editable via /prompt), fallback to default
         # Removed stale prompt_overrides.json lookup; .md files are the source of truth.
 
@@ -558,14 +595,19 @@ async def broadcast_round(
                 f"4. 用 wait() 等待队友回复结果\n"
                 f"5. 根据结果：追加任务 / 纠正方向 / 自己补充搜索\n"
                 f"6. 信息充分后，先完成以下两步，再调用 end_discussion()：\n"
-                f"   a. 在最终文字回复中整合所有发现，给出完整答案\n"
-                f"   b. 用 memory_palace(action='store') 将关键结论、发现写入记忆宫殿\n"
+                f"   a. 输出结构化最终总结（必须包含以下部分，禁止省略）：\n"
+                f"      ## 结论\n"
+                f"      （直接回答用户问题的核心结论，1-3句话）\n\n"
+                f"      ## 关键发现\n"
+                f"      （讨论中确认的事实、数据、来源，用列表形式）\n\n"
+                f"      ## 备注\n"
+                f"      （可选：分歧说明、局限、后续建议）\n\n"
+                f"   b. 用 memory_palace(action='store') 将关键结论写入记忆宫殿\n"
                 f"      示例: memory_palace(action='store', content='用户偏好：...', wing='用户', hall='偏好', room='main')\n"
                 f"7. 完成记忆存入后，调用 end_discussion() 结束任务\n\n"
                 f"## 关键规则\n"
                 f"- 发现队友空转或无法完成任务时：果断 end_discussion\n"
                 f"- 可以一次给多个队友同时发任务（并行工作）\n"
-                f"- 你的最终文字回复就是给用户的答案，要完整、结构化\n"
                 f"- ⚠️ 如果你打算自己做搜索/验证，必须先完成工具调用，再调用 end_discussion。\n"
                 f"  end_discussion 一旦触发无法撤销，之后再说'我来搜索'只是文字，不会执行。\n"
                 f"- ⚠️ 原假设被否证时，不要立即结束。应转向：'那么最近的可验证链条是什么？'\n"
@@ -577,21 +619,8 @@ async def broadcast_round(
                 "content": leader_hint,
             })
         else:
-            # ── Non-leader: standard broadcast hint + wait for leader ──
-            hint_template = engine.prompt_builder.get_component_template("broadcast_hint")
-            if hint_template:
-                hint = (
-                    hint_template
-                    .replace("{{agent_idx}}", str(agent_idx + 1))
-                    .replace("{{total}}", str(total))
-                    .replace("{{teammates}}", ", ".join(teammates))
-                    .replace("{{agent}}", name)
-                    .replace("{{user_question}}", user_question)
-                )
-                messages.insert(max(len(messages) - 1, 0), {
-                    "role": "system",
-                    "content": hint,
-                })
+            # ── Non-leader: broadcast_hint already expanded by build_agent_prompt ──
+            pass
 
             # If there's a leader, tell non-leader agents to expect instructions
             if leader_name:
@@ -684,6 +713,10 @@ async def broadcast_round(
         # Tracks how many timeout-recovery attempts this agent has made.
         # Hard cap at 1 to prevent recovery loops.
         _timeout_recovery_count = 0
+        # Tracks consecutive LLM errors to prevent rapid-fire error loops.
+        # After MAX_CONSECUTIVE_ERRORS, the agent exits instead of continuing.
+        _consecutive_error_count = 0
+        MAX_CONSECUTIVE_ERRORS = 3
 
         try:
             while True:
@@ -900,6 +933,17 @@ async def broadcast_round(
                         await tracker.set_state(name, "error", reason=err_short[:40])
                         await engine._send(f"  ✗ {name} failed ({latency:.1f}s): {err_short}")
 
+                        _consecutive_error_count += 1
+                        if _consecutive_error_count >= MAX_CONSECUTIVE_ERRORS:
+                            logger.error(
+                                "Broadcast: {} hit {} consecutive LLM errors, forcing exit",
+                                name, _consecutive_error_count,
+                            )
+                            await engine._send(
+                                f"  ✗ {name} 连续 {_consecutive_error_count} 次 LLM 错误，强制退出"
+                            )
+                            break
+
                         # Keep agent alive instead of killing it (mirrors timeout recovery)
                         _placeholder = (
                             f"⚠️ [{name}] LLM调用出错（{err_short[:60]}），我仍在线。"
@@ -915,13 +959,16 @@ async def broadcast_round(
                         )
                         await tracker.set_state(name, "waiting", detail="error recovery")
                         logger.warning(
-                            "Broadcast: {} LLM error, injecting placeholder and continuing",
-                            name,
+                            "Broadcast: {} LLM error ({}/{}), injecting placeholder and continuing",
+                            name, _consecutive_error_count, MAX_CONSECUTIVE_ERRORS,
                         )
                         continue  # stay alive like timeout branch
 
 
                 _used_chatroom_send = result.tools_used and "chatroom_send" in result.tools_used
+
+                # Reset consecutive error counter on successful cycle
+                _consecutive_error_count = 0
 
                 # Record final text or tool calls in history
                 if content or result.tool_calls_detail:
@@ -1107,7 +1154,9 @@ async def broadcast_round(
                 # Display the agent's final text for this cycle.
                 # If chatroom_send was used, the content was already shown at tool-call
                 # time (line 612) — skip the duplicate "Self/Final" display.
-                if content:
+                # Defer display when leader is in synthesis validation — only show
+                # output that passes the quality gate (prevents spamming failed retries).
+                if content and not (is_leader and _leader_ended_discussion):
                     if not _used_chatroom_send:
                         # Token + latency suffix
                         tok = result.token_usage
@@ -1133,8 +1182,77 @@ async def broadcast_round(
                         logger.info("Broadcast: displayed {} cycle {} output ({} chars) [Local Only]", name, cycle, len(content))
                     # else: chatroom_send already displayed the message — no duplicate needed
                 
-                # If leader called end_discussion this cycle, exit immediately.
+                # If leader called end_discussion this cycle, validate synthesis length & quality.
                 if is_leader and _leader_ended_discussion:
+                    stripped = content.strip() if content else ""
+                    if len(stripped) < _MIN_SYNTHESIS_LEN:
+                        logger.warning(
+                        "Broadcast: leader {} synthesis too short ({} chars < {}), forcing retry",
+                        name, len(stripped), _MIN_SYNTHESIS_LEN,
+                        )
+                        messages.append({
+                        "role": "system",
+                        "content": get_system_warning("leader_end_without_text", name=name),
+                        })
+                        _synthesis_retries += 1
+                        if _synthesis_retries >= 3:
+                            logger.warning("Broadcast: leader {} synthesis retry exhausted ({} attempts), forcing exit", name, _synthesis_retries)
+                            break
+                        # Restore engine so the retry cycle can execute;
+                        # end_discussion already set _running=False but synthesis
+                        # hasn't produced valid output yet.
+                        engine._running = True
+                        continue
+                    # Step 2 — content quality guard (catches fluff like "问题已解答，无需补充")
+                    quality_ok, quality_reason = synthesis_quality_check(stripped, tools_used=result.tools_used)
+                    if not quality_ok:
+                        logger.warning(
+                        "Broadcast: leader {} synthesis quality check failed ({})",
+                        name, quality_reason,
+                        )
+                        # Pick the most specific warning template
+                        if "记忆" in quality_reason or "memory" in quality_reason:
+                            _warn = get_system_warning("delivery_gate_memory", name=name)
+                        elif "数据采集" in quality_reason or "工具" in quality_reason:
+                            _warn = get_system_warning("delivery_gate_tools", name=name)
+                        else:
+                            _warn = get_system_warning("leader_end_without_text", name=name)
+                        messages.append({
+                        "role": "system",
+                        "content": (
+                        _warn
+                        + f"\n\n[质量检查失败] {quality_reason}"
+                        "\n请输出包含 ## 结论、## 关键发现 的结构化总结，附带具体数据和来源。"
+                        ),
+                        })
+                        _synthesis_retries += 1
+                        if _synthesis_retries >= 3:
+                            logger.warning("Broadcast: leader {} synthesis quality retry exhausted ({} attempts), forcing exit", name, _synthesis_retries)
+                            break
+                        engine._running = True
+                        continue
+                    # Synthesis passed validation — now display it
+                    if content and not _used_chatroom_send:
+                        tok = result.token_usage
+                        total_tok = tok.get("total", 0)
+                        tok_suffix = ""
+                        if total_tok > 0:
+                            elapsed = _t.time() - _cycle_t0
+                            cost = result.cost or 0
+                            cache_t = result.cache_tokens or 0
+                            reasoning_t = sum(
+                                (m.get("reasoning_tokens") or 0)
+                                for m in (result.provider_meta or [])
+                                if isinstance(m, dict)
+                            )
+                            tok_suffix = "\n" + _d.format_token_stats(
+                                tok.get("prompt", 0), tok.get("completion", 0),
+                                elapsed=elapsed, cost=cost, cache_tokens=cache_t,
+                                reasoning_tokens=reasoning_t,
+                            )
+                        target_label = f"进展 [{cycle}]"
+                        await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
+                        logger.info("Broadcast: displayed {} synthesis output ({} chars) [post-validation]", name, len(content))
                     logger.info("Broadcast: leader {} called end_discussion, exiting cycle loop", name)
                     break
 
@@ -1181,13 +1299,21 @@ async def broadcast_round(
                 # ── Prune conversation tail to prevent unbounded growth ──
                 # Keep system-prompt prefix intact; only retain the last
                 # _CONV_KEEP_TURNS conversation turns (3 msgs per turn).
-                from nanobot.groupchat.history.tool_pruning import prune_conversation_tail
-                _CONV_KEEP_TURNS = 6  # keep last 6 reactivation cycles worth of msgs
-                dropped = prune_conversation_tail(messages, _sys_msg_count, _CONV_KEEP_TURNS)
+                # Dropped messages are AI-summarised before removal so the
+                # agent retains context of earlier discussion.
+                from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
+                from nanobot.groupchat.history.history_settings import summarize_model as _summarize_model
+                _conv_keep_turns = gc_settings.get("conv_keep_turns", 3)  # configurable via groupchat_settings.json
+                dropped = await prune_conversation_tail_with_summary(
+                    messages, _sys_msg_count, _conv_keep_turns,
+                    provider=engine.provider,
+                    model=_summarize_model(),
+                    agent_name=name,
+                )
                 if dropped > 0:
                     logger.debug(
                         "Broadcast: {} pruned {} conversation messages (kept {})",
-                        name, dropped, _CONV_KEEP_TURNS * 3,
+                        name, dropped, _conv_keep_turns * 3,
                     )
 
                 # Inject agent's own previous output so LLM knows what it already said
@@ -1197,13 +1323,22 @@ async def broadcast_round(
                         "content": content,
                     })
                 # Anti-repeat injection: remind agent not to repeat itself
-                messages.append({
-                    "role": "system",
-                    "content": (
-                        f"[提醒] 你（{name}）已经发表过上述观点。"
-                        f"针对队友的新消息做出回应或补充新观点，不要重复已说的内容。"
-                    ),
-                })
+                # Only inject if not already present (avoid accumulation across rounds)
+                _anti_repeat_tag = f"[提醒] 你（{name}）已经发表过上述观点"
+                _already_injected = any(
+                    m.get("role") == "system"
+                    and isinstance(m.get("content"), str)
+                    and _anti_repeat_tag in m["content"]
+                    for m in messages[-6:]  # check last 6 only — sufficient
+                )
+                if not _already_injected:
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            f"{_anti_repeat_tag}。"
+                            f"针对队友的新消息做出回应或补充新观点，不要重复已说的内容。"
+                        ),
+                    })
                 # Then inject the received teammate message
                 messages.append({
                     "role": "user",
@@ -1301,7 +1436,7 @@ async def broadcast_round(
                 engine._add_message("用户", msg)
                 await engine._send(
                     f"── User ──\n{msg}\n"
-                    f"  {_d.thread_bar(pool.used, pool.capacity)}"
+                    f"  {pool.status()}"
                 )
                 logger.info("Broadcast: user interjected: {} ({} agent(s) interrupted)", msg[:60], _interrupted)
 

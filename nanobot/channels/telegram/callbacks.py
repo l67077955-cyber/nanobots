@@ -64,7 +64,9 @@ class CallbacksMixin:
         return buttons
 
 
-    async def _send_agent_hyperparams_keyboard(self, chat_id: str, agent_name: str, agent_hp: dict) -> None:
+    async def _send_agent_hyperparams_keyboard(self, chat_id: str, agent_name: str, agent_hp) -> None:
+        if not isinstance(agent_hp, dict):
+            agent_hp = {}
         """Send per-agent hyperparams keyboard."""
         buttons = []
         if agent_hp:
@@ -209,9 +211,9 @@ class CallbacksMixin:
                 elif field == "rank":
                     agent = self._groupchat_engine.registry.get(name, {})
                     current = agent.get("rank", "pawn")
-                    rank_icons = {"pawn": "♟ 兵", "knight": "♞ 马", "bishop": "♝ 象"}
+                    rank_icons = {"pawn": "♟ 兵", "knight": "♞ 马", "bishop": "♝ 象", "queen": "♛ 后"}
                     buttons = []
-                    for r in ("pawn", "knight", "bishop"):
+                    for r in ("pawn", "knight", "bishop", "queen"):
                         icon = "✅ " if r == current else "  "
                         buttons.append([InlineKeyboardButton(
                             f"{icon}{rank_icons[r]}", callback_data=f"srr:{name}:{r}"
@@ -415,7 +417,7 @@ class CallbacksMixin:
                 if len(parts) < 3:
                     return
                 name, rank_val = parts[1], parts[2]
-                if rank_val not in ("pawn", "knight", "bishop"):
+                if rank_val not in ("pawn", "knight", "bishop", "queen"):
                     return
                 agent = self._groupchat_engine.registry.get(name, {})
                 agent["rank"] = rank_val
@@ -433,9 +435,9 @@ class CallbacksMixin:
                     cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
                 except Exception:
                     pass
-                rank_icons = {"pawn": "♟ 兵", "knight": "♞ 马", "bishop": "♝ 象"}
+                rank_icons = {"pawn": "♟ 兵", "knight": "♞ 马", "bishop": "♝ 象", "queen": "♛ 后"}
                 buttons = []
-                for r in ("pawn", "knight", "bishop"):
+                for r in ("pawn", "knight", "bishop", "queen"):
                     icon = "✅ " if r == rank_val else "  "
                     buttons.append([InlineKeyboardButton(
                         f"{icon}{rank_icons[r]}", callback_data=f"srr:{name}:{r}"
@@ -548,7 +550,7 @@ class CallbacksMixin:
                 context_snapshot: dict = {}
                 engine = self._groupchat_engine
                 if engine:
-                    from nanobot.groupchat.history.prompt_builder import PromptBuilder
+                    # PromptBuilder already imported at module top level
                     raw_history = engine.history.messages
                     active = engine.active_agents
                     registry = getattr(engine, "registry", {})

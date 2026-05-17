@@ -5,9 +5,38 @@ Independent of prompt construction."""
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from nanobot.groupchat.history.context_validator import validate_context
+
+# ── Tool Log Aging ──────────────────────────────────────────────────────────
+
+_TOOL_LOG_RE = re.compile(
+    r"(• \w+\([^)]*\) → )"
+    r"(.*?)"           # preview text (greedy within line)
+    r"(\(\d[\d,]*字\))",  # trailing char count
+    re.DOTALL,
+)
+
+
+def age_tool_log(content: str) -> str:
+    """Strip verbose previews from tool call logs, keeping only status.
+
+    Transforms:
+      • web_search(trump xi meeting) → Found 5 results... (1,234字)
+    Into:
+      • web_search(trump xi meeting) → (1,234字)
+
+    Returns the content unchanged if no tool log block is found.
+    """
+    if "[工具调用记录]" not in content:
+        return content
+
+    def _replace(m: re.Match) -> str:
+        return m.group(1) + m.group(3)
+
+    return _TOOL_LOG_RE.sub(_replace, content)
 
 
 def history_to_messages(
@@ -70,24 +99,37 @@ def history_to_messages(
     used_chars = sum(len(m.get("content", "")) for m in critical)
     budget = max_chars - used_chars
 
-    # ── 從尾部補齊 ──
+    # ── 從尾部補齊（先嘗試 aging 中間消息的 tool log） ──
     tail: list[dict[str, Any]] = []
+    aged_map: dict[int, dict[str, Any]] = {}  # original id → aged message
     for m in reversed(msgs_full):
         if m in critical:
             continue
         c = len(m.get("content", ""))
         if budget - c < 0:
+            # Try aging tool logs to fit
+            aged_content = age_tool_log(m.get("content", ""))
+            aged_c = len(aged_content)
+            if aged_c < c and budget - aged_c >= 0:
+                aged_map[id(m)] = {**m, "content": aged_content}
+                budget -= aged_c
+                continue
             break
         tail.insert(0, m)
         budget -= c
 
     # ── 重建最終列表（保持時序） ──
     result: list[dict[str, Any]] = []
-    seen = set()
+    seen: set[int] = set()
     for m in msgs_full:
         m_id = id(m)
-        if (m in critical or m in tail) and m_id not in seen:
+        if m_id in seen:
+            continue
+        if m in critical or m in tail:
             result.append(m)
+            seen.add(m_id)
+        elif m_id in aged_map:
+            result.append(aged_map[m_id])
             seen.add(m_id)
 
     # ── 插入省略提示 ──

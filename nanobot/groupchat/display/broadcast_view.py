@@ -112,12 +112,11 @@ class BroadcastView:
         if tool_name == "chatroom_send" and result:
             if "BLOCKED:" in result:
                 await self.engine._send(
-                    f"✗ {name} dropped ── "
-                    f"{_d.thread_bar(self.pool.used, self.pool.capacity)}"
+                    f"✗ {name} dropped ── {self.pool.status()}"
                 )
             elif "threads]" in result:
                 await self.engine._send(
-                    f"  {_d.thread_bar(self.pool.used, self.pool.capacity)}"
+                    f"  {self.pool.status()}"
                 )
                 await _trigger_realtime_interrupts(
                     sender=name,

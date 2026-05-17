@@ -61,6 +61,13 @@ class ProviderSpec:
     # Provider supports cache_control on content blocks (e.g. Anthropic prompt caching)
     supports_prompt_caching: bool = False
 
+    # How the provider implements prompt caching:
+    #   "explicit"  — uses cache_control breakpoints (Anthropic, Azure)
+    #   "automatic" — auto-detects prefix match, no cache_control needed (DeepSeek)
+    # Only "explicit" triggers _apply_cache_control(); "automatic" lets the
+    # provider's native prefix matching do its job without content-structure changes.
+    cache_control_mode: str = "explicit"
+
     @property
     def label(self) -> str:
         return self.display_name or self.name.title()
@@ -309,8 +316,8 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         strip_model_prefix=False,
         model_overrides=(),
         supports_prompt_caching=True,
+        cache_control_mode="automatic",
     ),
-    # Gemini: needs "gemini/" prefix for LiteLLM.
     ProviderSpec(
         name="gemini",
         keywords=("gemini",),

@@ -175,15 +175,25 @@ class LiteLLMProvider(LLMProvider):
         Gateways (e.g. OpenRouter) may support prompt caching for some backend
         models (Anthropic) but not others (Zhipu/GLM).  We require BOTH the
         gateway AND the underlying model's native provider to opt in.
+
+        Providers with "automatic" cache mode (e.g. DeepSeek) do NOT need
+        explicit cache_control breakpoints — injecting them would alter the
+        content structure and potentially break the provider's native prefix
+        matching.
         """
         if self._gateway is not None:
             # Gateway says yes — but does the *underlying* model's provider?
             native_spec = find_by_model(model)
-            if native_spec is not None and not native_spec.supports_prompt_caching:
-                return False
+            if native_spec is not None:
+                if not native_spec.supports_prompt_caching:
+                    return False
+                if native_spec.cache_control_mode == "automatic":
+                    return False
             return self._gateway.supports_prompt_caching
         spec = find_by_model(model)
-        return spec is not None and spec.supports_prompt_caching
+        if spec is None or not spec.supports_prompt_caching:
+            return False
+        return spec.cache_control_mode == "explicit"
 
     def _apply_cache_control(
         self,

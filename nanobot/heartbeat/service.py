@@ -140,6 +140,16 @@ class HeartbeatService:
             except Exception as e:
                 logger.error("Heartbeat error: {}", e)
 
+    @staticmethod
+    def _has_active_tasks(content: str) -> bool:
+        """Check if HEARTBEAT.md contains actual tasks beyond headers/comments."""
+        import re
+        # Strip markdown headers, HTML comments, and blank lines
+        stripped = re.sub(r'<!--.*?-->', '', content, flags=re.DOTALL)
+        stripped = re.sub(r'^#.*$', '', stripped, flags=re.MULTILINE)
+        stripped = '\n'.join(line.strip() for line in stripped.splitlines() if line.strip())
+        return len(stripped) > 0
+
     async def _tick(self) -> None:
         """Execute a single heartbeat tick."""
         from nanobot.utils.evaluator import evaluate_response
@@ -147,6 +157,10 @@ class HeartbeatService:
         content = self._read_heartbeat_file()
         if not content:
             logger.debug("Heartbeat: HEARTBEAT.md missing or empty")
+            return
+
+        if not self._has_active_tasks(content):
+            logger.debug("Heartbeat: HEARTBEAT.md has no active tasks, skipping")
             return
 
         logger.info("Heartbeat: checking for tasks...")

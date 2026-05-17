@@ -33,7 +33,37 @@ def load_agents(config: GroupChatConfig, workspace: Path) -> dict[str, dict[str,
 
         prompt = _resolve_persona(agent_cfg.persona, agent_cfg.character_json, workspace)
         if prompt:
-            agents[name] = {"model": agent_cfg.model, "prompt": prompt}
+            agent_data: dict[str, Any] = {"model": agent_cfg.model, "prompt": prompt}
+            # Supplement with per-agent config.json from agents_dir (hyperparams, tools, rank, etc.)
+            if config.agents_dir:
+                agents_dir = Path(config.agents_dir).expanduser()
+                if not agents_dir.is_absolute():
+                    agents_dir = workspace / config.agents_dir
+                agent_subdir = agents_dir / name.lower()
+                cfg_file = agent_subdir / "config.json"
+                if cfg_file.exists():
+                    try:
+                        _cfg = json.loads(cfg_file.read_text())
+                        if isinstance(_cfg.get("tools"), dict):
+                            agent_data["tools"] = _cfg["tools"]
+                        if _cfg.get("tools_enabled"):
+                            agent_data["tools_enabled"] = True
+                        if _cfg.get("rank"):
+                            agent_data["rank"] = _cfg["rank"]
+                        if _cfg.get("workspace"):
+                            agent_data["workspace_scope"] = _cfg["workspace"]
+                        if _cfg.get("agent_dir"):
+                            agent_data["agent_dir"] = _cfg["agent_dir"]
+                        hp = _cfg.get("hyperparams")
+                        if _cfg.get("reasoning_effort"):
+                            hp = hp or {}
+                            hp.setdefault("reasoning_effort", _cfg["reasoning_effort"])
+                        if hp:
+                            agent_data["hyperparams"] = hp
+                        logger.info("Groupchat: enriched agent {} from {}", name, cfg_file)
+                    except Exception as e:
+                        logger.warning("Groupchat: failed to read agent config {}: {}", cfg_file, e)
+            agents[name] = agent_data
             logger.info("Groupchat: loaded agent {} (model={})", name, agent_cfg.model)
 
     # 2. Scan agents_dir for auto-discovery

@@ -26,14 +26,19 @@ class SearchPool:
     - Leader can transfer credits between agents via transfer()
     """
 
-    def __init__(self, agents: list[str], initial_per_agent: int = 2,
+    def __init__(self, agents: list[str], initial_per_agent: int | dict[str, int] = 2,
                  earn_per_output: float = 0.25) -> None:
         self._agents = agents
-        self._initial = initial_per_agent
         self._earn_per_output = earn_per_output
         self._lock = threading.Lock()
-        # Per-agent quotas (float for fractional accumulation)
-        self._credits: dict[str, float] = {a: float(initial_per_agent) for a in agents}
+        # Per-agent quotas: support dict (per-agent) or int (uniform)
+        if isinstance(initial_per_agent, dict):
+            self._initial_per = dict(initial_per_agent)
+            self._credits: dict[str, float] = {a: float(initial_per_agent.get(a, 2)) for a in agents}
+        else:
+            self._initial_per = {a: initial_per_agent for a in agents}
+            self._credits = {a: float(initial_per_agent) for a in agents}
+        self._initial = max(self._initial_per.values()) if self._initial_per else 2
         # Fractional accumulator: sub-integer credits that haven't been awarded yet
         self._fractional: dict[str, float] = {a: 0.0 for a in agents}
         self._tool_calls: dict[str, int] = {a: 0 for a in agents}
@@ -46,7 +51,7 @@ class SearchPool:
 
     @property
     def total(self) -> int:
-        return self._initial * len(self._agents)
+        return sum(self._initial_per.values())
 
     def spend(self, agent: str) -> bool:
         """Spend 1 credit from agent's own quota. Returns False if empty."""
@@ -692,8 +697,10 @@ class ChatroomSendTool(Tool):
         if self._pool:
             ok = await self._pool.allocate(self._agent_name, actual_recipients)
             if not ok:
+                my_used = self._pool.agent_used(self._agent_name)
+                my_cap = self._pool.agent_capacity(self._agent_name)
                 return (
-                    f"BLOCKED: pool full ({self._pool.used}/{self._pool.capacity}), "
+                    f"BLOCKED: your pool full ({my_used}/{my_cap}), "
                     "message dropped. Use wait() to free slots, or send to fewer people."
                 )
             # If replying to someone who sent us a message, mark it replied
@@ -1063,9 +1070,10 @@ class EndDiscussionTool(Tool):
     All agent tasks are cancelled and the leader enters the synthesis phase.
     """
 
-    def __init__(self, *, end_event: Any, engine: Any) -> None:
+    def __init__(self, *, end_event: Any, engine: Any, mailbox: Any = None) -> None:
         self._end_event = end_event  # asyncio.Event
         self._engine = engine
+        self._mailbox = mailbox
 
     @property
     def name(self) -> str:
@@ -1094,6 +1102,28 @@ class EndDiscussionTool(Tool):
         }
 
     async def execute(self, reason: str = "", **kwargs: Any) -> str:
+        # ── Autowait guard: if any non-leader agent is busy, wait for them ──
+        if self._mailbox is not None:
+            active = getattr(self._mailbox, "_active_agents", set())
+            waiting = getattr(self._mailbox, "_waiting", set())
+            leader = getattr(self._mailbox, "_leader_name", "")
+            # Exclude leader (the caller) — leader is always "executing" when calling this
+            non_waiting = (active - waiting) - {leader}
+            if non_waiting:
+                names = ", ".join(sorted(non_waiting))
+                # Autowait: poll until all non-leader agents enter waiting (max 60s)
+                for _ in range(60):
+                    await asyncio.sleep(1)
+                    waiting = getattr(self._mailbox, "_waiting", set())
+                    remaining = (active - waiting) - {leader}
+                    if not remaining:
+                        break
+                else:
+                    return (
+                        f"❌ Autowait 超时（60s）：以下 agent 仍未进入 waiting：{names}。"
+                        "请稍后再试或手动干预。"
+                    )
+
         reason_str = f"（原因: {reason}）" if reason else ""
         # Store reason so broadcast_round sentinel can include it in the
         # single unified termination message (avoids duplicate notifications).

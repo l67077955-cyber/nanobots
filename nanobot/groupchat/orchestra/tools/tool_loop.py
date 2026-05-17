@@ -560,7 +560,14 @@ async def tool_loop(
                     })
 
                     if on_tool_result:
-                        await on_tool_result(tc.name, tc.id, tool_result)
+                        # Normalize list results to str before passing to callback
+                        # (broadcast_view.on_tool_result calls .startswith() which fails on list)
+                        _callback_result = (
+                            json.dumps(tool_result, ensure_ascii=False)
+                            if isinstance(tool_result, list)
+                            else (tool_result or "")
+                        )
+                        await on_tool_result(tc.name, tc.id, _callback_result)
 
                     tool_content = process_tool_result(
                         content=tool_result,

@@ -162,17 +162,18 @@ def tool_in_progress_msg(header: str) -> str:
 
 # ── Broadcast-specific ───────────────────────────────────────
 
-def broadcast_start_msg(agents: list[str], timeout: int, leader: str | None = None) -> str:
-    """Render broadcast start banner with role indicators."""
+def broadcast_start_msg(agents: list[str], timeout: int, leader: str | None = None, ranks: dict[str, str] | None = None) -> str:
+    """Render broadcast start banner with role indicators and rank badges."""
     total = len(agents)
     lines = [f"══ Broadcast · {total} agents · {timeout}s ══"]
+    _r = ranks or {}
     if leader:
-        lines.append(f"👑 {leader}")
+        lines.append(f"👑 {leader} ({_r.get(leader, 'pawn')})")
         members = [a for a in agents if a != leader]
         if members:
-            lines.append("🔹 " + "  🔹 ".join(members))
+            lines.append("  ".join(f"🔹 {m} ({_r.get(m, 'pawn')})" for m in members))
     else:
-        lines.append("🔹 " + "  🔹 ".join(agents))
+        lines.append("  ".join(f"🔹 {a} ({_r.get(a, 'pawn')})" for a in agents))
     return "\n".join(lines)
 
 
@@ -187,17 +188,6 @@ def broadcast_complete_msg(
     msg += " ══"
     return msg
 
-
-def thread_bar(used: int, capacity: int) -> str:
-    """Render pool status as a visual thread bar.
-
-    Example: '▰▰▰▱▱▱▱▱▱▱▱▱ 3/12'
-    """
-    # Clamp: pool bookkeeping can go negative in race conditions
-    used = max(0, min(used, capacity))
-    filled = "▰" * used
-    empty = "▱" * (capacity - used)
-    return f"{filled}{empty} {used}/{capacity}"
 
 
 def search_credits_bar(pool_status: str) -> str:

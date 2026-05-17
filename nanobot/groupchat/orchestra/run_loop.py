@@ -1,52 +1,81 @@
-"""Main group chat event loop and summary generation.
+"""Main group chat event loop — dispatches to broadcast mode.
 
-Contains the core run loop that processes user input and dispatches
-to broadcast mode, plus the summary generator.
+Leader's final text reply (before end_discussion) serves as the
+synthesis; no separate summary generation stage exists.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 from loguru import logger
 
-from nanobot.groupchat.display import display as _d
-# ── 关键修复：import 移到文件顶部，避免循环内重复 import ──
 from nanobot.groupchat.orchestra.broadcast import broadcast_round
 
 
 async def generate_summary(engine: Any) -> None:
-    """Generate a discussion summary using the first active agent's model."""
-    if not engine._history:
+    """Generate and send an AI summary of the entire discussion.
+
+    Called when user sends ``__SUMMARY__`` or when Leader triggers
+    ``end_discussion``.  Uses the same provider + model as history
+    compression (``tool_results.summarize_model``).
+    """
+    from nanobot.groupchat.history.history_settings import (
+        summarize_model as _get_summarize_model,
+        history_summarize_enabled,
+    )
+
+    if not engine._history or not history_summarize_enabled():
         return
 
-    # ── 关键修复：防止 _active_agents 为空时 IndexError ──
-    if not engine._active_agents:
-        await engine._send("⚠️ 没有活跃 agent，无法生成总结")
+    messages = list(engine._history)
+    if not messages:
         return
 
-    agent_name = engine._active_agents[0]
-    model = engine.registry[agent_name]["model"]
+    # Format conversation for summarisation
+    lines = []
+    for m in messages:
+        sender = m.get("sender", "?")
+        content = m.get("content", "")
+        if len(content) > 600:
+            content = content[:600] + "…"
+        lines.append(f"[{sender}] {content}")
 
-    try:
-        response = await engine.provider.chat_with_retry(
-            messages=[
-                {"role": "system", "content": "你是一个讨论总结专家。"},
-                {"role": "user", "content": (
-                    f"话题：{engine._topic}\n\n"
-                    f"群聊记录：\n{engine._format_history()}\n\n"
-                    "请输出简洁总结：1)核心观点 2)分歧点 3)初步结论"
-                )},
-            ],
-            model=model,
-            max_tokens=2000,
+    input_text = "\n".join(lines)
+    if len(input_text) > 15000:
+        input_text = input_text[-15000:]
+
+    provider = engine._history._provider if engine._history else None
+    if provider is None:
+        await engine._send(
+            f"📋 讨论总结\n"
+            f"共 {len(messages)} 条消息\n"
+            f"参与: {', '.join(engine._active_agents)}"
         )
-        summary = response.content or "无法生成总结"
-        await engine._send(f"📋 讨论总结:\n\n{summary}")
+        return
+
+    model = _get_summarize_model()
+    prompt = (
+        f"以下是群聊的完整讨论记录（共 {len(messages)} 条）。\n"
+        "请用简洁的中文总结核心内容、关键决策和结论。\n"
+        "保留重要的数值、文件路径和具体结论。\n"
+        "控制在 400 字以内。\n\n"
+        f"{input_text}"
+    )
+    try:
+        response = await provider.chat_with_retry(
+            messages=[{"role": "user", "content": prompt}],
+            model=model,
+            max_tokens=600,
+        )
+        summary = (response.content or "").strip()
+        if summary:
+            await engine._send(f"📋 讨论总结\n\n{summary}")
+        else:
+            await engine._send(f"📋 讨论总结\n共 {len(messages)} 条消息")
     except Exception as e:
-        logger.error("Summary failed: {}", e)
-        await engine._send(f"⚠️ 总结生成失败: {e}")
+        logger.error("generate_summary failed: {}", e)
+        await engine._send(f"📋 讨论总结\n共 {len(messages)} 条消息（AI 总结生成失败）")
 
 
 async def run_loop(engine: Any) -> None:

@@ -1,7 +1,7 @@
 """Centralized history, summarization, and context-pruning settings.
 
 Loads ``~/.nanobot/history_settings.json`` once and exposes typed getters
-so that shell.py, summarizer.py, tool_loop.py, context_pruning.py,
+so that shell.py, tool_loop.py, context_pruning.py,
 engine.py, broadcast.py, tool_chat.py, and the Telegram UI can all
 read the same configuration without hardcoding defaults.
 
@@ -58,9 +58,15 @@ _DEFAULTS: dict[str, Any] = {
     "history": {
         "max_messages": 50,
         "max_context_chars": 100_000,
-        # History compression: triggered at 80% of max_messages
+        # History compression: triggered at compress_ratio * max_messages
         "compress_ratio": 0.8,
         "compress_max_summary_tokens": 600,
+        # Number of recent messages to keep in tail during compression
+        "compression_keep_recent": 6,
+        # Protect ALL user messages (not just the first) during compression
+        "keep_user_messages": True,
+        # AI summarization toggle for history compression (separate from tool_results)
+        "history_summarize_enabled": True,
     },
 
     # ── Stage 4: iterative context pruning (tool_loop iteration 2+) ──
@@ -153,24 +159,8 @@ def web_search_max_chars() -> int:
     return int(_load()["tool_results"]["web_search_max_chars"])
 
 
-def summarize_enabled() -> bool:
-    return bool(_load()["tool_results"]["summarize_enabled"])
-
-
-def summarize_threshold() -> int:
-    return int(_load()["tool_results"]["summarize_threshold"])
-
-
 def summarize_model() -> str:
     return str(_load()["tool_results"]["summarize_model"])
-
-
-def summarize_max_input_chars() -> int:
-    return int(_load()["tool_results"]["summarize_max_input_chars"])
-
-
-def summarize_max_output_chars() -> int:
-    return int(_load()["tool_results"]["summarize_max_output_chars"])
 
 
 def broadcast_result_max_chars() -> int:
@@ -201,6 +191,18 @@ def compress_ratio() -> float:
 
 def compress_max_summary_tokens() -> int:
     return int(_load()["history"]["compress_max_summary_tokens"])
+
+
+def compression_keep_recent() -> int:
+    return int(_load()["history"]["compression_keep_recent"])
+
+
+def keep_user_messages() -> bool:
+    return bool(_load()["history"]["keep_user_messages"])
+
+
+def history_summarize_enabled() -> bool:
+    return bool(_load()["history"]["history_summarize_enabled"])
 
 
 # ── context_pruning getters ──────────────────────────────────────────────

@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from nanobot.groupchat.history.message_converter import age_tool_log
+
 if TYPE_CHECKING:
     from nanobot.groupchat.history.persistence import GroupChatState
 
@@ -51,13 +53,18 @@ class HistoryContext:
     # ── Internal helpers ──────────────────────────────────────────────────
 
     @staticmethod
-    def _find_head_indices(history: list[dict]) -> set[int]:
-        """Return indices of head-protected messages: index 0 + first user msg."""
+    def _find_head_indices(history: list[dict], keep_all_users: bool = False) -> set[int]:
+        """Return indices of head-protected messages.
+
+        Always protects index 0 (system prompt).  If *keep_all_users* is True,
+        protects **all** user messages; otherwise only the first user message.
+        """
         protected = {0}
         for i, msg in enumerate(history):
             if msg.get("sender") in ("User", "user", "用户"):
                 protected.add(i)
-                break
+                if not keep_all_users:
+                    break
         return protected
 
     # ── Public API ────────────────────────────────────────────────────────
@@ -96,15 +103,18 @@ class HistoryContext:
             from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
                 max_messages,
                 max_context_chars,
+                keep_user_messages,
             )
             limit = max_messages()
             char_budget = max_context_chars()
+            _keep_users = keep_user_messages()
         except Exception:
             limit = 150
             char_budget = 0
+            _keep_users = False
 
         # ── Pre-identify protected head before any trimming ──
-        head_indices = self._find_head_indices(self.messages)
+        head_indices = self._find_head_indices(self.messages, keep_all_users=_keep_users)
         head_msgs = [self.messages[i] for i in sorted(head_indices)]
 
         # Step 1: message-count limit — keep most-recent N, always keep head
@@ -116,7 +126,7 @@ class HistoryContext:
 
         # Step 2: char-budget trimming — head is counted but always kept
         if char_budget > 0:
-            head_indices = self._find_head_indices(self.messages)
+            head_indices = self._find_head_indices(self.messages, keep_all_users=_keep_users)
             head_msgs = [self.messages[i] for i in sorted(head_indices)]
             head_chars = sum(len(m.get("content", "")) for m in head_msgs)
             available = max(0, char_budget - head_chars)
@@ -151,10 +161,12 @@ class HistoryContext:
         """
         from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
             max_messages,
-            summarize_enabled,
+            history_summarize_enabled,
             summarize_model,
             compress_ratio,
             compress_max_summary_tokens,
+            compression_keep_recent,
+            keep_user_messages,
         )
 
         limit = max_messages()
@@ -165,42 +177,45 @@ class HistoryContext:
         total_len = len(self.messages)
 
         # ── 1. Protected Head ──
-        protected_head_indices = self._find_head_indices(self.messages)
+        protected_head_indices = self._find_head_indices(
+            self.messages, keep_all_users=keep_user_messages()
+        )
 
         # ── 2. Protected Tail ──
-        keep_recent = 6
+        keep_recent = compression_keep_recent()
         protected_tail_indices = set(
             range(max(0, total_len - keep_recent), total_len)
         )
 
         # ── 3. Compressible Middle ──
-        compress_start = (
-            max(protected_head_indices) + 1 if protected_head_indices else 0
-        )
-        compress_end = (
-            min(protected_tail_indices) if protected_tail_indices else total_len
-        )
+        # Use set exclusion instead of contiguous range — head indices may be
+        # non-contiguous when keep_user_messages=True (user messages scattered).
+        all_protected = protected_head_indices | protected_tail_indices
 
-        if compress_start >= compress_end:
-            return
-
-        to_compress = self.messages[compress_start:compress_end]
-        if not to_compress:
-            return
-
-        head = [
-            self.messages[i]
-            for i in sorted(protected_head_indices)
-            if i < compress_start
-        ]
+        head = [self.messages[i] for i in sorted(protected_head_indices)]
         tail = [
             self.messages[i]
             for i in sorted(protected_tail_indices)
-            if i >= compress_end
+            if i not in protected_head_indices
+        ]
+        to_compress = [
+            self.messages[i] for i in range(total_len) if i not in all_protected
         ]
 
+        if not to_compress:
+            return
+
+        # ── 3.5 Age tool logs in middle region before summarisation ──
+        # Strip verbose previews from tool call logs to reduce summary input
+        # size and preserve more semantic content in the compressed output.
+        for msg in to_compress:
+            original = msg["content"]
+            aged = age_tool_log(original)
+            if aged != original:
+                msg["content"] = aged
+
         # ── 4a. AI Summarise ──
-        if summarize_enabled() and self._provider is not None:
+        if history_summarize_enabled() and self._provider is not None:
             history_text = "\n".join(
                 f"[{m['sender']}]: {m['content']}" for m in to_compress
             )

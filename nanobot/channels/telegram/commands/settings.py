@@ -326,7 +326,6 @@ class SettingsCommandsMixin:
 
     # Components that are only injected under specific conditions
     _CONDITIONAL_TAGS: dict[str, str] = {
-        "broadcast_hint": "广播模式",
         "leader_prompt": "Leader",
     }
 
