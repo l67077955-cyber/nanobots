@@ -1281,8 +1281,8 @@ async def broadcast_round(
                 msg = await mailbox.wait(name, timeout=600)
 
                 if msg is None:
-                    # No message — check if engine stopped, otherwise keep waiting
-                    if not engine._running:
+                    # No message — check if engine stopped or leader ended discussion
+                    if not engine._running or leader_end_event.is_set():
                         await tracker.set_state(name, "done", reason="engine stopped")
                         logger.info("Broadcast: {} wait returned None, engine stopped, exiting", name)
                         break
@@ -1302,8 +1302,8 @@ async def broadcast_round(
                     continue
 
                 # Got a message! Inject it and re-run tool_loop
-                # But first check if /stop was issued while we were waiting
-                if not engine._running:
+                # But first check if /stop was issued or leader ended discussion
+                if not engine._running or leader_end_event.is_set():
                     logger.info("Broadcast: {} exiting after wait — engine stopped", name)
                     break
                 logger.info("Broadcast: {} reactivated by {}: {}", name, msg.sender, msg.content[:60])
