@@ -51,7 +51,7 @@ class SearchPool:
 
     @property
     def total(self) -> int:
-        return self._initial * len(self._agents)
+        return sum(self._initial_per.values())
 
     def spend(self, agent: str) -> bool:
         """Spend 1 credit from agent's own quota. Returns False if empty."""

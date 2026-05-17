@@ -298,7 +298,7 @@ class BroadcastOrchestrator:
 
         n = len(self.exec_agents)
         # Build per-agent capacity from ranks
-        rank_cap = {"pawn": 2, "knight": 3, "bishop": 3, "queen": 4}
+        rank_cap = {"pawn": 2, "knight": 3, "bishop": 4, "queen": 5}
         per_agent_cap: dict[str, int] = {}
         for ag in self.exec_agents:
             cfg = self.engine.registry.get(ag, {})
@@ -308,11 +308,13 @@ class BroadcastOrchestrator:
                 cap += 1  # leader gets +1
             per_agent_cap[ag] = cap
 
+        # ConversationPool: rank-based per-agent, with settings fallback
         pool_capacity_setting = self.gc_settings.get("context_pool_capacity", 0)
         if pool_capacity_setting > 0:
-            # Override: uniform capacity from settings
+            # Settings override: uniform capacity
             self.pool = ConversationPool(capacity=pool_capacity_setting, agents=list(self.exec_agents))
         else:
+            # Rank-based per-agent capacity
             self.pool = ConversationPool(agents=list(self.exec_agents), per_agent_capacity=per_agent_cap)
         self.pool.ALLOCATE_TIMEOUT = float(self.gc_settings["allocate_timeout"])
         
@@ -329,7 +331,12 @@ class BroadcastOrchestrator:
 
         points_per_agent = self.gc_settings.get("context_points_per_agent", 0)
         tool_initial = self.gc_settings.get("tool_initial", self.gc_settings.get("search_initial", 2))
-        search_initial = points_per_agent if points_per_agent > 0 else tool_initial
+        if points_per_agent > 0:
+            # Settings override: uniform search credits
+            search_initial = points_per_agent
+        else:
+            # Rank-based per-agent search credits (reuse per_agent_cap from pool)
+            search_initial = per_agent_cap
         self.search_pool = SearchPool(
             agents=list(self.exec_agents),
             initial_per_agent=search_initial,
