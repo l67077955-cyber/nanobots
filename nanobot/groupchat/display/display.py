@@ -188,17 +188,6 @@ def broadcast_complete_msg(
     return msg
 
 
-def thread_bar(used: int, capacity: int) -> str:
-    """Render pool status as a visual thread bar.
-
-    Example: '▰▰▰▱▱▱▱▱▱▱▱▱ 3/12'
-    """
-    # Clamp: pool bookkeeping can go negative in race conditions
-    used = max(0, min(used, capacity))
-    filled = "▰" * used
-    empty = "▱" * (capacity - used)
-    return f"{filled}{empty} {used}/{capacity}"
-
 
 def search_credits_bar(pool_status: str) -> str:
     """Format search credits for display.
