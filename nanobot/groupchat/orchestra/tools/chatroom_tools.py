@@ -26,14 +26,19 @@ class SearchPool:
     - Leader can transfer credits between agents via transfer()
     """
 
-    def __init__(self, agents: list[str], initial_per_agent: int = 2,
+    def __init__(self, agents: list[str], initial_per_agent: int | dict[str, int] = 2,
                  earn_per_output: float = 0.25) -> None:
         self._agents = agents
-        self._initial = initial_per_agent
         self._earn_per_output = earn_per_output
         self._lock = threading.Lock()
-        # Per-agent quotas (float for fractional accumulation)
-        self._credits: dict[str, float] = {a: float(initial_per_agent) for a in agents}
+        # Per-agent quotas: support dict (per-agent) or int (uniform)
+        if isinstance(initial_per_agent, dict):
+            self._initial_per = dict(initial_per_agent)
+            self._credits: dict[str, float] = {a: float(initial_per_agent.get(a, 2)) for a in agents}
+        else:
+            self._initial_per = {a: initial_per_agent for a in agents}
+            self._credits = {a: float(initial_per_agent) for a in agents}
+        self._initial = max(self._initial_per.values()) if self._initial_per else 2
         # Fractional accumulator: sub-integer credits that haven't been awarded yet
         self._fractional: dict[str, float] = {a: 0.0 for a in agents}
         self._tool_calls: dict[str, int] = {a: 0 for a in agents}
