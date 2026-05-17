@@ -39,6 +39,29 @@ for i in range(6):
 send("✅ 完成")
 ```
 
+## 发送图片到 Telegram
+
+用 `send_photo_cli.py` 发送图片文件到 Telegram：
+
+```bash
+python3 {baseDir}/scripts/send_photo_cli.py --chat-id <CHAT_ID> --image /path/to/image.jpg --caption "可选说明"
+```
+
+> **CHAT_ID**: 环境变量 `NANOBOT_CHAT_ID` 在 exec 中可用。
+> 支持 jpg/png/gif/webp 等常见图片格式。
+
+### 脚本内调用示例
+
+```python
+#!/usr/bin/env python3
+import subprocess, os
+
+SEND_PHOTO = "{baseDir}/scripts/send_photo_cli.py"
+CHAT_ID = os.environ.get("NANOBOT_CHAT_ID", "<填入chat_id>")
+
+subprocess.run(["python3", SEND_PHOTO, "--chat-id", CHAT_ID, "--image", "/path/to/img.jpg", "--caption", "说明文字"])
+```
+
 ## 查看日志
 
 ```bash
