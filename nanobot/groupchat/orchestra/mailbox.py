@@ -241,6 +241,15 @@ class ConversationPool:
         """Used slots for a specific agent."""
         return max(0, self.agent_capacity(agent) - self.agent_available(agent))
 
+    def status(self) -> str:
+        """Per-agent pool breakdown: 'Kirk:3/5 | Harper:2/3'."""
+        parts = []
+        for a in self._agents:
+            u = self.agent_used(a)
+            c = self.agent_capacity(a)
+            parts.append(f"{a}:{u}/{c}")
+        return " | ".join(parts)
+
 
 # Keep SpeakQueue as alias for backward compat (referenced in imports)
 SpeakQueue = ConversationPool

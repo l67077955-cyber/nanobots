@@ -318,8 +318,7 @@ class BroadcastOrchestrator:
             self.pool = ConversationPool(agents=list(self.exec_agents), per_agent_capacity=per_agent_cap)
         self.pool.ALLOCATE_TIMEOUT = float(self.gc_settings["allocate_timeout"])
         
-        total_cap = self.pool.capacity
-        await self.engine._send(f"── threads {_d.thread_bar(0, total_cap)} ──")
+        await self.engine._send(f"── threads {self.pool.status()} ──")
 
         self.tracker = AgentStatusTracker(
             agents=self.exec_agents,
@@ -1437,7 +1436,7 @@ async def broadcast_round(
                 engine._add_message("用户", msg)
                 await engine._send(
                     f"── User ──\n{msg}\n"
-                    f"  {_d.thread_bar(pool.used, pool.capacity)}"
+                    f"  {pool.status()}"
                 )
                 logger.info("Broadcast: user interjected: {} ({} agent(s) interrupted)", msg[:60], _interrupted)
 
