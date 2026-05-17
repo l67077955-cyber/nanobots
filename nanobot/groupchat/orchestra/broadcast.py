@@ -318,7 +318,7 @@ class BroadcastOrchestrator:
             self.pool = ConversationPool(agents=list(self.exec_agents), per_agent_capacity=per_agent_cap)
         self.pool.ALLOCATE_TIMEOUT = float(self.gc_settings["allocate_timeout"])
         
-        await self.engine._send(f"── threads {self.pool.status()} ──")
+        await self.engine._send(f"threads {self.pool.status()}")
 
         self.tracker = AgentStatusTracker(
             agents=self.exec_agents,
@@ -456,7 +456,7 @@ async def broadcast_round(
         "mode": "broadcast",
         "leader": leader_name,
     })
-    await engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout), leader=leader_name))
+    await engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout), leader=leader_name, ranks=ranks_map))
 
     orch = BroadcastOrchestrator(agents, engine, mailbox)
 

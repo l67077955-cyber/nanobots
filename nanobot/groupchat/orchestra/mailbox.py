@@ -242,15 +242,15 @@ class ConversationPool:
         return max(0, self.agent_capacity(agent) - self.agent_available(agent))
 
     def status(self) -> str:
-        """Per-agent pool breakdown: 'Kirk:▰▰▱▱▱ 2/5 | Harper:▰▱▱ 1/3'."""
+        """Per-agent pool breakdown: 'Kirk ▰▰▱▱▱ 2/5 · Harper ▰▱▱ 1/3'."""
         parts = []
         for a in self._agents:
             u = self.agent_used(a)
             c = self.agent_capacity(a)
             filled = "▰" * u
             empty = "▱" * (c - u)
-            parts.append(f"{a}:{filled}{empty} {u}/{c}")
-        return " | ".join(parts)
+            parts.append(f"{a} {filled}{empty} {u}/{c}")
+        return " · ".join(parts)
 
 
 # Keep SpeakQueue as alias for backward compat (referenced in imports)
