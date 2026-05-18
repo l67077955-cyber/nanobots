@@ -1193,8 +1193,14 @@ class CallbacksMixin:
                     await self._send_order_keyboard(chat_id, self._groupchat_engine.active_agents)
 
             # ── Prompt orchestration callbacks ──
+            elif data == "prmanage":
+                # Toggle manage mode for prompt order view
+                self._prompt_manage_mode = not getattr(self, '_prompt_manage_mode', False)
+                await self._prompt_show_components(query, manage_mode=self._prompt_manage_mode)
+
             elif data in ("pr:refresh", "pr:"):
-                # Refresh global prompt order view
+                # Refresh global prompt order view (exits manage mode)
+                self._prompt_manage_mode = False
                 await self._prompt_show_components(query)
 
             elif data.startswith("pre:"):
@@ -1206,7 +1212,7 @@ class CallbacksMixin:
                     content = PromptBuilder.get_component_template(key)
                     label = _COMPONENT_LABELS.get(key, key)
                     phase = _COMPONENT_PHASES.get(key, "static")
-                    phase_label = "⬛静态" if phase == "static" else "⬜动态"
+                    phase_label = "STATIC" if phase == "static" else "DYNAMIC"
                     vars_hint = (
                         "{{agent}} {{members}} {{tools}} {{others}} {{identity}}"
                         if phase == "static"
@@ -1228,7 +1234,7 @@ class CallbacksMixin:
             elif data == "prcan":
                 # Cancel edit
                 self._edit_state.pop(chat_id, None)
-                await self._prompt_show_components(query)
+                await self._prompt_show_components(query, manage_mode=getattr(self, '_prompt_manage_mode', False))
 
             elif data.startswith("pru:") or data.startswith("prd:"):
                 # Move component up/down: pru:<idx> or prd:<idx>
@@ -1240,7 +1246,7 @@ class CallbacksMixin:
                 if 0 <= new_idx < len(order):
                     order[idx], order[new_idx] = order[new_idx], order[idx]
                     engine.prompt_builder.set_default_prompt_order(order)
-                await self._prompt_show_components(query)
+                await self._prompt_show_components(query, manage_mode=getattr(self, '_prompt_manage_mode', False))
 
             elif data.startswith("pviz:"):
                 # Toggle visibility: pviz:<idx>
@@ -1254,7 +1260,7 @@ class CallbacksMixin:
                     vis = engine.prompt_builder.get_component_visibility(key)
                     vis_label = "全体可见 👁" if vis == "all" else "仅Leader可见 👑"
                     logger.debug("pviz toggle: {} → {}", key, vis_label)
-                await self._prompt_show_components(query)
+                await self._prompt_show_components(query, manage_mode=getattr(self, '_prompt_manage_mode', False))
 
             elif data.startswith("prdel:"):
                 # Delete component: prdel:<idx>
@@ -1262,7 +1268,7 @@ class CallbacksMixin:
                 engine = self._groupchat_engine
                 result = engine.prompt_builder.remove_prompt_component(idx)
                 await query.answer(result, show_alert=True)
-                await self._prompt_show_components(query)
+                await self._prompt_show_components(query, manage_mode=getattr(self, '_prompt_manage_mode', False))
 
             elif data == "pradd":
                 # Show available components to add back
@@ -1310,39 +1316,34 @@ class CallbacksMixin:
             elif data == "prrules":
                 # Show prompt assembly rules explanation
                 rules_text = (
-                    "📖 Prompt 组装规则说明\n\n"
-                    "━━━━━━━━━━━━━━━━━━━━━\n"
-                    "📌 组装顺序\n"
-                    "  ⬛ 静态区 → 💬 聊天记录 → ⬜ 动态区\n"
-                    "  静态位于 history 前，动态位于 history 后\n"
-                    "━━━━━━━━━━━━━━━━━━━━━\n"
-                    "📌 Phase 区别\n\n"
-                    "  ⬛ 静态 (static)\n"
+                    "📖 Prompt 组装规则\n\n"
+                    "▸ 组装顺序\n"
+                    "  STATIC → 💬 HISTORY → DYNAMIC\n"
+                    "  静态位于 history 前，动态位于 history 后\n\n"
+                    "▸ Phase 区别\n\n"
+                    "  STATIC\n"
                     "    位于聊天记录之前，所有 agent 共享\n"
                     "    仅可使用 stable vars（不随轮次变化）\n"
                     "    适合: 人设、工具指令、硬规则等固定内容\n"
                     "    缓存友好，LLM 可复用前缀\n\n"
-                    "  ⬜ 动态 (dynamic)\n"
+                    "  DYNAMIC\n"
                     "    位于聊天记录之后，每轮刷新\n"
                     "    可使用 stable + volatile vars\n"
-                    "    适合: 群聊上下文、示例、技能概览等时效内容\n"
-                    "━━━━━━━━━━━━━━━━━━━━━\n"
-                    "📌 可用变量\n"
-                    "  ⬛ stable（通用）:\n"
+                    "    适合: 群聊上下文、示例、技能概览等时效内容\n\n"
+                    "▸ 可用变量\n"
+                    "  stable（通用）:\n"
                     "    {{agent}} {{members}} {{tools}} {{others}} {{identity}}\n\n"
-                    "  ⬜ volatile（仅 dynamic 可用）:\n"
-                    "    {{datetime}} {{round}} {{agent_idx}} {{total}} {{teammates}}\n"
-                    "━━━━━━━━━━━━━━━━━━━━━\n"
-                    "📌 组件来源\n"
+                    "  volatile（仅 dynamic 可用）:\n"
+                    "    {{datetime}} {{round}} {{agent_idx}} {{total}} {{teammates}}\n\n"
+                    "▸ 组件来源\n"
                     "  ✏️ 全局模板 — /prompt 编辑可修改内容\n"
                     "  📂 per-agent — /editagent 编辑，各 agent 独立\n"
-                    "  🔒 代码生成 — 不可编辑（history、skills_overview）\n"
-                    "━━━━━━━━━━━━━━━━━━━━━\n"
-                    "📌 内容状态\n"
+                    "  🔒 代码生成 — 不可编辑（history、skills_overview）\n\n"
+                    "▸ 内容状态\n"
                     "  ● 已配置（注入提示词）\n"
                     "  ○ 空（跳过注入）\n"
                     "  [条件] 按条件激活（如仅 Leader 可见）\n\n"
-                    "📌 组件可见性\n"
+                    "▸ 组件可见性\n"
                     "  👁 全体可见 — 所有 agent 均可读取\n"
                     "  👑 仅 Leader 可见 — 普通 agent 不可见"
                 )
@@ -1362,8 +1363,8 @@ class CallbacksMixin:
 
                 phases = _COMPONENT_PHASES
                 lines: list[str] = [
-                    "📌 组装规则: ⬛静态 → 💬聊天记录 → ⬜动态",
-                    "   ⬛ stable vars only  |  ⬜ stable + volatile vars",
+                    "📌 组装规则: STATIC → 💬聊天记录 → DYNAMIC",
+                    "   stable vars only      stable + volatile vars",
                     "",
                 ]
                 display_num = 0
@@ -1371,17 +1372,15 @@ class CallbacksMixin:
                     label = labels.get(key, key)
                     phase = phases.get(key, "static")
                     if key == "history":
-                        lines.append("━━━━━━━━━━━━━━━━━━━━━━")
-                        lines.append("  💬 聊天记录（运行时自动插入）")
-                        lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+                        lines.append("")
+                        lines.append("  ── CHAT · runtime auto ──")
                         lines.append("")
                         continue
 
                     # Phase divider
                     if phase == "dynamic" and (i == 0 or phases.get(order[i - 1], "static") == "static"):
-                        lines.append("━━━━━━━━━━━━━━━━━━━━━━")
-                        lines.append("  ⬜ 以下为动态组件 (volatile vars 可用)")
-                        lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+                        lines.append("")
+                        lines.append("  ── DYNAMIC ──")
                         lines.append("")
 
                     display_num += 1
@@ -1395,7 +1394,7 @@ class CallbacksMixin:
                         lines.append(f"─── [{display_num}] {label} ─── ○ 空 (跳过注入)")
                         lines.append("")
                         continue
-                    phase_tag = "⬛" if phase == "static" else "⬜"
+                    phase_tag = "STATIC" if phase == "static" else "DYNAMIC"
                     lines.append(f"─── [{display_num}] {phase_tag} {label} ({len(tpl):,}字) ───")
                     preview = tpl[:400]
                     if len(tpl) > 400:

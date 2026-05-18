@@ -330,8 +330,12 @@ class SettingsCommandsMixin:
         "leader_prompt": "Leader",
     }
 
-    def _build_prompt_order_view(self, engine) -> tuple[str, "InlineKeyboardMarkup"]:
-        """Build the global prompt component order view with edit/reorder buttons."""
+    def _build_prompt_order_view(self, engine, manage_mode: bool = False) -> tuple[str, "InlineKeyboardMarkup"]:
+        """Build the global prompt component order view.
+
+        manage_mode=False: compact — one button per component (name only).
+        manage_mode=True:  full — name + reorder/delete/visibility buttons.
+        """
         order = engine.prompt_builder.get_agent_prompt_order()
         labels = _COMPONENT_LABELS
         global_editable = _GLOBAL_EDITABLE
@@ -339,30 +343,31 @@ class SettingsCommandsMixin:
         conditional_tags = self._CONDITIONAL_TAGS
 
         phases = _COMPONENT_PHASES
-        static_keys = [k for k in order if phases.get(k) == "static"]
-        dynamic_keys = [k for k in order if phases.get(k) == "dynamic"]
 
-        lines = ["📋 System Prompt 组装管线 (全局)\n"]
-        lines.append("📌 组装顺序: ⬛ 静态区 → 💬 聊天记录 → ⬜ 动态区\n")
-        lines.append("   ⬛ 静态: 仅 stable vars ({{agent}} {{members}} {{tools}} …)，缓存友好\n")
-        lines.append("   ⬜ 动态: stable + volatile vars ({{datetime}} {{round}})，每次轮次刷新\n")
-        lines.append("   🔒 自动生成  ✏️ 全局模板  📂 per-agent  ● 已配置  ○ 空(跳过)\n")
-        lines.append(f"\n⬛ 静态组件  ({len(static_keys)} 个) — stable vars only\n")
+        lines = ["📋 PROMPT PIPELINE\n"]
+        lines.append("▸ STATIC · before history · cache-friendly")
+        lines.append("  → 💬 HISTORY · runtime")
+        lines.append("▸ DYNAMIC · after history · per-turn\n")
+        lines.append("🔒 auto · ✏️ global · 📂 agent · ● full · ○ empty · 👁 all · 👑 leader\n")
 
         display_num = 0
+        prev_phase = None
         for i, key in enumerate(order):
             phase = phases.get(key, "static")
             if key == "history":
-                lines.append("━━━━━━━━━━━━━━━━━━━━━")
-                lines.append("  💬 聊天记录（运行时自动插入）")
-                lines.append("━━━━━━━━━━━━━━━━━━━━━")
+                lines.append("── 💬 HISTORY ──")
                 continue
 
-            # Phase divider: static → dynamic
-            if phase == "dynamic" and (i == 0 or phases.get(order[i - 1], "static") == "static"):
-                lines.append(f"\n⬜ 动态组件  ({len(dynamic_keys)} 个) — stable + volatile vars\n")
+            # Phase section header on transition
+            if phase != prev_phase:
+                if phase == "static":
+                    lines.append("▸ STATIC")
+                else:
+                    lines.append("▸ DYNAMIC")
+                prev_phase = phase
 
             display_num += 1
+
             if key in global_editable:
                 edit_icon = "✏️"
             elif key in agent_editable:
@@ -372,56 +377,67 @@ class SettingsCommandsMixin:
 
             label = labels.get(key, key)
             tpl = PromptBuilder.get_component_template(key)
-            status = f"● {len(tpl):,}字" if tpl else "○ 空"
+            status = f"●{len(tpl):,}字" if tpl else "○空"
 
             cond = conditional_tags.get(key, "")
-            cond_str = f"  [仅{cond}]" if cond else ""
+            cond_str = f" · {cond}" if cond else ""
 
-            # Visibility icon
             vis = engine.prompt_builder.get_component_visibility(key)
             vis_icon = "👁" if vis == "all" else "👑"
-            vis_str = f" {vis_icon}" if key != "history" else ""
 
-            lines.append(f"{display_num}. {edit_icon} {label} — {status}{cond_str}{vis_str}")
+            lines.append(f"  {display_num}. {edit_icon} {label} · {status}{cond_str} · {vis_icon}")
 
         lines.append("")
 
         buttons = []
         for i, key in enumerate(order):
-            row = []
             label = labels.get(key, key)
+
+            # Name button (always shown)
+            if key == "history":
+                buttons.append([InlineKeyboardButton(f"📜 {label}", callback_data="pr:refresh")])
+                continue
+
             if key in global_editable:
                 tpl = PromptBuilder.get_component_template(key)
                 dot = "●" if tpl else "○"
-                row.append(InlineKeyboardButton(f"✏️{dot} {label}", callback_data=f"pre:__global__:{key}"))
+                buttons.append([InlineKeyboardButton(f"✏️{dot} {label}", callback_data=f"pre:__global__:{key}")])
             elif key in agent_editable:
-                row.append(InlineKeyboardButton(f"📂 {label}", callback_data="pr:refresh"))
+                buttons.append([InlineKeyboardButton(f"📂 {label}", callback_data="pr:refresh")])
             else:
-                row.append(InlineKeyboardButton(f"🔒 {label}", callback_data="pr:refresh"))
-            if i > 0:
-                row.append(InlineKeyboardButton("⬆️", callback_data=f"pru:{i}"))
-            if i < len(order) - 1:
-                row.append(InlineKeyboardButton("⬇️", callback_data=f"prd:{i}"))
-            # Delete button (history cannot be removed)
-            if key != "history":
-                row.append(InlineKeyboardButton("❌", callback_data=f"prdel:{i}"))
-            # Visibility toggle button (history always all-visible)
-            if key != "history":
+                buttons.append([InlineKeyboardButton(f"🔒 {label}", callback_data="pr:refresh")])
+
+            # Action buttons — only in manage mode
+            if manage_mode:
+                row2 = []
+                if i > 0:
+                    row2.append(InlineKeyboardButton("⬆️", callback_data=f"pru:{i}"))
+                if i < len(order) - 1:
+                    row2.append(InlineKeyboardButton("⬇️", callback_data=f"prd:{i}"))
+                row2.append(InlineKeyboardButton("🗑", callback_data=f"prdel:{i}"))
                 vis = engine.prompt_builder.get_component_visibility(key)
                 vis_btn = "👁" if vis == "all" else "👑"
-                row.append(InlineKeyboardButton(vis_btn, callback_data=f"pviz:{i}"))
-            buttons.append(row)
-        bottom_row = [InlineKeyboardButton("🔍 预览完整上下文", callback_data="prv:0"), InlineKeyboardButton("📖 规则说明", callback_data="prrules")]
+                row2.append(InlineKeyboardButton(vis_btn, callback_data=f"pviz:{i}"))
+                buttons.append(row2)
+
+        # Bottom row
+        bottom_row = []
+        if manage_mode:
+            bottom_row.append(InlineKeyboardButton("✅ 完成管理", callback_data="prmanage"))
+        else:
+            bottom_row.append(InlineKeyboardButton("⚙️ 管理", callback_data="prmanage"))
+        bottom_row.append(InlineKeyboardButton("🔍 预览", callback_data="prv:0"))
+        bottom_row.append(InlineKeyboardButton("📖 规则", callback_data="prrules"))
         if engine.prompt_builder.get_available_components():
-            bottom_row.insert(0, InlineKeyboardButton("➕ 添加组件", callback_data="pradd"))
+            bottom_row.append(InlineKeyboardButton("➕ 添加", callback_data="pradd"))
         buttons.append(bottom_row)
         return "\n".join(lines), InlineKeyboardMarkup(buttons)
 
-    async def _prompt_show_components(self, query) -> None:
+    async def _prompt_show_components(self, query, manage_mode: bool = False) -> None:
         """Helper: refresh global prompt order view via callback."""
         from telegram.error import BadRequest
         engine = self._groupchat_engine
-        text, markup = self._build_prompt_order_view(engine)
+        text, markup = self._build_prompt_order_view(engine, manage_mode=manage_mode)
         try:
             await query.edit_message_text(text[:4096], reply_markup=markup)
         except BadRequest as e:
