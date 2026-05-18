@@ -75,7 +75,6 @@ _FALLBACK_PHASES: dict[str, str] = {
     "group_context": "dynamic",
     "examples": "dynamic",
     "group_nudge": "dynamic",
-    "工程原则": "dynamic",
     "coding_principle": "dynamic",
     "记忆补充": "dynamic",
 }
