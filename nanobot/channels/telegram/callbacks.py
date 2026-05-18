@@ -1301,7 +1301,7 @@ class CallbacksMixin:
                 await query.edit_message_text(
                     "✏️ 创建自定义提示词组件\n\n"
                     "请输入组件名称（如: 角色背景、安全规则、写作风格 等）:\n\n"
-                    "💡 名称会显示在组件列表中，创建后可编辑内容",
+                    "💡 名称会显示在组件列表中，创建后可选 Phase 类型",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("❌ 取消", callback_data="prcan")]
                     ]),
@@ -1311,29 +1311,40 @@ class CallbacksMixin:
                 # Show prompt assembly rules explanation
                 rules_text = (
                     "📖 Prompt 组装规则说明\n\n"
+                    "━━━━━━━━━━━━━━━━━━━━━\n"
                     "📌 组装顺序\n"
-                    "  ⬛ 静态区 → 💬 聊天记录 → ⬜ 动态区\n\n"
-                    "📌 Phase 区别\n"
+                    "  ⬛ 静态区 → 💬 聊天记录 → ⬜ 动态区\n"
+                    "  静态位于 history 前，动态位于 history 后\n"
+                    "━━━━━━━━━━━━━━━━━━━━━\n"
+                    "📌 Phase 区别\n\n"
                     "  ⬛ 静态 (static)\n"
-                    "    • 位于聊天记录之前，所有 agent 共享\n"
-                    "    • 仅可使用 stable vars（不随轮次变化）\n"
-                    "    • 适合: 人设、工具指令、硬规则等固定内容\n"
-                    "    • 缓存友好，LLM 可复用前缀\n\n"
+                    "    位于聊天记录之前，所有 agent 共享\n"
+                    "    仅可使用 stable vars（不随轮次变化）\n"
+                    "    适合: 人设、工具指令、硬规则等固定内容\n"
+                    "    缓存友好，LLM 可复用前缀\n\n"
                     "  ⬜ 动态 (dynamic)\n"
-                    "    • 位于聊天记录之后，每轮刷新\n"
-                    "    • 可使用 stable + volatile vars\n"
-                    "    • 适合: 群聊上下文、示例、技能概览等时效内容\n\n"
+                    "    位于聊天记录之后，每轮刷新\n"
+                    "    可使用 stable + volatile vars\n"
+                    "    适合: 群聊上下文、示例、技能概览等时效内容\n"
+                    "━━━━━━━━━━━━━━━━━━━━━\n"
                     "📌 可用变量\n"
-                    "  Stable (⬛⬜通用):\n"
-                    "    {{agent}} {{members}} {{tools}} {{others}} {{identity}}\n"
-                    "  Volatile (仅⬜动态):\n"
-                    "    {{datetime}} {{round}} {{agent_idx}} {{total}} {{teammates}}\n\n"
+                    "  ⬛ stable（通用）:\n"
+                    "    {{agent}} {{members}} {{tools}} {{others}} {{identity}}\n\n"
+                    "  ⬜ volatile（仅 dynamic 可用）:\n"
+                    "    {{datetime}} {{round}} {{agent_idx}} {{total}} {{teammates}}\n"
+                    "━━━━━━━━━━━━━━━━━━━━━\n"
                     "📌 组件来源\n"
-                    "  ✏️ 全局模板 — /prompt 编辑\n"
-                    "  📂 per-agent — /editagent 编辑\n"
-                    "  🔒 代码生成 — 不可编辑 (如 history, skills_overview)\n\n"
+                    "  ✏️ 全局模板 — /prompt 编辑可修改内容\n"
+                    "  📂 per-agent — /editagent 编辑，各 agent 独立\n"
+                    "  🔒 代码生成 — 不可编辑（history、skills_overview）\n"
+                    "━━━━━━━━━━━━━━━━━━━━━\n"
                     "📌 内容状态\n"
-                    "  ● 已配置  ○ 空(跳过)  [条件] 按条件激活"
+                    "  ● 已配置（注入提示词）\n"
+                    "  ○ 空（跳过注入）\n"
+                    "  [条件] 按条件激活（如仅 Leader 可见）\n\n"
+                    "📌 组件可见性\n"
+                    "  👁 全体可见 — 所有 agent 均可读取\n"
+                    "  👑 仅 Leader 可见 — 普通 agent 不可见"
                 )
                 await query.edit_message_text(
                     rules_text,

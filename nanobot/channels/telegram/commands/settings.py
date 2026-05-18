@@ -353,9 +353,9 @@ class SettingsCommandsMixin:
         for i, key in enumerate(order):
             phase = phases.get(key, "static")
             if key == "history":
-                lines.append("┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
+                lines.append("━━━━━━━━━━━━━━━━━━━━━")
                 lines.append("  💬 聊天记录（运行时自动插入）")
-                lines.append("┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
+                lines.append("━━━━━━━━━━━━━━━━━━━━━")
                 continue
 
             # Phase divider: static → dynamic
