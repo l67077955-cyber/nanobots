@@ -1307,6 +1307,41 @@ class CallbacksMixin:
                     ]),
                 )
 
+            elif data == "prrules":
+                # Show prompt assembly rules explanation
+                rules_text = (
+                    "📖 Prompt 组装规则说明\n\n"
+                    "📌 组装顺序\n"
+                    "  ⬛ 静态区 → 💬 聊天记录 → ⬜ 动态区\n\n"
+                    "📌 Phase 区别\n"
+                    "  ⬛ 静态 (static)\n"
+                    "    • 位于聊天记录之前，所有 agent 共享\n"
+                    "    • 仅可使用 stable vars（不随轮次变化）\n"
+                    "    • 适合: 人设、工具指令、硬规则等固定内容\n"
+                    "    • 缓存友好，LLM 可复用前缀\n\n"
+                    "  ⬜ 动态 (dynamic)\n"
+                    "    • 位于聊天记录之后，每轮刷新\n"
+                    "    • 可使用 stable + volatile vars\n"
+                    "    • 适合: 群聊上下文、示例、技能概览等时效内容\n\n"
+                    "📌 可用变量\n"
+                    "  Stable (⬛⬜通用):\n"
+                    "    {{agent}} {{members}} {{tools}} {{others}} {{identity}}\n"
+                    "  Volatile (仅⬜动态):\n"
+                    "    {{datetime}} {{round}} {{agent_idx}} {{total}} {{teammates}}\n\n"
+                    "📌 组件来源\n"
+                    "  ✏️ 全局模板 — /prompt 编辑\n"
+                    "  📂 per-agent — /editagent 编辑\n"
+                    "  🔒 代码生成 — 不可编辑 (如 history, skills_overview)\n\n"
+                    "📌 内容状态\n"
+                    "  ● 已配置  ○ 空(跳过)  [条件] 按条件激活"
+                )
+                await query.edit_message_text(
+                    rules_text,
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⬅️ 返回组件列表", callback_data="pr:refresh")]
+                    ]),
+                )
+
             elif data.startswith("prv:"):
                 # Preview full template: prv:<page>
                 page = int(data[4:])
@@ -1315,7 +1350,11 @@ class CallbacksMixin:
                 labels = _COMPONENT_LABELS
 
                 phases = _COMPONENT_PHASES
-                lines: list[str] = []
+                lines: list[str] = [
+                    "📌 组装规则: ⬛静态 → 💬聊天记录 → ⬜动态",
+                    "   ⬛ stable vars only  |  ⬜ stable + volatile vars",
+                    "",
+                ]
                 display_num = 0
                 for i, key in enumerate(order):
                     label = labels.get(key, key)

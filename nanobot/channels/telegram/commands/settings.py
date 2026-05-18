@@ -343,7 +343,11 @@ class SettingsCommandsMixin:
         dynamic_keys = [k for k in order if phases.get(k) == "dynamic"]
 
         lines = ["📋 System Prompt 组装管线 (全局)\n"]
-        lines.append(f"⬛ 静态组件  ({len(static_keys)} 个) — stable vars only\n")
+        lines.append("📌 组装顺序: ⬛ 静态区 → 💬 聊天记录 → ⬜ 动态区\n")
+        lines.append("   ⬛ 静态: 仅 stable vars ({{agent}} {{members}} {{tools}} …)，缓存友好\n")
+        lines.append("   ⬜ 动态: stable + volatile vars ({{datetime}} {{round}})，每次轮次刷新\n")
+        lines.append("   🔒 自动生成  ✏️ 全局模板  📂 per-agent  ● 已配置  ○ 空(跳过)\n")
+        lines.append(f"\n⬛ 静态组件  ({len(static_keys)} 个) — stable vars only\n")
 
         display_num = 0
         for i, key in enumerate(order):
@@ -381,11 +385,14 @@ class SettingsCommandsMixin:
             lines.append(f"{display_num}. {edit_icon} {label} — {status}{cond_str}{vis_str}")
 
         lines.append("")
-        lines.append("✏️ 全局模板  📂 per-agent(/editagent)  🔒 自动生成")
-        lines.append("● 已配置  ○ 空(跳过注入)  [条件] 按条件激活")
-        lines.append("👁全体可见  👑仅Leader可见  点击👁/👑按钮切换")
-        lines.append("⬛静态变量: {{agent}} {{members}} {{tools}} {{others}} {{identity}}")
-        lines.append("⬜+动态变量: {{datetime}} {{round}} {{agent_idx}} {{total}} {{teammates}}")
+        lines.append("📌 图例")
+        lines.append("  组件来源: ✏️ 全局模板可编辑  📂 per-agent  🔒 代码自动生成")
+        lines.append("  内容状态: ● 已配置  ○ 空(跳过注入)  [条件] 按条件激活")
+        lines.append("  可见性  : 👁 全体可见  👑 仅Leader可见  (点击切换)")
+        lines.append("")
+        lines.append("📌 变量可用范围")
+        lines.append("  ⬛ stable: {{agent}} {{members}} {{tools}} {{others}} {{identity}}")
+        lines.append("  ⬜ volatile: +{{datetime}} {{round}} {{agent_idx}} {{total}} {{teammates}}")
 
         buttons = []
         for i, key in enumerate(order):
@@ -412,7 +419,7 @@ class SettingsCommandsMixin:
                 vis_btn = "👁" if vis == "all" else "👑"
                 row.append(InlineKeyboardButton(vis_btn, callback_data=f"pviz:{i}"))
             buttons.append(row)
-        bottom_row = [InlineKeyboardButton("🔍 预览完整上下文", callback_data="prv:0")]
+        bottom_row = [InlineKeyboardButton("🔍 预览完整上下文", callback_data="prv:0"), InlineKeyboardButton("📖 规则说明", callback_data="prrules")]
         if engine.prompt_builder.get_available_components():
             bottom_row.insert(0, InlineKeyboardButton("➕ 添加组件", callback_data="pradd"))
         buttons.append(bottom_row)
