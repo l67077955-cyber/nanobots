@@ -385,14 +385,6 @@ class SettingsCommandsMixin:
             lines.append(f"{display_num}. {edit_icon} {label} — {status}{cond_str}{vis_str}")
 
         lines.append("")
-        lines.append("📌 图例")
-        lines.append("  组件来源: ✏️ 全局模板可编辑  📂 per-agent  🔒 代码自动生成")
-        lines.append("  内容状态: ● 已配置  ○ 空(跳过注入)  [条件] 按条件激活")
-        lines.append("  可见性  : 👁 全体可见  👑 仅Leader可见  (点击切换)")
-        lines.append("")
-        lines.append("📌 变量可用范围")
-        lines.append("  ⬛ stable: {{agent}} {{members}} {{tools}} {{others}} {{identity}}")
-        lines.append("  ⬜ volatile: +{{datetime}} {{round}} {{agent_idx}} {{total}} {{teammates}}")
 
         buttons = []
         for i, key in enumerate(order):
