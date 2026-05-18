@@ -19,6 +19,7 @@ from nanobot.groupchat import display as _d
 from nanobot.groupchat.history.prompt_builder import (
     PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
     GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
+    COMPONENT_PHASES as _COMPONENT_PHASES,
 )
 from .formatting import TELEGRAM_MAX_MESSAGE_LEN
 
@@ -1204,13 +1205,20 @@ class CallbacksMixin:
                     engine = self._groupchat_engine
                     content = PromptBuilder.get_component_template(key)
                     label = _COMPONENT_LABELS.get(key, key)
+                    phase = _COMPONENT_PHASES.get(key, "static")
+                    phase_label = "⬛静态" if phase == "static" else "⬜动态"
+                    vars_hint = (
+                        "{{agent}} {{members}} {{tools}} {{others}} {{identity}}"
+                        if phase == "static"
+                        else "{{agent}} {{members}} {{tools}} {{others}} {{identity}} {{datetime}} {{round}} {{agent_idx}} {{total}} {{teammates}}"
+                    )
                     self._edit_state[chat_id] = {"field": "prompt_edit", "agent": "__global__", "key": key}
                     preview = (content[:3500] + "…") if len(content) > 3500 else (content or "(空)")
                     await query.edit_message_text(
-                        f"✏️ 编辑全局模板 - {label}\n\n"
+                        f"✏️ 编辑全局模板 - {label} [{phase_label}]\n\n"
                         f"当前内容 ({len(content or '')}字):\n"
                         f"{preview}\n\n"
-                        f"💡 模板变量: {{{{agent}}}} {{{{members}}}} {{{{datetime}}}} {{{{round}}}} {{{{tools}}}} {{{{others}}}}\n"
+                        f"💡 可用变量: {vars_hint}\n"
                         f"请回复新内容 (完整替换):",
                         reply_markup=InlineKeyboardMarkup([
                             [InlineKeyboardButton("❌ 取消", callback_data="prcan")]
@@ -1306,16 +1314,26 @@ class CallbacksMixin:
                 order = engine.prompt_builder.get_agent_prompt_order()
                 labels = _COMPONENT_LABELS
 
+                phases = _COMPONENT_PHASES
                 lines: list[str] = []
                 display_num = 0
                 for i, key in enumerate(order):
                     label = labels.get(key, key)
+                    phase = phases.get(key, "static")
                     if key == "history":
                         lines.append("━━━━━━━━━━━━━━━━━━━━━━")
                         lines.append("  💬 聊天记录（运行时自动插入）")
                         lines.append("━━━━━━━━━━━━━━━━━━━━━━")
                         lines.append("")
                         continue
+
+                    # Phase divider
+                    if phase == "dynamic" and (i == 0 or phases.get(order[i - 1], "static") == "static"):
+                        lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+                        lines.append("  ⬜ 以下为动态组件 (volatile vars 可用)")
+                        lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+                        lines.append("")
+
                     display_num += 1
                     if key == "persona":
                         lines.append(f"─── [{display_num}] {label} ───")
@@ -1327,7 +1345,8 @@ class CallbacksMixin:
                         lines.append(f"─── [{display_num}] {label} ─── ○ 空 (跳过注入)")
                         lines.append("")
                         continue
-                    lines.append(f"─── [{display_num}] {label} ({len(tpl):,}字) ───")
+                    phase_tag = "⬛" if phase == "static" else "⬜"
+                    lines.append(f"─── [{display_num}] {phase_tag} {label} ({len(tpl):,}字) ───")
                     preview = tpl[:400]
                     if len(tpl) > 400:
                         preview += "…"

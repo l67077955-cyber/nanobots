@@ -16,6 +16,7 @@ from loguru import logger
 from nanobot.groupchat.history.prompt_builder import (
     PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
     GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
+    COMPONENT_PHASES as _COMPONENT_PHASES,
 )
 
 
@@ -337,22 +338,25 @@ class SettingsCommandsMixin:
         agent_editable = _AGENT_EDITABLE
         conditional_tags = self._CONDITIONAL_TAGS
 
-        history_idx = order.index("history") if "history" in order else len(order)
-        pre_count = sum(1 for k in order[:history_idx] if k != "history")
-        post_count = sum(1 for k in order[history_idx + 1:])
+        phases = _COMPONENT_PHASES
+        static_keys = [k for k in order if phases.get(k) == "static"]
+        dynamic_keys = [k for k in order if phases.get(k) == "dynamic"]
 
         lines = ["📋 System Prompt 组装管线 (全局)\n"]
-        lines.append(f"↓ 系统上下文  ({pre_count} 个组件)\n")
+        lines.append(f"⬛ 静态组件  ({len(static_keys)} 个) — stable vars only\n")
 
         display_num = 0
         for i, key in enumerate(order):
+            phase = phases.get(key, "static")
             if key == "history":
                 lines.append("┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
                 lines.append("  💬 聊天记录（运行时自动插入）")
                 lines.append("┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
-                if post_count > 0:
-                    lines.append(f"\n↓ 后置规范  ({post_count} 个组件)\n")
                 continue
+
+            # Phase divider: static → dynamic
+            if phase == "dynamic" and (i == 0 or phases.get(order[i - 1], "static") == "static"):
+                lines.append(f"\n⬜ 动态组件  ({len(dynamic_keys)} 个) — stable + volatile vars\n")
 
             display_num += 1
             if key in global_editable:
@@ -380,7 +384,8 @@ class SettingsCommandsMixin:
         lines.append("✏️ 全局模板  📂 per-agent(/editagent)  🔒 自动生成")
         lines.append("● 已配置  ○ 空(跳过注入)  [条件] 按条件激活")
         lines.append("👁全体可见  👑仅Leader可见  点击👁/👑按钮切换")
-        lines.append("💡 变量: {{agent}} {{members}} {{datetime}} {{round}} {{tools}} {{others}}")
+        lines.append("⬛静态变量: {{agent}} {{members}} {{tools}} {{others}} {{identity}}")
+        lines.append("⬜+动态变量: {{datetime}} {{round}} {{agent_idx}} {{total}} {{teammates}}")
 
         buttons = []
         for i, key in enumerate(order):
