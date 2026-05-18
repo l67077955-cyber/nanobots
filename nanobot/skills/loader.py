@@ -35,17 +35,28 @@ def build_skills_section(workspace: Path) -> tuple[str, str]:
     """Build the skills section for prompt injection (shared logic).
 
     Returns (static_content, dynamic_content):
-      - static_content: always-on skills inlined (stable, before history)
-      - dynamic_content: summary + undocumented scripts (volatile, after history)
+      - static_content: always-on skills with type=static inlined (stable, before history)
+      - dynamic_content: always-on skills with type=dynamic inlined + summary + undocumented scripts (volatile, after history)
+
+    Skills declare ``type: dynamic`` in frontmatter to opt into volatile template
+    variables (e.g. ``{{datetime}}``).  Default is ``type: static``.
     """
     loader = SkillsLoader(workspace)
 
-    # ── Static: always-on skills inlined ──
+    # ── Split always-on skills by type ──
+    static_always: list[str] = []
+    dynamic_always: list[str] = []
+    for name in loader.get_always_skills():
+        if loader.get_skill_type(name) == "dynamic":
+            dynamic_always.append(name)
+        else:
+            static_always.append(name)
+
+    # ── Static: always-on skills with type=static ──
     static_parts: list[str] = []
-    always_skills = loader.get_always_skills()
-    if always_skills:
+    if static_always:
         content = loader.load_skills_for_context(
-            always_skills,
+            static_always,
             max_chars_per_skill=MAX_ALWAYS_SKILL_INLINE,
             max_total_chars=MAX_ALWAYS_SKILLS_CHARS,
         )
@@ -53,9 +64,19 @@ def build_skills_section(workspace: Path) -> tuple[str, str]:
             static_parts.append(content)
     static_content = "\n\n".join(static_parts)
 
-    # ── Dynamic: summary + undocumented scripts ──
+    # ── Dynamic: always-on type=dynamic inlined + summary + undocumented scripts ──
     dynamic_parts: list[str] = []
-    summary = loader.build_skills_summary(exclude=set(always_skills) if always_skills else None)
+    if dynamic_always:
+        content = loader.load_skills_for_context(
+            dynamic_always,
+            max_chars_per_skill=MAX_ALWAYS_SKILL_INLINE,
+            max_total_chars=MAX_ALWAYS_SKILLS_CHARS,
+        )
+        if content:
+            dynamic_parts.append(content)
+
+    all_always = set(static_always) | set(dynamic_always)
+    summary = loader.build_skills_summary(exclude=all_always if all_always else None)
     if summary:
         dynamic_parts.append("Other skills (read SKILL.md to use):\n" + summary)
 
@@ -353,6 +374,20 @@ class SkillsLoader:
         """Get nanobot metadata for a skill (cached in frontmatter)."""
         meta = self.get_skill_metadata(name) or {}
         return self._parse_nanobot_metadata(meta.get("metadata", ""))
+
+    def get_skill_type(self, name: str) -> str:
+        """Get the prompt type for a skill: 'static' or 'dynamic'.
+
+        Skills with ``type: dynamic`` in frontmatter are injected after history
+        where volatile template variables (e.g. ``{{datetime}}``) are available.
+        Default is 'static'.
+        """
+        meta = self.get_skill_metadata(name) or {}
+        skill_meta = self._parse_nanobot_metadata(meta.get("metadata", ""))
+        t = skill_meta.get("type") or meta.get("type")
+        if isinstance(t, str) and t.strip().lower() == "dynamic":
+            return "dynamic"
+        return "static"
 
     def get_always_skills(self) -> list[str]:
         """Get skills marked as always=true that meet requirements."""
