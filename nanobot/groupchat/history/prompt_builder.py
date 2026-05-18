@@ -33,6 +33,7 @@ _FALLBACK_ORDER = [
     "main_prompt", "group_context", "persona", "memory",
     "tool_instructions", "skills", "broadcast_hint", "examples",
     "history", "instructions", "leader_prompt", "group_nudge",
+    "skills_overview",
 ]
 _FALLBACK_LABELS: dict[str, str] = {
     "main_prompt": "主提示 (main_prompt)",
@@ -47,10 +48,12 @@ _FALLBACK_LABELS: dict[str, str] = {
     "instructions": "后置指令 (instructions)",
     "leader_prompt": "领袖指令 (leader_prompt)",
     "group_nudge": "群聊规范 (group_nudge)",
+    "skills_overview": "技能概览 (skills_overview)",
 }
 _FALLBACK_GLOBAL_EDITABLE: set[str] = {
     "main_prompt", "group_context", "tool_instructions", "skills", "memory",
     "broadcast_hint", "examples", "instructions", "leader_prompt", "group_nudge",
+    "skills_overview",
 }
 _FALLBACK_AGENT_EDITABLE: set[str] = {"persona"}
 
@@ -516,6 +519,8 @@ class PromptBuilder:
             return self.get_component_template("tool_instructions")
         elif key == "skills":
             return self._build_skills_content()
+        elif key == "skills_overview":
+            return self._build_skills_overview()
         elif key == "examples":
             return agent.get("examples", "")
         elif key == "history":
@@ -576,9 +581,16 @@ class PromptBuilder:
         )
 
     def _build_skills_content(self) -> str:
-        """Build the skills section for prompt injection."""
+        """Build the static skills section (always-on skills inlined)."""
         from nanobot.skills.loader import build_skills_section
-        return build_skills_section(self._workspace)
+        static, _ = build_skills_section(self._workspace)
+        return static
+
+    def _build_skills_overview(self) -> str:
+        """Build the dynamic skills overview (summary + undocumented scripts)."""
+        from nanobot.skills.loader import build_skills_section
+        _, dynamic = build_skills_section(self._workspace)
+        return dynamic
 
 
     # ── Delegation to extracted modules (backward compat) ──

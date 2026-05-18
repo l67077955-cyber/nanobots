@@ -31,15 +31,17 @@ def _parse_bool(value) -> bool:
     return bool(value)
 
 
-def build_skills_section(workspace: Path) -> str:
+def build_skills_section(workspace: Path) -> tuple[str, str]:
     """Build the skills section for prompt injection (shared logic).
 
-    Always-on skills are injected up to MAX_ALWAYS_SKILL_INLINE chars each
-    (with a read_file pointer for the rest); other skills are listed compactly.
+    Returns (static_content, dynamic_content):
+      - static_content: always-on skills inlined (stable, before history)
+      - dynamic_content: summary + undocumented scripts (volatile, after history)
     """
     loader = SkillsLoader(workspace)
-    parts: list[str] = []
 
+    # ── Static: always-on skills inlined ──
+    static_parts: list[str] = []
     always_skills = loader.get_always_skills()
     if always_skills:
         content = loader.load_skills_for_context(
@@ -48,18 +50,22 @@ def build_skills_section(workspace: Path) -> str:
             max_total_chars=MAX_ALWAYS_SKILLS_CHARS,
         )
         if content:
-            parts.append(content)
+            static_parts.append(content)
+    static_content = "\n\n".join(static_parts)
 
+    # ── Dynamic: summary + undocumented scripts ──
+    dynamic_parts: list[str] = []
     summary = loader.build_skills_summary(exclude=set(always_skills) if always_skills else None)
     if summary:
-        parts.append("Other skills (read SKILL.md to use):\n" + summary)
+        dynamic_parts.append("Other skills (read SKILL.md to use):\n" + summary)
 
-    # Auto-discover scripts not documented in SKILL.md
     undocumented = loader._discover_undocumented_scripts()
     if undocumented:
-        parts.append("Undocumented scripts (auto-discovered from scripts/ dirs):\n" + "\n".join(undocumented))
+        dynamic_parts.append("Undocumented scripts (auto-discovered from scripts/ dirs):\n" + "\n".join(undocumented))
 
-    return "\n\n".join(parts)
+    dynamic_content = "\n\n".join(dynamic_parts)
+
+    return static_content, dynamic_content
 
 
 class SkillsLoader:
