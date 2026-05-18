@@ -443,16 +443,19 @@ class PromptBuilder:
         return [k for k in all_known if k not in current]
 
     @staticmethod
-    def add_custom_component(key: str, label: str) -> str:
+    @staticmethod
+    def add_custom_component(key: str, label: str, phase: str = "static") -> str:
         """Register a user-defined custom component.
 
-        Adds it to COMPONENT_LABELS, GLOBAL_EDITABLE, and persists to manifest.
+        Adds it to COMPONENT_LABELS, GLOBAL_EDITABLE, COMPONENT_PHASES, and persists to manifest.
         Does NOT add to the prompt order — caller should do that separately.
         """
         if key in COMPONENT_LABELS:
             return f"❌ 组件 '{key}' 已存在"
+        phase = phase if phase in ("static", "dynamic") else "static"
         # Register in module-level dicts
         COMPONENT_LABELS[key] = label
+        COMPONENT_PHASES[key] = phase
         GLOBAL_EDITABLE.add(key)
         EDITABLE_COMPONENTS.add(key)
         # Persist to manifest (single source of truth)
@@ -462,9 +465,10 @@ class PromptBuilder:
         manifest["components"][key] = {
             "order": 99, "visibility": "all",
             "label": label, "editable_by": "global", "resolver": None,
+            "phase": phase,
         }
         _save_manifest(manifest)
-        return f"✅ 已创建自定义组件: {label}"
+        return f"✅ 已创建自定义组件: {label} (phase={phase})"
 
     # ── Component content ──
 
