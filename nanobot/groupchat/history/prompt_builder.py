@@ -56,6 +56,29 @@ _FALLBACK_GLOBAL_EDITABLE: set[str] = {
     "skills_overview",
 }
 _FALLBACK_AGENT_EDITABLE: set[str] = {"persona"}
+_FALLBACK_PHASES: dict[str, str] = {
+    # static = before history, stable template vars only (cache-friendly)
+    "main_prompt": "static",
+    "hard_rules": "static",
+    "tool_instructions": "static",
+    "persona": "static",
+    "broadcast_hint": "static",
+    "user_context": "static",
+    "output_efficiency": "static",
+    "skills": "static",
+    "leader_prompt": "static",
+    "instructions": "static",
+    "memory": "static",
+    # dynamic = after history, volatile template vars available ({{datetime}}, {{round}})
+    "history": "dynamic",
+    "skills_overview": "dynamic",
+    "group_context": "dynamic",
+    "examples": "dynamic",
+    "group_nudge": "dynamic",
+    "工程原则": "dynamic",
+    "coding_principle": "dynamic",
+    "记忆补充": "dynamic",
+}
 
 # Module-level dicts/sets — populated from manifest at import time.
 # These remain the public API consumed by:
@@ -63,6 +86,7 @@ _FALLBACK_AGENT_EDITABLE: set[str] = {"persona"}
 #   nanobot.channels.telegram.commands.settings
 DEFAULT_PROMPT_ORDER: list[str] = list(_FALLBACK_ORDER)
 COMPONENT_LABELS: dict[str, str] = dict(_FALLBACK_LABELS)
+COMPONENT_PHASES: dict[str, str] = dict(_FALLBACK_PHASES)
 GLOBAL_EDITABLE: set[str] = set(_FALLBACK_GLOBAL_EDITABLE)
 AGENT_EDITABLE: set[str] = set(_FALLBACK_AGENT_EDITABLE)
 EDITABLE_COMPONENTS: set[str] = GLOBAL_EDITABLE | AGENT_EDITABLE
@@ -154,7 +178,7 @@ def _sync_from_manifest() -> None:
     Consumers (nanobot.channels.telegram.callbacks, nanobot.channels.telegram.commands.settings) continue to read the module-level
     dicts/sets unchanged — zero changes needed on their side.
     """
-    global DEFAULT_PROMPT_ORDER, COMPONENT_LABELS, GLOBAL_EDITABLE, AGENT_EDITABLE, EDITABLE_COMPONENTS
+    global DEFAULT_PROMPT_ORDER, COMPONENT_LABELS, COMPONENT_PHASES, GLOBAL_EDITABLE, AGENT_EDITABLE, EDITABLE_COMPONENTS
 
     manifest = _load_manifest()
     components = manifest.get("components", {}) if manifest else {}
@@ -167,8 +191,9 @@ def _sync_from_manifest() -> None:
     sorted_items = sorted(components.items(), key=lambda kv: (kv[1].get("order", 999), kv[0]))
     DEFAULT_PROMPT_ORDER = [k for k, _ in sorted_items]
 
-    # Rebuild labels, editable sets from manifest metadata.
+    # Rebuild labels, phases, editable sets from manifest metadata.
     COMPONENT_LABELS = {}
+    COMPONENT_PHASES = {}
     GLOBAL_EDITABLE = set()
     AGENT_EDITABLE = set()
 
@@ -176,6 +201,9 @@ def _sync_from_manifest() -> None:
         label = meta.get("label", key)
         if label:
             COMPONENT_LABELS[key] = label
+
+        phase = meta.get("phase", "static")
+        COMPONENT_PHASES[key] = phase
 
         editable_by = meta.get("editable_by", "none")
         if editable_by == "global":
@@ -682,7 +710,6 @@ class PromptBuilder:
         }
         all_tpl_vars = {**stable_tpl_vars, **volatile_tpl_vars}
 
-        past_history = False
         messages: list[dict[str, Any]] = []
         for key in order:
             if key == "history":
@@ -692,7 +719,6 @@ class PromptBuilder:
                     max_chars=max_context_chars(),
                     relevant_agents=relevant_agents,
                 ))
-                past_history = True
                 continue
 
             # Visibility filter: controls whether a component is injected for this agent.
@@ -708,7 +734,11 @@ class PromptBuilder:
             if not raw:
                 continue
 
-            content = self._expand_template_vars(raw, all_tpl_vars if past_history else stable_tpl_vars)
+            # Use COMPONENT_PHASES to determine if this component can use volatile vars.
+            # "dynamic" components (after history in manifest) get all_tpl_vars;
+            # "static" components (before history) get only stable_tpl_vars.
+            tpl_vars = all_tpl_vars if COMPONENT_PHASES.get(key) == "dynamic" else stable_tpl_vars
+            content = self._expand_template_vars(raw, tpl_vars)
             if key == "examples":
                 content = f"[Example Chat]\n{content}"
             messages.append({"role": "system", "content": content})
