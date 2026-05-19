@@ -1190,9 +1190,18 @@ async def broadcast_round(
                         "Broadcast: leader {} synthesis too short ({} chars < {}), forcing retry",
                         name, len(stripped), _MIN_SYNTHESIS_LEN,
                         )
+                        # Inject tool results into retry prompt so the LLM has
+                        # actual data to synthesize instead of producing from nothing.
+                        _tool_data = build_tool_log(result.tool_calls_detail)
+                        _retry_prompt = get_system_warning("leader_end_without_text", name=name)
+                        if _tool_data:
+                            _retry_prompt += (
+                                "\n\n[本轮工具调用结果 — 请基于以下数据输出总结]\n"
+                                + _tool_data
+                            )
                         messages.append({
                         "role": "system",
-                        "content": get_system_warning("leader_end_without_text", name=name),
+                        "content": _retry_prompt,
                         })
                         _synthesis_retries += 1
                         if _synthesis_retries >= 3:
@@ -1217,13 +1226,21 @@ async def broadcast_round(
                             _warn = get_system_warning("delivery_gate_tools", name=name)
                         else:
                             _warn = get_system_warning("leader_end_without_text", name=name)
+                        # Inject tool results so the LLM has data to synthesize
+                        _tool_data = build_tool_log(result.tool_calls_detail)
+                        _retry_content = (
+                            _warn
+                            + f"\n\n[质量检查失败] {quality_reason}"
+                            "\n请输出包含 ## 结论、## 关键发现 的结构化总结，附带具体数据和来源。"
+                        )
+                        if _tool_data:
+                            _retry_content += (
+                                "\n\n[本轮工具调用结果 — 请基于以下数据输出总结]\n"
+                                + _tool_data
+                            )
                         messages.append({
                         "role": "system",
-                        "content": (
-                        _warn
-                        + f"\n\n[质量检查失败] {quality_reason}"
-                        "\n请输出包含 ## 结论、## 关键发现 的结构化总结，附带具体数据和来源。"
-                        ),
+                        "content": _retry_content,
                         })
                         _synthesis_retries += 1
                         if _synthesis_retries >= 3:
@@ -1232,7 +1249,10 @@ async def broadcast_round(
                         engine._running = True
                         continue
                     # Synthesis passed validation — now display it
-                    if content and not _used_chatroom_send:
+                    # NOTE: Always display leader synthesis even if chatroom_send was used.
+                    # chatroom_send targets teammates, NOT the user. The final synthesis
+                    # is the user's only delivery channel and must never be silently dropped.
+                    if content:
                         tok = result.token_usage
                         total_tok = tok.get("total", 0)
                         tok_suffix = ""

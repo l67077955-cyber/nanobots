@@ -57,8 +57,8 @@ def build_skills_section(workspace: Path) -> tuple[str, str]:
     if static_always:
         content = loader.load_skills_for_context(
             static_always,
-            max_chars_per_skill=MAX_ALWAYS_SKILL_INLINE,
             max_total_chars=MAX_ALWAYS_SKILLS_CHARS,
+            compact=True,
         )
         if content:
             static_parts.append(content)
@@ -69,8 +69,8 @@ def build_skills_section(workspace: Path) -> tuple[str, str]:
     if dynamic_always:
         content = loader.load_skills_for_context(
             dynamic_always,
-            max_chars_per_skill=MAX_ALWAYS_SKILL_INLINE,
             max_total_chars=MAX_ALWAYS_SKILLS_CHARS,
+            compact=True,
         )
         if content:
             dynamic_parts.append(content)
@@ -83,6 +83,10 @@ def build_skills_section(workspace: Path) -> tuple[str, str]:
     undocumented = loader._discover_undocumented_scripts()
     if undocumented:
         dynamic_parts.append("Undocumented scripts (auto-discovered from scripts/ dirs):\n" + "\n".join(undocumented))
+
+    untracked = loader._discover_untracked_scripts()
+    if untracked:
+        dynamic_parts.append("Untracked scripts (standalone workspace scripts without SKILL.md):\n" + "\n".join(untracked))
 
     dynamic_content = "\n\n".join(dynamic_parts)
 
@@ -125,6 +129,11 @@ class SkillsLoader:
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists():
                         skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "workspace"})
+                    else:
+                        # Docless dir: yield if it contains scripts/ with .py/.sh
+                        scripts_dir = skill_dir / "scripts"
+                        if scripts_dir.is_dir() and any(f.suffix in (".py", ".sh") for f in scripts_dir.iterdir()):
+                            skills.append({"name": skill_dir.name, "path": str(scripts_dir), "source": "workspace", "docless": True})
 
         # Built-in skills
         if self.builtin_skills and self.builtin_skills.exists():
@@ -169,6 +178,7 @@ class SkillsLoader:
         skill_names: list[str],
         max_chars_per_skill: int = 0,
         max_total_chars: int = 0,
+        compact: bool = False,
     ) -> str:
         """Load specific skills for inclusion in agent context.
 
@@ -178,6 +188,8 @@ class SkillsLoader:
                 many chars and append a read_file hint for the remainder.
             max_total_chars: If > 0, stop adding skills once the cumulative
                 output would exceed this limit (footer note appended).
+            compact: When True, emit compact one-liner (description + read_file hint)
+                per skill. max_chars_per_skill is ignored.
 
         Returns:
             Formatted skills content.
@@ -187,6 +199,18 @@ class SkillsLoader:
         skipped: list[str] = []
 
         for name in skill_names:
+            # ── Compact mode: description + read_file pointer ──
+            if compact:
+                meta = self.get_skill_metadata(name) or {}
+                desc = meta.get("description", "").strip()
+                block = f"### Skill: {name}\n{desc}\n[read_file skills/{name}/SKILL.md for full doc]"
+                if max_total_chars and total_chars + len(block) > max_total_chars:
+                    skipped.append(name)
+                    continue
+                parts.append(block)
+                total_chars += len(block)
+                continue
+
             content = self.load_skill(name)
             if not content:
                 continue
@@ -194,11 +218,15 @@ class SkillsLoader:
             base_dir = self._resolve_skill_dir(name)
             if base_dir:
                 content = content.replace("{baseDir}", base_dir)
-            # Per-skill truncation.
+            # Per-skill truncation (line-boundary).
             if max_chars_per_skill and len(content) > max_chars_per_skill:
                 skill_path = f"skills/{name}/SKILL.md"
+                truncated = content[:max_chars_per_skill]
+                last_nl = truncated.rfind('\n')
+                if last_nl > 0:
+                    truncated = truncated[:last_nl]
                 content = (
-                    content[:max_chars_per_skill]
+                    truncated
                     + f"\n\n[…truncated. `read_file {skill_path}` for full doc.]"
                 )
             block = f"### Skill: {name}\n\n{content}"
@@ -356,7 +384,6 @@ class SkillsLoader:
             return True
         if v.lower() in ("false", "no", "off"):
             return False
-        return False
         return v
 
     def _check_requirements(self, skill_meta: dict) -> bool:
@@ -418,11 +445,35 @@ class SkillsLoader:
                         text = script_file.read_text(encoding="utf-8", errors="ignore")
                         m = re.search(r'"""(.*?)(?:\n|$)', text) or re.search(r"'''(.*?)(?:\n|$)", text)
                         if m:
-                            docstring = m.group(1).strip().rstrip(".")
+                            docstring = m.group(1).strip().rstrip('."\'')
                     except Exception:
                         pass
                     desc = f" — {docstring}" if docstring else ""
                     entries.append(f"  - `{script_file.name}`{desc}")
+        return entries
+
+    def _discover_untracked_scripts(self) -> list[str]:
+        """Find standalone scripts in workspace/skills/ outside any skill dir.
+
+        Unlike _discover_undocumented_scripts(), this scans workspace/skills/
+        directly instead of relying on list_skills(), so it catches files
+        that don't have a SKILL.md nearby at all.
+        """
+        if not self.workspace_skills.exists():
+            return []
+
+        entries = []
+        for f in sorted(self.workspace_skills.iterdir()):
+            if f.is_file() and f.suffix in (".py", ".sh") and not f.name.startswith("_"):
+                docstring = ""
+                try:
+                    text = f.read_text(encoding="utf-8", errors="ignore")
+                    m = re.search(r'"""(.*?)(?:\n|$)', text) or re.search(r"'''(.*?)(?:\n|$)", text)
+                    if m:
+                        docstring = " — " + m.group(1).strip().rstrip('."\'')
+                except Exception:
+                    pass
+                entries.append(f"  - `{f.name}`{docstring}")
         return entries
 
     def get_skill_metadata(self, name: str) -> dict | None:
