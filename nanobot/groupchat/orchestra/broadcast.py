@@ -745,8 +745,11 @@ async def broadcast_round(
                         except Exception:
                             pass
                     break
-                # Respect /stop — exit immediately if engine is no longer running
-                if not engine._running:
+                # Respect /stop — exit immediately if engine is no longer running.
+                # Exception: leader called end_discussion but hasn't produced valid
+                # synthesis yet — allow the cycle loop to continue so the leader
+                # can retry (guards at line ~1125/1140 force a text-producing cycle).
+                if not engine._running and not (is_leader and _leader_ended_discussion):
                     logger.info("Broadcast: {} exiting — engine stopped", name)
                     break
                 cycle += 1
