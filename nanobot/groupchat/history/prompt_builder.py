@@ -30,10 +30,11 @@ MANIFEST_PATH = Path.home() / ".nanobot" / "prompt_manifest.json"
 
 # Hardcoded fallback defaults — used ONLY when manifest is missing/corrupt.
 _FALLBACK_ORDER = [
-    "main_prompt", "group_context", "persona", "memory",
-    "tool_instructions", "skills", "broadcast_hint", "examples",
-    "history", "instructions", "leader_prompt", "group_nudge",
-    "skills_overview",
+    "main_prompt", "persona", "hard_rules", "tool_instructions", "skills",
+    "user_context", "broadcast_hint", "group_context", "memory",
+    "output_efficiency", "instructions", "leader_prompt",
+    "history", "skills_overview", "examples", "group_nudge",
+    "coding_principle", "记忆补充",
 ]
 _FALLBACK_LABELS: dict[str, str] = {
     "main_prompt": "主提示 (main_prompt)",
