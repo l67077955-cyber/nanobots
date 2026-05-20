@@ -87,9 +87,10 @@ def test_detects_curl_metadata():
         assert contains_internal_url('curl -s http://169.254.169.254/computeMetadata/v1/')
 
 
-def test_detects_wget_localhost():
+def test_allows_wget_localhost():
+    """Loopback is allowed in exec context — curling localhost is not an SSRF vector."""
     with patch("nanobot.security.network.socket.getaddrinfo", _fake_resolve("localhost", ["127.0.0.1"])):
-        assert contains_internal_url("wget http://localhost:8080/secret")
+        assert not contains_internal_url("wget http://localhost:8080/secret")
 
 
 def test_allows_normal_curl():
