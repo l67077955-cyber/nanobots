@@ -94,17 +94,40 @@ def validate_resolved_url(url: str) -> tuple[bool, str]:
     return True, ""
 
 
+_LOOPBACK_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+]
+
+_NON_LOOPBACK_BLOCKED = [n for n in _BLOCKED_NETWORKS if n not in _LOOPBACK_NETWORKS]
+
+
 def contains_internal_url(command: str) -> bool:
     """Return True if the command string contains a URL targeting an internal/private address.
 
-    Only blocks URLs that resolve to a *confirmed* private IP.
-    DNS failures and non-http schemes are ignored — not SSRF risks in exec context.
-    Loopback addresses (127.0.0.0/8, ::1) are allowed — exec runs on the same host,
-    so curling localhost is never an SSRF vector.
+    Only blocks URLs that resolve to a *confirmed non-loopback* private IP.
+    DNS failures, non-http schemes, and loopback addresses are all allowed —
+    exec runs on the same host, so curling localhost is never an SSRF vector.
+    The real threat is SSRF to cloud metadata (169.254.169.254) or internal networks.
     """
     for m in _URL_RE.finditer(command):
         url = m.group(0)
-        ok, err = validate_url_target(url)
-        if not ok and "private" in err.lower() and "internal" in err.lower():
-            return True
+        try:
+            p = urlparse(url)
+        except Exception:
+            continue
+        hostname = p.hostname
+        if not hostname:
+            continue
+        try:
+            infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        except (socket.gaierror, OSError):
+            continue  # DNS failure — not an SSRF risk
+        for info in infos:
+            try:
+                addr = ipaddress.ip_address(info[4][0])
+            except ValueError:
+                continue
+            if any(addr in net for net in _NON_LOOPBACK_BLOCKED):
+                return True
     return False
