@@ -65,8 +65,8 @@ class HttpxProvider(LLMProvider):
         defaults = {
             "temperature": 0.95,
             "top_p": 0.92,
-            "frequency_penalty": 0.1,
-            "presence_penalty": 0.05,
+            "frequency_penalty": 0.4,
+            "presence_penalty": 0.25,
             "repetition_penalty": 1.15,
         }
         hp_path = Path.home() / ".nanobot" / "hyperparams.json"
