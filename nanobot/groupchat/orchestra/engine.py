@@ -1672,5 +1672,8 @@ def log_request(
     }
     entry.update(extra)
     engine._request_log.append(entry)
+    # Cap to prevent unbounded memory growth
+    if len(engine._request_log) > 1000:
+        engine._request_log = engine._request_log[-500:]
 
 

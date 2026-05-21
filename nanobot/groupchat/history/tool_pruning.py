@@ -205,26 +205,6 @@ def prune_messages(
     return result
 
 
-def prune_conversation_tail(
-    messages: list[dict[str, Any]],
-    sys_msg_count: int,
-    keep_turns: int = 3
-) -> int:
-    """Prune old conversation turns from the tail to prevent unbounded growth.
-    
-    Mutates the `messages` list in-place by preserving the `sys_msg_count` prefix
-    and keeping only the last `keep_turns * 3` messages of the conversation.
-    Returns the number of messages dropped.
-    """
-    max_conv = keep_turns * 3
-    conv_msgs = messages[sys_msg_count:]
-    if len(conv_msgs) > max_conv:
-        dropped = len(conv_msgs) - max_conv
-        messages[sys_msg_count:] = conv_msgs[-max_conv:]
-        return dropped
-    return 0
-
-
 async def prune_conversation_tail_with_summary(
     messages: list[dict[str, Any]],
     sys_msg_count: int,
