@@ -147,6 +147,18 @@ def get_tool_result_max_chars() -> int:
 
 # ── tool_results getters ─────────────────────────────────────────────────
 
+def exec_max_chars() -> int:
+    return int(_load()["tool_results"]["exec_max_chars"])
+
+
+def web_fetch_max_chars() -> int:
+    return int(_load()["tool_results"]["web_fetch_max_chars"])
+
+
+def web_search_max_chars() -> int:
+    return int(_load()["tool_results"]["web_search_max_chars"])
+
+
 def summarize_model() -> str:
     return str(_load()["tool_results"]["summarize_model"])
 
