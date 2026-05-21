@@ -1102,7 +1102,7 @@ class EndDiscussionTool(Tool):
         }
 
     async def execute(self, reason: str = "", **kwargs: Any) -> str:
-        # ── Autowait guard: if any non-leader agent is busy, wait for them ──
+        # ── Guard: reject if any non-leader agent is still busy — leader must retry ──
         if self._mailbox is not None:
             active = getattr(self._mailbox, "_active_agents", set())
             waiting = getattr(self._mailbox, "_waiting", set())
@@ -1111,18 +1111,10 @@ class EndDiscussionTool(Tool):
             non_waiting = (active - waiting) - {leader}
             if non_waiting:
                 names = ", ".join(sorted(non_waiting))
-                # Autowait: poll until all non-leader agents enter waiting (max 60s)
-                for _ in range(60):
-                    await asyncio.sleep(1)
-                    waiting = getattr(self._mailbox, "_waiting", set())
-                    remaining = (active - waiting) - {leader}
-                    if not remaining:
-                        break
-                else:
-                    return (
-                        f"❌ Autowait 超时（60s）：以下 agent 仍未进入 waiting：{names}。"
-                        "请稍后再试或手动干预。"
-                    )
+                return (
+                    f"❌ 结束讨论失败：以下 agent 尚未进入等待状态：{names}。\n"
+                    "请在所有 agent 进入等待状态后，再次调用 end_discussion。"
+                )
 
         reason_str = f"（原因: {reason}）" if reason else ""
         # Store reason so broadcast_round sentinel can include it in the

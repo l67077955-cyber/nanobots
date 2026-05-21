@@ -140,7 +140,7 @@ def completion_msg(
         ]
         parts.append(", ".join(tool_parts))
     if iterations > 1:
-        parts.append(f"{iterations}轮")
+        parts.append(f"{iterations}次迭代")
     detail = " · ".join(parts)
     icon = "👑✓" if leader == agent_name else "✓"
     return f"{icon} {agent_name}  {detail}" if detail else ""

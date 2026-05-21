@@ -846,7 +846,7 @@ async def broadcast_round(
                 total_iterations += result.iterations
                 all_tools_used.extend(result.tools_used or [])
 
-                if is_leader and "end_discussion" in (result.tools_used or []):
+                if is_leader and "end_discussion" in (result.tools_used or []) and not engine._running:
                     _leader_ended_discussion = True
 
                 if is_error or is_timeout:
