@@ -718,6 +718,18 @@ async def broadcast_round(
         _consecutive_error_count = 0
         MAX_CONSECUTIVE_ERRORS = 3
 
+        # ── Synthesis retry helper ────────────────────────────────────────
+        async def _inject_retry(prompt: str) -> bool:
+            """Inject retry prompt; return True if caller should continue, False if exhausted and should break."""
+            messages.append({"role": "system", "content": prompt})
+            nonlocal _synthesis_retries
+            _synthesis_retries += 1
+            if _synthesis_retries >= 3:
+                logger.warning("Broadcast: leader {} synthesis retry exhausted ({} attempts), forcing exit", name, _synthesis_retries)
+                return False
+            engine._running = True
+            return True
+
         try:
             while True:
                 # Hard cycle cap — prevent runaway agents from draining resources
@@ -731,8 +743,7 @@ async def broadcast_round(
                             "content": "[已达到最大轮次限制，请立即输出最终总结，禁止再调用工具。]",
                         })
                         try:
-                            from nanobot.groupchat.orchestra.tools.tool_loop import tool_loop as _final_loop
-                            _r = await _final_loop(
+                            _r = await tool_loop(
                                 provider=engine.provider,
                                 messages=messages,
                                 tool_registry=reg,
@@ -1204,8 +1215,6 @@ async def broadcast_round(
                         "Broadcast: leader {} synthesis too short ({} chars < {}), forcing retry",
                         name, len(stripped), _MIN_SYNTHESIS_LEN,
                         )
-                        # Inject tool results into retry prompt so the LLM has
-                        # actual data to synthesize instead of producing from nothing.
                         _tool_data = build_tool_log(result.tool_calls_detail)
                         _retry_prompt = get_system_warning("leader_end_without_text", name=name)
                         if _tool_data:
@@ -1213,18 +1222,8 @@ async def broadcast_round(
                                 "\n\n[本轮工具调用结果 — 请基于以下数据输出总结]\n"
                                 + _tool_data
                             )
-                        messages.append({
-                        "role": "system",
-                        "content": _retry_prompt,
-                        })
-                        _synthesis_retries += 1
-                        if _synthesis_retries >= 3:
-                            logger.warning("Broadcast: leader {} synthesis retry exhausted ({} attempts), forcing exit", name, _synthesis_retries)
+                        if not await _inject_retry(_retry_prompt):
                             break
-                        # Restore engine so the retry cycle can execute;
-                        # end_discussion already set _running=False but synthesis
-                        # hasn't produced valid output yet.
-                        engine._running = True
                         continue
                     # Step 2 — content quality guard (catches fluff like "问题已解答，无需补充")
                     quality_ok, quality_reason = synthesis_quality_check(stripped, tools_used=result.tools_used)
@@ -1240,7 +1239,6 @@ async def broadcast_round(
                             _warn = get_system_warning("delivery_gate_tools", name=name)
                         else:
                             _warn = get_system_warning("leader_end_without_text", name=name)
-                        # Inject tool results so the LLM has data to synthesize
                         _tool_data = build_tool_log(result.tool_calls_detail)
                         _retry_content = (
                             _warn
@@ -1252,15 +1250,8 @@ async def broadcast_round(
                                 "\n\n[本轮工具调用结果 — 请基于以下数据输出总结]\n"
                                 + _tool_data
                             )
-                        messages.append({
-                        "role": "system",
-                        "content": _retry_content,
-                        })
-                        _synthesis_retries += 1
-                        if _synthesis_retries >= 3:
-                            logger.warning("Broadcast: leader {} synthesis quality retry exhausted ({} attempts), forcing exit", name, _synthesis_retries)
+                        if not await _inject_retry(_retry_content):
                             break
-                        engine._running = True
                         continue
                     # Synthesis passed validation — now display it
                     # NOTE: Always display leader synthesis even if chatroom_send was used.

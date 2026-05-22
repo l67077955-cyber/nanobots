@@ -904,16 +904,6 @@ class GroupChatEngine:
     def _session_dir(self, value: Path | None) -> None:
         self._state.session_dir = value
 
-    @staticmethod
-    def _find_head_indices(history: list[dict]) -> set[int]:
-        """Identify head protection indices: index 0 + first user message index."""
-        protected = {0}
-        for i, msg in enumerate(history):
-            if msg.get("sender") in ("User", "user", "用户"):
-                protected.add(i)
-                break
-        return protected
-
     def _add_message(self, sender: str, content: str) -> None:
         """Append a message — delegates to HistoryContext."""
         self.history.add_message(sender, content)
