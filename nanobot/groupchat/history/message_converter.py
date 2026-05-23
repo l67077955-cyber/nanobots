@@ -70,23 +70,17 @@ def history_to_messages(
     - 僅在中間裁剪 assistant 消息，從尾部補齊最近對話
     - 單 Agent 模式現在也會走此邏輯
 
-    Rank-based tool call isolation (2026.5):
-    - agent_ranks: {agent_name: rank_int} — higher number = higher privilege
-    - An agent can only see tool calls from agents with rank <= its own rank
-    - Text messages are never stripped, only [工具调用记录] blocks
+    Full tool call isolation (2026.5):
+    - By default, an agent cannot see any other agent's tool call records
+    - Only the agent itself, user, and system messages retain tool logs
+    - Text messages (chatroom_send) are never stripped
+    - agent_ranks param kept for backward compat but no longer used for isolation
     """
-    my_rank = (agent_ranks or {}).get(current_agent, 0)
-
     def _to_msg(m: dict[str, str]) -> dict[str, Any]:
         sender, content = m["sender"], m["content"]
-        # Self sees full tool details; other agents see aged (no previews)
+        # Self sees full tool details; other agents get tool logs stripped entirely
         if sender not in ("用户", "系统", current_agent) and "[工具调用记录]" in content:
-            content = age_tool_log(content)
-        # Rank-based: additionally strip tool logs from much lower-rank agents
-        if agent_ranks and sender not in ("用户", "系统", current_agent):
-            sender_rank = agent_ranks.get(sender, 0)
-            if sender_rank < my_rank and "[工具调用记录]" in content:
-                content = strip_tool_log(content)
+            content = strip_tool_log(content)
         if sender == "用户":
             return {"role": "user", "content": content}
         elif sender == "系统":
