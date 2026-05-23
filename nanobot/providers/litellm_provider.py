@@ -698,6 +698,10 @@ class LiteLLMProvider(LLMProvider):
         if metadata:
             kwargs["metadata"] = metadata
 
+        # Hard timeout to prevent OpenRouter cold-start stalls (observed up to 135s).
+        # Existing retry logic handles the resulting Timeout error gracefully.
+        kwargs["timeout"] = 20
+
         if pm_provider_name == "openrouter" or (not pm_provider_name and "openrouter" in (model or "")):
             import hashlib
             # Stable cache key: prefer session_id for intra-session cache hits
