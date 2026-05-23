@@ -415,6 +415,9 @@ async def broadcast_round(
     Returns:
         List of (agent_name, content) tuples in completion order.
     """
+    # Clear stale rank cache from previous round
+    if hasattr(broadcast_round, "_agent_ranks_cache"):
+        del broadcast_round._agent_ranks_cache
     if not agents:
         return []
 
@@ -524,13 +527,32 @@ async def broadcast_round(
         # ── Compute teammates list (must be before _build_agent_prompt call) ──
         teammates = [a for a in agents if a != name]
 
+        # ── Compute agent_ranks for rank-based tool call isolation ──
+        # Higher rank = higher privilege. Leader gets highest rank.
+        # An agent can only see tool calls from agents with rank <= its own.
+        # Text messages (chatroom_send) are never stripped.
+        _RANK_ORDER = {"pawn": 0, "knight": 1, "bishop": 2, "queen": 3, "king": 4}
+        if not hasattr(broadcast_round, "_agent_ranks_cache"):
+            _ranks: dict[str, int] = {}
+            for _a in agents:
+                _r = engine.registry.get(_a, {}).get("rank", "pawn")
+                _ranks[_a] = _RANK_ORDER.get(_r, 0) if isinstance(_r, str) else int(_r)
+            # Leader always gets the highest rank
+            if leader_name and leader_name in _ranks:
+                _max_rank = max(_ranks.values())
+                _ranks[leader_name] = max(_ranks[leader_name], _max_rank + 1)
+            broadcast_round._agent_ranks_cache = _ranks
+        agent_ranks = broadcast_round._agent_ranks_cache
+
         # In broadcast mode, all agents share the full history (relevant_agents=None).
         # Each agent sees user messages, system messages, and ALL teammates' final replies.
         # Tool call logs are appended as text inside each agent's message, so teammates
         # can read a concise summary of what was done without the full tool protocol overhead.
+        # Rank-based isolation: agents only see tool calls from agents with rank <= their own.
         messages = engine._build_agent_prompt(
             name,
             relevant_agents=None,
+            agent_ranks=agent_ranks,
             agent_idx=agent_idx,
             total=total,
             teammates=teammates,

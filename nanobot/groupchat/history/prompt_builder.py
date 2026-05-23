@@ -634,6 +634,7 @@ class PromptBuilder:
         max_chars: int = 0,
         pin_first_user: bool = True,
         relevant_agents: list[str] | None = None,
+        agent_ranks: dict[str, int] | None = None,
     ) -> list[dict[str, Any]]:
         """Delegate to message_converter.history_to_messages."""
         return history_to_messages(
@@ -642,6 +643,7 @@ class PromptBuilder:
             max_chars=max_chars,
             pin_first_user=pin_first_user,
             relevant_agents=relevant_agents,
+            agent_ranks=agent_ranks,
         )
 
     @staticmethod
@@ -679,6 +681,7 @@ class PromptBuilder:
         leader: str | None = None,
         round_num: int = 0,
         relevant_agents: list[str] | None = None,
+        agent_ranks: dict[str, int] | None = None,
         agent_idx: int | None = None,
         total: int | None = None,
         teammates: list[str] | None = None,
@@ -722,6 +725,7 @@ class PromptBuilder:
                     history, agent_name,
                     max_chars=max_context_chars(),
                     relevant_agents=relevant_agents,
+                    agent_ranks=agent_ranks,
                 ))
                 continue
 

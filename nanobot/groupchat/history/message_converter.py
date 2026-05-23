@@ -19,6 +19,12 @@ _TOOL_LOG_RE = re.compile(
     re.DOTALL,
 )
 
+# Matches the entire [工具调用记录]... block at the end of a message
+_TOOL_LOG_BLOCK_RE = re.compile(
+    r"\n*\[工具调用记录\].*$",
+    re.DOTALL,
+)
+
 
 def age_tool_log(content: str) -> str:
     """Strip verbose previews from tool call logs, keeping only status.
@@ -39,12 +45,22 @@ def age_tool_log(content: str) -> str:
     return _TOOL_LOG_RE.sub(_replace, content)
 
 
+def strip_tool_log(content: str) -> str:
+    """Remove the entire [工具调用记录] block from a message.
+
+    Used for rank-based context isolation: high-rank agents (Leader)
+    don't need to see low-rank agents' tool call details.
+    """
+    return _TOOL_LOG_BLOCK_RE.sub("", content)
+
+
 def history_to_messages(
     history: list[dict],
     current_agent: str = "",
     max_chars: int = 0,
     pin_first_user: bool = True,          # 保留參數，向後相容
     relevant_agents: list[str] | None = None,
+    agent_ranks: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     """Convert history dicts into LLM API messages.
 
@@ -53,9 +69,21 @@ def history_to_messages(
     - 強制保留：第1條消息 + 所有 user 消息 + 所有 system 消息
     - 僅在中間裁剪 assistant 消息，從尾部補齊最近對話
     - 單 Agent 模式現在也會走此邏輯
+
+    Rank-based tool call isolation (2026.5):
+    - agent_ranks: {agent_name: rank_int} — higher number = higher privilege
+    - An agent can only see tool calls from agents with rank <= its own rank
+    - Text messages are never stripped, only [工具调用记录] blocks
     """
+    my_rank = (agent_ranks or {}).get(current_agent, 0)
+
     def _to_msg(m: dict[str, str]) -> dict[str, Any]:
         sender, content = m["sender"], m["content"]
+        # Rank-based tool call isolation: strip tool logs from lower-rank agents
+        if agent_ranks and sender not in ("用户", "系统", current_agent):
+            sender_rank = agent_ranks.get(sender, 0)
+            if sender_rank < my_rank and "[工具调用记录]" in content:
+                content = strip_tool_log(content)
         if sender == "用户":
             return {"role": "user", "content": content}
         elif sender == "系统":
