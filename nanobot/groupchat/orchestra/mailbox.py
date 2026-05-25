@@ -189,6 +189,10 @@ class ConversationPool:
                 sem.release()
                 self._available[sender] = self._available.get(sender, 0) + 1
                 released += 1
+            else:
+                # Non-agent sender (e.g. "User"): release slot back to agent
+                self._available[agent_name] = self._available.get(agent_name, 0) + 1
+                released += 1
         self._pending[agent_name] = []
         if released > 0:
             logger.debug(
@@ -209,6 +213,9 @@ class ConversationPool:
             if sem:
                 sem.release()
                 self._available[to_sender] = self._available.get(to_sender, 0) + 1
+            else:
+                # Non-agent sender (e.g. "User"): release slot back to agent
+                self._available[agent_name] = self._available.get(agent_name, 0) + 1
             logger.debug(
                 "ConversationPool: {} replied to {} (released 1 slot to sender)",
                 agent_name, to_sender,
