@@ -79,10 +79,7 @@ def history_to_messages(
 
     def _to_msg(m: dict[str, str]) -> dict[str, Any]:
         sender, content = m["sender"], m["content"]
-        # Self sees full tool details; other agents see aged (no previews)
-        if sender not in ("用户", "系统", current_agent) and "[工具调用记录]" in content:
-            content = age_tool_log(content)
-        # Rank-based: additionally strip tool logs from much lower-rank agents
+        # Rank-based tool call isolation: strip tool logs from lower-rank agents
         if agent_ranks and sender not in ("用户", "系统", current_agent):
             sender_rank = agent_ranks.get(sender, 0)
             if sender_rank < my_rank and "[工具调用记录]" in content:
