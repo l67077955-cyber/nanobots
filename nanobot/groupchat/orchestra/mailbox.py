@@ -611,6 +611,22 @@ class MailboxHub:
             logger.warning("MailboxHub.wait: no mailbox for {}", agent_name)
             return None
 
+        # ── Proactive nudge: if waiting for a specific busy agent, set their
+        # interrupt event so they know someone is waiting for a reply.  This
+        # avoids the "oblivious busy agent" problem where an agent in tool_loop
+        # continues working without realising a teammate's wait() is blocked
+        # on them.  The interrupt causes the busy agent's tool_loop to break
+        # out at the next asyncio checkpoint, giving it a chance to reply.
+        if from_agent and from_agent in self._busy_agents:
+            evt = self.get_interrupt_event(from_agent)
+            if not evt.is_set():
+                evt.set()
+                logger.info(
+                    "MailboxHub.wait: {} nudging busy agent {} (interrupt set, "
+                    "from_agent is in tool_loop)",
+                    agent_name, from_agent,
+                )
+
         # Fast path: if there are already messages queued, return immediately
         # WITHOUT marking as waiting.  This prevents the all_waiting_event
         # from firing prematurely when a teammate's message is already in the

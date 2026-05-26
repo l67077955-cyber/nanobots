@@ -1633,10 +1633,50 @@ async def broadcast_round(
                     _end_reason = getattr(engine, '_leader_end_reason', '')
                     _reason_suffix = f"（{_end_reason}）" if _end_reason else ""
                     await engine._send(f"━━ Leader 结束讨论{_reason_suffix} — entering synthesis ━━")
+
+                    # Graceful shutdown: give agents time to finish their current
+                    # LLM generation cycle before force-cancelling. This prevents
+                    # losing content that's already been generated but not yet returned.
+                    GRACE_PERIOD = 15  # seconds
+
+                    # Step 1: notify all non-leader agents to wrap up
+                    for task_obj, task_name in tasks.items():
+                        if not task_obj.done() and task_name != leader_name:
+                            await tracker.set_state(task_name, "finishing", reason="leader ended")
+                            mailbox.send("系统", [task_name],
+                                "[系统通知] Leader 已结束讨论，请尽快完成当前输出并进入等待状态。")
+
+                    # Step 2: wait for agents to naturally complete (up to grace period)
+                    deadline = asyncio.get_event_loop().time() + GRACE_PERIOD
+                    while asyncio.get_event_loop().time() < deadline:
+                        still_running = [
+                            t for t in tasks
+                            if not t.done() and tasks[t] != leader_name
+                        ]
+                        if not still_running:
+                            break
+                        done_now, _ = await asyncio.wait(
+                            still_running,
+                            timeout=min(2.0, deadline - asyncio.get_event_loop().time()),
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        for dt in done_now:
+                            if dt in tasks:
+                                try:
+                                    name, content, _, _ = dt.result()
+                                    logger.info(
+                                        "Broadcast: {} finished during grace period ({} chars)",
+                                        name, len(content) if content else 0,
+                                    )
+                                except Exception:
+                                    pass
+
+                    # Step 3: force-cancel any stragglers
                     for task_obj, task_name in tasks.items():
                         if not task_obj.done() and task_name != leader_name:
                             await tracker.set_state(task_name, "cancelled", reason="leader ended")
                             task_obj.cancel()
+                            logger.warning("Broadcast: {} force-cancelled after grace period", task_name)
                 elif t in tasks:
                     try:
                         name, content, tools_used_list, *_ = t.result()

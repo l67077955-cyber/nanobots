@@ -966,6 +966,16 @@ class ManageAgentTool(Tool):
         if action == "disable":
             if agent in self._disabled:
                 return f"{agent} 已经被 disable 了"
+            # Guard: refuse to disable an agent that is still producing content
+            tracker = getattr(self._engine, '_tracker', None)
+            if tracker is not None:
+                agent_state = tracker._states.get(agent, "unknown")
+                safe_states = {"waiting", "done", "error", "cancelled"}
+                if agent_state not in safe_states:
+                    return (
+                        f"❌ 无法 disable {agent}：当前状态为 '{agent_state}'，仍在产出内容。\n"
+                        f"请等待 agent 进入 waiting/done/error/cancelled 状态后再操作。"
+                    )
             self._disabled.add(agent)
             # Cancel the agent's task
             for task_obj, task_name in self._agent_tasks.items():
