@@ -730,6 +730,12 @@ async def broadcast_round(
         # so we can prune conversation turns without touching the system prompt.
         _sys_msg_count = len(messages)
 
+        # ── Consecutive wait-timeout tracker ──
+        # Prevents agents from looping wait→timeout→wait forever when no one
+        # is going to reply.  After MAX_CONSECUTIVE_WAITS empty waits, exit.
+        _consecutive_waits = 0
+        MAX_CONSECUTIVE_WAITS = 3
+
         # ── Forced interrupt: get this agent's interrupt event from mailbox ──
         _interrupt_event = mailbox.get_interrupt_event(name)
         # Tracks how many timeout-recovery attempts this agent has made.
@@ -1016,6 +1022,8 @@ async def broadcast_round(
 
                 # Reset consecutive error counter on successful cycle
                 _consecutive_error_count = 0
+                # Reset consecutive wait counter — agent produced output
+                _consecutive_waits = 0
 
                 # Record final text or tool calls in history
                 if content or result.tool_calls_detail:
@@ -1329,9 +1337,20 @@ async def broadcast_round(
                             "role": "system",
                             "content": get_system_warning("leader_wait_timeout", name=name)
                         })
+                        _consecutive_waits = 0
                         continue  # re-enter tool_loop for synthesis
-                    # Non-leader: keep waiting
-                    logger.info("Broadcast: {} wait timeout, retrying wait", name)
+                    # Consecutive wait-timeout guard: if this agent keeps timing
+                    # out with no incoming messages, it's stuck in a wait loop.
+                    # After MAX_CONSECUTIVE_WAITS, exit to avoid blocking the round.
+                    _consecutive_waits += 1
+                    if _consecutive_waits >= MAX_CONSECUTIVE_WAITS:
+                        logger.warning(
+                            "Broadcast: {} hit {} consecutive wait timeouts, exiting (no one replying)",
+                            name, _consecutive_waits,
+                        )
+                        await tracker.set_state(name, "done", reason=f"wait timeout x{_consecutive_waits}")
+                        break
+                    logger.info("Broadcast: {} wait timeout ({}/{}), retrying wait", name, _consecutive_waits, MAX_CONSECUTIVE_WAITS)
                     continue
 
                 # Got a message! Inject it and re-run tool_loop
@@ -1339,6 +1358,7 @@ async def broadcast_round(
                 if not engine._running or leader_end_event.is_set():
                     logger.info("Broadcast: {} exiting after wait — engine stopped", name)
                     break
+                _consecutive_waits = 0  # reset — we got a real message
                 logger.info("Broadcast: {} reactivated by {}: {}", name, msg.sender, msg.content[:60])
                 await tracker.set_state(name, "thinking")
                 await engine._send(_d.chatroom_wait_msg(name, str(msg), leader=leader_name))
