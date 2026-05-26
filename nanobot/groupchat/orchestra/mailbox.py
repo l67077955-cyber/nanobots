@@ -736,6 +736,12 @@ class MailboxHub:
         These are agents that received a message from agent_name (so they may
         reply back) but have not yet entered the waiting state — meaning they
         are still running their tool_loop.
+
+        NOTE: Only agents that are *busy* (inside tool_loop, tracked by
+        _busy_agents) qualify.  An agent that is active but idle (between
+        tool_loop runs, e.g. in mailbox.wait itself) is NOT considered a
+        busy replier — they had their chance to reply and chose to wait
+        instead, so extending the caller's deadline won't help.
         """
         expected = self._expected_replies.get(agent_name, set())
         busy = set()
@@ -743,6 +749,7 @@ class MailboxHub:
             if (
                 other in self._active_agents   # still active (not done)
                 and other not in self._waiting  # not currently idle-waiting
+                and other in self._busy_agents   # actively inside tool_loop
             ):
                 busy.add(other)
         return busy
