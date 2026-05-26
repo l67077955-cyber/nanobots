@@ -27,12 +27,15 @@ _TOOL_LOG_BLOCK_RE = re.compile(
 
 
 def age_tool_log(content: str) -> str:
-    """Strip verbose previews from tool call logs, keeping only status.
+    """Compress tool call previews to first-line summary.
 
     Transforms:
-      • web_search(trump xi meeting) → Found 5 results... (1,234字)
+      • exec(grep 'foo' /tmp/) → STDERR: No such file or directory\nExit code: 1 (112字)
     Into:
-      • web_search(trump xi meeting) → (1,234字)
+      • exec(grep 'foo' /tmp/) → STDERR: No such file or directory (112字)
+
+    Keeps first line of preview (max 100 chars) so agents see what happened,
+    without the verbose multi-line output.
 
     Returns the content unchanged if no tool log block is found.
     """
@@ -40,6 +43,10 @@ def age_tool_log(content: str) -> str:
         return content
 
     def _replace(m: re.Match) -> str:
+        preview = m.group(2).strip()
+        first_line = preview.split("\n")[0][:100]
+        if first_line:
+            return f"{m.group(1)}{first_line} {m.group(3)}"
         return m.group(1) + m.group(3)
 
     return _TOOL_LOG_RE.sub(_replace, content)
@@ -75,6 +82,8 @@ def history_to_messages(
     - An agent can only see tool calls from agents with rank <= its own rank
     - Text messages are never stripped, only [工具调用记录] blocks
     """
+    from nanobot.groupchat.display.visibility import can_see_tool_call
+
     my_rank = (agent_ranks or {}).get(current_agent, 0)
 
     def _to_msg(m: dict[str, str]) -> dict[str, Any]:
@@ -82,8 +91,11 @@ def history_to_messages(
         # Rank-based tool call isolation: strip tool logs from lower-rank agents
         if agent_ranks and sender not in ("用户", "系统", current_agent):
             sender_rank = agent_ranks.get(sender, 0)
-            if sender_rank < my_rank and "[工具调用记录]" in content:
+            if not can_see_tool_call(sender_rank, my_rank) and "[工具调用记录]" in content:
                 content = strip_tool_log(content)
+            elif "[工具调用记录]" in content:
+                # Compress visible cross-agent tool logs: keep fn+args+char count only
+                content = age_tool_log(content)
         if sender == "用户":
             return {"role": "user", "content": content}
         elif sender == "系统":

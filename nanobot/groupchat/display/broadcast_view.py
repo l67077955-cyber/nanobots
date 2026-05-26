@@ -8,7 +8,7 @@ from nanobot.groupchat.orchestra.broadcast import _trigger_realtime_interrupts
 class BroadcastView:
     """Handles Telegram UI rendering for broadcast events."""
 
-    def __init__(self, engine: Any, tracker: Any, mailbox: Any, pool: Any, search_pool: Any, agents: list[str], leader_name: str | None):
+    def __init__(self, engine: Any, tracker: Any, mailbox: Any, pool: Any, search_pool: Any, agents: list[str], leader_name: str | None, agent_ranks: dict[str, int] | None = None):
         self.engine = engine
         self.tracker = tracker
         self.mailbox = mailbox
@@ -16,6 +16,7 @@ class BroadcastView:
         self.search_pool = search_pool
         self.agents = agents
         self.leader_name = leader_name
+        self.agent_ranks = agent_ranks or {}
         
         # Per-agent states
         self.pending_tool_msgs: dict[str, tuple[int | None, str]] = {}
@@ -76,7 +77,7 @@ class BroadcastView:
             pass # wait is internal, log handled locally in broadcast if needed
             
         else:
-            line = _d.tool_activity_msg(name, tool_name, args, leader=self.leader_name)
+            line = _d.tool_activity_msg(name, tool_name, args, leader=self.leader_name, agent_ranks=self.agent_ranks)
             text = f"🟡 {line}"
             msg_id = None
             if self.engine._send_and_get_id_fn:

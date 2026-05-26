@@ -305,46 +305,51 @@ def tool_activity_msg(
     tool_name: str,
     args: dict,
     leader: str | None = None,
+    agent_ranks: dict[str, int] | None = None,
 ) -> str:
     """Format a tool call for broadcast display.
 
-    Leader:     👑▸ Nanobot · search "酒馆战棋"
-    Non-leader: ▸ Lucas · search "Trump latest news"
+    Leader:     👑▸ Nanobot · search "酒馆战棋"  → King+
+    Non-leader: ▸ Lucas · search "Trump latest news"  → Pawn+
     """
+    from nanobot.groupchat.display.visibility import tool_call_label
+
     label = TOOL_LABELS.get(tool_name, tool_name)
     prefix = "👑▸" if agent_name == leader else "  ▸"
+
+    # Build base line
     if tool_name == "web_search":
         query = args.get("query", "")
-        return f"{prefix} {agent_name} · {label} \"{query}\""
+        line = f"{prefix} {agent_name} · {label} \"{query}\""
     elif tool_name == "web_fetch":
         url = (args.get("url", "") or "")
         if len(url) > 65:
             url = url[:65] + "…"
-        return f"{prefix} {agent_name} · {label} {url}"
+        line = f"{prefix} {agent_name} · {label} {url}"
     elif tool_name == "exec":
         cmd = (args.get("command", "") or "")[:55]
-        return f"{prefix} {agent_name} · {label} {cmd}"
+        line = f"{prefix} {agent_name} · {label} {cmd}"
     elif tool_name == "read_file":
         path = (args.get("path", "") or "").split("/")[-1]
-        return f"{prefix} {agent_name} · {label} {path}"
+        line = f"{prefix} {agent_name} · {label} {path}"
     elif tool_name in ("write_file", "edit_file"):
         path = (args.get("path", "") or "").split("/")[-1]
-        return f"{prefix} {agent_name} · {label} {path}"
+        line = f"{prefix} {agent_name} · {label} {path}"
     elif tool_name == "list_dir":
         path = args.get("path", "") or "."
-        return f"{prefix} {agent_name} · {label} {path}"
+        line = f"{prefix} {agent_name} · {label} {path}"
     elif tool_name == "transfer_credits":
         fr = args.get("from_agent", "?")
         to = args.get("to_agent", "?")
         amt = args.get("amount", "?")
-        return f"{prefix} {agent_name} · {label} {fr}→{to} ×{amt}"
+        line = f"{prefix} {agent_name} · {label} {fr}→{to} ×{amt}"
     elif tool_name == "manage_agent":
         action = args.get("action", "?")
         target = args.get("agent", "?")
-        return f"{prefix} {agent_name} · {label} {action}({target})"
+        line = f"{prefix} {agent_name} · {label} {action}({target})"
     elif tool_name == "end_discussion":
         reason = (args.get("reason", "") or "")[:40]
-        return f"{prefix} {agent_name} · {label} {reason}"
+        line = f"{prefix} {agent_name} · {label} {reason}"
     else:
         short = ""
         if args:
@@ -352,7 +357,15 @@ def tool_activity_msg(
             if isinstance(first, str):
                 short = first[:40]
         suffix = f" {short}" if short else ""
-        return f"{prefix} {agent_name} · {label}{suffix}"
+        line = f"{prefix} {agent_name} · {label}{suffix}"
+
+    # Append visibility label with actual agent names
+    if agent_ranks is not None:
+        sender_rank = agent_ranks.get(agent_name, 0)
+        is_leader = (agent_name == leader)
+        line += f"  {tool_call_label(sender_rank, agent_ranks, agent_name, is_leader=is_leader)}"
+
+    return line
 
 
 def tool_result_brief(

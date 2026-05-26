@@ -488,8 +488,14 @@ async def broadcast_round(
 
     await orch.setup_tools_and_pools(_spawn_agent_task)
 
+    # ── Compute agent_ranks early (needed by BroadcastView and message_converter) ──
+    from nanobot.groupchat.display.visibility import compute_agent_ranks
+    if not hasattr(broadcast_round, "_agent_ranks_cache"):
+        broadcast_round._agent_ranks_cache = compute_agent_ranks(list(agents), engine.registry, leader_name)
+    agent_ranks = broadcast_round._agent_ranks_cache
+
     from nanobot.groupchat.display.broadcast_view import BroadcastView
-    view = BroadcastView(engine, orch.tracker, mailbox, orch.pool, orch.search_pool, list(agents), leader_name)
+    view = BroadcastView(engine, orch.tracker, mailbox, orch.pool, orch.search_pool, list(agents), leader_name, agent_ranks=agent_ranks)
 
     # Map back to local variables to keep downstream code unmodified for now
     exec_agents = orch.exec_agents
@@ -527,23 +533,7 @@ async def broadcast_round(
         # ── Compute teammates list (must be before _build_agent_prompt call) ──
         teammates = [a for a in agents if a != name]
 
-        # ── Compute agent_ranks for rank-based tool call isolation ──
-        # Higher rank = higher privilege. Leader gets highest rank.
-        # An agent can only see tool calls from agents with rank <= its own.
-        # Text messages (chatroom_send) are never stripped.
-        _RANK_ORDER = {"pawn": 0, "knight": 1, "bishop": 2, "queen": 3, "king": 4}
-        if not hasattr(broadcast_round, "_agent_ranks_cache"):
-            _ranks: dict[str, int] = {}
-            for _a in agents:
-                _r = engine.registry.get(_a, {}).get("rank", "pawn")
-                _ranks[_a] = _RANK_ORDER.get(_r, 0) if isinstance(_r, str) else int(_r)
-            # Leader always gets the highest rank
-            if leader_name and leader_name in _ranks:
-                _max_rank = max(_ranks.values())
-                _ranks[leader_name] = max(_ranks[leader_name], _max_rank + 1)
-            broadcast_round._agent_ranks_cache = _ranks
-        agent_ranks = broadcast_round._agent_ranks_cache
-
+        # agent_ranks already computed above (before BroadcastView creation)
         # In broadcast mode, all agents share the full history (relevant_agents=None).
         # Each agent sees user messages, system messages, and ALL teammates' final replies.
         # Tool call logs are appended as text inside each agent's message, so teammates
@@ -1208,7 +1198,7 @@ async def broadcast_round(
                 # ── Auto-wait: enter idle state ──
                 # Display the agent's final text for this cycle.
                 # If chatroom_send was used, the content was already shown at tool-call
-                # time (line 612) — skip the duplicate "Self/Final" display.
+                # time (line 612) — skip the duplicate "Output" display.
                 # Defer display when leader is in synthesis validation — only show
                 # output that passes the quality gate (prevents spamming failed retries).
                 if content and not (is_leader and _leader_ended_discussion):
@@ -1232,7 +1222,7 @@ async def broadcast_round(
                                 reasoning_tokens=reasoning_t,
                             )
 
-                        target_label = f"进展 [{cycle}]" if is_leader else "Self/Final"
+                        target_label = f"Output [{cycle}]"
                         await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
                         logger.info("Broadcast: displayed {} cycle {} output ({} chars) [Local Only]", name, cycle, len(content))
                     # else: chatroom_send already displayed the message — no duplicate needed
@@ -1305,7 +1295,7 @@ async def broadcast_round(
                                 elapsed=elapsed, cost=cost, cache_tokens=cache_t,
                                 reasoning_tokens=reasoning_t,
                             )
-                        target_label = f"进展 [{cycle}]"
+                        target_label = f"Output [{cycle}]"
                         await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
                         logger.info("Broadcast: displayed {} synthesis output ({} chars) [post-validation]", name, len(content))
                     logger.info("Broadcast: leader {} called end_discussion, exiting cycle loop", name)
