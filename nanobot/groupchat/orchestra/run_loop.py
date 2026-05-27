@@ -130,7 +130,7 @@ async def run_loop(engine: Any) -> None:
             # ── Auto memory recall: inject relevant memories before broadcast ──
             try:
                 from nanobot.groupchat.orchestra._auto_recall import auto_recall_memories
-                recalled = await auto_recall_memories(user_input=user_input)
+                recalled = await auto_recall_memories(user_input=user_input, engine=engine)
                 if recalled:
                     engine._add_message("系统", recalled)
                     logger.info("run_loop: auto recall injected ({} chars)", len(recalled))
