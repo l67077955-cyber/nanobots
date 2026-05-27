@@ -683,6 +683,17 @@ async def tool_loop(
                     result.finish_reason = "interrupted"
                     break
 
+                # ── Checkpoint 2.5: end_discussion early exit ──
+                # When the agent calls end_discussion, break immediately so the
+                # LLM doesn't generate another round of text.  The broadcast
+                # layer will use the last substantive content as synthesis.
+                if "end_discussion" in result.tools_used:
+                    logger.info(
+                        "tool_loop: end_discussion detected after tool batch (iter {}), breaking", iteration
+                    )
+                    result.finish_reason = "end_discussion"
+                    break
+
         else:
             # Text response — done
             raw_content = response.content

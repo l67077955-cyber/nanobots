@@ -551,6 +551,7 @@ async def broadcast_round(
 
         is_leader = (name == leader_name)
         _leader_ended_discussion = False
+        _leader_disabled_agent = False  # track if leader disabled/kicked an agent this cycle
         _synthesis_retries = 0  # guard against infinite synthesis retry loops
         # Load from override system (editable via /prompt), fallback to default
         # Removed stale prompt_overrides.json lookup; .md files are the source of truth.
@@ -877,6 +878,16 @@ async def broadcast_round(
 
                 if is_leader and "end_discussion" in (result.tools_used or []) and not engine._running:
                     _leader_ended_discussion = True
+
+                # Track if leader disabled/kicked an agent this cycle — this affects
+                # the synthesis path (see L1234 clean-exit guard).
+                if is_leader and "manage_agent" in (result.tools_used or []):
+                    for tc in (result.tool_calls_detail or []):
+                        if tc.get("name") == "manage_agent":
+                            _action = (tc.get("arguments") or {}).get("action", "")
+                            if _action in ("disable", "restart"):
+                                _leader_disabled_agent = True
+                                break
 
                 if is_error or is_timeout:
                     if is_timeout:
@@ -1228,7 +1239,21 @@ async def broadcast_round(
                     # else: chatroom_send already displayed the message — no duplicate needed
                 
                 # If leader called end_discussion this cycle, validate synthesis length & quality.
+                # When finish_reason is "end_discussion", tool_loop broke before the LLM
+                # could generate post-tool text — skip synthesis validation and exit cleanly.
+                # EXCEPTION: if leader disabled/kicked an agent in the same cycle, the
+                # clean-exit path was likely used to bypass the waiting guard.  Force a
+                # synthesis retry so the user still gets a proper summary.
                 if is_leader and _leader_ended_discussion:
+                    if result.finish_reason == "end_discussion" and not content and not _leader_disabled_agent:
+                        # Agent called end_discussion and tool_loop exited immediately.
+                        # The agent's last substantive output was already displayed in a
+                        # previous cycle — no synthesis retry needed.
+                        logger.info(
+                            "Broadcast: leader {} end_discussion with no post-tool content, exiting cleanly",
+                            name,
+                        )
+                        break
                     stripped = content.strip() if content else ""
                     if len(stripped) < _MIN_SYNTHESIS_LEN:
                         logger.warning(
