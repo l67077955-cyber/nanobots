@@ -163,6 +163,12 @@ async def run_loop(engine: Any) -> None:
                         mem_stats["stored"], mem_stats.get("skipped", 0),
                         len(mem_stats.get("errors", [])),
                     )
+                    # Inject store summary into context so user can see it in Telegram
+                    wings = [p["wing"] for p in mem_stats.get("polls", []) if "wing" in p]
+                    engine._add_message(
+                        "系统",
+                        f"🧠 自动记忆存储完成：{mem_stats['stored']} 条 → {', '.join(wings)}",
+                    )
             except Exception as e:
                 logger.warning("run_loop: auto memory extraction failed: {}", e)
 
