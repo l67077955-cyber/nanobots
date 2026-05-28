@@ -67,6 +67,7 @@ TOOL_LABELS: dict[str, str] = {
     "manage_agent": "🔧",
     "end_discussion": "🏁",
     "transfer_credits": "💰",
+    "memory_palace": "🧠",
 }
 
 
@@ -350,6 +351,22 @@ def tool_activity_msg(
     elif tool_name == "end_discussion":
         reason = (args.get("reason", "") or "")[:40]
         line = f"{prefix} {agent_name} · {label} {reason}"
+    elif tool_name == "memory_palace":
+        action = args.get("action", "?")
+        if action == "store":
+            wing = args.get("wing", "")
+            room = args.get("room", "")
+            content_preview = (args.get("content", "") or "")[:50].replace("\n", " ")
+            detail = f"{wing}/{room}" if wing and room else content_preview
+            suffix = f"\n    └ {content_preview}" if content_preview else ""
+            line = f"{prefix} {agent_name} · {label} store → {detail}{suffix}"
+        elif action == "search":
+            query = (args.get("query", "") or "")[:50]
+            wing = args.get("wing", "")
+            detail = f"\"{query}\"" if query else wing
+            line = f"{prefix} {agent_name} · {label} search {detail}"
+        else:
+            line = f"{prefix} {agent_name} · {label} {action}"
     else:
         short = ""
         if args:
@@ -400,10 +417,21 @@ def tool_result_brief(
         count = result.count("\n") if result else 0
         return f"    └ {count} entries"
     elif tool_name == "memory_palace":
-        if result and "stored" in result:
-            return f"    └ ✅ stored"
+        if result and "stored" in result.lower():
+            import re
+            m = re.search(r'Stored in (\S+)', result)
+            loc = m.group(1) if m else ""
+            return f"    └ ✅ {loc}"
         elif result and "search" in result.lower():
-            return f"    └ 🔍 found"
+            count = result.count("[") if result else 0
+            # Show first result title as preview
+            first_line = ""
+            for line in result.split("\n"):
+                if line.strip().startswith("["):
+                    first_line = line.strip().replace("[", "").split("]", 1)[-1].strip()[:50]
+                    break
+            preview = f" · {first_line}" if first_line else ""
+            return f"    └ 🔍 {count} results{preview}"
         else:
             return f"    └ ({rlen:,}字)"
     elif tool_name == "manage_agent":
