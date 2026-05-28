@@ -145,4 +145,14 @@ async def auto_recall_memories(user_input: str = "", engine=None) -> str:
     if user_input:
         header += f"\n当前用户输入: {user_input[:200]}"
 
+    # Show generated keywords so user can see what was searched
+    if engine and user_input:
+        kw_lines = []
+        for wing, label, _ in _RECALL_WINGS:
+            q = wing_queries.get(wing, "")
+            if q and q != user_input:
+                kw_lines.append(f"- {label}: {q}")
+        if kw_lines:
+            header += "\n### 检索关键词\n" + "\n".join(kw_lines)
+
     return header + "\n\n" + "\n\n---\n\n".join(sections)
