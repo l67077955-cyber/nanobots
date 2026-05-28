@@ -1573,16 +1573,6 @@ def build_tool_log(tool_calls_detail: list[dict[str, Any]]) -> str:
         success = tc.get("success", True)
         is_dup = tc.get("duplicate", False)
 
-        # memory_palace store with visible=false: suppress preview in chat log
-        _mp_hidden = False
-        if name == "memory_palace":
-            try:
-                _mp_args = __import__("json").loads(args_raw) if isinstance(args_raw, str) else args_raw
-            except Exception:
-                _mp_args = {}
-            if _mp_args.get("action") == "store" and _mp_args.get("visible") is False:
-                _mp_hidden = True
-
         # Extract the key argument (query / url / command / path) for display
         try:
             args_dict = __import__("json").loads(args_raw) if isinstance(args_raw, str) else args_raw
@@ -1604,8 +1594,6 @@ def build_tool_log(tool_calls_detail: list[dict[str, Any]]) -> str:
 
         if is_dup:
             result_info = "[重复调用,已跳过]"
-        elif _mp_hidden:
-            result_info = "✅ 已存储 (内容已隐藏)"
         elif not success:
             err = tc.get("error", "")
             result_info = f"[失败: {err[:80]}]"
