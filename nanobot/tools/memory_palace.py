@@ -413,7 +413,7 @@ class MemoryPalaceTool(Tool):
                     wings = result.get("wings", {})
                     path = result.get("palace_path", _PALACE_PATH)
                     lines = [
-                        f"🧠 Memory Palace Status",
+                        f"🗄️ Memory Palace Status",
                         f"  Path    : {path}",
                         f"  Drawers : {total}",
                         f"  Wings   : {len(wings)}",

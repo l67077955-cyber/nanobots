@@ -79,7 +79,8 @@ def history_to_messages(
 
     Rank-based tool call isolation (2026.5):
     - agent_ranks: {agent_name: rank_int} — higher number = higher privilege
-    - An agent can only see tool calls from agents with rank <= its own rank
+    - An agent can only see tool calls from agents with rank >= its own rank
+    - (Lower-ranked agents see higher-ranked agents' tools, not vice versa)
     - Text messages are never stripped, only [工具调用记录] blocks
     """
     from nanobot.groupchat.display.visibility import can_see_tool_call

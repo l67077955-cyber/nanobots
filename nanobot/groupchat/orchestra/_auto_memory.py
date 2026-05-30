@@ -26,20 +26,32 @@ _POLL_1_CONTEXT_TOOLS = """你是一个记忆提取助手。从以下群聊记�
 
 提取规则：
 - 这次讨论用了什么工具/方法跑通的？（具体命令、API、代码片段）
+- 关键参数是什么？（如API端点、配置项、版本号、路径等）
+- 完整的调用链是什么？（从输入到输出的完整流程）
 - 遇到了什么坑/错误，怎么解决的？
+- 有什么失败的尝试？（错误信息、失败原因、为什么失败）
 - 关键的技术结论是什么？
 
 输出格式（纯文本，不要 JSON/markdown 标题）：
 ## 工具与方法
 （具体工具名、命令、参数）
 
+## 关键参数
+（API端点、配置项、版本号、路径等）
+
+## 调用链
+（从输入到输出的完整流程）
+
 ## 踩坑与解决
 （错误描述 + 解决方案）
+
+## 失败尝试
+（错误信息、失败原因、为什么失败）
 
 ## 技术结论
 （确认的事实、路径、配置）
 
-如果某项无内容则写"无"。控制在 800 字以内。
+如果某项无内容则写"无"。控制在 1200 字以内。
 
 ---
 
@@ -82,6 +94,7 @@ _POLL_3_FIXED_INFO = """你是一个信息提取助手。从以下群聊记录�
 - 有什么事实/数据/配置值得下次复用？
 - 有什么发现/洞察是跨任务通用的？
 - 有什么规则/约定被确认或更新了？
+- 有什么失败的尝试值得记录？（避免重复踩坑）
 
 输出格式（纯文本）：
 ## 事实与数据
@@ -93,7 +106,10 @@ _POLL_3_FIXED_INFO = """你是一个信息提取助手。从以下群聊记录�
 ## 规则与约定
 （确认或更新的规则）
 
-如果某项无内容则写"无"。控制在 500 字以内。
+## 失败经验
+（值得记录的失败尝试，避免重复踩坑）
+
+如果某项无内容则写"无"。控制在 600 字以内。
 
 ---
 
@@ -114,7 +130,7 @@ def _slugify(text: str, max_len: int = 40) -> str:
     return text[:max_len].strip('-') or "untitled"
 
 
-def _build_conversation_text(history: list[dict], max_chars: int = 12000) -> str:
+def _build_conversation_text(history: list[dict], max_chars: int = 20000) -> str:
     """Format conversation history into text for LLM extraction."""
     lines = []
     total = 0
@@ -124,8 +140,8 @@ def _build_conversation_text(history: list[dict], max_chars: int = 12000) -> str
         if not content:
             continue
         # Truncate long messages
-        if len(content) > 800:
-            content = content[:800] + "…"
+        if len(content) > 1500:
+            content = content[:1500] + "…"
         line = f"[{sender}] {content}"
         if total + len(line) > max_chars:
             break
@@ -183,7 +199,7 @@ async def auto_store_memories(
         result1 = await provider.chat_with_retry(
             messages=[{"role": "user", "content": _POLL_1_CONTEXT_TOOLS.format(conversation=conversation)}],
             model=model,
-            max_tokens=1200,
+            max_tokens=1800,
             temperature=0.3,
         )
         content1 = (result1.content or "").strip()
@@ -242,7 +258,7 @@ async def auto_store_memories(
         if content3 and len(content3) > 50 and "无" not in content3[:20]:
             _store_drawer(
                 wing="wing_agent",
-                room=f"discoveries-{timestamp}",
+                room=f"round-{timestamp}-{topic_slug}",
                 content=content3,
                 source="auto_memory_poll_3",
             )
@@ -263,8 +279,54 @@ async def auto_store_memories(
     return stats
 
 
-def _store_drawer(wing: str, room: str, content: str, source: str = "auto_memory") -> dict:
-    """Direct ChromaDB store via tool_add_drawer (no LLM tool loop)."""
+# ── Self-referential filter ────────────────────────────────────
+
+_SELF_REFERENTIAL_KEYWORDS = [
+    "memory_palace", "auto_memory", "记忆检索", "记忆存储",
+    "记忆宫殿", "记忆提取", "auto_recall", "auto_store",
+    "语义搜索", "关键词生成", "_generate_wing_queries",
+]
+
+
+def _is_self_referential(content: str) -> bool:
+    """Check if content is about the memory system itself (meta-discussion)."""
+    hits = sum(1 for kw in _SELF_REFERENTIAL_KEYWORDS if kw in content)
+    return hits >= 2
+
+
+# ── Deduplication via similarity check ────────────────────────
+
+def _is_duplicate(content: str, wing: str, threshold: float = 0.60) -> bool:
+    """Check if similar content already exists in the given wing."""
+    try:
+        from mempalace.mcp_server import tool_search
+        result = tool_search(query=content[:200], wing=wing, limit=3)
+        for r in result.get("results", []):
+            if r.get("similarity", 0) >= threshold:
+                logger.info(
+                    "auto_store: dedup skipped (sim={:.2f}) in {}",
+                    r["similarity"], wing,
+                )
+                return True
+    except Exception as e:
+        logger.warning("auto_store: dedup check failed: {}", e)
+    return False
+
+
+def _store_drawer(wing: str, room: str, content: str, source: str = "auto_memory") -> dict | None:
+    """Direct ChromaDB store via tool_add_drawer (no LLM tool loop).
+    
+    Returns None if content is self-referential or duplicate.
+    """
+    # Guard 1: self-referential filter
+    if _is_self_referential(content):
+        logger.info("auto_store: self-referential content skipped in {}", wing)
+        return None
+
+    # Guard 2: deduplication
+    if _is_duplicate(content, wing):
+        return None
+
     from mempalace.mcp_server import tool_add_drawer
     return tool_add_drawer(
         wing=wing,

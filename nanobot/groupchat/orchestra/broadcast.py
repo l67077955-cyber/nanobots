@@ -588,7 +588,7 @@ async def broadcast_round(
                 f"- end_discussion(reason): 结束讨论，进入最终总结\n"
                 f"- transfer_credits(from_agent, to_agent, amount): 划拨搜索额度\n"
                 f"- 你也拥有自己的基础工具{leader_base_tools_str}，可以自己做部分工作\n\n"
-                f"## 🧠 记忆宫殿（所有 Agent 共享）\n"
+                f"## 🗄️ 记忆宫殿（所有 Agent 共享）\n"
                 f"memory_palace 工具在本轮结束后仍然保留，下次启动自动加载。\n"
                 f"- memory_palace(action='store', content=..., wing=..., hall=..., room=...)\n"
                 f"    存入记忆。wing=大类（如'项目知识'），hall=子类（如'2026-04'），room=具体槽位\n"

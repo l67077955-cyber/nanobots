@@ -67,7 +67,7 @@ TOOL_LABELS: dict[str, str] = {
     "manage_agent": "🔧",
     "end_discussion": "🏁",
     "transfer_credits": "💰",
-    "memory_palace": "🧠",
+    "memory_palace": "🗄️",
 }
 
 
@@ -553,7 +553,7 @@ STATUS_INDICATORS: dict[str, tuple[str, str]] = {
     "sending":      ("🟢", "Sending"),
     "waiting":      ("⚪", "Waiting..."),
     "blocked":      ("🔴", "Blocked"),
-    "interrupted":  ("⚡", "Interrupted"),
+    "interrupted":  ("⚠️", "Interrupted"),
     "done":         ("✅", "Done"),
     "error":        ("❌", "Error"),
     "cancelled":    ("⬛", "Cancelled"),

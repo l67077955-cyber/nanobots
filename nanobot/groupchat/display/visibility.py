@@ -36,8 +36,13 @@ def compute_agent_ranks(
 
 
 def can_see_tool_call(sender_rank: int, viewer_rank: int) -> bool:
-    """Viewer can see sender's tool call iff viewer rank >= sender rank."""
-    return viewer_rank >= sender_rank
+    """Viewer can see sender's tool call iff viewer rank <= sender rank.
+
+    Lower-ranked agents see higher-ranked agents' tools (subordinates
+    know what their superiors can do).  Higher-ranked agents do NOT see
+    lower-ranked agents' tools.
+    """
+    return viewer_rank <= sender_rank
 
 
 def tool_call_label(
@@ -48,14 +53,14 @@ def tool_call_label(
 ) -> str:
     """Visibility label showing actual agent names who can see the tool call.
 
-    Examples:
+    Examples (inverted: lower ranks see higher ranks):
         '→ Kirk'                    (leader call, only leader sees)
-        '→ Harper, Kirk'            (knight call, knight+ sees)
-        '→ Lucas, Harper, Kirk'     (pawn call, all see)
+        '→ Kirk, Harper'            (knight call, knight+leader see)
+        '→ Kirk, Harper, Lucas'     (pawn call, all see)
     """
     if is_leader:
         return f"→ {sender_name}"
     visible = sorted(
-        name for name, rank in agent_ranks.items() if rank >= sender_rank
+        name for name, rank in agent_ranks.items() if rank <= sender_rank
     )
     return f"→ {', '.join(visible)}"

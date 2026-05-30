@@ -2295,7 +2295,7 @@ class CallbacksMixin:
                 "── 轮次 2 ──\n"
                 "🤖 Agent: 现在执行下载 → exec(python send_photo.py)\n"
                 "\n"
-                f"💻 exec 返回报错 3,000 字符:\n"
+                f"⚡ exec 返回报错 3,000 字符:\n"
                 f" └─ [截断①] exec_max_chars={tr['exec_max_chars']:,}\n"
                 f"    3,000 < {tr['exec_max_chars']:,} → 未触发截断，完整保留\n"
                 f" └─ [AI压缩] 3,000 < {tr['summarize_threshold']:,} → 未触发AI压缩\n"

@@ -56,7 +56,23 @@ def _recall_wing(wing: str, query: str = "", n_results: int = 5) -> str:
 
         stack = MemoryStack()
         if query:
-            result = stack.search(query=query, wing=wing, n_results=n_results)
+            # Use search_raw to get structured data for sim filtering
+            hits = stack.l3.search_raw(query=query, wing=wing, n_results=n_results)
+            # Filter by sim > 0.1
+            hits = [h for h in hits if h.get("similarity", 0) > 0.1]
+            if not hits:
+                return ""
+            # Format results manually
+            lines = [f'## L3 — SEARCH RESULTS for "{query}"']
+            for i, hit in enumerate(hits, 1):
+                snippet = hit["text"].strip().replace("\n", " ")
+                if len(snippet) > 300:
+                    snippet = snippet[:297] + "..."
+                lines.append(f"  [{i}] {hit['wing']}/{hit['room']} (sim={hit['similarity']})")
+                lines.append(f"      {snippet}")
+                if hit.get("source_file"):
+                    lines.append(f"      src: {hit['source_file']}")
+            result = "\n".join(lines)
         else:
             result = stack.recall(wing=wing, n_results=n_results)
         if not result or "0 drawers" in result.split("\n")[0]:
@@ -141,7 +157,7 @@ async def auto_recall_memories(user_input: str = "", engine=None) -> str:
     if not sections:
         return ""
 
-    header = "## 🧠 自动记忆检索（群聊开始时触发）"
+    header = "## 🗄️ 自动记忆检索（群聊开始时触发）"
     if user_input:
         header += f"\n当前用户输入: {user_input[:200]}"
 

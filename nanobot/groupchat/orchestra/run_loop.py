@@ -167,7 +167,7 @@ async def run_loop(engine: Any) -> None:
                     wings = [p["wing"] for p in mem_stats.get("polls", []) if "wing" in p]
                     engine._add_message(
                         "系统",
-                        f"🧠 自动记忆存储完成：{mem_stats['stored']} 条 → {', '.join(wings)}",
+                        f"🗄️ 自动记忆存储完成：{mem_stats['stored']} 条 → {', '.join(wings)}",
                     )
             except Exception as e:
                 logger.warning("run_loop: auto memory extraction failed: {}", e)
