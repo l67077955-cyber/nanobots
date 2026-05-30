@@ -942,6 +942,17 @@ async def broadcast_round(
                             await engine._send(
                                 f"  ✗ {name} 连续 {_consecutive_error_count} 次 LLM 错误，强制退出"
                             )
+                            # If the leader crashes, end the entire group chat
+                            # so other agents don't hang until timeout.
+                            if is_leader:
+                                _reason = f"Leader {name} 连续 {_consecutive_error_count} 次 LLM 错误"
+                                engine._leader_end_reason = _reason
+                                engine._running = False
+                                leader_end_event.set()
+                                logger.warning(
+                                    "Broadcast: leader %s force-exited, ending group chat: %s",
+                                    name, _reason,
+                                )
                             break
 
                         # Keep agent alive instead of killing it (mirrors timeout recovery)
