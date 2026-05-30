@@ -61,6 +61,9 @@ class ToolLoopResult:
     tools_available: bool = False
     """Whether tool definitions were provided for this call."""
 
+    degenerate_repetition: bool = False
+    """``True`` if the loop was terminated due to degenerate repetition."""
+
     finish_reason: str = "stop"
     """``"stop"`` for normal completion, ``"max_iterations"``, or ``"error"``."""
 
@@ -94,6 +97,75 @@ _DEDUP_TOOLS = frozenset({
     "web_search", "web_fetch", "chatroom_send",
     "exec", "list_dir", "read_file",
 })
+
+# ── Degenerate repetition detection ────────────────────────────────────────
+
+def _has_contiguous_repeat(text: str, min_repeat: int = 3) -> bool:
+    """Detect if the same sentence/segment appears consecutively ≥ *min_repeat* times.
+
+    Splits on sentence-ending punctuation or newlines, then checks for runs
+    of identical (whitespace-normalised) segments.  O(n) — suitable for
+    calling on every iteration without measurable overhead.
+    """
+    if not text:
+        return False
+    segments = re.split(r'[\n。！？.!?\u3002]', text)
+    # Normalise and filter empty
+    segs = [s.strip() for s in segments if s.strip()]
+    if len(segs) < min_repeat:
+        return False
+    count = 1
+    for i in range(1, len(segs)):
+        if segs[i] == segs[i - 1]:
+            count += 1
+            if count >= min_repeat:
+                return True
+        else:
+            count = 1
+    return False
+
+
+def _truncate_repeated_tail(text: str, min_repeat: int = 3) -> str:
+    """Remove trailing contiguous repetitions from *text*.
+
+    Keeps the first occurrence of each repeated segment and discards the
+    duplicates that follow.  Returns the cleaned text.
+    """
+    if not text:
+        return text
+    segments = re.split(r'([\n。！？.!?\u3002])', text)
+    # segments alternates: [content, delimiter, content, delimiter, ...]
+    # Rebuild into (content, delimiter) pairs
+    pairs: list[tuple[str, str]] = []
+    i = 0
+    while i < len(segments):
+        content = segments[i]
+        delim = segments[i + 1] if i + 1 < len(segments) else ""
+        # Skip trailing empty pairs (produced by re.split when text ends with delimiter)
+        if content or delim:
+            pairs.append((content, delim))
+        i += 2
+
+    if len(pairs) < min_repeat:
+        return text
+
+    # Find the longest trailing run of identical (content, delim) pairs
+    last_unique_idx = len(pairs) - 1
+    for i in range(len(pairs) - 2, -1, -1):
+        if pairs[i] == pairs[i + 1]:
+            last_unique_idx = i
+        else:
+            break
+
+    # Check if the run is long enough
+    run_len = len(pairs) - last_unique_idx
+    if run_len >= min_repeat:
+        # Keep up to and including the first occurrence of the repeated segment
+        keep_until = last_unique_idx + 1
+        return "".join(c + d for c, d in pairs[:keep_until])
+
+    return text
+
 
 # Shell redirections to strip when normalizing exec commands for dedup.
 _SHELL_REDIR_RE = re.compile(
@@ -382,6 +454,27 @@ async def tool_loop(
             iteration, response.finish_reason,
             bool(response.has_tool_calls), raw_content,
         )
+
+        # ── Degenerate repetition guard ──────────────────────────────────
+        # Detect when the model falls into a self-reinforcing repetition
+        # loop (same sentence repeated ≥3 times).  Break immediately to
+        # avoid burning iterations / tokens on useless output.
+        _check_text = raw_content
+        # Also check reasoning/thinking content if present
+        if not _check_text and hasattr(response, "reasoning_content") and response.reasoning_content:
+            _check_text = response.reasoning_content
+        if _has_contiguous_repeat(_check_text):
+            logger.warning(
+                "tool_loop iter %d: degenerate repetition detected, breaking loop",
+                iteration,
+            )
+            # Keep whatever non-repeated content we have so far
+            _non_repeated = _truncate_repeated_tail(raw_content)
+            if _non_repeated != raw_content:
+                raw_content = _non_repeated
+            result.content = raw_content
+            result.finish_reason = "degenerate_repetition"
+            break
 
         if response.has_tool_calls:
             # Notify per-iteration token usage (before tool execution)
