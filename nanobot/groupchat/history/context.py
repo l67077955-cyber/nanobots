@@ -126,13 +126,10 @@ class HistoryContext:
 
         # Step 2: char-budget trimming — head is counted but always kept
         if char_budget > 0:
-            head_indices = self._find_head_indices(self.messages, keep_all_users=_keep_users)
-            head_msgs = [self.messages[i] for i in sorted(head_indices)]
             head_chars = sum(len(m.get("content", "")) for m in head_msgs)
             available = max(0, char_budget - head_chars)
-
-            tail: list[dict] = []
             head_id_set = {id(m) for m in head_msgs}
+            tail: list[dict] = []
             for m in reversed(self.messages):
                 if id(m) in head_id_set:
                     continue
@@ -141,15 +138,7 @@ class HistoryContext:
                     break
                 tail.insert(0, m)
                 available -= c
-
-            # Rebuild: head first (preserving order), then tail
-            seen: set[int] = set()
-            rebuilt: list[dict] = []
-            for m in head_msgs + tail:
-                if id(m) not in seen:
-                    rebuilt.append(m)
-                    seen.add(id(m))
-            self.messages = rebuilt
+            self.messages = head_msgs + tail
 
         self._state.save_message(sender, content, self.messages)
 

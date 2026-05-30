@@ -147,18 +147,6 @@ def get_tool_result_max_chars() -> int:
 
 # ── tool_results getters ─────────────────────────────────────────────────
 
-def exec_max_chars() -> int:
-    return int(_load()["tool_results"]["exec_max_chars"])
-
-
-def web_fetch_max_chars() -> int:
-    return int(_load()["tool_results"]["web_fetch_max_chars"])
-
-
-def web_search_max_chars() -> int:
-    return int(_load()["tool_results"]["web_search_max_chars"])
-
-
 def summarize_model() -> str:
     return str(_load()["tool_results"]["summarize_model"])
 
@@ -169,10 +157,6 @@ def broadcast_result_max_chars() -> int:
 
 def direct_result_max_chars() -> int:
     return int(_load()["tool_results"]["direct_result_max_chars"])
-
-
-def html_detect_enabled() -> bool:
-    return bool(_load()["tool_results"]["html_detect_enabled"])
 
 
 # ── history getters ──────────────────────────────────────────────────────
@@ -211,24 +195,12 @@ def pruning_soft_ratio() -> float:
     return float(_load()["context_pruning"]["soft_ratio"])
 
 
-def pruning_hard_ratio() -> float:
-    return float(_load()["context_pruning"]["hard_ratio"])
-
-
 def pruning_keep_recent() -> int:
     return int(_load()["context_pruning"]["keep_recent"])
 
 
 def pruning_soft_max_chars() -> int:
     return int(_load()["context_pruning"]["soft_max_chars"])
-
-
-def pruning_soft_head_chars() -> int:
-    return int(_load()["context_pruning"]["soft_head_chars"])
-
-
-def pruning_soft_tail_chars() -> int:
-    return int(_load()["context_pruning"]["soft_tail_chars"])
 
 
 # ── Field update (Telegram UI) ──────────────────────────────────────────

@@ -283,7 +283,7 @@ def gateway(
     """Start the nanobot gateway."""
     from nanobot.bus.queue import MessageBus
     from nanobot.channels.manager import ChannelManager
-    from nanobot.config.paths import get_cron_dir
+    from nanobot.config.paths import get_cron_dir, get_logs_dir
     from nanobot.cron.service import CronService
     from nanobot.cron.types import CronJob
     from nanobot.heartbeat.service import HeartbeatService
@@ -295,6 +295,17 @@ def gateway(
         logging.basicConfig(level=logging.DEBUG)
 
     config = _load_runtime_config(config, workspace)
+
+    # Ensure loguru writes to a file sink (independent of shell redirection)
+    _logs_dir = get_logs_dir()
+    logger.add(
+        _logs_dir / "gateway.log",
+        rotation="100 MB",
+        retention=0,
+        compression="gz",
+        level="DEBUG" if verbose else "INFO",
+        enqueue=True,
+    )
     _print_deprecated_memory_window_notice(config)
     port = port if port is not None else config.gateway.port
 
