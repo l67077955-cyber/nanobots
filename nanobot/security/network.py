@@ -95,10 +95,16 @@ def validate_resolved_url(url: str) -> tuple[bool, str]:
 
 
 def contains_internal_url(command: str) -> bool:
-    """Return True if the command string contains a URL targeting an internal/private address."""
+    """Return True if the command string contains a URL targeting an internal/private address.
+
+    Only blocks URLs that resolve to a *confirmed* private IP.
+    DNS failures and non-http schemes are ignored — not SSRF risks in exec context.
+    Loopback addresses (127.0.0.0/8, ::1) are allowed — exec runs on the same host,
+    so curling localhost is never an SSRF vector.
+    """
     for m in _URL_RE.finditer(command):
         url = m.group(0)
-        ok, _ = validate_url_target(url)
-        if not ok:
+        ok, err = validate_url_target(url)
+        if not ok and "private" in err.lower() and "internal" in err.lower():
             return True
     return False

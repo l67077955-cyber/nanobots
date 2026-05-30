@@ -19,6 +19,17 @@ MAX_ALWAYS_SKILLS_CHARS: int = 5600
 # Per-skill inline truncation limit for always-on skills.
 MAX_ALWAYS_SKILL_INLINE: int = 700
 
+_BOOL_TRUE = frozenset({"true", "yes", "1", "on"})
+
+
+def _parse_bool(value) -> bool:
+    """Parse a value that may be a string like 'true'/'false' into a real bool."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower().strip() in _BOOL_TRUE
+    return bool(value)
+
 
 def build_skills_section(workspace: Path) -> str:
     """Build the skills section for prompt injection (shared logic).
@@ -42,6 +53,11 @@ def build_skills_section(workspace: Path) -> str:
     summary = loader.build_skills_summary(exclude=set(always_skills) if always_skills else None)
     if summary:
         parts.append("Other skills (read SKILL.md to use):\n" + summary)
+
+    # Auto-discover scripts not documented in SKILL.md
+    undocumented = loader._discover_undocumented_scripts()
+    if undocumented:
+        parts.append("Undocumented scripts (auto-discovered from scripts/ dirs):\n" + "\n".join(undocumented))
 
     return "\n\n".join(parts)
 
@@ -305,6 +321,17 @@ class SkillsLoader:
         except (json.JSONDecodeError, TypeError):
             return {}
 
+    @staticmethod
+    def _parse_yaml_value(value: str):
+        """Convert YAML scalar strings to proper Python types (bool, str)."""
+        v = value.strip('"\'')
+        if v.lower() in ("true", "yes", "on"):
+            return True
+        if v.lower() in ("false", "no", "off"):
+            return False
+        return False
+        return v
+
     def _check_requirements(self, skill_meta: dict) -> bool:
         """Check if skill requirements are met (bins, env vars)."""
         requires = skill_meta.get("requires", {})
@@ -327,9 +354,35 @@ class SkillsLoader:
         for s in self.list_skills(filter_unavailable=True):
             meta = self.get_skill_metadata(s["name"]) or {}
             skill_meta = self._parse_nanobot_metadata(meta.get("metadata", ""))
-            if skill_meta.get("always") or meta.get("always"):
+            if _parse_bool(skill_meta.get("always")) or _parse_bool(meta.get("always")):
                 result.append(s["name"])
         return result
+
+    def _discover_undocumented_scripts(self) -> list[str]:
+        """Find scripts in skill dirs not mentioned in their SKILL.md."""
+        entries = []
+        for s in self.list_skills(filter_unavailable=False):
+            name = s["name"]
+            skill_dir = Path(s["path"]).parent
+            scripts_dir = skill_dir / "scripts"
+            if not scripts_dir.exists():
+                continue
+            skill_content = self.load_skill(name) or ""
+            for script_file in sorted(scripts_dir.iterdir()):
+                if script_file.suffix not in (".py", ".sh") or script_file.name.startswith("_"):
+                    continue
+                if script_file.name not in skill_content:
+                    docstring = ""
+                    try:
+                        text = script_file.read_text(encoding="utf-8", errors="ignore")
+                        m = re.search(r'"""(.*?)(?:\n|$)', text) or re.search(r"'''(.*?)(?:\n|$)", text)
+                        if m:
+                            docstring = m.group(1).strip().rstrip(".")
+                    except Exception:
+                        pass
+                    desc = f" — {docstring}" if docstring else ""
+                    entries.append(f"  - `{script_file.name}`{desc}")
+        return entries
 
     def get_skill_metadata(self, name: str) -> dict | None:
         """
