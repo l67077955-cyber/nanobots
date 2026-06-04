@@ -193,14 +193,56 @@ def test_apply_patch_edits_dry_run_validates_without_writing(tmp_path):
     assert not (tmp_path / "added.txt").exists()
 
 
-def test_apply_patch_edits_rejects_absolute_and_parent_paths(tmp_path):
-    tool = ApplyPatchTool(workspace=tmp_path)
+def test_apply_patch_edits_allows_absolute_and_parent_paths_when_unrestricted(tmp_path):
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    absolute_target = outside / "absolute.txt"
+    parent_target = outside / "parent.txt"
+    tool = ApplyPatchTool(workspace=workspace, restrict_to_workspace=False)
 
     absolute = asyncio.run(
         tool.execute(
             edits=[
                 {
-                    "path": "/tmp/owned.txt",
+                    "path": str(absolute_target),
+                    "action": "add",
+                    "new_text": "absolute",
+                }
+            ]
+        )
+    )
+    parent = asyncio.run(
+        tool.execute(
+            edits=[
+                {
+                    "path": "../outside/parent.txt",
+                    "action": "add",
+                    "new_text": "parent",
+                }
+            ]
+        )
+    )
+
+    assert "Patch applied" in absolute
+    assert "Patch applied" in parent
+    assert absolute_target.read_text() == "absolute\n"
+    assert parent_target.read_text() == "parent\n"
+
+
+def test_apply_patch_edits_rejects_outside_paths_when_restricted(tmp_path):
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    tool = ApplyPatchTool(workspace=workspace, allowed_dir=workspace)
+
+    absolute = asyncio.run(
+        tool.execute(
+            edits=[
+                {
+                    "path": str(outside / "absolute.txt"),
                     "action": "add",
                     "new_text": "nope",
                 }
@@ -211,29 +253,7 @@ def test_apply_patch_edits_rejects_absolute_and_parent_paths(tmp_path):
         tool.execute(
             edits=[
                 {
-                    "path": "../owned.txt",
-                    "action": "add",
-                    "new_text": "nope",
-                }
-            ]
-        )
-    )
-    windows_absolute = asyncio.run(
-        tool.execute(
-            edits=[
-                {
-                    "path": r"C:\owned.txt",
-                    "action": "add",
-                    "new_text": "nope",
-                }
-            ]
-        )
-    )
-    windows_parent = asyncio.run(
-        tool.execute(
-            edits=[
-                {
-                    "path": r"..\owned.txt",
+                    "path": "../outside/parent.txt",
                     "action": "add",
                     "new_text": "nope",
                 }
@@ -241,11 +261,10 @@ def test_apply_patch_edits_rejects_absolute_and_parent_paths(tmp_path):
         )
     )
 
-    assert "must be relative" in absolute
-    assert "must not contain '..'" in parent
-    assert "must be relative" in windows_absolute
-    assert "must not contain '..'" in windows_parent
-    assert not (tmp_path.parent / "owned.txt").exists()
+    assert "outside allowed directory" in absolute
+    assert "outside allowed directory" in parent
+    assert not (outside / "absolute.txt").exists()
+    assert not (outside / "parent.txt").exists()
 
 
 def test_apply_patch_edits_reports_invalid_edit_shapes(tmp_path):
