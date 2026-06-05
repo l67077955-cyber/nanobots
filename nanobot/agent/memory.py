@@ -452,13 +452,13 @@ class MemoryStore:
         ))
         tools.register(EditFileTool(
             workspace=workspace,
-            allowed_dir=self.memory_dir,
+            allowed_dir=self.memory_file,
             extra_write_allowed_dirs=editable_roots,
             file_states=file_states,
         ))
         tools.register(ApplyPatchTool(
             workspace=workspace,
-            allowed_dir=self.memory_dir,
+            allowed_dir=self.memory_file,
             extra_write_allowed_dirs=editable_roots,
             file_states=file_states,
         ))

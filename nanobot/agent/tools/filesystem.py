@@ -82,6 +82,20 @@ class _FsTool(Tool):
             return self._explicit_file_states
         return current_file_states(self._fallback_file_states)
 
+    def _effective_allowed_root(self, access_allowed_root: Path | None) -> Path | None:
+        if access_allowed_root is None:
+            return None
+        if self._allowed_dir is None or self._workspace is None:
+            return access_allowed_root
+        try:
+            allowed_dir = Path(self._allowed_dir).expanduser().resolve(strict=False)
+            workspace = Path(self._workspace).expanduser().resolve(strict=False)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return access_allowed_root
+        if allowed_dir == workspace:
+            return access_allowed_root
+        return allowed_dir
+
     def _resolve_with_extra(
         self,
         path: str,
@@ -97,7 +111,7 @@ class _FsTool(Tool):
         return resolve_workspace_path(
             path,
             access.project_path,
-            access.allowed_root,
+            self._effective_allowed_root(access.allowed_root),
             extra_allowed_dirs,
             include_media_dir=include_media_dir,
         )
