@@ -297,6 +297,33 @@ def test_apply_patch_legacy_extra_allowed_dirs_are_read_only(tmp_path):
     assert target.read_text(encoding="utf-8") == "before\n"
 
 
+def test_apply_patch_media_dir_is_read_only_by_default(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    media = tmp_path / "media"
+    workspace.mkdir()
+    media.mkdir()
+    target = media / "demo.md"
+    target.write_text("before\n", encoding="utf-8")
+    monkeypatch.setattr("nanobot.agent.tools.path_utils.get_media_dir", lambda: media)
+    tool = ApplyPatchTool(workspace=workspace, allowed_dir=workspace)
+
+    result = asyncio.run(
+        tool.execute(
+            edits=[
+                {
+                    "path": str(target),
+                    "action": "replace",
+                    "old_text": "before",
+                    "new_text": "after",
+                }
+            ]
+        )
+    )
+
+    assert "outside allowed directory" in result
+    assert target.read_text(encoding="utf-8") == "before\n"
+
+
 def test_apply_patch_allows_explicit_extra_write_allowed_dirs_when_restricted(tmp_path):
     workspace = tmp_path / "workspace"
     writable = tmp_path / "writable"

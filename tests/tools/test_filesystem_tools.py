@@ -338,6 +338,21 @@ class TestWorkspaceRestriction:
         assert "Error" not in result
 
     @pytest.mark.asyncio
+    async def test_write_blocked_in_media_dir_by_default(self, tmp_path, monkeypatch):
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        media_dir = tmp_path / "media"
+        media_dir.mkdir()
+
+        monkeypatch.setattr("nanobot.agent.tools.path_utils.get_media_dir", lambda: media_dir)
+
+        tool = WriteFileTool(workspace=workspace, allowed_dir=workspace)
+        result = await tool.execute(path=str(media_dir / "hack.txt"), content="pwned")
+        assert "Error" in result
+        assert "outside" in result.lower()
+        assert not (media_dir / "hack.txt").exists()
+
+    @pytest.mark.asyncio
     async def test_legacy_extra_allowed_dirs_does_not_widen_write(self, tmp_path):
         workspace = tmp_path / "ws"
         workspace.mkdir()

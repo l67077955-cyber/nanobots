@@ -86,6 +86,8 @@ class _FsTool(Tool):
         self,
         path: str,
         extra_allowed_dirs: list[Path] | None,
+        *,
+        include_media_dir: bool,
     ) -> Path:
         access = current_tool_workspace(
             self._workspace,
@@ -97,13 +99,22 @@ class _FsTool(Tool):
             access.project_path,
             access.allowed_root,
             extra_allowed_dirs,
+            include_media_dir=include_media_dir,
         )
 
     def _resolve_read(self, path: str) -> Path:
-        return self._resolve_with_extra(path, self._extra_read_allowed_dirs)
+        return self._resolve_with_extra(
+            path,
+            self._extra_read_allowed_dirs,
+            include_media_dir=True,
+        )
 
     def _resolve_write(self, path: str) -> Path:
-        return self._resolve_with_extra(path, self._extra_write_allowed_dirs)
+        return self._resolve_with_extra(
+            path,
+            self._extra_write_allowed_dirs,
+            include_media_dir=False,
+        )
 
     def _resolve(self, path: str) -> Path:
         return self._resolve_read(path)
