@@ -149,7 +149,7 @@ class ApplyPatchTool(_FsTool):
                 action = edit.get("action")
                 if not isinstance(action, str):
                     raise _PatchError(f"action required for edit: {path}")
-                source = self._resolve(path)
+                source = self._resolve_write(path)
 
                 if action == "add":
                     new_text = edit.get("new_text")

@@ -267,6 +267,64 @@ def test_apply_patch_edits_rejects_outside_paths_when_restricted(tmp_path):
     assert not (outside / "parent.txt").exists()
 
 
+def test_apply_patch_legacy_extra_allowed_dirs_are_read_only(tmp_path):
+    workspace = tmp_path / "workspace"
+    skills = tmp_path / "skills"
+    workspace.mkdir()
+    skills.mkdir()
+    target = skills / "demo.md"
+    target.write_text("before\n", encoding="utf-8")
+    tool = ApplyPatchTool(
+        workspace=workspace,
+        allowed_dir=workspace,
+        extra_allowed_dirs=[skills],
+    )
+
+    result = asyncio.run(
+        tool.execute(
+            edits=[
+                {
+                    "path": str(target),
+                    "action": "replace",
+                    "old_text": "before",
+                    "new_text": "after",
+                }
+            ]
+        )
+    )
+
+    assert "outside allowed directory" in result
+    assert target.read_text(encoding="utf-8") == "before\n"
+
+
+def test_apply_patch_allows_explicit_extra_write_allowed_dirs_when_restricted(tmp_path):
+    workspace = tmp_path / "workspace"
+    writable = tmp_path / "writable"
+    workspace.mkdir()
+    writable.mkdir()
+    target = writable / "allowed.txt"
+    tool = ApplyPatchTool(
+        workspace=workspace,
+        allowed_dir=workspace,
+        extra_write_allowed_dirs=[writable],
+    )
+
+    result = asyncio.run(
+        tool.execute(
+            edits=[
+                {
+                    "path": str(target),
+                    "action": "add",
+                    "new_text": "allowed",
+                }
+            ]
+        )
+    )
+
+    assert "Patch applied" in result
+    assert target.read_text(encoding="utf-8") == "allowed\n"
+
+
 def test_apply_patch_edits_reports_invalid_edit_shapes(tmp_path):
     tool = ApplyPatchTool(workspace=tmp_path)
 
