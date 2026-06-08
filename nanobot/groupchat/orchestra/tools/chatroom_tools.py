@@ -709,6 +709,10 @@ class ChatroomSendTool(Tool):
 
         delivered = self._mailbox.send(self._agent_name, targets, message)
 
+        # Trigger rank-based interrupt for high-priority senders
+        # This enables higher-ranked agents to interrupt lower-ranked busy agents
+        self._mailbox.interrupt_busy_agents(self._agent_name)
+
         # Count successful sends as "output" for search credit recovery
         if delivered > 0 and self._search_pool:
             self._search_pool.on_output(self._agent_name)

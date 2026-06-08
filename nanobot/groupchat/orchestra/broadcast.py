@@ -227,7 +227,7 @@ async def _trigger_realtime_interrupts(
     # Check if the target set effectively includes someone we want to interrupt
     # (someone other than the sender).
     has_others = "all" in _targets_lower or any(t != sender.lower() for t in _targets_lower)
-    if not leader_name or not has_others:
+    if not has_others:
         return
 
     _interrupted_count = 0
@@ -1506,6 +1506,18 @@ async def broadcast_round(
                 if msg == "__SUMMARY__":
                     continue
 
+                # ── Fix A: defer message if all agents already finished ──
+                # If every agent task is done, no one will process this
+                # message.  Put it back into _input_queue so run_loop picks
+                # it up for the next round instead of losing it.
+                if all(t.done() for t in tasks):
+                    engine._input_queue.put_nowait(msg)
+                    logger.info(
+                        "Broadcast: all agents done, deferred user message to next round: {}",
+                        msg[:60],
+                    )
+                    continue
+
                 all_agent_names = list(mailbox.agent_names)
                 await pool.allocate_user(all_agent_names)
 
@@ -1779,6 +1791,29 @@ async def broadcast_round(
     # chain = _d.chat_chain_summary(mailbox.history, leader=leader_name)
     # if chain:
     #     await engine._send(chain)
+
+    # ── Fix B: salvage unread user messages before clearing mailbox ──
+    # If a user message arrived via _user_listener but no agent consumed it
+    # (e.g. agents finished between interrupt and message pickup), the
+    # message would be lost by mailbox.clear().  Drain agent queues, collect
+    # any unread "用户" messages, and re-inject them into _input_queue so
+    # run_loop picks them up for the next round.
+    _salvaged_user_msgs: list[str] = []
+    for _q in list(mailbox._queues.values()):
+        while not _q.empty():
+            try:
+                _m = _q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if _m.sender == "用户" and _m.content not in _salvaged_user_msgs:
+                _salvaged_user_msgs.append(_m.content)
+    for _s in _salvaged_user_msgs:
+        engine._input_queue.put_nowait(_s)
+    if _salvaged_user_msgs:
+        logger.warning(
+            "Broadcast: salvaged {} unread user message(s) for next round",
+            len(_salvaged_user_msgs),
+        )
 
     # Clean up queues (history preserved for synthesis & test harness)
     mailbox.clear()
