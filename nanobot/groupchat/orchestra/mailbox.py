@@ -618,13 +618,21 @@ class MailboxHub:
         # on them.  The interrupt causes the busy agent's tool_loop to break
         # out at the next asyncio checkpoint, giving it a chance to reply.
         if from_agent and from_agent in self._busy_agents:
-            evt = self.get_interrupt_event(from_agent)
-            if not evt.is_set():
-                evt.set()
-                logger.info(
-                    "MailboxHub.wait: {} nudging busy agent {} (interrupt set, "
-                    "from_agent is in tool_loop)",
-                    agent_name, from_agent,
+            # Rank check: only nudge if caller has higher rank than target
+            if self._can_interrupt(agent_name, from_agent):
+                evt = self.get_interrupt_event(from_agent)
+                if not evt.is_set():
+                    evt.set()
+                    logger.info(
+                        "MailboxHub.wait: {} nudging busy agent {} (interrupt set, "
+                        "from_agent is in tool_loop)",
+                        agent_name, from_agent,
+                    )
+            else:
+                logger.debug(
+                    "MailboxHub.wait: nudge blocked — {} (rank {}) cannot nudge {} (rank {})",
+                    agent_name, self._ranks.get(agent_name, 0),
+                    from_agent, self._ranks.get(from_agent, 0),
                 )
 
         # Fast path: if there are already messages queued, return immediately
