@@ -127,16 +127,6 @@ async def run_loop(engine: Any) -> None:
             engine._add_message("用户", user_input)
             engine._round = rounds
 
-            # ── Auto memory recall: inject relevant memories before broadcast ──
-            try:
-                from nanobot.groupchat.orchestra._auto_recall import auto_recall_memories
-                recalled = await auto_recall_memories(user_input=user_input)
-                if recalled:
-                    engine._add_message("系统", recalled)
-                    logger.info("run_loop: auto recall injected ({} chars)", len(recalled))
-            except Exception as e:
-                logger.warning("run_loop: auto memory recall failed: {}", e)
-
             # Determine speaking order
             speak_order = list(engine._active_agents)
 
@@ -148,23 +138,6 @@ async def run_loop(engine: Any) -> None:
                 engine._mailbox,
                 global_timeout=600.0,   # 10 分钟（可根据需要调整）
             )
-
-            # ── Auto memory extraction: 3 polls after discussion ends ──
-            try:
-                from nanobot.groupchat.orchestra._auto_memory import auto_store_memories
-                mem_stats = await auto_store_memories(
-                    engine=engine,
-                    history=list(engine._history),
-                    topic=engine._topic or "",
-                )
-                if mem_stats.get("stored", 0) > 0:
-                    logger.info(
-                        "run_loop: auto memory stored {} drawers (skipped={}, errors={})",
-                        mem_stats["stored"], mem_stats.get("skipped", 0),
-                        len(mem_stats.get("errors", [])),
-                    )
-            except Exception as e:
-                logger.warning("run_loop: auto memory extraction failed: {}", e)
 
             # Compress history if approaching the message limit
             await engine._maybe_compress_history()

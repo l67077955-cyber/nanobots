@@ -372,6 +372,7 @@ def tool_result_brief(
     agent_name: str,
     tool_name: str,
     result: str,
+    action: str | None = None,
 ) -> str:
     """Format a tool result summary for broadcast display.
 
@@ -400,12 +401,16 @@ def tool_result_brief(
         count = result.count("\n") if result else 0
         return f"    └ {count} entries"
     elif tool_name == "memory_palace":
-        if result and "stored" in result:
-            return f"    └ ✅ stored"
-        elif result and "search" in result.lower():
-            return f"    └ 🔍 found"
-        else:
-            return f"    └ ({rlen:,}字)"
+        if action == "search":
+            return "    └ 🔍 found"
+        if action == "store":
+            return "    └ ✅ stored"
+        # Fallback: infer from result text (fragile, covers missing action)
+        if result and "result(s) for" in result:
+            return "    └ 🔍 found"
+        if result and "stored in" in result.lower():
+            return "    └ ✅ stored"
+        return f"    └ ({rlen:,}字)"
     elif tool_name == "manage_agent":
         return f"    └ ✅ done"
     elif tool_name == "transfer_credits":

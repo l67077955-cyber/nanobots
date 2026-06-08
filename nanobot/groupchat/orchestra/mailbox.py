@@ -424,6 +424,9 @@ class MailboxHub:
         - Equal rank CANNOT interrupt each other (they queue)
         - Unknown rank defaults to 0 (lowest)
         """
+        # Leader always has highest interrupt priority
+        if sender == self._leader:
+            return True
         s_rank = self._ranks.get(sender, 0)
         t_rank = self._ranks.get(target, 0)
         return s_rank > t_rank
