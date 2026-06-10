@@ -415,6 +415,14 @@ class MailboxHub:
             self._ranks[name] = val
             logger.debug("MailboxHub: rank({}) = {} ({})", name, val, r)
 
+    def _is_high_priority(self, sender: str) -> bool:
+        """Check if sender is a high-priority source (user or leader).
+
+        High-priority senders bypass rank checks in interrupt_busy_agents,
+        ensuring user/leader messages always wake up busy agents.
+        """
+        return sender == "用户" or sender == self._leader
+
     def _can_interrupt(self, sender: str, target: str) -> bool:
         """Check if sender has sufficient rank to interrupt target.
         
@@ -439,9 +447,6 @@ class MailboxHub:
             return False
         if target not in self._busy_agents:
             return False
-        # Record who attempted the interrupt (before rank check, so blocked
-        # attempts are also visible in the UI for debugging hierarchy bugs)
-        self._last_interrupt_sender[target] = sender
         # Rank check: low-rank agents cannot interrupt higher-or-equal rank
         if not self._can_interrupt(sender, target):
             logger.debug(
@@ -456,14 +461,22 @@ class MailboxHub:
                 target, self._interrupt_counts.get(target, 0),
             )
             return False
-        # Record who caused this interrupt (persists beyond queue consumption)
-        self._last_interrupt_sender[target] = sender
-        # Trigger the interrupt
+        # Record who caused this interrupt (only after rank + quota checks pass)
+        # Only overwrite _last_interrupt_sender if new sender has >= rank
+        prev_sender = self._last_interrupt_sender.get(target)
+        if prev_sender is None or self._can_interrupt(sender, target) or self._ranks.get(sender, 0) >= self._ranks.get(prev_sender, 0):
+            self._last_interrupt_sender[target] = sender
+        # Trigger the interrupt (skip if already set — avoids double-counting)
         evt = self.get_interrupt_event(target)
+        if evt.is_set():
+            logger.debug(
+                "MailboxHub: interrupt skipped for {} (event already set)", target,
+            )
+            return False
         evt.set()
         self._interrupt_counts[target] = self._interrupt_counts.get(target, 0) + 1
         logger.info(
-            "MailboxHub: ⚡ interrupt triggered for {} by {} (count={}/1)",
+            "MailboxHub: ⚡ interrupt triggered for {} by {} (count={}/3)",
             target, sender, self._interrupt_counts[target],
         )
         return True
@@ -471,15 +484,13 @@ class MailboxHub:
     def interrupt_busy_agents(self, sender: str) -> int:
         """Set the interrupt event for every currently-busy agent.
 
-        Used for high-priority signals (e.g. user messages) that should
+        Used for high-priority signals (e.g. user/leader messages) that should
         wake up all active tool_loops immediately.  Unlike ``_try_interrupt``,
         this does **not** increment ``_interrupt_counts`` so it doesn't
         consume the per-round agent—agent interrupt quota.
 
-        Also resets each interrupted agent's interrupt count so that
-        subsequent messages can still trigger fresh interrupts — this
-        ensures the agent always responds to the *latest* high-priority
-        message, not a stale one.
+        Only high-priority senders (user or leader) bypass rank checks;
+        other senders must still have higher rank than the target agent.
 
         Returns:
             Number of agents whose interrupt event was set.
@@ -488,18 +499,18 @@ class MailboxHub:
         for agent in list(self._busy_agents):
             if agent == sender:
                 continue
-            if sender != "用户" and not self._can_interrupt(sender, agent):
+            if not self._is_high_priority(sender) and not self._can_interrupt(sender, agent):
                 continue
-            self._last_interrupt_sender[agent] = sender
+            # Only overwrite _last_interrupt_sender if new sender has >= rank
+            prev_sender = self._last_interrupt_sender.get(agent)
+            if prev_sender is None or self._ranks.get(sender, 0) >= self._ranks.get(prev_sender, 0):
+                self._last_interrupt_sender[agent] = sender
             evt = self.get_interrupt_event(agent)
             if not evt.is_set():
                 evt.set()
-                # Reset interrupt counter so the agent can be interrupted
-                # again by newer messages after it re-enters tool_loop.
-                self._interrupt_counts[agent] = 0
                 count += 1
                 logger.info(
-                    "MailboxHub: ⚡ user interrupt set for busy agent {} (sender={}, counter reset)",
+                    "MailboxHub: ⚡ high-priority interrupt set for busy agent {} (sender={})",
                     agent, sender,
                 )
         if count:
@@ -538,8 +549,9 @@ class MailboxHub:
                         continue
                     q.put_nowait(msg)
                     delivered += 1
-                    # Trigger interrupt if recipient is busy (max 1/round)
-                    self._try_interrupt(name, sender)
+                    # NOTE: interrupt is now handled by _trigger_realtime_interrupts
+                    # in broadcast_view.py, so we no longer call _try_interrupt here
+                    # to avoid double-interrupting the same target.
         else:
             for name in targets:
                 q = self._queues.get(name)
@@ -550,8 +562,9 @@ class MailboxHub:
                         continue
                     q.put_nowait(msg)
                     delivered += 1
-                    # Trigger interrupt if recipient is busy (max 1/round)
-                    self._try_interrupt(name, sender)
+                    # NOTE: interrupt is now handled by _trigger_realtime_interrupts
+                    # in broadcast_view.py, so we no longer call _try_interrupt here
+                    # to avoid double-interrupting the same target.
                 elif q is None:
                     logger.warning("MailboxHub: target '{}' has no mailbox", name)
 

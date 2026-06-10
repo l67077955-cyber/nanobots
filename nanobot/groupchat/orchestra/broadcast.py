@@ -227,7 +227,7 @@ async def _trigger_realtime_interrupts(
     # Check if the target set effectively includes someone we want to interrupt
     # (someone other than the sender).
     has_others = "all" in _targets_lower or any(t != sender.lower() for t in _targets_lower)
-    if not leader_name or not has_others:
+    if not has_others:
         return
 
     _interrupted_count = 0
