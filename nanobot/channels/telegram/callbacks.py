@@ -191,6 +191,7 @@ class CallbacksMixin:
                         "write_file": "✍️ 写文件",
                         "edit_file": "✂️ 编辑文件",
                         "list_dir": "📁 列目录",
+                        "memory_palace": "🧠 记忆宫殿",
                     }
                     buttons = []
                     for t in GroupChatEngine.TOOL_NAMES:
@@ -395,6 +396,7 @@ class CallbacksMixin:
                     "exec": "⚡ 执行命令", "read_file": "📄 读文件",
                     "write_file": "✍️ 写文件", "edit_file": "✂️ 编辑文件",
                     "list_dir": "📁 列目录",
+                    "memory_palace": "🧠 记忆宫殿",
                 }
                 buttons = []
                 for t in GroupChatEngine.TOOL_NAMES:

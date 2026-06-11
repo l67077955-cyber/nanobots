@@ -61,6 +61,7 @@ TOOL_LABELS: dict[str, str] = {
     "write_file": "✏️",
     "edit_file": "📝",
     "list_dir": "📁",
+    "memory_palace": "🧠",
     "chatroom_send": "📤",
     "wait": "⏳",
     "yield_turn": "🔄",

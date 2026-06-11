@@ -14,9 +14,10 @@ from nanobot.groupchat.history.context_validator import validate_context
 
 _TOOL_LOG_RE = re.compile(
     r"(• \w+\([^)]*\) → )"
-    r"(.*?)"           # preview text (greedy within line)
+    r"([^\n]*?)"       # preview text bounded to single line (non-greedy, no cross-line)
     r"(\(\d[\d,]*字\))",  # trailing char count
-    re.DOTALL,
+    # NOTE: removed re.DOTALL to prevent (.*?) from spanning across line boundaries
+    # and accidentally consuming char counts from subsequent tool call lines
 )
 
 # Matches the entire [工具调用记录]... block at the end of a message
@@ -130,14 +131,21 @@ def history_to_messages(
         return msgs_full
 
     # ── 強制保留核心消息 ──
+    # Protect index 0 (system prompt) + ALL user messages + ALL system messages.
+    # User messages are always important — they contain the human's intent.
+    # Only assistant messages are trimmed when budget is tight.
     critical: list[dict[str, Any]] = []
     for i, m in enumerate(msgs_full):
-        if m["role"] in ("user", "system") or i == 0:
+        if i == 0:
+            critical.append(m)
+        elif m["role"] in ("user", "system"):
             critical.append(m)
 
     # ── 預算計算 ──
     used_chars = sum(len(m.get("content", "")) for m in critical)
-    budget = max_chars - used_chars
+    # Reserve space for the omission prompt that will be inserted if messages are skipped
+    _OMISSION_PROMPT = "[...earlier messages omitted...]"
+    budget = max_chars - used_chars - len(_OMISSION_PROMPT)
 
     # ── 從尾部補齊（先嘗試 aging 中間消息的 tool log） ──
     tail: list[dict[str, Any]] = []
@@ -178,7 +186,7 @@ def history_to_messages(
         insert_pos = 0
         result.insert(insert_pos, {
             "role": "system",
-            "content": "[...earlier messages omitted...]",
+            "content": _OMISSION_PROMPT,
         })
 
     # ── 自检: 上下文完整性验证 ──

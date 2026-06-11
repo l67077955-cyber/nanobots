@@ -367,7 +367,19 @@ class BroadcastOrchestrator:
             wait_tool._send_tool = send_tool
             registry.register(send_tool)
             registry.register(wait_tool)
-            registry.register(memory_palace)
+            # memory_palace: register only if enabled in agent's tool config
+            agent_cfg = self.engine.registry.get(name, {})
+            mp_enabled = True  # default: enabled
+            tools_cfg = agent_cfg.get("tools")
+            if isinstance(tools_cfg, dict) and "memory_palace" in tools_cfg:
+                mp_enabled = bool(tools_cfg["memory_palace"])
+            # Also check session override
+            if hasattr(self.engine, "_session_tools_override") and name in self.engine._session_tools_override:
+                session_cfg = self.engine._session_tools_override[name]
+                if isinstance(session_cfg, dict) and "memory_palace" in session_cfg:
+                    mp_enabled = bool(session_cfg["memory_palace"])
+            if mp_enabled:
+                registry.register(memory_palace)
             registry.register(QuoteMessageTool(mailbox=self.mailbox))
             registry.register(ListMessagesTool(mailbox=self.mailbox))
             self.agent_tool_registries[name] = registry
@@ -698,8 +710,10 @@ async def broadcast_round(
             _broadcast_result_max = 20_000
 
         reg = agent_tool_registries[name]
-        # Always include chatroom + broadcast-specific tools
-        broadcast_tool_names = ["chatroom_send", "wait", "memory_palace"]
+        # Always include chatroom tools; memory_palace only if registered (i.e. enabled)
+        broadcast_tool_names = ["chatroom_send", "wait"]
+        if reg.get("memory_palace") is not None:
+            broadcast_tool_names.append("memory_palace")
         if is_leader:
             broadcast_tool_names.extend(["manage_agent", "end_discussion", "transfer_credits", "clear_context"])
         broadcast_defs = [
