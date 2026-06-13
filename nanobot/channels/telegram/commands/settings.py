@@ -466,9 +466,7 @@ class SettingsCommandsMixin:
         ctx_chars_limit = settings["context_window_tokens"] * 4  # rough chars estimate
 
         ai_on = tr["summarize_enabled"]
-        html_on = tr.get("html_detect_enabled", True)
         prune_soft_budget = int(ctx_chars_limit * cp.get("soft_ratio", 0.3))
-        prune_hard_budget = int(ctx_chars_limit * cp.get("hard_ratio", 0.5))
 
         # ── Estimate compiled LLM context size per active agent ──
         # engine._history only stores final turn messages (user + agent final replies).
@@ -524,8 +522,6 @@ class SettingsCommandsMixin:
             f" | 最大输出={tr.get('summarize_max_output_chars', 4000):,}tokens\n"
             f"    → 摘要注入上下文(广播模式最大={tr.get('broadcast_result_max_chars', 20000):,}"
             f" | 直接模式最大={tr.get('direct_result_max_chars', 8000):,})\n"
-            f" └─ [HTML检测] html_detect={'✅' if html_on else '❌'}"
-            f"  {'(若返回HTML会注入警告)' if html_on else '(已关闭)'}\n"
             "\n"
             "── 轮次 2 ──\n"
             "🤖 Agent: 现在执行下载 → exec(python send_photo.py)\n"
@@ -538,9 +534,7 @@ class SettingsCommandsMixin:
             f"── [上下文裁剪] tool_loop 第2次迭代起自动检查 ──\n"
             f" 软裁剪: 上下文>{prune_soft_budget:,}字符({cp.get('soft_ratio',0.3)}×窗口)\n"
             f"   → 对超过soft_max_chars={cp.get('soft_max_chars',4000):,}的旧工具结果\n"
-            f"     保留头部{cp.get('soft_head_chars',1500):,}字符 + 尾部{cp.get('soft_tail_chars',1500):,}字符\n"
-            f" 硬裁剪: 上下文>{prune_hard_budget:,}字符({cp.get('hard_ratio',0.5)}×窗口)\n"
-            f"   → 旧工具结果替换为精简摘要(仅保留路径/错误/kv)\n"
+            f"      替换为精简摘要(仅保留路径/错误/kv)\n"
             f" 保护: 最近{cp.get('keep_recent',3)}轮的工具结果不裁剪\n"
             "\n"
             f"── [历史记忆压缩] 消息数>={compress_trigger}条触发 ──\n"
@@ -584,7 +578,7 @@ class SettingsCommandsMixin:
             ],
             [
                 InlineKeyboardButton(
-                    f"🔪 迭代裁剪: soft@{cp.get('soft_ratio',0.3)} hard@{cp.get('hard_ratio',0.5)} 保留最近{cp.get('keep_recent',3)}轮",
+                    f"🔪 迭代裁剪: soft@{cp.get('soft_ratio',0.3)} 保留最近{cp.get('keep_recent',3)}轮",
                     callback_data="hs_stage4",
                 )
             ],

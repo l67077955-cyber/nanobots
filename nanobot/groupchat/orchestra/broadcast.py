@@ -380,6 +380,9 @@ class BroadcastOrchestrator:
                     mp_enabled = bool(session_cfg["memory_palace"])
             if mp_enabled:
                 registry.register(memory_palace)
+            # forget tool: delete previous tool call results from context
+            from nanobot.tools.forget import ForgetTool
+            registry.register(ForgetTool())
             registry.register(QuoteMessageTool(mailbox=self.mailbox))
             registry.register(ListMessagesTool(mailbox=self.mailbox))
             self.agent_tool_registries[name] = registry

@@ -112,16 +112,7 @@ class TestStage3_ContextPrune:
         assert len(short_ones) > 0, "Old tool results should be summarized"
         assert len(long_ones) >= 3, "Last 3 protected by keep_recent"
 
-    def test_hard_cap_breaks_keep_recent(self):
-        """Hard cap forces pruning even within keep_recent when total > cap."""
-        from nanobot.groupchat.history.tool_pruning import prune_messages
-        msgs = [{"role": "system", "content": "system"}]
-        for i in range(8):
-            msgs.append({"role": "assistant", "content": f"step {i}"})
-            msgs.append({"role": "tool", "tool_call_id": f"call_{i}", "content": "x" * 5000})
-        result = prune_messages(msgs, context_window_tokens=200_000, soft_ratio=0.3, keep_recent=3, hard_max_total_chars=40000)
-        total_chars = sum(len(m.get("content", "")) for m in result if isinstance(m.get("content"), str))
-        assert total_chars <= 40000, f"Hard cap breached: {total_chars} > 40000"
+    
 
     def test_summarize_tool_result_format(self):
         """_summarize_tool_result produces expected 1-line summaries per tool type."""

@@ -47,7 +47,7 @@ class GroupChatEngine:
     TOOL_NAMES = [
         "web_search", "web_fetch", "exec",
         "read_file", "write_file", "edit_file", "list_dir",
-        "memory_palace",
+        "memory_palace", "forget",
     ]
 
     def __init__(
@@ -173,6 +173,9 @@ class GroupChatEngine:
         if self._send_outbound_fn:
             from nanobot.tools.message import MessageTool
             registry.register(MessageTool(send_callback=self._send_outbound_fn))
+        # Register ForgetTool so agents can delete previous tool call results from context
+        from nanobot.tools.forget import ForgetTool
+        registry.register(ForgetTool())
         return registry
 
     def _get_reader_model(self) -> str:

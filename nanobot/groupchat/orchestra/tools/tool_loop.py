@@ -14,6 +14,7 @@ import asyncio
 import json
 import re
 import time as _time
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
@@ -516,6 +517,26 @@ async def tool_loop(
                 thinking_blocks=response.thinking_blocks,
             ))
 
+            # ── Share last tool calls with ForgetTool ──
+            # ForgetTool reads this to know what previous calls exist.
+            # Save the previous batch before overwriting, so forget can target
+            # the calls from the *previous* round (not the current batch that
+            # includes forget itself).
+            try:
+                from nanobot.tools.forget import ForgetTool
+                _prev = ForgetTool._shared.get("last_tool_calls", [])
+                ForgetTool.set_shared("prev_tool_calls", _prev)
+                ForgetTool.set_shared("last_tool_calls", [
+                    {
+                        "tool_call_id": tc.id,
+                        "name": tc.name,
+                        "args_str": json.dumps(tc.arguments, ensure_ascii=False),
+                    }
+                    for tc in response.tool_calls
+                ])
+            except Exception:
+                pass
+
             # ── Phase 1: Sequential pre-check (dedup, permission, progress) ──
             pending: list[tuple] = []  # (tc, args_str, dedup_key)
             _batch_dedup_keys: set[str] = set()  # track dedup keys within this batch
@@ -672,6 +693,76 @@ async def tool_loop(
                         "tool_call_id": tc.id,
                         "content": tool_content,
                     })
+
+                # ── Phase 3b: Handle forget tool — delete matched tool call+result pairs ──
+                _forget_ids: set[str] = set()
+                _forget_names: list[str] = []
+                for (tc, args_str, dedup_key), raw in zip(pending, exec_results):
+                    if isinstance(raw, BaseException):
+                        continue
+                    tool_result, _, _ = raw
+                    if isinstance(tool_result, str) and tool_result.startswith("__FORGET__:"):
+                        try:
+                            import json as _json
+                            info = _json.loads(tool_result[len("__FORGET__:"):])
+                            _forget_ids.update(info.get("tool_call_ids", []))
+                            _forget_names.extend(info.get("names", []))
+                        except Exception:
+                            pass
+
+                if _forget_ids:
+                    # Collect forget tool's own IDs separately for residue cleanup.
+                    _forget_self_ids: set[str] = set()
+                    # Also build a map: tool_call_id → name for descriptive replacement
+                    _id_to_name: dict[str, str] = {}
+                    for (tc, args_str, dedup_key), raw in zip(pending, exec_results):
+                        if isinstance(raw, BaseException):
+                            continue
+                        tool_result, _, _ = raw
+                        if isinstance(tool_result, str) and tool_result.startswith("__FORGET__:"):
+                            _forget_self_ids.add(tc.id)
+                            try:
+                                import json as _json
+                                info = _json.loads(tool_result[len("__FORGET__:"):])
+                                for tid, nm in zip(info.get("tool_call_ids", []),
+                                                    info.get("names", [])):
+                                    _id_to_name[tid] = nm
+                            except Exception:
+                                pass
+
+                    # ── Replace target tool results with "tool_name → forgeted" ──
+                    for m in messages:
+                        if m.get("role") == "tool" and m.get("tool_call_id") in _forget_ids:
+                            name = _id_to_name.get(m.get("tool_call_id", ""), "?")
+                            m["content"] = f"{name} → forgeted"
+
+                    # Mark target tool_calls entries
+                    for m in messages:
+                        if m.get("role") == "assistant" and m.get("tool_calls"):
+                            for tc in m["tool_calls"]:
+                                if tc.get("id") in _forget_ids:
+                                    tc["forgot"] = True
+
+                    # ── Replace forget tool's own result with clear summary ──
+                    # (keep entry so agent knows forget was already called)
+                    forget_msg = ", ".join(f"{n}×{c}" for n, c in Counter(_forget_names).items())
+                    for m in messages:
+                        if m.get("role") == "tool" and m.get("tool_call_id") in _forget_self_ids:
+                            m["content"] = f"✓ forgot: {forget_msg}"
+
+                    logger.info(
+                        "tool_loop: forget replaced {} tool call(s): {} → (forgot)",
+                        len(_forget_ids), ", ".join(_forget_names),
+                    )
+
+                    # Track forgot IDs so ForgetTool can skip already-forgot entries
+                    try:
+                        from nanobot.tools.forget import ForgetTool
+                        existing: set = ForgetTool._shared.get("_forgot_ids", set())
+                        existing.update(_forget_ids)
+                        ForgetTool._shared["_forgot_ids"] = existing
+                    except Exception:
+                        pass
 
                 # ── Checkpoint 2: cooperative interrupt check (after tool batch) ──
                 # Checked after all tools in this iteration have finished so

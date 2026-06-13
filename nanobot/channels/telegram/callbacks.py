@@ -1978,17 +1978,6 @@ class CallbacksMixin:
                 "建议: 6,000-12,000"
             ),
         },
-        "tool_results:html_detect_enabled": {
-            "label": "HTML 检测开关",
-            "location": "Stage 1 → exec/web_fetch 结果后处理",
-            "doc": (
-                "当 exec 或 web_fetch 返回原始 HTML 时，\n"
-                "自动注入警告提示 agent 结果不可用。\n\n"
-                "场景: curl API 返回 HTML 登录页而非 JSON 数据\n"
-                "效果: agent 能及时发现并切换策略，"
-                "而非基于无用 HTML 摘要继续推理"
-            ),
-        },
         "history:max_messages": {
             "label": "最大消息条数",
             "location": "Stage 3 → 历史窗口裁剪",
@@ -2050,17 +2039,6 @@ class CallbacksMixin:
                 "建议: 0.2-0.4"
             ),
         },
-        "context_pruning:hard_ratio": {
-            "label": "硬裁剪触发比例",
-            "location": "Stage 4 → context_pruning",
-            "doc": (
-                "软裁剪后仍超预算时，当比例超过此值\n"
-                "触发硬裁剪。\n\n"
-                "硬裁剪: 旧 tool result 替换为精简摘要\n"
-                "（保留 paths/errors/urls/kv）。\n\n"
-                "建议: 0.4-0.6"
-            ),
-        },
         "context_pruning:keep_recent": {
             "label": "保护最近 N 轮",
             "location": "Stage 4 → context_pruning",
@@ -2079,23 +2057,7 @@ class CallbacksMixin:
                 "建议: 3,000-6,000"
             ),
         },
-        "context_pruning:soft_head_chars": {
-            "label": "软裁剪保留头部 (字符)",
-            "location": "Stage 4 → context_pruning",
-            "doc": (
-                "软裁剪时保留 tool result 开头的字符数。\n\n"
-                "建议: 1,000-2,500"
-            ),
-        },
-        "context_pruning:soft_tail_chars": {
-            "label": "软裁剪保留尾部 (字符)",
-            "location": "Stage 4 → context_pruning",
-            "doc": (
-                "软裁剪时保留 tool result 末尾的字符数。\n\n"
-                "建议: 1,000-2,500"
-            ),
-        },
-    }
+        }
 
     async def _handle_history_callback(self, query, data: str) -> None:
         """Handle /history interactive settings callbacks."""
@@ -2151,14 +2113,10 @@ class CallbacksMixin:
                 f"  当前: {tr['web_search_max_chars']:,} 字符\n"
                 f"  {d_search['doc'].split(chr(10))[0]}\n"
             )
-            html_enabled = tr.get("html_detect_enabled", True)
-            html_toggle_text = "❌ 关闭 HTML检测" if html_enabled else "✅ 开启 HTML检测"
-            html_toggle_val = "false" if html_enabled else "true"
             buttons = [
                 [InlineKeyboardButton(f"exec: {tr['exec_max_chars']:,}", callback_data="hs_edit:tool_results:exec_max_chars")],
                 [InlineKeyboardButton(f"web_fetch: {tr['web_fetch_max_chars']:,}", callback_data="hs_edit:tool_results:web_fetch_max_chars")],
                 [InlineKeyboardButton(f"web_search: {tr['web_search_max_chars']:,}", callback_data="hs_edit:tool_results:web_search_max_chars")],
-                [InlineKeyboardButton(html_toggle_text, callback_data=f"hs_set:tool_results:html_detect_enabled:{html_toggle_val}")],
                 [InlineKeyboardButton("⬅️ 返回", callback_data="hs_back")],
             ]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
@@ -2231,19 +2189,13 @@ class CallbacksMixin:
                 "✂️ Stage 4: 迭代上下文裁剪\n"
                 "tool_loop 迭代 2+ 时，自动裁剪旧 tool result\n\n"
                 f"  软裁剪比例 → {cp.get('soft_ratio', 0.3)}\n"
-                f"  硬裁剪比例 → {cp.get('hard_ratio', 0.5)}\n"
                 f"  保护最近   → {cp.get('keep_recent', 3)} 轮\n"
-                f"  软裁剪阈值 → {cp.get('soft_max_chars', 4000):,} 字符\n"
-                f"  保留头部   → {cp.get('soft_head_chars', 1500):,} 字符\n"
-                f"  保留尾部   → {cp.get('soft_tail_chars', 1500):,} 字符"
+                f"  软裁剪阈值 → {cp.get('soft_max_chars', 4000):,} 字符"
             )
             buttons = [
                 [InlineKeyboardButton(f"软裁剪比例: {cp.get('soft_ratio', 0.3)}", callback_data="hs_edit:context_pruning:soft_ratio")],
-                [InlineKeyboardButton(f"硬裁剪比例: {cp.get('hard_ratio', 0.5)}", callback_data="hs_edit:context_pruning:hard_ratio")],
                 [InlineKeyboardButton(f"保护最近: {cp.get('keep_recent', 3)}", callback_data="hs_edit:context_pruning:keep_recent")],
                 [InlineKeyboardButton(f"软裁剪阈值: {cp.get('soft_max_chars', 4000):,}", callback_data="hs_edit:context_pruning:soft_max_chars")],
-                [InlineKeyboardButton(f"保留头部: {cp.get('soft_head_chars', 1500):,}", callback_data="hs_edit:context_pruning:soft_head_chars")],
-                [InlineKeyboardButton(f"保留尾部: {cp.get('soft_tail_chars', 1500):,}", callback_data="hs_edit:context_pruning:soft_tail_chars")],
                 [InlineKeyboardButton("⬅️ 返回", callback_data="hs_back")],
             ]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
@@ -2260,9 +2212,7 @@ class CallbacksMixin:
             compress_trigger = int(hist["max_messages"] * hist.get("compress_ratio", 0.8))
             ctx_chars_limit = settings["context_window_tokens"] * 4
             ai_on = tr["summarize_enabled"]
-            html_on = tr.get("html_detect_enabled", True)
             prune_soft_budget = int(ctx_chars_limit * cp.get("soft_ratio", 0.3))
-            prune_hard_budget = int(ctx_chars_limit * cp.get("hard_ratio", 0.5))
             text = (
                 "─── 上下文管线 · 实时演示 ───\n"
                 f"全局: context_window={settings['context_window_tokens']:,} tokens"
@@ -2291,8 +2241,6 @@ class CallbacksMixin:
                 f" | 最大输出={tr.get('summarize_max_output_chars', 4000):,}tokens\n"
                 f"    → 摘要注入上下文(广播模式最大={tr.get('broadcast_result_max_chars', 20000):,}"
                 f" | 直接模式最大={tr.get('direct_result_max_chars', 8000):,})\n"
-                f" └─ [HTML检测] html_detect={'✅' if html_on else '❌'}"
-                f"  {'(若返回HTML会注入警告)' if html_on else '(已关闭)'}\n"
                 "\n"
                 "── 轮次 2 ──\n"
                 "🤖 Agent: 现在执行下载 → exec(python send_photo.py)\n"
@@ -2305,9 +2253,7 @@ class CallbacksMixin:
                 f"── [上下文裁剪] tool_loop 第2次迭代起自动检查 ──\n"
                 f" 软裁剪: 上下文>{prune_soft_budget:,}字符({cp.get('soft_ratio',0.3)}×窗口)\n"
                 f"   → 对超过soft_max_chars={cp.get('soft_max_chars',4000):,}的旧工具结果\n"
-                f"     保留头部{cp.get('soft_head_chars',1500):,}字符 + 尾部{cp.get('soft_tail_chars',1500):,}字符\n"
-                f" 硬裁剪: 上下文>{prune_hard_budget:,}字符({cp.get('hard_ratio',0.5)}×窗口)\n"
-                f"   → 旧工具结果替换为精简摘要(仅保留路径/错误/kv)\n"
+                f"      替换为精简摘要(仅保留路径/错误/kv)\n"
                 f" 保护: 最近{cp.get('keep_recent',3)}轮的工具结果不裁剪\n"
                 "\n"
                 f"── [历史记忆压缩] 消息数>={compress_trigger}条触发 ──\n"
@@ -2351,7 +2297,7 @@ class CallbacksMixin:
                 ],
                 [
                     InlineKeyboardButton(
-                        f"🔪 迭代裁剪: soft@{cp.get('soft_ratio',0.3)} hard@{cp.get('hard_ratio',0.5)} 保留最近{cp.get('keep_recent',3)}轮",
+                        f"🔪 迭代裁剪: soft@{cp.get('soft_ratio',0.3)} 保留最近{cp.get('keep_recent',3)}轮",
                         callback_data="hs_stage4",
                     )
                 ],
@@ -2378,8 +2324,7 @@ class CallbacksMixin:
                 # Refresh the stage view that owns this setting
                 if section == "tool_results" and ("summarize" in key or "result_max_chars" in key):
                     await self._handle_history_callback(query, "hs_stage2")
-                elif section == "tool_results" and "html_detect" in key:
-                    await self._handle_history_callback(query, "hs_stage1")
+                
                 elif section == "context_pruning":
                     await self._handle_history_callback(query, "hs_stage4")
                 elif section == "history":
@@ -2436,7 +2381,7 @@ class CallbacksMixin:
             key = state["key"]
             raw = content.strip()
             # Detect type: float keys (ratios), string keys (model), else int
-            _float_keys = {"soft_ratio", "hard_ratio", "compress_ratio"}
+            _float_keys = {"soft_ratio", "compress_ratio"}
             _string_keys = {"summarize_model"}
             if key in _string_keys:
                 value: Any = raw

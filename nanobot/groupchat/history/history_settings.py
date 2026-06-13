@@ -49,9 +49,7 @@ _DEFAULTS: dict[str, Any] = {
         # Direct mode: tool_loop result_max_chars override
         "direct_result_max_chars": 8_000,
 
-        # HTML detection: when exec/web_fetch returns raw HTML,
-        # inject a warning so the agent knows the result is unusable
-        "html_detect_enabled": True,
+        
     },
 
     # ── Stage 3: conversation history window ─────────────────────────
@@ -72,11 +70,8 @@ _DEFAULTS: dict[str, Any] = {
     # ── Stage 4: iterative context pruning (tool_loop iteration 2+) ──
     "context_pruning": {
         "soft_ratio": 0.3,
-        "hard_ratio": 0.5,
         "keep_recent": 3,
         "soft_max_chars": 4_000,
-        "soft_head_chars": 1_500,
-        "soft_tail_chars": 1_500,
     },
 }
 

@@ -50,7 +50,7 @@ def test_soft_trim_preserves_head_tail():
 
 
 def test_hard_clear_replaces_with_placeholder():
-    """When ratio exceeds hard_ratio, tool results should be replaced with placeholder."""
+    """When large content exceeds max_chars, tool results are replaced with placeholder."""
     big_content = "X" * 50_000
     msgs = [
         {"role": "system", "content": "sys"},
