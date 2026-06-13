@@ -30,7 +30,7 @@ MANIFEST_PATH = Path.home() / ".nanobot" / "prompt_manifest.json"
 
 # Hardcoded fallback defaults — used ONLY when manifest is missing/corrupt.
 _FALLBACK_ORDER = [
-    "main_prompt", "persona", "hard_rules", "tool_instructions", "skills",
+    "main_prompt", "persona", "hard_rules", "tool_instructions", "forget_guidance", "skills",
     "user_context", "broadcast_hint", "group_context", "memory",
     "output_efficiency", "instructions", "leader_prompt",
     "history", "skills_overview", "examples", "group_nudge",
@@ -42,6 +42,7 @@ _FALLBACK_LABELS: dict[str, str] = {
     "persona": "人设/SOUL (persona)",
     "memory": "长期记忆 (memory)",
     "tool_instructions": "工具指令 (tool_instructions)",
+    "forget_guidance": "主动压缩 (forget_guidance)",
     "skills": "技能列表 (skills)",
     "broadcast_hint": "广播协调 (broadcast_hint)",
     "examples": "示例对话 (examples)",
@@ -62,6 +63,7 @@ _FALLBACK_PHASES: dict[str, str] = {
     "main_prompt": "static",
     "hard_rules": "static",
     "tool_instructions": "static",
+    "forget_guidance": "static",
     "persona": "static",
     "broadcast_hint": "static",
     "user_context": "static",
@@ -236,6 +238,24 @@ TEMPLATES: dict[str, str] = {
     ),
     "persona": "[从 SOUL.md 加载 — 在 /editagent 中编辑]",
     "tool_instructions": "",  # Loaded from ~/.nanobot/prompts/tool_instructions.md
+    "forget_guidance": (
+        "### ⚡ 主动压缩 (forget) — 强制规则\n"
+        "上下文空间有限。系统会在接近容量时自动压缩（摘要替换中间消息），但自动压缩不区分重要与否，可能吞掉关键信息。\n"
+        "你必须主动用 forget 工具清理低价值输出，保护重要内容不被自动压缩丢失。\n\n"
+        "#### 🔴 必须立即 forget 的场景\n"
+        "- 搜索结果已提取完关键信息 → forget(indices=[0,1,2])\n"
+        "- 长文件已读完并记了笔记 → forget(keywords=\"read_file\")\n"
+        "- exec 输出冗长但只需结论 → forget(indices=0)\n"
+        "- 同一工具连续调用多次，早期结果已过时 → forget(keywords=\"web_search\")\n"
+        "- 任何超过500字的工具输出，提取完信息后立即 forget\n\n"
+        "#### 🟢 不要 forget\n"
+        "- 结果还需要在后续步骤中引用（文件路径、URL、关键数据）\n"
+        "- 压缩摘要可能丢失细节时，保留原文更安全\n\n"
+        "#### 执行纪律\n"
+        "1. **每轮工具调用后自检**：这批结果还需要吗？不需要→立即 forget\n"
+        "2. **forget 优先于自动压缩**：你主动清理的，自动压缩就不需要碰\n"
+        "3. **大输出不过夜**：超过500字的工具结果，用完即 forget，不要留在上下文里占空间"
+    ),
     "broadcast_hint": (
         "[广播模式 — 多Agent协作]\n"
         "你是 {{agent_idx}}/{{total}} 号成员，代号 {{agent}}\n"
@@ -549,6 +569,16 @@ class PromptBuilder:
             return self.get_component_template("memory")
         elif key == "tool_instructions":
             return self.get_component_template("tool_instructions")
+        elif key == "forget_guidance":
+            # Only inject if the agent has the forget tool available
+            agent_tools = agent.get("tools", [])
+            has_forget = any(
+                "forget" in (t if isinstance(t, str) else t.get("function", {}).get("name", ""))
+                for t in agent_tools
+            ) if agent_tools else True  # Default: show if tools list unavailable
+            if not has_forget:
+                return ""
+            return self.get_component_template("forget_guidance")
         elif key == "skills":
             return self._build_skills_content()
         elif key == "skills_overview":

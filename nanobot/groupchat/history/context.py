@@ -169,6 +169,11 @@ class HistoryContext:
         Head-tail protection always runs.  AI summarisation is gated by
         ``summarize_enabled``; if disabled, the middle region is simply dropped.
 
+        When compression is first triggered, a warning message is injected to
+        give agents one turn to proactively ``forget`` low-value content.  If
+        the context is still over the threshold on the next check, compression
+        proceeds for real.
+
         Protected by an async lock to prevent concurrent corruption.
         """
         async with self._compress_lock:
@@ -185,7 +190,32 @@ class HistoryContext:
             limit = max_messages()
             ratio = compress_ratio()
             if len(self.messages) < int(limit * ratio):
+                # Under threshold — reset the warning flag
+                self._compress_warned = False
                 return
+
+            # ── 0. Forget opportunity: warn once, then compress ──
+            # On first breach, inject a system message telling agents to
+            # proactively forget.  Skip actual compression this round so
+            # agents get one turn to act.  Next round, compress for real.
+            if not getattr(self, "_compress_warned", False):
+                self._compress_warned = True
+                usage_pct = int(len(self.messages) / limit * 100)
+                warn_msg = {
+                    "sender": "系统",
+                    "content": (
+                        f"⚠️ 上下文已达 ~{usage_pct}% 容量，即将自动压缩历史。\n"
+                        "请立即用 forget 工具清理不再需要的工具输出（搜索结果、长文件内容、exec输出等），"
+                        "保护重要信息不被自动压缩丢失。这是你唯一的机会。"
+                    ),
+                }
+                self.messages.append(warn_msg)
+                self._state.save_message("系统", warn_msg["content"], self.messages)
+                logger.info(
+                    "HistoryContext: compression warning injected ({} msgs, ~{}% capacity)",
+                    len(self.messages), usage_pct,
+                )
+                return  # Give agents one turn to forget
 
             total_len = len(self.messages)
 
