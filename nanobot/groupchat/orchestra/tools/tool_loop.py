@@ -730,18 +730,17 @@ async def tool_loop(
                             except Exception:
                                 pass
 
-                    # ── Replace target tool results with "tool_name → forgeted" ──
-                    for m in messages:
-                        if m.get("role") == "tool" and m.get("tool_call_id") in _forget_ids:
-                            name = _id_to_name.get(m.get("tool_call_id", ""), "?")
-                            m["content"] = f"{name} → forgeted"
+                    # ── Actually excise target tool results and clean assistant tool_calls ──
+                    # This ensures forgotten items are truly removed from the shared history
+                    # used by compression (maybe_compress) and context building (history_to_messages).
+                    # The "know" trace is kept only in the forget tool's own result summary.
+                    # Previously this was replace+mark, which left entries in the list and
+                    # could still affect positional middle selection or prompt reconstruction.
+                    messages[:] = [m for m in messages if not (m.get("role") == "tool" and m.get("tool_call_id") in _forget_ids and m.get("tool_call_id") not in _forget_self_ids)]
 
-                    # Mark target tool_calls entries
                     for m in messages:
                         if m.get("role") == "assistant" and m.get("tool_calls"):
-                            for tc in m["tool_calls"]:
-                                if tc.get("id") in _forget_ids:
-                                    tc["forgot"] = True
+                            m["tool_calls"] = [tc for tc in m["tool_calls"] if tc.get("id") not in _forget_ids]
 
                     # ── Replace forget tool's own result with clear summary ──
                     # (keep entry so agent knows forget was already called)
@@ -751,7 +750,7 @@ async def tool_loop(
                             m["content"] = f"✓ forgot: {forget_msg}"
 
                     logger.info(
-                        "tool_loop: forget replaced {} tool call(s): {} → (forgot)",
+                        "tool_loop: forget excised {} tool call(s): {} from history",
                         len(_forget_ids), ", ".join(_forget_names),
                     )
 
