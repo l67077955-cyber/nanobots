@@ -3,6 +3,7 @@
 Owns the message list and all related operations:
   - add_message     : append + enforce message-count & char-budget limits
   - maybe_compress  : AI summarize (or drop) the middle region on overflow
+                      (now also token-aware using the project's tiktoken estimator)
   - clear / format  : utility helpers
 
 Engine and Broadcast delegate to this class instead of maintaining
@@ -189,7 +190,30 @@ class HistoryContext:
 
             limit = max_messages()
             ratio = compress_ratio()
-            if len(self.messages) < int(limit * ratio):
+
+            # Token-aware trigger (new): use real estimator when available so that
+            # long individual messages or tool output bloat trigger compression
+            # even if message count is still under the old limit.
+            current_tok = 0
+            token_ratio = 0.0
+            try:
+                from nanobot.groupchat.history.history_settings import get_context_window_tokens
+                from nanobot.utils.helpers import estimate_message_tokens
+                _est = estimate_message_tokens
+                token_window = get_context_window_tokens()
+                # Map our sender-based history items to something the estimator understands
+                def _as_llm_msg(m):
+                    role = "user" if m.get("sender") in ("User", "user", "用户") else "assistant"
+                    return {"role": role, "content": m.get("content", "")}
+                current_tok = sum(int(_est(_as_llm_msg(m)) or 0) for m in self.messages)
+                token_ratio = current_tok / max(1, token_window)
+            except Exception:
+                _est = None
+
+            msg_count_ratio = len(self.messages) / max(1, limit)
+            effective_ratio = max(msg_count_ratio, token_ratio)
+
+            if effective_ratio < ratio and token_ratio < 0.55:
                 # Under threshold — reset the warning flag
                 self._compress_warned = False
                 return
@@ -201,10 +225,12 @@ class HistoryContext:
             if not getattr(self, "_compress_warned", False):
                 self._compress_warned = True
                 usage_pct = int(len(self.messages) / limit * 100)
+                tok_pct = int(token_ratio * 100) if token_ratio > 0 else usage_pct
+                report_pct = max(usage_pct, tok_pct)
                 warn_msg = {
                     "sender": "系统",
                     "content": (
-                        f"⚠️ 上下文已达 ~{usage_pct}% 容量，即将自动压缩历史。\n"
+                        f"⚠️ 上下文已达 ~{report_pct}% 容量（{len(self.messages)} msgs, ~{current_tok} tokens），即将自动压缩历史。\n"
                         "请立即用 forget 工具清理不再需要的工具输出（搜索结果、长文件内容、exec输出等），"
                         "保护重要信息不被自动压缩丢失。这是你唯一的机会。"
                     ),
@@ -212,8 +238,8 @@ class HistoryContext:
                 self.messages.append(warn_msg)
                 self._state.save_message("系统", warn_msg["content"], self.messages)
                 logger.info(
-                    "HistoryContext: compression warning injected ({} msgs, ~{}% capacity)",
-                    len(self.messages), usage_pct,
+                    "HistoryContext: compression warning injected ({} msgs, ~{}% count, {} tokens ~{}% of window)",
+                    len(self.messages), usage_pct, current_tok, tok_pct,
                 )
                 return  # Give agents one turn to forget
 
