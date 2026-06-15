@@ -67,7 +67,11 @@ class SettingsCommandsMixin:
 
     async def _send_hyperparams_keyboard(self, chat_id: str, params: dict) -> None:
         """Send hyperparams display with edit/delete buttons."""
-        lines = ["⚙️ 默认超参数设置\n", "💡 新创建的 agent 将自动使用此配置\n"]
+        lines = [
+            "⚙️ 默认超参数设置（全局）\n",
+            "💡 新 agent 默认继承这些值。除非清楚每个参数的作用，否则建议保持精简或留空。\n",
+            "简单控制思考/创意？推荐用 /editagent 里的「思考深度」+「等级」。\n"
+        ]
         buttons = []
         for k, v in params.items():
             lines.append(f"  {k}: {v}")
@@ -163,7 +167,7 @@ class SettingsCommandsMixin:
         )
 
     async def _on_restart(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Hard restart: save notification info, then replace the current process."""
+        """Hard restart: save notification info, then background-restart (close frontend, detach)."""
         if not update.message or not update.effective_user:
             return
         if not self.is_allowed(self._sender_id(update.effective_user)):
@@ -182,33 +186,21 @@ class SettingsCommandsMixin:
         await update.message.reply_text(f"🔄 正在重启...\n请求时间: {ts}")
 
         async def _do_restart():
-            await asyncio.sleep(1)
-            # Determine the correct command to restart
-            # Use sys.executable to ensure we use the same Python interpreter
-            # Reconstruct argv: if 'gateway' is in original args, keep it
-            argv = sys.argv[:]
-            if not any("gateway" in a for a in argv):
-                # Running via entry point (e.g. /usr/local/bin/nanobot gateway)
-                # sys.argv[0] is the script path
-                argv = [sys.argv[0], "gateway"]
+            # Always do background restart: this ensures that if nanobot was started
+            # from a command line / attached terminal (the "frontend"), that terminal
+            # is released and the new instance runs fully detached in the background.
+            # We still write the /tmp notice for telegram post-restart notification.
+            from nanobot.utils.restart import perform_background_restart
 
-            logger.info("Restart: execv {} {}", sys.executable, [sys.executable] + argv)
-
+            # Also set env notice so that any CLI restart notice consumer in the child can pick it up.
+            # (The /tmp json is the primary mechanism for telegram channel notification.)
             try:
-                # os.execv replaces the current process in-place
-                # All env vars, file descriptors are inherited automatically
-                os.execv(sys.executable, [sys.executable] + argv)
-            except Exception as e:
-                # Fallback: spawn new process and exit
-                logger.warning("execv failed ({}), falling back to Popen", e)
-                import subprocess
-                subprocess.Popen(
-                    [sys.executable, "-m", "nanobot", "gateway"],
-                    start_new_session=True,
-                    stdout=open("/tmp/nanobot.log", "w"),
-                    stderr=subprocess.STDOUT,
-                )
-                os._exit(0)
+                from nanobot.utils.restart import set_restart_notice_to_env
+                set_restart_notice_to_env(channel="telegram", chat_id=chat_id, metadata={})
+            except Exception:
+                pass
+
+            perform_background_restart(delay_s=0.8)
 
         asyncio.create_task(_do_restart())
 
