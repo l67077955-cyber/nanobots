@@ -13,7 +13,6 @@ class GroupChatAgentConfig(Base):
 
     model: str = "anthropic/claude-sonnet-4-5"
     persona: str = ""  # Path to SOUL.md or inline persona text
-    character_json: str = ""  # Path to SillyTavern character.json (fallback)
 
 
 class GroupChatConfig(Base):
@@ -26,5 +25,5 @@ class GroupChatConfig(Base):
     max_rounds: int = 30
     max_history: int = 50
     auto_reply_delay: int = 0  # seconds between agent turns
-    max_tokens: int = 3000  # max tokens per agent response (match SillyTavern)
+    max_tokens: int = 3000  # max tokens per agent response
 

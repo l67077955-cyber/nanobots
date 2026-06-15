@@ -2,7 +2,7 @@
 
 Loads agent personas from:
 1. Config-defined agents (inline persona or file path)
-2. Directory scan (agents/<name>/workspace/SOUL.md or character.json)
+2. Directory scan (agents/<name>/workspace/SOUL.md)
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ def load_agents(config: GroupChatConfig, workspace: Path) -> dict[str, dict[str,
             logger.info("Groupchat: skipping excluded agent {}", name)
             continue
 
-        prompt = _resolve_persona(agent_cfg.persona, agent_cfg.character_json, workspace)
+        prompt = _resolve_persona(agent_cfg.persona, workspace)
         if prompt:
             agent_data: dict[str, Any] = {"model": agent_cfg.model, "prompt": prompt}
             # Supplement with per-agent config.json from agents_dir (hyperparams, tools, rank, etc.)
@@ -80,11 +80,9 @@ def load_agents(config: GroupChatConfig, workspace: Path) -> dict[str, dict[str,
     return agents
 
 
-def _resolve_persona(persona_path: str, character_json: str, workspace: Path) -> str | None:
+def _resolve_persona(persona_path: str, workspace: Path) -> str | None:
     """Resolve persona text from path or inline content."""
     if not persona_path:
-        if character_json:
-            return _load_character_json(Path(character_json).expanduser(), workspace)
         return None
 
     # Check if it's inline text (not a path)
@@ -100,36 +98,6 @@ def _resolve_persona(persona_path: str, character_json: str, workspace: Path) ->
 
     logger.warning("Groupchat: persona file not found: {}", path)
     return None
-
-
-def _load_character_json(path: Path, workspace: Path) -> str | None:
-    """Load SillyTavern character.json as persona text."""
-    if not path.is_absolute():
-        path = workspace / path
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text())
-        # Try nanobot's built-in parser first
-        try:
-            from nanobot.sillytavern.character_card import (
-                build_character_prompt,
-                parse_character_card,
-            )
-            parsed, err, spec = parse_character_card(path.read_text())
-            if parsed and not err:
-                return build_character_prompt(parsed, include_post_history=True)
-        except ImportError:
-            pass
-        # Fallback: extract description/personality directly
-        parts = []
-        for key in ("description", "personality", "scenario", "first_mes"):
-            if data.get(key):
-                parts.append(data[key])
-        return "\n\n".join(parts) if parts else None
-    except Exception as e:
-        logger.warning("Groupchat: failed to load character.json {}: {}", path, e)
-        return None
 
 
 def _scan_agents_dir(
@@ -167,7 +135,9 @@ def _scan_agents_dir(
                     model = _cfg.get("model", "?")
                     desc = _cfg.get("description", "系统 agent")
                     tools_enabled = _cfg.get("tools_enabled", False)
-                    rank = _cfg.get("rank", "pawn")
+                    raw_rank = _cfg.get("rank", "basic")
+                    LEGACY_TO_MODERN = {"pawn": "basic", "knight": "standard", "bishop": "advanced", "queen": "expert", "king": "expert"}
+                    rank = LEGACY_TO_MODERN.get(raw_rank, raw_rank)
                     agent_data = {
                         "model": model, "prompt": "", "role": "system",
                         "description": desc, "tools_enabled": tools_enabled,
@@ -192,7 +162,7 @@ def _scan_agents_dir(
 
         ws = d / "workspace"
         soul_file = ws / "SOUL.md" if ws.exists() else d / "SOUL.md"
-        prompt = soul_file.read_text().strip() if soul_file.exists() else _load_character_json(d / "character.json", agents_dir)
+        prompt = soul_file.read_text().strip() if soul_file.exists() else None
 
         if not prompt:
             continue
@@ -228,8 +198,10 @@ def _scan_agents_dir(
         if d.name == "grok":
             name = "Grok"
 
-        # Rank: pawn < knight < bishop (controls who-can-interrupt-whom)
-        rank = acfg.get("rank", "pawn") if config_file.exists() else "pawn"
+        # Rank: basic < standard < advanced < expert (controls who-can-interrupt-whom)
+        raw_rank = acfg.get("rank", "basic") if config_file.exists() else "basic"
+        LEGACY_TO_MODERN = {"pawn": "basic", "knight": "standard", "bishop": "advanced", "queen": "expert", "king": "expert"}
+        rank = LEGACY_TO_MODERN.get(raw_rank, raw_rank)
         
         agent_data: dict[str, Any] = {"model": model, "prompt": prompt, "tools_enabled": tools_enabled, "rank": rank}
         if tools_cfg is not None:
