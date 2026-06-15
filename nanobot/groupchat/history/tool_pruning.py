@@ -1,11 +1,15 @@
 """Context pruning for tool results.
 
 Prunes old tool-result messages to keep the prompt within token budgets.
-When token limits are exceeded, replaces old voluminous tool outputs with
-a concise 1-line summary (e.g. `[exec] ran 'npm test' -> exit 0, 47 lines`).
+When the estimated usage exceeds the soft threshold, replaces old voluminous
+tool outputs with a concise 1-line summary (e.g. `[exec] ran 'npm test' -> exit 0, 47 lines`).
 
 Only tool-result messages *before* the last ``keep_recent`` assistant turns
 are eligible for pruning. User and assistant messages are never modified.
+
+Tuning note: defaults were raised (soft_ratio ~0.55, keep_recent=4, larger max)
+to reduce premature loss of useful tool output while still protecting the window.
+See history_settings.context_pruning for user overrides.
 """
 
 from __future__ import annotations
@@ -14,13 +18,20 @@ import json
 import re
 from typing import Any
 
-CHARS_PER_TOKEN = 4  # conservative estimate
+CHARS_PER_TOKEN = 4  # conservative fallback only
+
+# Prefer real tiktoken-based estimation (handles Chinese, tool_calls, images etc accurately)
+# Falls back to char//4 when the helper is unavailable or fails.
+try:
+    from nanobot.utils.helpers import estimate_message_tokens as _estimate_one_message_tokens
+except Exception:
+    _estimate_one_message_tokens = None  # type: ignore[assignment]
 
 # ── Defaults ──────────────────────────────────────────────────────────────
 
-DEFAULT_SOFT_RATIO = 0.3     # start pruning when > 30% of window
-DEFAULT_KEEP_RECENT = 3      # protect last N assistant turns
-DEFAULT_MAX_CHARS = 1_000    # prune tool outputs larger than this
+DEFAULT_SOFT_RATIO = 0.55    # start pruning when > 55% of window (was 0.3; tuned to reduce info loss)
+DEFAULT_KEEP_RECENT = 4      # protect last N assistant turns
+DEFAULT_MAX_CHARS = 2_000    # prune tool outputs larger than this (internal hard threshold before summarization)
 
 
 def _estimate_message_chars(msg: dict[str, Any]) -> int:
@@ -42,6 +53,21 @@ def _estimate_message_chars(msg: dict[str, Any]) -> int:
 
 def _estimate_total_chars(messages: list[dict[str, Any]]) -> int:
     return sum(_estimate_message_chars(m) for m in messages)
+
+
+def _estimate_total_tokens(messages: list[dict[str, Any]]) -> int:
+    """Best-effort token estimate for the whole message list.
+
+    Uses the project's tiktoken helper when available (much better for CJK,
+    tool_calls framing, etc). Falls back to the old char//4 rule.
+    """
+    if _estimate_one_message_tokens is not None:
+        try:
+            return sum(int(_estimate_one_message_tokens(m) or 0) for m in messages)
+        except Exception:
+            pass
+    # Fallback (original behavior)
+    return sum(_estimate_message_chars(m) for m in messages) // CHARS_PER_TOKEN + len(messages) * 3  # small framing overhead
 
 
 def _find_cutoff_index(messages: list[dict[str, Any]], keep_recent: int) -> int:
@@ -145,6 +171,9 @@ def prune_messages(
     Returns a new list (shallow copy) with pruned messages. User/assistant messages
     are never modified. Only tool results before the last ``keep_recent`` assistant
     turns are pruned by substituting large outputs with a single generic summary line.
+
+    The decision uses a char*4 estimate (see CHARS_PER_TOKEN). For higher accuracy
+    consider integrating estimate_message_tokens from nanobot.utils.helpers in future.
     """
     try:
         from nanobot.groupchat.history import history_settings as hs
@@ -167,9 +196,8 @@ def prune_messages(
     if not messages or context_window_tokens <= 0:
         return messages
 
-    char_window = context_window_tokens * CHARS_PER_TOKEN
-    total_chars = _estimate_total_chars(messages)
-    ratio = total_chars / char_window
+    total_tokens = _estimate_total_tokens(messages)
+    ratio = total_tokens / max(1, context_window_tokens)
 
     if ratio < soft_ratio:
         return messages

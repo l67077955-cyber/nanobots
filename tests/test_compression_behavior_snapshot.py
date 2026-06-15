@@ -89,8 +89,8 @@ class TestStage3_ContextPrune:
         return msgs
 
     def test_soft_pruning_not_triggered(self):
-        """When ratio < 0.3, no messages are pruned.
-        6 tool results * 5K = 30K chars. window ~ 40K*4=160K. ratio=0.1875 < 0.3
+        """When ratio < soft_ratio (now 0.55 by default), no messages are pruned.
+        The test uses explicit args. 6*5k chars on 40k-token window is still low ratio.
         """
         msgs = self._make_messages(6)
         from nanobot.groupchat.history.tool_pruning import prune_messages

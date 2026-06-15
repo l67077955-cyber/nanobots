@@ -68,10 +68,14 @@ _DEFAULTS: dict[str, Any] = {
     },
 
     # ── Stage 4: iterative context pruning (tool_loop iteration 2+) ──
+    # These are intentionally conservative now:
+    # - soft_ratio 0.55: only start aggressive tool-result replacement after >55% of budget
+    # - keep_recent 4: protect the last 4 assistant turns (more context for ongoing tool use)
+    # - soft_max_chars 8000: allow larger tool outputs before 1-line replacement
     "context_pruning": {
-        "soft_ratio": 0.3,
-        "keep_recent": 3,
-        "soft_max_chars": 4_000,
+        "soft_ratio": 0.55,
+        "keep_recent": 4,
+        "soft_max_chars": 8_000,
     },
 }
 

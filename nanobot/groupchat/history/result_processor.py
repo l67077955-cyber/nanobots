@@ -12,7 +12,9 @@ from pathlib import Path
 from typing import Any
 from loguru import logger
 
-STORAGE_DIR = Path("/tmp/nanobot/tool_storage")
+# Prefer a user-persistent location (survives container/tmp cleans).
+# Old /tmp location was ephemeral and caused lost full results after restarts.
+STORAGE_DIR = Path.home() / ".nanobot" / "tool_results"
 
 # tool_name → (config_getter_name, strategy)
 _TOOL_CONFIGS: dict[str, tuple[str, str]] = {
