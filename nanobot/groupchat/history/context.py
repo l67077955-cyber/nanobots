@@ -94,10 +94,15 @@ class HistoryContext:
         )
 
     def add_message(self, sender: str, content: str) -> None:
-        """Append a message and enforce message-count / char-budget limits.
+        """Append a message and enforce message-count / char-budget / token-budget limits.
 
         Head-protection guarantees that the very first message and the first
         user message are never evicted during trimming.
+
+        Token trimming (when the estimator is available) uses the real
+        tiktoken-based estimate from helpers so that long tool outputs or
+        verbose messages trigger trimming based on actual LLM token cost
+        rather than just raw characters.
         """
         self.messages.append({"sender": sender, "content": content})
 
@@ -161,6 +166,69 @@ class HistoryContext:
                 if id(m) in head_id_set or id(m) in tail_id_set:
                     rebuilt.append(m)
             self.messages = rebuilt
+
+        # ── Step 2b: token-budget trimming (new, more accurate) ──
+        # Uses the project's tiktoken estimator (estimate_message_tokens) so
+        # trimming decisions reflect actual context cost to the LLM.
+        # We take a conservative slice of the context_window (e.g. 65%) as the
+        # budget for this history buffer (leaving headroom for system prompt,
+        # tools, etc.). Falls back silently if estimator or settings unavailable.
+        # Head is still always protected.
+        try:
+            from nanobot.groupchat.history.history_settings import get_context_window_tokens
+            from nanobot.utils.helpers import estimate_message_tokens as _est_tok
+
+            token_window = get_context_window_tokens()
+            if token_window > 0:
+                def _as_llm(m):
+                    role = "user" if m.get("sender") in ("User", "user", "用户") else "assistant"
+                    return {"role": role, "content": m.get("content", "")}
+
+                # Re-identify head after previous trims (char or count)
+                head_indices = self._find_head_indices(self.messages, keep_all_users=_keep_users)
+                head_msgs = [self.messages[i] for i in sorted(head_indices)]
+                head_id_set = {id(m) for m in head_msgs}
+
+                head_toks = sum(int(_est_tok(_as_llm(m)) or 0) for m in head_msgs)
+
+                # Conservative fraction for the conversation history itself
+                token_budget = int(token_window * 0.65)
+                available_toks = max(0, token_budget - head_toks)
+
+                tail: list[dict] = []
+                for m in reversed(self.messages):
+                    if id(m) in head_id_set:
+                        continue
+                    try:
+                        mtoks = int(_est_tok(_as_llm(m)) or 0)
+                    except Exception:
+                        mtoks = len(m.get("content", "")) // 4 + 4
+
+                    if available_toks - mtoks < 0:
+                        # Try aging tool logs to shrink before dropping
+                        aged_content = age_tool_log(m.get("content", ""))
+                        try:
+                            atoks = int(_est_tok(_as_llm({**m, "content": aged_content})) or 0)
+                        except Exception:
+                            atoks = len(aged_content) // 4 + 4
+                        if atoks < mtoks and available_toks - atoks >= 0:
+                            tail.insert(0, {**m, "content": aged_content})
+                            available_toks -= atoks
+                            continue
+                        continue
+                    tail.insert(0, m)
+                    available_toks -= mtoks
+
+                # Rebuild preserving chronological order
+                tail_id_set = {id(m) for m in tail}
+                rebuilt: list[dict] = []
+                for m in self.messages:
+                    if id(m) in head_id_set or id(m) in tail_id_set:
+                        rebuilt.append(m)
+                self.messages = rebuilt
+        except Exception:
+            # Estimator or settings not available; rely on previous char/count logic
+            pass
 
         self._state.save_message(sender, content, self.messages)
 
