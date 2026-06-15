@@ -107,8 +107,11 @@ def _summarize_tool_result(tool_name: str, tool_args: str, tool_content: str) ->
     """Create an informative 1-line summary of a tool call + result.
 
     Returns strings like::
-        [exec] ran `npm test` -> exit 0, 47 lines output
+        [exec] ran `npm test` -> exit 0, 47 lines | head: 'test_foo.py::test_bar PASSED'
         [read_file] read config.py (1,200 chars)
+
+    When replacing large tool outputs we intentionally keep a short "head"
+    preview so the agent still has some signal without the full bloat.
     """
     try:
         args = json.loads(tool_args) if tool_args else {}
@@ -125,11 +128,24 @@ def _summarize_tool_result(tool_name: str, tool_args: str, tool_content: str) ->
             cmd = cmd[:77] + "..."
         exit_match = re.search(r'(?:exit[_ ]?code|returncode)\s*[:=]\s*(-?\d+)', content, re.IGNORECASE)
         exit_code = exit_match.group(1) if exit_match else "?"
-        return f"[exec] ran `{cmd}` -> exit {exit_code}, {line_count} lines output"
+        head = ""
+        # Extract a short useful preview from the actual output (skip trailing exit noise)
+        lines = [l.strip() for l in content.splitlines() if l.strip()]
+        if lines:
+            # take first 1-2 non-trivial lines, keep very short
+            preview_lines = [l[:70] for l in lines[:2] if len(l) > 3][:2]
+            if preview_lines:
+                head = " | head: " + " ; ".join(preview_lines)[:140]
+        return f"[exec] ran `{cmd}` -> exit {exit_code}, {line_count} lines{head}"
 
     if tool_name == "read_file":
         path = args.get("path", "?")
-        return f"[read_file] read {path} ({content_len:,} chars)"
+        head = ""
+        if content_len > 300:
+            first = content.splitlines()[0][:80] if content.splitlines() else ""
+            if first:
+                head = f" | head: {first}"
+        return f"[read_file] read {path} ({content_len:,} chars){head}"
 
     if tool_name in ("write_file", "edit_file"):
         path = args.get("path", "?")
@@ -137,11 +153,21 @@ def _summarize_tool_result(tool_name: str, tool_args: str, tool_content: str) ->
 
     if tool_name in ("web_search", "smart_search"):
         query = args.get("query", "?")
-        return f"[{tool_name}] query='{query}' ({content_len:,} chars result)"
+        head = ""
+        if content_len > 400:
+            # Try to surface the first title/link or result snippet
+            first_line = next((l.strip() for l in content.splitlines() if l.strip()), "")[:90]
+            if first_line:
+                head = f" | e.g. {first_line}"
+        return f"[{tool_name}] query='{query}' ({content_len:,} chars result){head}"
 
     if tool_name in ("web_fetch", "smart_fetch"):
         url = args.get("url", "?")
-        return f"[{tool_name}] fetched {url} ({content_len:,} chars result)"
+        head = ""
+        if content_len > 400:
+            first = content[:120].replace("\n", " ").strip()
+            head = f" | head: {first[:100]}"
+        return f"[{tool_name}] fetched {url} ({content_len:,} chars result){head}"
 
     if tool_name == "list_dir":
         path = args.get("dir", args.get("path", "."))
