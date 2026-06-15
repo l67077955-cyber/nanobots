@@ -12,8 +12,12 @@ from dataclasses import dataclass
 from nanobot import __version__
 from nanobot.bus.events import OutboundMessage
 from nanobot.command.router import CommandContext, CommandRouter
-from nanobot.utils.helpers import build_status_content
 from nanobot.utils.restart import set_restart_notice_to_env
+
+# NOTE: other heavy imports are done lazily inside the functions that need them
+# (build_status_content, pairing, memory stores, etc.) so that just importing
+# the module for /restart (cmd_restart) does not pull in missing symbols from
+# a partial source tree.
 
 
 @dataclass(frozen=True)
@@ -147,6 +151,8 @@ async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
 
 async def cmd_status(ctx: CommandContext) -> OutboundMessage:
     """Build an outbound status message for a session."""
+    from nanobot.utils.helpers import build_status_content
+
     loop = ctx.loop
     session = ctx.session or loop.sessions.get_or_create(ctx.key)
     ctx_est = 0
