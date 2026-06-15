@@ -31,6 +31,7 @@ from .formatting import (
     _strip_md,
     _render_table_box,
     _markdown_to_telegram_html,
+    to_cli_style,
 )
 from .callbacks import CallbacksMixin
 from .message_handler import MessageHandlerMixin
@@ -136,23 +137,38 @@ class TelegramChannel(
         logger.info("Telegram: group chat engine set with {} agents", len(engine.registry))
 
     def is_allowed(self, sender_id: str) -> bool:
-        """Preserve Telegram's legacy id|username allowlist matching."""
+        """Support legacy composite "id|username" (from _sender_id mixin) for allow_from.
+
+        Base class already does the right thing for:
+          - empty allow_from → deny all (with warning)
+          - "*" in list → allow everyone
+          - exact string match on the passed sender_id value
+
+        This override adds tolerance so users can put either the raw numeric ID
+        *or* the @username into allowFrom, even when the runtime value passed
+        to is_allowed is the composite form "123456|alice" (or plain "123456"
+        when the user has no username set).
+        """
         if super().is_allowed(sender_id):
             return True
 
-        allow_list = getattr(self.config, "allow_from", [])
-        if not allow_list or "*" in allow_list:
-            return False
+        allow_list = getattr(self.config, "allow_from", []) or []
+        sender_str = str(sender_id or "")
 
-        sender_str = str(sender_id)
-        if sender_str.count("|") != 1:
-            return False
+        # Composite form produced by the mixin when username is present
+        if "|" in sender_str:
+            try:
+                sid, username = sender_str.split("|", 1)
+                if sid in allow_list or (username and username in allow_list):
+                    return True
+            except ValueError:
+                pass
 
-        sid, username = sender_str.split("|", 1)
-        if not sid.isdigit() or not username:
-            return False
+        # Plain ID (no username) or the whole string listed
+        if sender_str in allow_list:
+            return True
 
-        return sid in allow_list or username in allow_list
+        return False
 
     async def start(self) -> None:
         """Start the Telegram bot with long polling."""
@@ -434,7 +450,7 @@ class TelegramChannel(
         """Handle /help command, bypassing ACL so all users can access it."""
         if not update.message:
             return
-        await update.message.reply_text(
+        help_text = to_cli_style(
             "🐈 nanobot commands:\n"
             "/new — 新对话\n"
             "/clear — 清空上下文\n"
@@ -472,6 +488,7 @@ class TelegramChannel(
             "💡 加入 agent 后直接发消息即可对话\n"
             "2+ agent 自动进入群聊模式"
         )
+        await update.message.reply_text(help_text, parse_mode="Markdown")
 
     # ── Agent Management Commands ────────────────────────────
 

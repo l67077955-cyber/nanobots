@@ -13,6 +13,7 @@ from telegram.ext import ContextTypes
 
 from loguru import logger
 
+from nanobot.channels.telegram.formatting import to_cli_style
 from nanobot.groupchat.history.prompt_builder import (
     PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
     GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
@@ -81,9 +82,11 @@ class SettingsCommandsMixin:
             ])
         buttons.append([InlineKeyboardButton("➕ 添加参数", callback_data="hp_add")])
         text = "\n".join(lines)
+        hp_text = to_cli_style(text, title="⚙️ 默认超参数设置（全局）")
         await self._app.bot.send_message(
-            chat_id=int(chat_id), text=text,
+            chat_id=int(chat_id), text=hp_text,
             reply_markup=InlineKeyboardMarkup(buttons),
+            parse_mode="Markdown",
         )
 
     # ── Groupchat Settings ─────────────────────────────────────
@@ -161,9 +164,11 @@ class SettingsCommandsMixin:
             lines.append(f"\n  对话池: {pool_mode} → {cap} threads" + (f" (auto={auto_cap})" if pool_points > 0 else ""))
             lines.append(f"  工具池: {active} agents × {settings.get('tool_initial', 1)} = {tool_pool} points")
 
+        gc_text = to_cli_style("\n".join(lines), title="⚙️ 群聊参数设置")
         await update.message.reply_text(
-            "\n".join(lines),
+            gc_text,
             reply_markup=InlineKeyboardMarkup(buttons),
+            parse_mode="Markdown",
         )
 
     async def _on_restart(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -214,7 +219,7 @@ class SettingsCommandsMixin:
         engine = self._groupchat_engine
         if not engine:
             lines.append("⚠️ 群聊引擎未初始化")
-            await update.message.reply_text("\n".join(lines))
+            await update.message.reply_text(to_cli_style("\n".join(lines)), parse_mode="Markdown")
             return
 
         # Toggle debug context logging
@@ -296,8 +301,8 @@ class SettingsCommandsMixin:
             model_count = len(pm.get("models", {}).get(pn, []))
             lines.append(f"  {pn}: {url or '(native)'} ({model_count}模型) key={key_preview}")
 
-        text = "\n".join(lines)
-        await update.message.reply_text(text[:4096])
+        text = to_cli_style("\n".join(lines), title="🐛 Debug 状态")
+        await update.message.reply_text(text[:4096], parse_mode="Markdown")
 
     # ── Prompt Orchestration ────────────────────────────────
 
@@ -315,7 +320,8 @@ class SettingsCommandsMixin:
 
         # Directly show global component order editor
         text, markup = self._build_prompt_order_view(engine)
-        await update.message.reply_text(text, reply_markup=markup)
+        text = to_cli_style(text, title="📋 PROMPT PIPELINE")
+        await update.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
 
     # Components that are only injected under specific conditions
     _CONDITIONAL_TAGS: dict[str, str] = {
@@ -579,8 +585,10 @@ class SettingsCommandsMixin:
             ],
         ]
 
+        hist_text = to_cli_style(text, title="📚 上下文 & 历史")
         await update.message.reply_text(
-            text, reply_markup=InlineKeyboardMarkup(buttons),
+            hist_text, reply_markup=InlineKeyboardMarkup(buttons),
+            parse_mode="Markdown",
         )
 
     # ── Think command ───────────────────────────────────────

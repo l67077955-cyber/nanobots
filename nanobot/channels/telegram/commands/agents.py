@@ -9,7 +9,7 @@ from loguru import logger
 
 from nanobot.groupchat import display as _d
 from nanobot.utils.helpers import split_message
-from ..formatting import TELEGRAM_MAX_MESSAGE_LEN
+from ..formatting import TELEGRAM_MAX_MESSAGE_LEN, to_cli_style
 
 
 class AgentCommandsMixin:
@@ -106,8 +106,8 @@ class AgentCommandsMixin:
             lines.append(f"👥 发言顺序: {order}")
         else:
             lines.append("💤 无活跃 agent")
-        text = "\n".join(lines)
-        await update.message.reply_text(text[:4096])
+        text = to_cli_style("\n".join(lines), title="🎭 Agents 状态")
+        await update.message.reply_text(text[:4096], parse_mode="Markdown")
 
     async def _on_setleader(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Set or clear the leader agent."""
@@ -251,15 +251,22 @@ class AgentCommandsMixin:
             tools_str = "全部开启"
         else:
             tools_str = "全部关闭"
-        rank = agent.get("rank", "pawn")
-        rank_icons = {"pawn": "♟ 兵", "knight": "♞ 马", "bishop": "♝ 象", "queen": "♛ 后"}
-        rank_str = rank_icons.get(rank, rank)
+        rank = agent.get("rank", "basic")
+        MODERN_LABELS = {
+            "basic": "基础 basic",
+            "standard": "标准 standard",
+            "advanced": "高级 advanced",
+            "expert": "专家 expert",
+        }
+        rank_str = MODERN_LABELS.get(rank, rank)
         return (
             f"✏️ 编辑 {agent_name}\n\n"
             f"🎖️ 等级: {rank_str}\n"
             f"模型: {agent['model']}\n"
             f"工具: {tools_str}\n"
-            f"人设: {agent['prompt'][:100]}..."
+            f"人设: {agent['prompt'][:100]}...\n\n"
+            f"💡 提示：多数情况下只需调整「等级」和「思考深度」即可。\n"
+            f"超参数为高级选项，默认即可获得良好效果。"
         )
 
     def _edit_menu_buttons(self, agent_name: str) -> InlineKeyboardMarkup:
@@ -269,8 +276,9 @@ class AgentCommandsMixin:
             [InlineKeyboardButton("📝 修改提示词", callback_data=f"ef:{agent_name}:persona")],
             [InlineKeyboardButton("🤖 更换模型/提供商", callback_data=f"ef:{agent_name}:model")],
             [InlineKeyboardButton("🔧 工具权限设置", callback_data=f"ef:{agent_name}:tools")],
-            [InlineKeyboardButton("⚙️ 超参数设置", callback_data=f"ef:{agent_name}:hyperparams")],
-            [InlineKeyboardButton("🧠 思考强度", callback_data=f"ef:{agent_name}:reasoning_effort")],
+            [InlineKeyboardButton("🧠 思考深度", callback_data=f"ef:{agent_name}:reasoning_effort")],
+            [InlineKeyboardButton("🎯 快速预设（推荐）", callback_data=f"ef:{agent_name}:presets")],
+            [InlineKeyboardButton("⚙️ 高级超参数 (可选)", callback_data=f"ef:{agent_name}:hyperparams")],
             [InlineKeyboardButton("🗑️ 删除 Agent", callback_data=f"da:{agent_name}")],
             [InlineKeyboardButton("❌ 取消", callback_data=f"ef:{agent_name}:cancel")],
         ])

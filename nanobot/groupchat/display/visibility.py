@@ -7,6 +7,12 @@ MUST import from this module — no inline rank comparisons elsewhere.
 from __future__ import annotations
 
 RANK_ORDER: dict[str, int] = {
+    # Clean modern names (preferred)
+    "basic": 0,
+    "standard": 1,
+    "advanced": 2,
+    "expert": 3,
+    # Legacy chess names (for backward compat with old agent configs)
     "pawn": 0,
     "knight": 1,
     "bishop": 2,
@@ -14,7 +20,22 @@ RANK_ORDER: dict[str, int] = {
     "king": 4,
 }
 
-RANK_NAME: dict[int, str] = {v: k.capitalize() for k, v in RANK_ORDER.items()}
+RANK_NAME: dict[int, str] = {v: k.capitalize() for k, v in RANK_ORDER.items() if k in ("basic", "standard", "advanced", "expert")}
+
+# Friendly display labels for UI and announcements (modern names only for new usage)
+RANK_DISPLAY: dict[str, str] = {
+    # Modern primary
+    "basic": "基础 basic",
+    "standard": "标准 standard",
+    "advanced": "高级 advanced",
+    "expert": "专家 expert",
+    # Legacy chess names map to modern display (for old configs and announcements)
+    "pawn": "基础 basic",
+    "knight": "标准 standard",
+    "bishop": "高级 advanced",
+    "queen": "专家 expert",
+    "king": "专家 expert",
+}
 
 
 def compute_agent_ranks(
@@ -28,7 +49,7 @@ def compute_agent_ranks(
     """
     ranks: dict[str, int] = {}
     for a in agents:
-        r = registry.get(a, {}).get("rank", "pawn")
+        r = registry.get(a, {}).get("rank", "basic")
         ranks[a] = RANK_ORDER.get(r, 0) if isinstance(r, str) else int(r)
     if leader_name and leader_name in ranks:
         ranks[leader_name] = max(ranks.values()) + 1
@@ -50,8 +71,8 @@ def tool_call_label(
 
     Examples:
         '→ Kirk'                    (leader call, only leader sees)
-        '→ Harper, Kirk'            (knight call, knight+ sees)
-        '→ Lucas, Harper, Kirk'     (pawn call, all see)
+        '→ Harper, Kirk'            (advanced call, advanced+ sees)
+        '→ Lucas, Harper, Kirk'     (basic call, all see)
     """
     if is_leader:
         return f"→ {sender_name}"

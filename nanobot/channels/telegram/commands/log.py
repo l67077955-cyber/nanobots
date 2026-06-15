@@ -10,6 +10,8 @@ from telegram.ext import ContextTypes
 
 from loguru import logger
 
+from ..formatting import to_cli_style
+
 from ..formatting import TELEGRAM_MAX_MESSAGE_LEN
 from nanobot.utils.helpers import split_message
 
@@ -50,7 +52,8 @@ class LogCommandsMixin:
         total_pages = max(1, (len(logs) + 7) // 8)
         page = total_pages - 1
         text, markup = self._build_log_page_v2(logs, page, keyword=keyword)
-        await update.message.reply_text(text, reply_markup=markup)
+        text = to_cli_style(text, title="📊 LLM 调用日志")
+        await update.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
 
     @staticmethod
     def _load_request_logs(max_lines: int = 500) -> list[dict]:

@@ -20,9 +20,10 @@ _TOOL_LOG_RE = re.compile(
     # and accidentally consuming char counts from subsequent tool call lines
 )
 
-# Matches the entire [工具调用记录]... block at the end of a message
+# Matches tool call history blocks (old [工具调用记录] or new <previous_tool_calls>)
+# We support both for history compatibility during transition.
 _TOOL_LOG_BLOCK_RE = re.compile(
-    r"\n*\[工具调用记录\].*$",
+    r"\n*(?:\[工具调用记录\]|<previous_tool_calls>[\s\S]*?</previous_tool_calls>).*$",
     re.DOTALL,
 )
 
@@ -40,7 +41,7 @@ def age_tool_log(content: str) -> str:
 
     Returns the content unchanged if no tool log block is found.
     """
-    if "[工具调用记录]" not in content:
+    if "[工具调用记录]" not in content and "<previous_tool_calls>" not in content:
         return content
 
     def _replace(m: re.Match) -> str:
@@ -54,7 +55,8 @@ def age_tool_log(content: str) -> str:
 
 
 def strip_tool_log(content: str) -> str:
-    """Remove the entire [工具调用记录] block from a message.
+    """Remove the entire tool call history block (<previous_tool_calls> or legacy [工具调用记录])
+    from a message.
 
     Used for rank-based context isolation: high-rank agents (Leader)
     don't need to see low-rank agents' tool call details.
@@ -81,7 +83,8 @@ def history_to_messages(
     Rank-based tool call isolation (2026.5):
     - agent_ranks: {agent_name: rank_int} — higher number = higher privilege
     - An agent can only see tool calls from agents with rank <= its own rank
-    - Text messages are never stripped, only [工具调用记录] blocks
+    - Text messages are never stripped, only tool history blocks
+      (<previous_tool_calls> or legacy [工具调用记录])
     """
     from nanobot.groupchat.display.visibility import can_see_tool_call
 
@@ -90,11 +93,12 @@ def history_to_messages(
     def _to_msg(m: dict[str, str]) -> dict[str, Any]:
         sender, content = m["sender"], m["content"]
         # Rank-based tool call isolation: strip tool logs from lower-rank agents
+        has_tool_log = "[工具调用记录]" in content or "<previous_tool_calls>" in content
         if agent_ranks and sender not in ("用户", "系统", current_agent):
             sender_rank = agent_ranks.get(sender, 0)
-            if not can_see_tool_call(sender_rank, my_rank) and "[工具调用记录]" in content:
+            if not can_see_tool_call(sender_rank, my_rank) and has_tool_log:
                 content = strip_tool_log(content)
-            elif "[工具调用记录]" in content:
+            elif has_tool_log:
                 # Compress visible cross-agent tool logs: keep fn+args+char count only
                 content = age_tool_log(content)
         if sender == "用户":

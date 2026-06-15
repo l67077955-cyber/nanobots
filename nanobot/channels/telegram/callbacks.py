@@ -21,7 +21,7 @@ from nanobot.groupchat.history.prompt_builder import (
     GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
     COMPONENT_PHASES as _COMPONENT_PHASES,
 )
-from .formatting import TELEGRAM_MAX_MESSAGE_LEN
+from .formatting import TELEGRAM_MAX_MESSAGE_LEN, to_cli_style
 
 
 class CallbacksMixin:
@@ -81,9 +81,16 @@ class CallbacksMixin:
             InlineKeyboardButton("📥 复制全局设置", callback_data=f"ahp_sync:{agent_name}")
         ])
         buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{agent_name}")])
-        text = f"⚙️ {agent_name} 超参数设置:"
+        text = (
+            f"⚙️ {agent_name} 高级超参数（可选）\n\n"
+            "这些是底层采样参数（temperature、top_p 等）。\n"
+            "大多数用户只需用上方的「思考深度」即可获得想要的效果。\n"
+            "除非你清楚知道每个参数的作用，否则建议保持为空（继承全局或模型默认）。"
+        )
         if agent_hp:
-            text += f"\n\n" + "\n".join(f"  {k} = {v}" for k, v in agent_hp.items())
+            text += f"\n\n当前覆盖值：\n" + "\n".join(f"  {k} = {v}" for k, v in agent_hp.items())
+        else:
+            text += "\n\n（当前无覆盖，使用全局/默认）"
         await self._app.bot.send_message(
             chat_id=int(chat_id), text=text[:4096],
             reply_markup=InlineKeyboardMarkup(buttons),
@@ -212,17 +219,23 @@ class CallbacksMixin:
                     return
                 elif field == "rank":
                     agent = self._groupchat_engine.registry.get(name, {})
-                    current = agent.get("rank", "pawn")
-                    rank_icons = {"pawn": "♟ 兵", "knight": "♞ 马", "bishop": "♝ 象", "queen": "♛ 后"}
+                    current = agent.get("rank", "basic")
+                    MODERN_RANKS = ["basic", "standard", "advanced", "expert"]
+                    MODERN_LABELS = {
+                        "basic": "基础 basic",
+                        "standard": "标准 standard",
+                        "advanced": "高级 advanced",
+                        "expert": "专家 expert",
+                    }
                     buttons = []
-                    for r in ("pawn", "knight", "bishop", "queen"):
+                    for r in MODERN_RANKS:
                         icon = "✅ " if r == current else "  "
                         buttons.append([InlineKeyboardButton(
-                            f"{icon}{rank_icons[r]}", callback_data=f"srr:{name}:{r}"
+                            f"{icon}{MODERN_LABELS[r]}", callback_data=f"srr:{name}:{r}"
                         )])
                     buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
                     await query.edit_message_text(
-                        f"🎖️ {name} 等级设置 (当前: {rank_icons.get(current, current)}):",
+                        f"🎖️ {name} 等级设置 (当前: {MODERN_LABELS.get(current, current)})\n\n更改后需要重新开始广播轮次才能更新中断层级和对话池容量。",
                         reply_markup=InlineKeyboardMarkup(buttons)
                     )
                     return
@@ -233,7 +246,7 @@ class CallbacksMixin:
                     await self._send_agent_hyperparams_keyboard(chat_id, name, agent_hp)
                     return
                 elif field == "reasoning_effort":
-                    # Show effort level selection (reuse think panel logic)
+                    # Show effort level selection — friendly "思考深度"
                     agent = self._groupchat_engine.registry.get(name, {})
                     current = agent.get("reasoning_effort") or "off"
                     levels = [("off", "默认(自动)"), ("low", "低"), ("medium", "中"), ("high", "高")]
@@ -245,8 +258,37 @@ class CallbacksMixin:
                             callback_data=f"ef_re:{name}:{lvl}"
                         )])
                     buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
+                    help_text = (
+                        "🧠 思考深度（reasoning_effort）\n\n"
+                        "• 默认：让模型自己决定\n"
+                        "• 低：快速响应，适合简单任务\n"
+                        "• 中：平衡质量与速度（推荐多数场景）\n"
+                        "• 高：模型会进行更深入的内部推理（仅支持 o1 / claude-thinking 等模型，耗时更长、token 更多，但思考更透彻）\n\n"
+                        "新手建议从「中」或「默认」开始。"
+                    )
                     await query.edit_message_text(
-                        f"🧠 {name} 思考强度 (当前: {current}):",
+                        f"🧠 {name} 思考深度 (当前: {current})\n\n{help_text}",
+                        reply_markup=InlineKeyboardMarkup(buttons)
+                    )
+                    return
+                elif field == "presets":
+                    # Simple high-level presets that hide complexity
+                    buttons = [
+                        [InlineKeyboardButton("⚖️ 平衡（推荐）", callback_data=f"preset:{name}:balanced")],
+                        [InlineKeyboardButton("✨ 更有创意", callback_data=f"preset:{name}:creative")],
+                        [InlineKeyboardButton("🔬 更严谨分析", callback_data=f"preset:{name}:precise")],
+                        [InlineKeyboardButton("🧠 深度思考", callback_data=f"preset:{name}:deep")],
+                        [InlineKeyboardButton("↩️ 恢复默认", callback_data=f"preset:{name}:reset")],
+                        [InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")],
+                    ]
+                    await query.edit_message_text(
+                        f"🎯 {name} 快速预设\n\n"
+                        "这些一键设置会同时调整思考深度和少量采样参数，适合不想碰底层超参数的用户。\n"
+                        "• 平衡：默认或中强度\n"
+                        "• 更有创意：较高随机性 + 中/高思考\n"
+                        "• 更严谨分析：低温度 + 中强度\n"
+                        "• 深度思考：高思考强度（适合支持的模型）\n"
+                        "• 恢复默认：清除本 agent 的高级覆盖",
                         reply_markup=InlineKeyboardMarkup(buttons)
                     )
                     return
@@ -338,9 +380,102 @@ class CallbacksMixin:
                     )])
                 buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
                 await query.edit_message_text(
-                    f"🧠 {name} 思考强度 (当前: {current}):",
+                    f"🧠 {name} 思考深度 (当前: {current})\n\n已更新。支持的模型会据此进行不同深度的推理。",
                     reply_markup=InlineKeyboardMarkup(buttons)
                 )
+
+            elif data.startswith("preset:"):
+                # One-click presets for common user desires (hides raw hyperparams complexity)
+                parts = data.split(":", 2)
+                if len(parts) < 3:
+                    return
+                name, preset = parts[1], parts[2]
+                agent = self._groupchat_engine.registry.get(name, {}) if self._groupchat_engine else {}
+                cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
+
+                def _apply_and_persist(changes: dict, msg: str):
+                    # Apply to runtime
+                    hp = agent.setdefault("hyperparams", {})
+                    hp.update(changes)
+                    # reasoning_effort goes top-level too for loader compatibility
+                    if "reasoning_effort" in changes:
+                        agent["reasoning_effort"] = changes["reasoning_effort"]
+                    # Persist
+                    try:
+                        if cfg_path.exists():
+                            c = json.loads(cfg_path.read_text())
+                            c.setdefault("hyperparams", {})
+                            c["hyperparams"].update(changes)
+                            if "reasoning_effort" in changes:
+                                c["reasoning_effort"] = changes["reasoning_effort"]
+                            cfg_path.write_text(json.dumps(c, indent=2, ensure_ascii=False))
+                    except Exception as e:
+                        logger.warning("Preset persist partial fail: {}", e)
+                    return msg
+
+                if preset == "balanced":
+                    # Clear heavy overrides, set medium
+                    for k in list(agent.get("hyperparams", {}).keys()):
+                        if k in ("temperature", "top_p"):
+                            agent["hyperparams"].pop(k, None)
+                    if "hyperparams" in agent and not agent["hyperparams"]:
+                        agent.pop("hyperparams", None)
+                    agent["reasoning_effort"] = "medium"
+                    if cfg_path.exists():
+                        try:
+                            c = json.loads(cfg_path.read_text())
+                            c.pop("hyperparams", None)
+                            c["reasoning_effort"] = "medium"
+                            cfg_path.write_text(json.dumps(c, indent=2, ensure_ascii=False))
+                        except Exception:
+                            pass
+                    await query.edit_message_text(f"✅ {name} 已设为「平衡」预设（中等思考深度，默认采样）。")
+                    await self._show_edit_menu(query, name)
+                    return
+
+                elif preset == "creative":
+                    res = _apply_and_persist(
+                        {"temperature": 0.9, "top_p": 0.95, "reasoning_effort": "medium"},
+                        "更有创意"
+                    )
+                    await query.edit_message_text(f"✅ {name} 已应用「{preset}」预设：更高随机性 + 中等思考深度。")
+                    await self._show_edit_menu(query, name)
+                    return
+
+                elif preset == "precise":
+                    res = _apply_and_persist(
+                        {"temperature": 0.2, "top_p": 0.9, "reasoning_effort": "medium"},
+                        "更严谨"
+                    )
+                    await query.edit_message_text(f"✅ {name} 已应用「{preset}」预设：低温度严谨采样 + 中等思考。")
+                    await self._show_edit_menu(query, name)
+                    return
+
+                elif preset == "deep":
+                    res = _apply_and_persist(
+                        {"temperature": 0.5, "top_p": 0.9, "reasoning_effort": "high"},
+                        "深度思考"
+                    )
+                    await query.edit_message_text(
+                        f"✅ {name} 已应用「深度思考」预设：高思考强度（适合支持推理的模型）+ 适中采样。"
+                    )
+                    await self._show_edit_menu(query, name)
+                    return
+
+                elif preset == "reset":
+                    agent.pop("hyperparams", None)
+                    agent.pop("reasoning_effort", None)
+                    if cfg_path.exists():
+                        try:
+                            c = json.loads(cfg_path.read_text())
+                            c.pop("hyperparams", None)
+                            c.pop("reasoning_effort", None)
+                            cfg_path.write_text(json.dumps(c, indent=2, ensure_ascii=False))
+                        except Exception:
+                            pass
+                    await query.edit_message_text(f"✅ {name} 已恢复默认（清除超参数与思考深度覆盖）。")
+                    await self._show_edit_menu(query, name)
+                    return
 
             elif data.startswith("tf:"):
                 # tf:AgentName:tool_name — toggle individual tool
@@ -415,16 +550,32 @@ class CallbacksMixin:
                 )
 
             elif data.startswith("srr:"):
-                # srr:AgentName:rank — set agent rank
+                # srr:AgentName:rank — set agent rank (modern names preferred)
                 parts = data.split(":", 2)
                 if len(parts) < 3:
                     return
                 name, rank_val = parts[1], parts[2]
-                if rank_val not in ("pawn", "knight", "bishop", "queen"):
+
+                # Only modern ranks for new UI. Legacy chess names are auto-migrated on load/start.
+                MODERN_RANKS = ["basic", "standard", "advanced", "expert"]
+                MODERN_LABELS = {
+                    "basic": "基础 basic",
+                    "standard": "标准 standard",
+                    "advanced": "高级 advanced",
+                    "expert": "专家 expert",
+                }
+
+                # Accept legacy for old button data in chat history, but normalize immediately
+                LEGACY_TO_MODERN = {"pawn": "basic", "knight": "standard", "bishop": "advanced", "queen": "expert"}
+                normalized = LEGACY_TO_MODERN.get(rank_val, rank_val)
+                if normalized not in MODERN_RANKS:
                     return
+
                 agent = self._groupchat_engine.registry.get(name, {})
-                agent["rank"] = rank_val
-                # Persist to config.json (same pattern as tf: handler)
+                old_rank = agent.get("rank")
+                agent["rank"] = normalized
+
+                # Persist to config.json
                 cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
                 cfg_path.parent.mkdir(parents=True, exist_ok=True)
                 cfg = {}
@@ -433,21 +584,38 @@ class CallbacksMixin:
                         cfg = json.loads(cfg_path.read_text())
                     except Exception:
                         pass
-                cfg["rank"] = rank_val
+                cfg["rank"] = normalized
                 try:
                     cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
                 except Exception:
                     pass
-                rank_icons = {"pawn": "♟ 兵", "knight": "♞ 马", "bishop": "♝ 象", "queen": "♛ 后"}
+
+                # Live-update the current round's interrupt hierarchy if broadcast is active
+                try:
+                    eng = self._groupchat_engine
+                    if eng and hasattr(eng, 'mailbox') and eng.mailbox:
+                        # Recompute all current ranks from the live registry
+                        ranks_map = {a: eng.registry.get(a, {}).get("rank", "basic") for a in eng.registry.keys()}
+                        leader = getattr(eng, '_leader', None) or ""
+                        eng.mailbox.set_ranks(ranks_map, leader=leader)
+                        logger.info("Live rank update for interrupt hierarchy: {} -> {}", name, normalized)
+                except Exception as e:
+                    logger.debug("Live rank refresh skipped: {}", e)
+
+                # Rebuild buttons with modern labels
                 buttons = []
-                for r in ("pawn", "knight", "bishop", "queen"):
-                    icon = "✅ " if r == rank_val else "  "
+                for r in MODERN_RANKS:
+                    icon = "✅ " if r == normalized else "  "
                     buttons.append([InlineKeyboardButton(
-                        f"{icon}{rank_icons[r]}", callback_data=f"srr:{name}:{r}"
+                        f"{icon}{MODERN_LABELS[r]}", callback_data=f"srr:{name}:{r}"
                     )])
                 buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
+
+                note = ""
+                if old_rank and old_rank != normalized:
+                    note = "\n\n⚠️ 等级已更新。当前广播轮次的中断权限和容量**不会立即改变**，需要结束本轮（end_discussion 或让所有 agent 完成）并开始新广播才会完全生效。"
                 await query.edit_message_text(
-                    f"🎖️ {name} 等级已设为 {rank_icons[rank_val]}",
+                    f"🎖️ {name} 等级已设为 {MODERN_LABELS[normalized]}{note}",
                     reply_markup=InlineKeyboardMarkup(buttons)
                 )
 
@@ -983,9 +1151,11 @@ class CallbacksMixin:
                 if params and key in params:
                     self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key}
                     await query.edit_message_text(
-                        f"✏️ 修改 {key}\n"
+                        f"✏️ 修改全局 {key}\n"
                         f"当前值: {params[key]}\n\n"
-                        f"请输入新值 (数字):"
+                        "请输入新值（数字）。\n"
+                        "示例：temperature 常用 0.2~1.0（越高越有创意但越不稳定）\n"
+                        "新手建议不要随意改，先试「思考深度」功能。"
                     )
 
             elif data.startswith("hp_del:"):
@@ -1018,18 +1188,23 @@ class CallbacksMixin:
                 buttons.append([InlineKeyboardButton("✏️ 自定义参数名", callback_data="hp_custom")])
                 buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="hp_back")])
                 await query.edit_message_text(
-                    "➕ 选择要添加的参数:",
+                    "➕ 选择要添加的参数（全局）：\n仅推荐给清楚这些参数含义的用户。temperature / top_p 是最常用，其余属于进阶。",
                     reply_markup=InlineKeyboardMarkup(buttons)
                 )
 
             elif data.startswith("hp_new:"):
                 key = data[7:]
                 self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key, "hp_is_new": True}
-                await query.edit_message_text(f"➕ 添加 {key}\n\n请输入值 (数字):")
+                await query.edit_message_text(
+                    f"➕ 添加全局 {key}\n\n"
+                    "请输入值（数字）。\n"
+                    "⚠️ 只有当你知道这个参数具体影响时再添加。\n"
+                    "temperature/top_p 是最常见的两个；其他如 min_p、top_k 等属于进阶用法。"
+                )
 
             elif data == "hp_custom":
                 self._edit_state[chat_id] = {"field": "hp_add_custom"}
-                await query.edit_message_text("✏️ 请输入参数名:")
+                await query.edit_message_text("✏️ 请输入参数名（例如 temperature）。\n只有熟悉采样参数的用户才需要自定义，普通用户建议取消并使用「思考深度」。")
 
             elif data == "hp_back":
                 provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
@@ -1051,7 +1226,9 @@ class CallbacksMixin:
                     await query.edit_message_text(
                         f"✏️ 修改 {a_name} 的 {key}\n"
                         f"当前值: {agent_hp[key]}\n\n"
-                        f"请输入新值 (数字):"
+                        "请输入新值（数字）。此设置仅对此 agent 生效，会覆盖全局。\n"
+                        "示例：temperature 0.7 左右平衡创意与可靠；0.2 更严谨。\n"
+                        "提示：大多数情况留空或只用「思考深度」按钮更简单。"
                     )
 
             elif data.startswith("ahp_del:"):
@@ -1129,7 +1306,7 @@ class CallbacksMixin:
                 buttons.append([InlineKeyboardButton("✏️ 自定义参数名", callback_data=f"ahp_custom:{a_name}")])
                 buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ahp_back:{a_name}")])
                 await query.edit_message_text(
-                    f"➕ 为 {a_name} 添加参数:",
+                    f"➕ 为 {a_name} 添加参数：\n这些是高级采样参数。新手强烈建议先只用「思考深度」和工具开关来调整，效果更直观可预测。",
                     reply_markup=InlineKeyboardMarkup(buttons)
                 )
 
@@ -1140,13 +1317,17 @@ class CallbacksMixin:
                     return
                 a_name, key = parts[1], parts[2]
                 self._edit_state[chat_id] = {"field": "ahp_value", "agent": a_name, "hp_key": key, "hp_is_new": True}
-                await query.edit_message_text(f"➕ 为 {a_name} 添加 {key}\n\n请输入值 (数字):")
+                await query.edit_message_text(
+                    f"➕ 为 {a_name} 添加 {key}\n\n"
+                    "请输入值（数字）。此值仅影响该 agent。\n"
+                    "推荐：除非必要，否则先用该 agent 的「思考深度」和「工具权限」来调整行为，更直观。"
+                )
 
             elif data.startswith("ahp_custom:"):
                 # ahp_custom:AgentName
                 a_name = data[11:]
                 self._edit_state[chat_id] = {"field": "ahp_add_custom", "agent": a_name}
-                await query.edit_message_text("✏️ 请输入参数名:")
+                await query.edit_message_text("✏️ 请输入参数名（例如 temperature）。\n只有熟悉采样参数的用户才需要自定义，普通用户建议取消并使用该 agent 的「思考深度」。")
 
             elif data.startswith("ahp_back:"):
                 # ahp_back:AgentName
@@ -2753,7 +2934,7 @@ class CallbacksMixin:
                 soul_dir.mkdir(parents=True, exist_ok=True)
                 (soul_dir / "SOUL.md").write_text(prompt)
                 config_path = soul_dir.parent / "config.json"
-                config_data = {"model": model, "rank": "pawn"}
+                config_data = {"model": model, "rank": "basic"}
                 if agent_hp:
                     config_data["hyperparams"] = agent_hp
                 config_path.write_text(json.dumps(config_data, indent=2))
@@ -2911,14 +3092,16 @@ class CallbacksMixin:
 
             # Refresh the status panel
             text, buttons = self._build_think_status_panel(engine)
+            text = to_cli_style(text, title="🧠 Agent 思考模式")
             await query.edit_message_text(
-                text, reply_markup=InlineKeyboardMarkup(buttons)
+                text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown"
             )
 
         elif data == "think_back":
             # Return to the main think status panel
             text, buttons = self._build_think_status_panel(engine)
+            text = to_cli_style(text, title="🧠 Agent 思考模式")
             await query.edit_message_text(
-                text, reply_markup=InlineKeyboardMarkup(buttons)
+                text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown"
             )
 

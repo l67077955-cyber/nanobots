@@ -164,17 +164,26 @@ def tool_in_progress_msg(header: str) -> str:
 # ── Broadcast-specific ───────────────────────────────────────
 
 def broadcast_start_msg(agents: list[str], timeout: int, leader: str | None = None, ranks: dict[str, str] | None = None) -> str:
-    """Render broadcast start banner with role indicators and rank badges."""
+    """Render broadcast start banner with role indicators and rank badges.
+    Always shows friendly modern labels even if old chess names are stored in config.
+    """
+    from nanobot.groupchat.display.visibility import RANK_DISPLAY
+
     total = len(agents)
     lines = [f"══ Broadcast · {total} agents · {timeout}s ══"]
     _r = ranks or {}
+
+    def _label(a: str) -> str:
+        raw = _r.get(a, "basic")
+        return RANK_DISPLAY.get(raw, raw)
+
     if leader:
-        lines.append(f"👑 {leader} ({_r.get(leader, 'pawn')})")
+        lines.append(f"👑 {leader} ({_label(leader)})")
         members = [a for a in agents if a != leader]
         if members:
-            lines.append("  ".join(f"🔹 {m} ({_r.get(m, 'pawn')})" for m in members))
+            lines.append("  ".join(f"🔹 {m} ({_label(m)})" for m in members))
     else:
-        lines.append("  ".join(f"🔹 {a} ({_r.get(a, 'pawn')})" for a in agents))
+        lines.append("  ".join(f"🔹 {a} ({_label(a)})" for a in agents))
     return "\n".join(lines)
 
 
@@ -310,8 +319,8 @@ def tool_activity_msg(
 ) -> str:
     """Format a tool call for broadcast display.
 
-    Leader:     👑▸ Nanobot · search "酒馆战棋"  → King+
-    Non-leader: ▸ Lucas · search "Trump latest news"  → Pawn+
+    Leader:     👑▸ Nanobot · search "酒馆战棋"  → expert+
+    Non-leader: ▸ Lucas · search "Trump latest news"  → basic+
     """
     from nanobot.groupchat.display.visibility import tool_call_label
 

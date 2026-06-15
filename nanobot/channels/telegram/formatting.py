@@ -132,3 +132,20 @@ def _markdown_to_telegram_html(text: str) -> str:
 
     return text
 
+
+def to_cli_style(text: str, title: str | None = None) -> str:
+    """Wrap text so it renders with CLI/terminal monospace 'font' in Telegram.
+
+    Uses ``` code block → <pre><code> which forces fixed-width font,
+    similar to pasting output from a real CLI/terminal.
+
+    This gives the "cli风味" the user asked for on status panels,
+    help, debug, prompt views, logs, etc.
+    """
+    text = (text or "").rstrip()
+    if title:
+        text = f"{title}\n\n{text}"
+    if not text.startswith("```"):
+        text = f"```\n{text}\n```"
+    return text
+

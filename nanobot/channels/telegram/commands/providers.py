@@ -10,6 +10,8 @@ from telegram.ext import ContextTypes
 
 from loguru import logger
 
+from ..formatting import to_cli_style
+
 
 class ProviderCommandsMixin:
     """Mixin providing provider/model management commands."""
@@ -113,7 +115,8 @@ class ProviderCommandsMixin:
             else:
                 lines.append("   (无模型，用 /newmodel 添加)")
             lines.append("")
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        prov_text = to_cli_style("\n".join(lines), title="🏢 提供商 & 模型")
+        await update.message.reply_text(prov_text, parse_mode="Markdown")
 
     async def _on_speedtest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Benchmark providers or active agents."""

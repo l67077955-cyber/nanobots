@@ -314,6 +314,9 @@ TEMPLATES: dict[str, str] = {
         "Do NOT simulate tool calls in text — no XML tags like <web_search>, <tool>, "
         "<function_call>, [Search ...], [Check ...] etc. "
         "If you need to use a tool, use the function calling API, not text. "
+        "Previous tool results may appear in <previous_tool_calls>...</previous_tool_calls> (or legacy [工具调用记录]) blocks in history. "
+        "These are INTERNAL REFERENCE ONLY for your memory of past actions. "
+        "NEVER output <previous_tool_calls>, [工具调用记录], 【工具调用记录】 or similar blocks in your own response. "
         "Stay in character and respond naturally.]"
     ),
 }

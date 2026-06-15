@@ -7,6 +7,7 @@ from nanobot.tools.filesystem import (
     ListDirTool,
     ReadFileTool,
     _find_match,
+    _strip_read_file_prefixes,
 )
 
 
@@ -121,6 +122,35 @@ class TestFindMatch:
         assert match == ""
 
 
+class TestStripReadFilePrefixes:
+    def test_no_prefix_passthrough(self):
+        assert _strip_read_file_prefixes("def foo():\n    pass\n") == "def foo():\n    pass\n"
+
+    def test_standard_pipe_prefix(self):
+        # Simulate real ReadFileTool output: "N| " + original_line (original_line may be '')
+        text = "42| def foo():\n43|     pass\n44| \n"
+        assert _strip_read_file_prefixes(text) == "def foo():\n    pass\n\n"
+
+    def test_colon_variant(self):
+        assert _strip_read_file_prefixes("10: line ten\n11:    indented\n") == "line ten\n   indented\n"
+
+    def test_mixed_and_preserve_ws(self):
+        # Real emit for source containing "  # comment" (2-space indent line) is "3|   # comment"
+        text = "1| if True:\n2|     x = 1\n3|   # comment\n"
+        expected = "if True:\n    x = 1\n  # comment\n"
+        assert _strip_read_file_prefixes(text) == expected
+
+    def test_multiline_crlf(self):
+        text = "1| a\r\n2| b\r\n"
+        assert _strip_read_file_prefixes(text) == "a\r\nb\r\n"
+
+    def test_empty_and_edge(self):
+        assert _strip_read_file_prefixes("") == ""
+        assert _strip_read_file_prefixes("123 not a prefix| real") == "123 not a prefix| real"
+        # Number too far or no sep keeps original
+        assert _strip_read_file_prefixes("abc123| def") == "abc123| def"
+
+
 # ---------------------------------------------------------------------------
 # EditFileTool
 # ---------------------------------------------------------------------------
@@ -161,6 +191,27 @@ class TestEditFileTool:
         )
         assert "Successfully" in result
         assert "bar" in f.read_text()
+
+    @pytest.mark.asyncio
+    async def test_read_file_numbered_prefix_auto_stripped(self, tool, tmp_path):
+        """Models can copy-paste read_file output (with 'N| ' prefixes) directly as old_text.
+
+        This is the key fix for precise positioning: read a region, immediately edit
+        the exact visible location without manual stripping.
+        """
+        f = tmp_path / "prefixed.py"
+        original = "def greet():\n    print('hi')\n    return 42\n"
+        f.write_text(original, encoding="utf-8")
+
+        # Simulate exact output from ReadFileTool
+        numbered_old = "1| def greet():\n2|     print('hi')\n3|     return 42\n"
+        result = await tool.execute(
+            path=str(f),
+            old_text=numbered_old,
+            new_text="1| def greet():\n2|     print('hello')\n3|     return 99\n",
+        )
+        assert "Successfully" in result
+        assert f.read_text() == "def greet():\n    print('hello')\n    return 99\n"
 
     @pytest.mark.asyncio
     async def test_ambiguous_match(self, tool, tmp_path):

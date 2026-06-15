@@ -2,12 +2,72 @@
 
 import base64
 import difflib
+import hashlib
 import mimetypes
+import os
+import re
 from pathlib import Path
 from typing import Any
 
 from nanobot.tools.base import Tool
 from nanobot.utils.helpers import detect_image_mime
+
+
+# ---------------------------------------------------------------------------
+# Strictly only the core "read unchanged since last read + force + write invalidation" feature.
+# No PDF, no office docs, no device blacklist, no limit/MAX changes, no extra params like pages.
+# All in this file only. Local code wins on any conflict.
+# ---------------------------------------------------------------------------
+
+
+_file_read_states: dict[str, dict] = {}  # minimal dict-based, no dataclass
+
+
+def _hash_file(p: str | Path) -> str | None:
+    try:
+        return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _record_read(path: str | Path, offset: int = 1, limit: int | None = None) -> None:
+    p = str(Path(path).resolve())
+    try:
+        mtime = os.path.getmtime(p)
+    except OSError:
+        return
+    _file_read_states[p] = {
+        "mtime": mtime,
+        "offset": offset,
+        "limit": limit,
+        "hash": _hash_file(p),
+    }
+
+
+def _invalidate_read_cache(path: str | Path) -> None:
+    """On write: drop cache so the next read_file returns actual (new) content."""
+    p = str(Path(path).resolve())
+    _file_read_states.pop(p, None)
+
+
+def _is_unchanged_since_last_read(path: str | Path, offset: int = 1, limit: int | None = None) -> bool:
+    p = str(Path(path).resolve())
+    entry = _file_read_states.get(p)
+    if entry is None:
+        return False
+    if entry["offset"] != offset or entry.get("limit") != limit:
+        return False
+    try:
+        cur_mtime = os.path.getmtime(p)
+    except OSError:
+        return False
+    if cur_mtime != entry["mtime"]:
+        cur_h = _hash_file(p)
+        if cur_h and cur_h != entry.get("hash"):
+            return False
+        entry["mtime"] = cur_mtime
+        return True
+    return True
 
 
 def _resolve_path(
@@ -70,8 +130,10 @@ class ReadFileTool(_FsTool):
     @property
     def description(self) -> str:
         return (
-            "Read the contents of a file. Returns numbered lines. "
-            "Use offset and limit to paginate through large files."
+            "Read the contents of a file. Returns numbered lines (format: 'N| actual content'). "
+            "The 'N| ' prefixes are for reference only. "
+            "Use offset and limit to paginate through large files. "
+            "When editing later with edit_file, copy ONLY the raw content after the 'N| ' prefix — do not include line numbers or the pipe in old_text."
         )
 
     @property
@@ -90,11 +152,16 @@ class ReadFileTool(_FsTool):
                     "description": "Maximum number of lines to read (default 300)",
                     "minimum": 1,
                 },
+                "force": {
+                    "type": "boolean",
+                    "description": "Bypass unchanged-since-last-read dedup and force a fresh read.",
+                    "default": False,
+                },
             },
             "required": ["path"],
         }
 
-    async def execute(self, path: str, offset: int = 1, limit: int | None = None, **kwargs: Any) -> Any:
+    async def execute(self, path: str, offset: int = 1, limit: int | None = None, force: bool = False, **kwargs: Any) -> Any:
         try:
             fp = self._resolve(path)
             if not fp.exists():
@@ -102,13 +169,20 @@ class ReadFileTool(_FsTool):
             if not fp.is_file():
                 return f"Error: Not a file: {path}"
 
+            # Core feature only: dedup check (local descriptions / logic win on conflicts)
+            if not force:
+                if _is_unchanged_since_last_read(fp, offset=offset, limit=limit):
+                    return f"[File unchanged since last read: {path}]"
+
             raw = fp.read_bytes()
             if not raw:
+                _record_read(fp, offset=offset, limit=limit)
                 return f"(Empty file: {path})"
 
             mime = detect_image_mime(raw) or mimetypes.guess_type(path)[0]
             if mime and mime.startswith("image/"):
                 b64 = base64.b64encode(raw).decode()
+                _record_read(fp, offset=offset, limit=limit)
                 return [
                     {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}, "_meta": {"path": str(fp)}},
                     {"type": "text", "text": f"(Image file: {path})"}
@@ -146,6 +220,12 @@ class ReadFileTool(_FsTool):
                 result += f"\n\n(Showing lines {offset}-{end} of {total}. Use offset={end + 1} to continue.)"
             else:
                 result += f"\n\n(End of file — {total} lines total)"
+
+            _record_read(fp, offset=offset, limit=limit)
+
+            # Keep the existing local reminder exactly as-is (priority to local)
+            if offset == 1:
+                result += "\n[Reminder: line prefixes 'N| ' are reference only. Omit them when using edit_file old_text.]"
             return result
         except PermissionError as e:
             return f"Error: {e}"
@@ -166,7 +246,10 @@ class WriteFileTool(_FsTool):
 
     @property
     def description(self) -> str:
-        return "Write content to a file at the given path. Creates parent directories if needed."
+        return (
+            "Write (overwrite) content to a file at the given path. Creates parent directories if needed. "
+            "For precise edits on existing files, prefer edit_file (or read_file then targeted edit_file) over write_file — write_file replaces the ENTIRE file content."
+        )
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -184,6 +267,7 @@ class WriteFileTool(_FsTool):
             fp = self._resolve(path)
             fp.parent.mkdir(parents=True, exist_ok=True)
             fp.write_text(content, encoding="utf-8")
+            _invalidate_read_cache(fp)  # only for the dedup feature: next read will see fresh content
             return f"Successfully wrote {len(content)} bytes to {fp}"
         except PermissionError as e:
             return f"Error: {e}"
@@ -221,6 +305,34 @@ def _find_match(content: str, old_text: str) -> tuple[str | None, int]:
     return None, 0
 
 
+def _strip_read_file_prefixes(text: str) -> str:
+    """Remove common 'N| ' or 'N: ' line-number prefixes produced by ReadFileTool.
+
+    This allows models to copy-paste directly from read_file output into edit_file
+    old_text without manual cleanup, enabling precise positioning.
+    ReadFileTool always emits exactly 'N| ' (number, pipe, single space) + original_line.
+    We remove only the added annotation, preserving the original line's leading whitespace.
+    """
+    if not text:
+        return text
+    # Per-line: remove a leading optional-ws + digits + optional-ws + [|:]+ optional-ws
+    # Use a regex that targets the *annotation* added by the reader.
+    # This is safe because real source rarely starts a line with "<number>| " or "<number>: " at column 0 after indent.
+    pattern = re.compile(r'^(\s*)(\d+)(\s*[\|:]+\s?)(.*)$', re.DOTALL)
+    lines = text.splitlines(keepends=True)
+    cleaned = []
+    for line in lines:
+        if "|" in line or ":" in line[:12]:
+            m = pattern.match(line)
+            if m:
+                _lead, _num, _sep, rest = m.groups()
+                # rest already contains the original line's exact content (including its indent ws)
+                cleaned.append(rest if rest is not None else line)
+                continue
+        cleaned.append(line)
+    return "".join(cleaned)
+
+
 class EditFileTool(_FsTool):
     """Edit a file by replacing text with fallback matching."""
 
@@ -232,7 +344,9 @@ class EditFileTool(_FsTool):
     def description(self) -> str:
         return (
             "Edit a file by replacing old_text with new_text. "
-            "Supports minor whitespace/line-ending differences. "
+            "Supports minor whitespace/line-ending differences via automatic matching. "
+            "old_text can be copied directly from a recent read_file result (the 'N| ' line prefixes are automatically stripped for convenience, enabling precise positioning at the exact location you just read). "
+            "Provide enough unique surrounding context in old_text if the snippet appears multiple times. "
             "Set replace_all=true to replace every occurrence."
         )
 
@@ -264,22 +378,28 @@ class EditFileTool(_FsTool):
             raw = fp.read_bytes()
             uses_crlf = b"\r\n" in raw
             content = raw.decode("utf-8").replace("\r\n", "\n")
-            match, count = _find_match(content, old_text.replace("\r\n", "\n"))
+            # Auto-strip read_file "N| " / "N: " prefixes so copy-paste from read_file works directly.
+            cleaned_old = _strip_read_file_prefixes(old_text.replace("\r\n", "\n"))
+            if cleaned_old == "":
+                return f"Error: old_text is empty after stripping (line numbers etc.). Cannot use empty old_text for edit; provide context text or use write_file for full overwrite / new files."
+
+            match, count = _find_match(content, cleaned_old)
 
             if match is None:
-                return self._not_found_msg(old_text, content, path)
+                return self._not_found_msg(cleaned_old, content, path)
             if count > 1 and not replace_all:
                 return (
                     f"Warning: old_text appears {count} times. "
                     "Provide more context to make it unique, or set replace_all=true."
                 )
 
-            norm_new = new_text.replace("\r\n", "\n")
+            norm_new = _strip_read_file_prefixes(new_text.replace("\r\n", "\n"))
             new_content = content.replace(match, norm_new) if replace_all else content.replace(match, norm_new, 1)
             if uses_crlf:
                 new_content = new_content.replace("\n", "\r\n")
 
             fp.write_bytes(new_content.encode("utf-8"))
+            _invalidate_read_cache(fp)  # keep dedup cache correct: edits are modifications, so next read should be fresh
             return f"Successfully edited {fp}"
         except PermissionError as e:
             return f"Error: {e}"

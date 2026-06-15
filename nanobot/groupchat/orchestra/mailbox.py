@@ -14,6 +14,8 @@ from typing import Any
 
 from loguru import logger
 
+from nanobot.groupchat.display.visibility import RANK_ORDER
+
 
 @dataclass
 class AgentMessage:
@@ -304,7 +306,7 @@ class MailboxHub:
         # agentA's auto-wait deadline is extended while agentB is still busy.
         self._expected_replies: dict[str, set[str]] = {}
 
-        # ── Agent ranks (pawn < knight < bishop) ────────────
+        # ── Agent ranks (basic < standard < advanced < expert) ────────────
         # Controls interrupt hierarchy: higher rank can interrupt lower rank.
         # Same rank cannot interrupt each other.
         self._ranks: dict[str, int] = {}
@@ -400,20 +402,20 @@ class MailboxHub:
         """Store agent ranks for interrupt permission checking.
         
         Args:
-            ranks: Mapping of agent_name -> rank_string ("pawn", "knight", "bishop", "queen")
+            ranks: Mapping of agent_name -> rank_string ("basic", "standard", "advanced", "expert"). Legacy chess names (pawn/knight/...) are also accepted for compatibility.
             leader: Leader agent name — always gets highest priority regardless of rank.
         """
-        order = {"pawn": 0, "knight": 1, "bishop": 2, "queen": 3}
         self._ranks.clear()
         self._leader = leader
+        # First assign base ranks for everyone (consistent with compute_agent_ranks)
         for name, r in ranks.items():
-            # Leader always gets highest rank (bishop + 1)
-            if name == leader:
-                val = max(order.values()) + 1
-            else:
-                val = order.get(r, 0)
-            self._ranks[name] = val
-            logger.debug("MailboxHub: rank({}) = {} ({})", name, val, r)
+            self._ranks[name] = RANK_ORDER.get(r, 0) if isinstance(r, str) else int(r)
+        # Then force leader to be strictly highest (max of assigned + 1)
+        if leader and leader in self._ranks:
+            self._ranks[leader] = max(self._ranks.values()) + 1
+        for name, val in self._ranks.items():
+            r_str = ranks.get(name, "?")
+            logger.debug("MailboxHub: rank({}) = {} ({})", name, val, r_str)
 
     def _is_high_priority(self, sender: str) -> bool:
         """Check if sender is a high-priority source (user or leader).
@@ -427,11 +429,13 @@ class MailboxHub:
         """Check if sender has sufficient rank to interrupt target.
         
         Rules:
-        - Leader CAN interrupt anyone (highest implicit priority)
+        - Leader (or "用户") CAN interrupt anyone (highest priority)
         - Higher rank CAN interrupt lower rank
         - Equal rank CANNOT interrupt each other (they queue)
         - Unknown rank defaults to 0 (lowest)
         """
+        if self._is_high_priority(sender):
+            return True
         s_rank = self._ranks.get(sender, 0)
         t_rank = self._ranks.get(target, 0)
         return s_rank > t_rank
@@ -462,9 +466,11 @@ class MailboxHub:
             )
             return False
         # Record who caused this interrupt (only after rank + quota checks pass)
-        # Only overwrite _last_interrupt_sender if new sender has >= rank
+        # Only overwrite _last_interrupt_sender if the new sender has rank >= previous
+        # interrupter's rank. (We already know sender can interrupt target.)
+        # This ensures higher-authority interrupters keep the attribution credit.
         prev_sender = self._last_interrupt_sender.get(target)
-        if prev_sender is None or self._can_interrupt(sender, target) or self._ranks.get(sender, 0) >= self._ranks.get(prev_sender, 0):
+        if prev_sender is None or self._ranks.get(sender, 0) >= self._ranks.get(prev_sender, 0):
             self._last_interrupt_sender[target] = sender
         # Trigger the interrupt (skip if already set — avoids double-counting)
         evt = self.get_interrupt_event(target)

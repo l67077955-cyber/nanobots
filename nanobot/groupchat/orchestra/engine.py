@@ -1546,6 +1546,11 @@ def build_tool_log(tool_calls_detail: list[dict[str, Any]]) -> str:
 
     Total output is capped at ~4000 chars to prevent context bloat.
 
+    Uses <previous_tool_calls> wrapper (instead of the old [工具调用记录])
+    so weak/cheap models are much less likely to hallucinate by imitating
+    the marker in their output (e.g. starting a reply with "我刚刚搜索了一些
+    【工具调用记录】search->114字" when no tool was actually called).
+
     Returns empty string if no tool calls were made.
     """
     if not tool_calls_detail:
@@ -1643,7 +1648,9 @@ def build_tool_log(tool_calls_detail: list[dict[str, Any]]) -> str:
     if not lines:
         return ""
 
-    return "\n\n[工具调用记录]\n" + "\n".join(lines)
+    # Use XML-style internal tag so weak models are less likely to imitate it
+    # as natural output. The model is explicitly instructed not to reproduce it.
+    return "\n\n<previous_tool_calls>\n" + "\n".join(lines) + "\n</previous_tool_calls>\n"
 
 
 def log_request(
