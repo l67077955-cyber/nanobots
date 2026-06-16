@@ -7,34 +7,20 @@ MUST import from this module — no inline rank comparisons elsewhere.
 from __future__ import annotations
 
 RANK_ORDER: dict[str, int] = {
-    # Clean modern names (preferred)
     "basic": 0,
     "standard": 1,
     "advanced": 2,
     "expert": 3,
-    # Legacy chess names (for backward compat with old agent configs)
-    "pawn": 0,
-    "knight": 1,
-    "bishop": 2,
-    "queen": 3,
-    "king": 4,
 }
 
 RANK_NAME: dict[int, str] = {v: k.capitalize() for k, v in RANK_ORDER.items() if k in ("basic", "standard", "advanced", "expert")}
 
-# Friendly display labels for UI and announcements (modern names only for new usage)
+# Friendly display labels for UI and announcements
 RANK_DISPLAY: dict[str, str] = {
-    # Modern primary
     "basic": "基础 basic",
     "standard": "标准 standard",
     "advanced": "高级 advanced",
     "expert": "专家 expert",
-    # Legacy chess names map to modern display (for old configs and announcements)
-    "pawn": "基础 basic",
-    "knight": "标准 standard",
-    "bishop": "高级 advanced",
-    "queen": "专家 expert",
-    "king": "专家 expert",
 }
 
 

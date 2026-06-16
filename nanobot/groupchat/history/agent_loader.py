@@ -136,8 +136,7 @@ def _scan_agents_dir(
                     desc = _cfg.get("description", "系统 agent")
                     tools_enabled = _cfg.get("tools_enabled", False)
                     raw_rank = _cfg.get("rank", "basic")
-                    LEGACY_TO_MODERN = {"pawn": "basic", "knight": "standard", "bishop": "advanced", "queen": "expert", "king": "expert"}
-                    rank = LEGACY_TO_MODERN.get(raw_rank, raw_rank)
+                    rank = raw_rank
                     agent_data = {
                         "model": model, "prompt": "", "role": "system",
                         "description": desc, "tools_enabled": tools_enabled,
@@ -200,8 +199,7 @@ def _scan_agents_dir(
 
         # Rank: basic < standard < advanced < expert (controls who-can-interrupt-whom)
         raw_rank = acfg.get("rank", "basic") if config_file.exists() else "basic"
-        LEGACY_TO_MODERN = {"pawn": "basic", "knight": "standard", "bishop": "advanced", "queen": "expert", "king": "expert"}
-        rank = LEGACY_TO_MODERN.get(raw_rank, raw_rank)
+        rank = raw_rank
         
         agent_data: dict[str, Any] = {"model": model, "prompt": prompt, "tools_enabled": tools_enabled, "rank": rank}
         if tools_cfg is not None:

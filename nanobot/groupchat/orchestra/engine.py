@@ -663,30 +663,6 @@ class GroupChatEngine:
 
     # ── Tool-augmented chat (matching AgentLoop._run_agent_loop) ───
 
-    # Search intent keywords — only pass tools when user message matches
-    _SEARCH_KEYWORDS = {
-        # Chinese
-        "搜索", "搜一下", "查一下", "查找", "查询", "找一下",
-        "新闻", "最新", "今天", "今日", "实时", "热点",
-        "帮我查", "帮我搜", "帮我找", "上网",
-        # English
-        "search", "look up", "find", "google", "news",
-        "latest", "recent", "today", "current",
-    }
-
-    @staticmethod
-    def _has_search_intent(messages: list[dict[str, Any]]) -> bool:
-        """Check if the latest user message has search intent."""
-        # Find the last user message
-        for msg in reversed(messages):
-            if msg.get("role") == "user":
-                text = msg.get("content", "").lower()
-                for kw in GroupChatEngine._SEARCH_KEYWORDS:
-                    if kw in text:
-                        return True
-                return False
-        return False
-
     def get_agent_enabled_tool_names(self, agent_name: str) -> list[str]:
         """Get the names of tools currently enabled for an agent."""
         agent_cfg = self.registry.get(agent_name, {})

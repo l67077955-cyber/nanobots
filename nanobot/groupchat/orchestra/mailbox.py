@@ -405,7 +405,7 @@ class MailboxHub:
         """Store agent ranks for interrupt permission checking.
         
         Args:
-            ranks: Mapping of agent_name -> rank_string ("basic", "standard", "advanced", "expert"). Legacy chess names (pawn/knight/...) are also accepted for compatibility.
+            ranks: Mapping of agent_name -> rank_string ("basic", "standard", "advanced", "expert").
             leader: Leader agent name — always gets highest priority regardless of rank.
         """
         self._ranks.clear()

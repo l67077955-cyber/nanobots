@@ -298,14 +298,11 @@ class BroadcastOrchestrator:
 
         n = len(self.exec_agents)
         # Build per-agent capacity from ranks (higher rank = more conversation pool capacity)
-        # Normalize legacy chess names on the fly for robustness
         MODERN_CAP = {"basic": 2, "standard": 3, "advanced": 4, "expert": 5}
-        LEGACY_TO_MODERN = {"pawn": "basic", "knight": "standard", "bishop": "advanced", "queen": "expert", "king": "expert"}
         per_agent_cap: dict[str, int] = {}
         for ag in self.exec_agents:
             cfg = self.engine.registry.get(ag, {})
-            raw = cfg.get("rank", "basic")
-            rank = LEGACY_TO_MODERN.get(raw, raw)
+            rank = cfg.get("rank", "basic")
             cap = MODERN_CAP.get(rank, 3)
             if ag == self.leader_name:
                 cap += 1  # leader gets +1
@@ -455,29 +452,12 @@ async def broadcast_round(
     mailbox.set_leader_name(leader_name or "")
 
     # Push agent ranks into mailbox for interrupt hierarchy
-    # Completely normalize to modern "basic/standard/advanced/expert" (legacy chess names only supported for loading old configs)
-    LEGACY_TO_MODERN = {"pawn": "basic", "knight": "standard", "bishop": "advanced", "queen": "expert", "king": "expert"}
     ranks_map: dict[str, str] = {}
     for ag in agents:
         cfg = engine.registry.get(ag, {})
-        raw = cfg.get("rank", "basic")
-        normalized = LEGACY_TO_MODERN.get(raw, raw)
-        ranks_map[ag] = normalized
-        # Update in-memory so the entire round (banner, interrupts, pool, etc.) uses only modern names
-        cfg["rank"] = normalized
-
-        # Auto-migration on every broadcast start: rewrite old chess names in disk config to modern
-        # This means after one restart, all agents will be fully on the new advanced/expert system
-        if raw != normalized:
-            try:
-                cfg_path = Path.home() / ".nanobot" / "agents" / ag.lower() / "config.json"
-                if cfg_path.exists():
-                    disk_cfg = _json.loads(cfg_path.read_text())
-                    disk_cfg["rank"] = normalized
-                    cfg_path.write_text(_json.dumps(disk_cfg, indent=2, ensure_ascii=False))
-                    logger.info("Auto-migrated rank for {} from legacy {} to modern {} (disk updated)", ag, raw, normalized)
-            except Exception as e:
-                logger.debug("Rank migration skipped for {}: {}", ag, e)
+        rank = cfg.get("rank", "basic")
+        ranks_map[ag] = rank
+        cfg["rank"] = rank
     mailbox.set_ranks(ranks_map, leader=leader_name or "")
 
     # ── Clear any leftover session tool overrides ──
