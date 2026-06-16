@@ -63,11 +63,37 @@ feat/* ──PR──► dev ──验证通过──► stable-YYYYMMDD ──�
 git remote prune upstream
 ```
 
+## 分支审查记录
+
+### `progressive-fixes`（2026-06-16 审查，已废弃）
+
+15 个 commit 全部已在 `stable-20260527` 中以不同 SHA 存在（经 `main` 合入）：
+
+| progressive-fixes | stable 中的等价 commit | 状态 |
+|-------------------|----------------------|------|
+| `9b439190` end_discussion 内容丢失 | `ae2c1a26` | 已覆盖 |
+| `6b4a0483` busy-replier 死锁 | `19e91046` | 已覆盖 |
+| `d728ec64` slot 泄漏 + busy_agents | `6b641659` + `_busy_agents` 检查 | 已覆盖 |
+| `5542061f` loopback URL 放行 | `fc4f5045` | 已覆盖 |
+| `2efaa8c4` boolean 解析 | `75d0179f` | 已覆盖 |
+| `1e901fcd` leader_end_event 检查 | `38901405` | 已覆盖 |
+| `5fd27c51` synthesis after end_discussion | `778c00ca` | 已覆盖 |
+| `c6f344de` max_chars getter 恢复 | `6f6e8357` | 已覆盖 |
+| `ff413832` head_indices 重算 | `c7347921` | 已覆盖 |
+| `b8e4e569` safety guard 误报 | `bede0b06` | 已覆盖 |
+| `48c968e5` _request_log 上限 | `4ac4fda7` | 已覆盖 |
+| `e66aa9a9` end_discussion guard | `8e58eb18` | 已覆盖 |
+| `f7b4ea1a` 连续 LLM 错误终止 | `f5f44dd2` | 已覆盖 |
+| `680e54da` 退化重复循环检测 | `46cf0831` | 已覆盖 |
+| `30330728` v-stable-20260517 合并点 | — | 历史节点 |
+
+**结论：** 不可合并。`progressive-fixes` 比 `stable` 落后 73 个文件（会回退 rank 现代化、ForgetTool、条件 memory_palace 等）。已删除远程分支。
+
 ## 待办（渐进整理）
 
 - [ ] 将 GitHub 默认分支从 `main` 改为 `stable-20260527`（需仓库 Settings 手动操作）
 - [ ] 合并 `dev` 与 `stable` 的分叉（ForgetTool 等待统一）
-- [ ] 处理 `progressive-fixes`（合并或废弃）
+- [x] 处理 `progressive-fixes`（审查完毕，已废弃删除，2026-06-16）
 - [x] 删除僵尸分支 `feat/groupchat-optimization`（2026-06-16 完成）
 - [x] `stable-20260527` 设置 upstream 跟踪（2026-06-16 完成）
 - [x] prune 过期 `upstream/*` 远程跟踪（19 条，2026-06-16 完成）
