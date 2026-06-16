@@ -93,6 +93,11 @@ GLOBAL_EDITABLE: set[str] = set(_FALLBACK_GLOBAL_EDITABLE)
 AGENT_EDITABLE: set[str] = set(_FALLBACK_AGENT_EDITABLE)
 EDITABLE_COMPONENTS: set[str] = GLOBAL_EDITABLE | AGENT_EDITABLE
 
+# Prompt processing / slimming features. Can be overridden in prompt_manifest.json
+PROMPT_SLIMMING: dict[str, bool] = {
+    "collapse_consecutive_systems": True,
+}
+
 
 def _load_manifest() -> dict | None:
     """Load prompt_manifest.json if it exists."""
@@ -180,10 +185,17 @@ def _sync_from_manifest() -> None:
     Consumers (nanobot.channels.telegram.callbacks, nanobot.channels.telegram.commands.settings) continue to read the module-level
     dicts/sets unchanged — zero changes needed on their side.
     """
-    global DEFAULT_PROMPT_ORDER, COMPONENT_LABELS, COMPONENT_PHASES, GLOBAL_EDITABLE, AGENT_EDITABLE, EDITABLE_COMPONENTS
+    global DEFAULT_PROMPT_ORDER, COMPONENT_LABELS, COMPONENT_PHASES, GLOBAL_EDITABLE, AGENT_EDITABLE, EDITABLE_COMPONENTS, PROMPT_SLIMMING
 
     manifest = _load_manifest()
     components = manifest.get("components", {}) if manifest else {}
+
+    if manifest:
+        slim = manifest.get("slimming", {})
+        if isinstance(slim, dict):
+            for k, v in slim.items():
+                if k in PROMPT_SLIMMING:
+                    PROMPT_SLIMMING[k] = bool(v)
 
     if not components:
         logger.warning("Manifest empty or missing — using hardcoded fallbacks")
@@ -456,6 +468,11 @@ class PromptBuilder:
         # should receive this system message.  All other components default to 'all'.
         default = "leader" if key == "leader_prompt" else "all"
         return self._visibility.get(key, default)
+
+    @staticmethod
+    def should_collapse_consecutive_systems() -> bool:
+        """Whether to merge consecutive system messages (reduces token count)."""
+        return PROMPT_SLIMMING.get("collapse_consecutive_systems", True)
 
     def set_component_visibility(self, key: str, mode: str) -> str:
         """Set visibility mode for a component. mode: 'all' or 'leader'."""
@@ -825,15 +842,16 @@ class PromptBuilder:
         # Merging adjacent systems into fewer messages reduces message count (and
         # often token overhead from repeated role markers) while preserving content.
         # This directly attacks the 10k+ char per-agent contexts seen in groupchat logs.
-        collapsed: list[dict[str, Any]] = []
-        for m in messages:
-            if m.get("role") == "system" and collapsed and collapsed[-1].get("role") == "system":
-                # Merge into previous system block (use blank line separator for readability)
-                prev = collapsed[-1]
-                prev["content"] = (prev["content"] or "") + "\n\n" + (m.get("content") or "")
-            else:
-                collapsed.append(m)
-        messages = collapsed
+        if PROMPT_SLIMMING.get("collapse_consecutive_systems", True):
+            collapsed: list[dict[str, Any]] = []
+            for m in messages:
+                if m.get("role") == "system" and collapsed and collapsed[-1].get("role") == "system":
+                    # Merge into previous system block (use blank line separator for readability)
+                    prev = collapsed[-1]
+                    prev["content"] = (prev["content"] or "") + "\n\n" + (m.get("content") or "")
+                else:
+                    collapsed.append(m)
+            messages = collapsed
 
         volatile_content = (
             f"[Current date and time: {volatile_tpl_vars['{{datetime}}']}]"
