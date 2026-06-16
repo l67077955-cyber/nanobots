@@ -424,10 +424,7 @@ class GroupChatEngine:
             return f"❌ Agent '{name}' 不存在。可用: {', '.join(self.registry.keys())}"
 
         if matched in self._active_agents:
-            note = ""
-            if self._running:
-                note = "\n（本轮 Broadcast banner 是启动时的快照；下条用户消息将用最新活跃列表启动新 round）"
-            return f"⚠️ {matched} 已在对话中\n👥 当前成员: {', '.join(self._active_agents)}{note}"
+            return f"⚠️ {matched} 已在对话中\n👥 当前成员: {', '.join(self._active_agents)}"
 
         self._active_agents.append(matched)
         self._state.save_active(self._active_agents)
