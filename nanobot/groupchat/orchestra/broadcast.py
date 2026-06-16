@@ -369,7 +369,7 @@ class BroadcastOrchestrator:
             registry.register(wait_tool)
             # memory_palace: register only if enabled in agent's tool config
             agent_cfg = self.engine.registry.get(name, {})
-            mp_enabled = True  # default: enabled
+            mp_enabled = False  # default: off (opt-in via tools config)
             tools_cfg = agent_cfg.get("tools")
             if isinstance(tools_cfg, dict) and "memory_palace" in tools_cfg:
                 mp_enabled = bool(tools_cfg["memory_palace"])

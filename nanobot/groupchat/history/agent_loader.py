@@ -167,7 +167,7 @@ def _scan_agents_dir(
             continue
 
         # Read model from agent's config.json
-        model = "minimax/minimax-m2.5"  # default
+        model = None
         config_file = d / "config.json"
         tools_cfg = None  # Will be dict or None
         tools_enabled = False
@@ -177,7 +177,7 @@ def _scan_agents_dir(
             try:
                 acfg = json.loads(config_file.read_text())
                 # Top-level 'model' takes priority (written by /editagent)
-                model = acfg.get("model", model)
+                model = acfg.get("model", model) or "?"
                 # Granular tools config: {web_search: true, exec: false, ...}
                 if isinstance(acfg.get("tools"), dict):
                     tools_cfg = acfg["tools"]
@@ -192,10 +192,6 @@ def _scan_agents_dir(
                     hyperparams.setdefault("reasoning_effort", acfg["reasoning_effort"])
             except Exception:
                 pass
-
-        # Special name handling
-        if d.name == "grok":
-            name = "Grok"
 
         # Rank: basic < standard < advanced < expert (controls who-can-interrupt-whom)
         raw_rank = acfg.get("rank", "basic") if config_file.exists() else "basic"
