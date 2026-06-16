@@ -177,13 +177,17 @@ def broadcast_start_msg(agents: list[str], timeout: int, leader: str | None = No
         raw = _r.get(a, "basic")
         return RANK_DISPLAY.get(raw, raw)
 
+    def _short_label(a: str) -> str:
+        full = _label(a)
+        return full.split()[0] if " " in full else full
+
     if leader:
-        lines.append(f"👑 {leader} ({_label(leader)})")
+        lines.append(f"👑 {leader} ({_short_label(leader)})")
         members = [a for a in agents if a != leader]
         if members:
-            lines.append("  ".join(f"🔹 {m} ({_label(m)})" for m in members))
+            lines.append("  ".join(f"🔹 {m} ({_short_label(m)})" for m in members))
     else:
-        lines.append("  ".join(f"🔹 {a} ({_label(a)})" for a in agents))
+        lines.append("  ".join(f"🔹 {a} ({_short_label(a)})" for a in agents))
     return "\n".join(lines)
 
 

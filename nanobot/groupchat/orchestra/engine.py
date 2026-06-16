@@ -424,7 +424,7 @@ class GroupChatEngine:
             return f"❌ Agent '{name}' 不存在。可用: {', '.join(self.registry.keys())}"
 
         if matched in self._active_agents:
-            return f"⚠️ {matched} 已在对话中"
+            return f"⚠️ {matched} 已在对话中\n👥 当前成员: {', '.join(self._active_agents)}"
 
         self._active_agents.append(matched)
         self._state.save_active(self._active_agents)

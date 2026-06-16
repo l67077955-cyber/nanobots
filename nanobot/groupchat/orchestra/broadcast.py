@@ -321,7 +321,7 @@ class BroadcastOrchestrator:
             self.pool = ConversationPool(agents=list(self.exec_agents), per_agent_capacity=per_agent_cap)
         self.pool.ALLOCATE_TIMEOUT = float(self.gc_settings["allocate_timeout"])
         
-        await self.engine._send(f"threads {self.pool.status()}")
+        await self.engine._send(f"🧵 对话池 {self.pool.status()}")
 
         self.tracker = AgentStatusTracker(
             agents=self.exec_agents,
