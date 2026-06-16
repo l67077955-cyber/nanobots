@@ -940,15 +940,6 @@ class GroupChatEngine:
 
     def _pick_next_speaker(self, last_content: str = "") -> str:
         names = self._active_agents
-        # @mentions
-        for name in names:
-            if f"@{name}" in last_content or f"@{name.lower()}" in last_content:
-                return name
-        # Implicit mentions
-        mentioned = [n for n in names if n.lower() in last_content.lower()
-                     and (not self._history or self._history[-1]["sender"] != n)]
-        if mentioned:
-            return random.choice(mentioned)
         # Avoid repeat
         candidates = list(names)
         if self._history:
