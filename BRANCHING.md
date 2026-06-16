@@ -104,7 +104,7 @@ git remote prune upstream
 | `54a5ca16` / `b4c439dd` 清理 dead code | ⏭ 跳过 | stable 仍保留 `visible` 参数 |
 | `44440fbe` backup commit | ⏭ 跳过 | 应用 tag 代替 |
 
-合并后：`git merge stable-20260527` 快进 `dev` 到同一 HEAD。
+合并后：`dev` 已 reset 到 `stable-20260527`（`c70119b6`），两分支同 HEAD。
 
 ## 待办（渐进整理）
 
