@@ -50,6 +50,19 @@ feat/* ──PR──► dev ──验证通过──► stable-YYYYMMDD ──�
 ./tools/switch-with-config.sh <branch-or-tag>
 ```
 
+## Tag 清理
+
+审计与渐进清理脚本（**默认 dry-run，不改动任何 tag**）：
+
+```bash
+./tools/tag-cleanup.sh                              # 完整审计
+./tools/tag-cleanup.sh --duplicates-only            # 仅重复 tag
+./tools/tag-cleanup.sh --execute                    # 删除重复别名（015 等）
+./tools/tag-cleanup.sh --tag-stable --date 20260616 --execute  # 给 HEAD 打 v-stable tag
+```
+
+当前 46 个 tag 均在本地，远程 0 个。并行开发期间建议只跑 dry-run。
+
 ## 远程仓库
 
 | Remote | 地址 |
