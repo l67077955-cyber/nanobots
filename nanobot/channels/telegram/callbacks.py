@@ -276,7 +276,6 @@ class CallbacksMixin:
                     buttons = [
                         [InlineKeyboardButton("⚖️ 平衡（推荐）", callback_data=f"preset:{name}:balanced")],
                         [InlineKeyboardButton("✨ 更有创意", callback_data=f"preset:{name}:creative")],
-                        [InlineKeyboardButton("💻 代码编写", callback_data=f"preset:{name}:code")],
                         [InlineKeyboardButton("🔬 更严谨分析", callback_data=f"preset:{name}:precise")],
                         [InlineKeyboardButton("🧠 深度思考", callback_data=f"preset:{name}:deep")],
                         [InlineKeyboardButton("↩️ 恢复默认", callback_data=f"preset:{name}:reset")],
@@ -287,7 +286,6 @@ class CallbacksMixin:
                         "这些一键设置会同时调整思考深度和少量采样参数，适合不想碰底层超参数的用户。\n"
                         "• 平衡：默认或中强度\n"
                         "• 更有创意：较高随机性 + 中/高思考\n"
-                        "• 代码编写：低温度严谨采样（适合代码任务）\n"
                         "• 更严谨分析：低温度 + 中强度\n"
                         "• 深度思考：高思考强度（适合支持的模型）\n"
                         "• 恢复默认：清除本 agent 的高级覆盖",
@@ -450,15 +448,6 @@ class CallbacksMixin:
                         "更严谨"
                     )
                     await query.edit_message_text(f"✅ {name} 已应用「{preset}」预设：低温度严谨采样 + 中等思考。")
-                    await self._show_edit_menu(query, name)
-                    return
-
-                elif preset == "code":
-                    res = _apply_and_persist(
-                        {"temperature": 0.2, "top_p": 0.9, "reasoning_effort": "medium"},
-                        "代码任务"
-                    )
-                    await query.edit_message_text(f"✅ {name} 已应用「代码编写」预设：低温度严谨采样，适合编写代码。")
                     await self._show_edit_menu(query, name)
                     return
 
@@ -2940,18 +2929,6 @@ class CallbacksMixin:
                 prompt = content
                 global_hp = getattr(engine.provider, 'sampling_params', None)
                 agent_hp = dict(global_hp) if global_hp else {}
-                name_lower = name.lower()
-                if any(kw in name_lower for kw in ("code", "coder", "dev", "engineer", "program", "fix", "bug")):
-                    agent_hp = {
-                        "temperature": 0.2,
-                        "top_p": 0.9,
-                        "frequency_penalty": 0.05,
-                        "presence_penalty": 0.05,
-                        "repetition_penalty": 1.05,
-                        "top_k": 0,
-                        "min_p": 0,
-                        "top_a": 0,
-                    }
                 engine.registry[name] = {"model": model, "prompt": prompt, "hyperparams": agent_hp}
                 # Save to disk
                 from pathlib import Path as _P

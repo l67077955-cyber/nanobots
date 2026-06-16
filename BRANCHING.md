@@ -38,7 +38,7 @@ feat/* ──PR──► dev ──验证通过──► stable-YYYYMMDD ──�
 |-----|------|----------------|------|
 | `v-stable-20260511` | 05-11 | ✅ | 压缩修复前检查点 |
 | `v-stable-20260518` | 05-18 | ✅ | telegram 回调清理 |
-| `v-stable-20260523` | 05-23 | ✅ | rank 隔离；**当前 lineage 上最新稳定版 tag** |
+| `v-stable-20260523` | 05-23 | ✅ | rank 隔离 |
 | `v-stable-20260517` | 05-17 | ❌ | 旧 dev 合并线，历史稳定版，保留 |
 | `v-stable-20260605` | 06-05 | ❌ | 另一路线的稳定版，保留 |
 | `v-stable-20260527` | 06-16 | ✅ | **当前稳定版**；`456ae97c` |
@@ -82,7 +82,7 @@ feat/* ──PR──► dev ──验证通过──► stable-YYYYMMDD ──�
 
 当前 46 个 tag 均在本地，远程 0 个。并行开发期间建议只跑 dry-run。
 
-**待发布：** 当前 HEAD 领先 `v-stable-20260523` 约 43 个 commit；并行改动结束后应打 `v-stable-20260527`（与分支名对齐）。
+**已发布：** `v-stable-20260527` → `456ae97c`（2026-06-16）。配置仓库需用 `capture-config.sh` 打同名 tag 后 `checkout` 才能完整同步。
 
 ## 远程仓库
 
@@ -149,4 +149,6 @@ git remote prune upstream
 - [x] `stable-20260527` 设置 upstream 跟踪（2026-06-16 完成）
 - [x] prune 过期 `upstream/*` 远程跟踪（19 条，2026-06-16 完成）
 - [x] 推送本地 21 个积压 commit 到远程（2026-06-16 完成）
-- [ ] 清理重复 tag（`v0.1.5` / `v0.1.5-stable` 等）
+- [x] 发布 `v-stable-20260527` 稳定版 tag（2026-06-16）
+- [x] 清理重复 tag：`015`、`v0.1.5-stable`、`v0.1.6-stable`、`stable/pre-history-...`（2026-06-16）
+- [ ] 配置仓库打同名 `v-stable-20260527` tag（`capture-config.sh`）
