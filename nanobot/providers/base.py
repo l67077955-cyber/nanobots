@@ -9,6 +9,21 @@ from typing import Any
 from loguru import logger
 
 
+# Default sampling parameters for agents.
+# Per-agent overrides can be set in ~/.nanobot/agents/<name>/config.json under "hyperparams".
+# Global overrides in ~/.nanobot/hyperparams.json.
+RECOMMENDED_AGENT_SAMPLING: dict[str, float] = {
+    "temperature": 1.0,
+    "top_p": 0.9,
+    "frequency_penalty": 0.05,
+    "presence_penalty": 0.05,
+    "repetition_penalty": 1.0,
+    "top_k": 0,
+    "min_p": 0,
+    "top_a": 0,
+}
+
+
 @dataclass
 class ToolCallRequest:
     """A tool call request from the LLM."""

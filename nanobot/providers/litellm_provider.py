@@ -92,16 +92,8 @@ class LiteLLMProvider(LLMProvider):
                 os.environ.pop("LANGFUSE_PUBLIC_KEY", None)
 
         # Sampling parameters — modifiable at runtime via /hyperparams
-        defaults = {
-            "temperature": 0.95,
-            "top_p": 0.92,
-            "top_k": 40,
-            "min_p": 0.07,
-            "repetition_penalty": 1.15,
-            "frequency_penalty": 0.10,
-            "presence_penalty": 0.05,
-            "top_a": 0,
-        }
+        from nanobot.providers.base import RECOMMENDED_AGENT_SAMPLING
+        defaults = dict(RECOMMENDED_AGENT_SAMPLING)
         # Load saved hyperparams from disk
         hp_path = Path.home() / ".nanobot" / "hyperparams.json"
         if hp_path.exists():

@@ -62,13 +62,10 @@ class HttpxProvider(LLMProvider):
         # Runtime auto-detected provider capabilities (inherited from LLMProvider)
 
         # Sampling parameters — modifiable at runtime via /hyperparams
-        defaults = {
-            "temperature": 0.95,
-            "top_p": 0.92,
-            "frequency_penalty": 0.4,
-            "presence_penalty": 0.25,
-            "repetition_penalty": 1.15,
-        }
+        from nanobot.providers.base import RECOMMENDED_AGENT_SAMPLING
+        defaults = {k: v for k, v in RECOMMENDED_AGENT_SAMPLING.items()
+                    if k in ("temperature", "top_p", "frequency_penalty",
+                             "presence_penalty", "repetition_penalty")}
         hp_path = Path.home() / ".nanobot" / "hyperparams.json"
         if hp_path.exists():
             try:

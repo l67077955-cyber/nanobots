@@ -1492,7 +1492,7 @@ async def chat_with_tools(
 
     _orig_sampling = getattr(provider, "sampling_params", None)
     if _orig_sampling is not None:
-        provider.sampling_params = sampling  # temporary per-turn override (see concurrency note at call site)
+        provider.sampling_params = sampling  # temporary per-turn override
     tool_names = [d.get("function", {}).get("name", "?") for d in (tool_defs or [])]
 
     # Per-iteration token usage callback — update shared ref so tool callbacks
