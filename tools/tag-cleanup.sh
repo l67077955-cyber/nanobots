@@ -45,11 +45,16 @@ DUPLICATE_GROUPS=(
   "stable-pre-config-change|stable/pre-history-settings-defaults-update"
 )
 
-# ── Tags off current stable lineage (informational, not auto-deleted) ─────
-OBSOLETE_TAGS=(
+# ── Stable releases off current lineage (historical, never auto-delete) ───
+# These are valid 稳定版 tags on forked lines — keep for checkout/rollback.
+OFFLINEAGE_STABLE_TAGS=(
   v-stable-20260517
   v-stable-20260517-plus-fixes
   v-stable-20260605
+)
+
+# ── PyPI semver releases (separate track from v-stable-*) ────────────────
+SEMVER_TAGS=(
   v0.2.0
   v0.2.1
 )
@@ -163,8 +168,28 @@ done | sort -n | head -8 | while read -r ahead t; do
   echo "  +$ahead commits | $t → $(git rev-parse --short "$t^{commit}" 2>/dev/null)"
 done
 
-header "Obsolete tags (off stable lineage — keep for reference, do not auto-delete)"
-for t in "${OBSOLETE_TAGS[@]}"; do
+header "Stable releases on current lineage"
+for t in v-stable-20260511 v-stable-20260518 v-stable-20260523; do
+  tag_info "$t"
+done
+latest_stable=$(git tag -l 'v-stable-*' | while read -r t; do
+  is_ancestor "$t" || continue
+  echo "$(git rev-list --count "$t"..HEAD 2>/dev/null || echo 9999) $t"
+done | sort -n | head -1 | awk '{print $2}')
+if [[ -n "$latest_stable" ]]; then
+  ahead=$(git rev-list --count "$latest_stable"..HEAD 2>/dev/null)
+  echo ""
+  echo "  Latest in-lineage stable release: $latest_stable"
+  echo "  HEAD is $ahead commits ahead — consider --tag-stable when ready."
+fi
+
+header "Stable releases off current lineage (historical 稳定版, keep)"
+for t in "${OFFLINEAGE_STABLE_TAGS[@]}"; do
+  tag_info "$t"
+done
+
+header "PyPI semver tags (separate from v-stable releases)"
+for t in "${SEMVER_TAGS[@]}"; do
   tag_info "$t"
 done
 
@@ -176,7 +201,7 @@ for t in "${BACKUP_TAGS[@]}"; do
   fi
 done
 
-header "2026-06-16 feature milestones (on stable lineage)"
+header "Feature milestones (NOT stable releases — on stable lineage)"
 for t in \
   prompt-config-overhaul-20260616 \
   prompt-collapse-configurable-20260616 \

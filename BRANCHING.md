@@ -30,18 +30,37 @@ feat/* ──PR──► dev ──验证通过──► stable-YYYYMMDD ──�
 
 ## 标签命名
 
-统一使用以下格式，旧 tag 逐步废弃：
+### 稳定版发布（核心）
 
-| 类型 | 格式 | 示例 |
+**`v-stable-YYYYMMDD` = 稳定版发布 tag。** 每个 tag 标记一个可部署的稳定基线；`post-checkout` hook 靠它同步 `.nanobot` 配置。
+
+| tag | 日期 | 在当前 lineage | 说明 |
+|-----|------|----------------|------|
+| `v-stable-20260511` | 05-11 | ✅ | 压缩修复前检查点 |
+| `v-stable-20260518` | 05-18 | ✅ | telegram 回调清理 |
+| `v-stable-20260523` | 05-23 | ✅ | rank 隔离；**当前 lineage 上最新稳定版 tag** |
+| `v-stable-20260517` | 05-17 | ❌ | 旧 dev 合并线，历史稳定版，保留 |
+| `v-stable-20260605` | 06-05 | ❌ | 另一路线的稳定版，保留 |
+| *(缺失)* `v-stable-20260527` | — | — | 分支 `stable-20260527` 尚无对应发布 tag |
+
+旧格式 `stable-YYYY-MM-DD`（如 `stable-2026-05-17`）含义相同，不再新建。
+
+**发布流程：** 在 `stable-YYYYMMDD` 分支验证通过后打 `v-stable-YYYYMMDD`（日期与分支一致）。
+
+### 其他 tag 类型（不是稳定版）
+
+| 类型 | 格式 | 含义 |
 |------|------|------|
-| 稳定快照 | `v-stable-YYYYMMDD` | `v-stable-20260605` |
-| 回滚备份 | `backup-YYYYMMDD-HHMMSS` | `backup-20260608-165600` |
-| 功能里程碑 | `<feature>-YYYYMMDD` | `prompt-config-overhaul-20260616` |
+| PyPI 版本 | `v0.x.x` | 包发布 semver，与 `v-stable-*` 独立 |
+| 功能里程碑 | `<feature>-YYYYMMDD` | 开发中间检查点，如 `broadcast-ux-polish-20260616` |
+| 回滚备份 | `backup-*` / `v-backup-*` | 紧急回滚锚点，非正式发布 |
+
+**勿混淆：** `broadcast-*-20260616` 等功能 tag 在 stable lineage 上，但**不代表稳定版发布**；只有 `v-stable-*` 才是。
 
 **已废弃的格式（勿再创建）：**
-- `stable-YYYY-MM-DD`（带横杠的日期）
 - `v0.x.x-stable`（与 semver 重复）
 - `stable/...`（带斜杠）
+- `015` 等误打别名
 
 ## 切换版本
 
@@ -58,10 +77,12 @@ feat/* ──PR──► dev ──验证通过──► stable-YYYYMMDD ──�
 ./tools/tag-cleanup.sh                              # 完整审计
 ./tools/tag-cleanup.sh --duplicates-only            # 仅重复 tag
 ./tools/tag-cleanup.sh --execute                    # 删除重复别名（015 等）
-./tools/tag-cleanup.sh --tag-stable --date 20260616 --execute  # 给 HEAD 打 v-stable tag
+./tools/tag-cleanup.sh --tag-stable --date 20260527 --execute  # 发布稳定版 v-stable-20260527
 ```
 
 当前 46 个 tag 均在本地，远程 0 个。并行开发期间建议只跑 dry-run。
+
+**待发布：** 当前 HEAD 领先 `v-stable-20260523` 约 43 个 commit；并行改动结束后应打 `v-stable-20260527`（与分支名对齐）。
 
 ## 远程仓库
 
