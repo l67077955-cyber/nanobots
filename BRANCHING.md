@@ -65,8 +65,11 @@ git remote prune upstream
 
 ## 待办（渐进整理）
 
-- [ ] 将 GitHub 默认分支从 `main` 改为 `stable-20260527`
+- [ ] 将 GitHub 默认分支从 `main` 改为 `stable-20260527`（需仓库 Settings 手动操作）
 - [ ] 合并 `dev` 与 `stable` 的分叉（ForgetTool 等待统一）
 - [ ] 处理 `progressive-fixes`（合并或废弃）
-- [x] 删除僵尸分支 `feat/groupchat-optimization`
+- [x] 删除僵尸分支 `feat/groupchat-optimization`（2026-06-16 完成）
+- [x] `stable-20260527` 设置 upstream 跟踪（2026-06-16 完成）
+- [x] prune 过期 `upstream/*` 远程跟踪（19 条，2026-06-16 完成）
+- [x] 推送本地 21 个积压 commit 到远程（2026-06-16 完成）
 - [ ] 清理重复 tag（`v0.1.5` / `v0.1.5-stable` 等）
