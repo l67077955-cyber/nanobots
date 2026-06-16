@@ -868,6 +868,24 @@ async def broadcast_round(
                     for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
                         _cycle_usage[k] += usage.get(k, 0)
 
+                # ── Pre-tool_loop pruning: cover all cycle paths (not just wait) ──
+                _conv_keep_turns = gc_settings.get("conv_keep_turns", 3)
+                _max_conv_msgs = _sys_msg_count + (_conv_keep_turns * 3) + 6
+                if len(messages) > _max_conv_msgs:
+                    from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
+                    from nanobot.groupchat.history.history_settings import summarize_model as _summarize_model
+                    dropped = await prune_conversation_tail_with_summary(
+                        messages, _sys_msg_count, _conv_keep_turns,
+                        provider=engine.provider,
+                        model=_summarize_model(),
+                        agent_name=name,
+                    )
+                    if dropped > 0:
+                        logger.debug(
+                            "Broadcast: {} pre-tool_loop pruned {} msgs (len {} → {})",
+                            name, dropped, len(messages) + dropped, len(messages),
+                        )
+
                 # Mark agent busy so incoming messages can trigger interrupt
                 mailbox.mark_busy(name)
                 try:

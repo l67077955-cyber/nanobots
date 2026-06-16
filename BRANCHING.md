@@ -89,10 +89,27 @@ git remote prune upstream
 
 **结论：** 不可合并。`progressive-fixes` 比 `stable` 落后 73 个文件（会回退 rank 现代化、ForgetTool、条件 memory_palace 等）。已删除远程分支。
 
+### `dev` ↔ `stable` 分叉合并（2026-06-16）
+
+**策略：** 以 `stable` 为基（保留 token-aware 压缩、forget 警告、rank 现代化等），只移植 `dev` 独有价值。
+
+| dev commit | 处理 | 说明 |
+|------------|------|------|
+| `6daa75cd` ForgetTool ↔ 压缩协调 | ✅ 移植 | `forgotten_tool_call_ids` + `ignored_tool_call_ids` |
+| `48641fe7` ForgetTool 实现 | ✅ 合并 | 实例级 `_ctx`（避免群聊跨 agent 污染）+ stable phase 3b 彻底清除 |
+| `7b2326ed` pre-tool_loop prune | ✅ 移植 | broadcast 所有 cycle 路径防消息膨胀 |
+| `46331ca2` memory_palace 显示预览 | ✅ 移植 | Telegram 工具活动/结果展示 |
+| `68e702df` auto_recall 关键词显示 | ⏭ 跳过 | stable 已移除 autorecall（`62a73281`） |
+| `7e9a50a8` auto_store 摘要显示 | ⏭ 跳过 | 同上 |
+| `54a5ca16` / `b4c439dd` 清理 dead code | ⏭ 跳过 | stable 仍保留 `visible` 参数 |
+| `44440fbe` backup commit | ⏭ 跳过 | 应用 tag 代替 |
+
+合并后：`git merge stable-20260527` 快进 `dev` 到同一 HEAD。
+
 ## 待办（渐进整理）
 
 - [ ] 将 GitHub 默认分支从 `main` 改为 `stable-20260527`（需仓库 Settings 手动操作）
-- [ ] 合并 `dev` 与 `stable` 的分叉（ForgetTool 等待统一）
+- [x] 合并 `dev` 与 `stable` 的分叉（2026-06-16：以 stable 为基，移植 dev 独有价值）
 - [x] 处理 `progressive-fixes`（审查完毕，已废弃删除，2026-06-16）
 - [x] 删除僵尸分支 `feat/groupchat-optimization`（2026-06-16 完成）
 - [x] `stable-20260527` 设置 upstream 跟踪（2026-06-16 完成）

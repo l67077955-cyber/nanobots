@@ -191,6 +191,7 @@ def prune_messages(
     soft_ratio: float | None = None,
     keep_recent: int | None = None,
     max_chars: int | None = None,
+    ignored_tool_call_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Prune old tool-result messages to fit within the context window.
 
@@ -198,8 +199,8 @@ def prune_messages(
     are never modified. Only tool results before the last ``keep_recent`` assistant
     turns are pruned by substituting large outputs with a single generic summary line.
 
-    The decision uses a char*4 estimate (see CHARS_PER_TOKEN). For higher accuracy
-    consider integrating estimate_message_tokens from nanobot.utils.helpers in future.
+    ignored_tool_call_ids: skip pruning tool results with these IDs (e.g. just
+    forgotten via ForgetTool) so forget and compression stay coordinated.
     """
     try:
         from nanobot.groupchat.history import history_settings as hs
@@ -235,6 +236,9 @@ def prune_messages(
     prunable: list[int] = []
     for i in range(cutoff):
         if messages[i].get("role") == "tool":
+            tcid = messages[i].get("tool_call_id", "")
+            if ignored_tool_call_ids and tcid in ignored_tool_call_ids:
+                continue
             content = messages[i].get("content", "")
             if isinstance(content, str) and len(content) > max_chars:
                 prunable.append(i)
@@ -251,6 +255,8 @@ def prune_messages(
             continue
             
         tcid = result[i].get("tool_call_id", "")
+        if ignored_tool_call_ids and tcid in ignored_tool_call_ids:
+            continue
         tool_name, tool_args = tool_map.get(tcid, ("unknown_tool", ""))
         
         summary = _summarize_tool_result(tool_name, tool_args, content)

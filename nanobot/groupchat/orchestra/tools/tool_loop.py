@@ -68,6 +68,9 @@ class ToolLoopResult:
     finish_reason: str = "stop"
     """``"stop"`` for normal completion, ``"max_iterations"``, or ``"error"``."""
 
+    forgotten_tool_call_ids: list[str] = field(default_factory=list)
+    """Tool call IDs forgotten via the forget tool — for prune/compress coordination."""
+
     status_code: int | None = None
     """HTTP status code on error (e.g. 429, 502)."""
 
@@ -288,7 +291,10 @@ async def tool_loop(
         # mutated, so new tool results continue to be appended correctly.
         if iteration > 1:
             from nanobot.groupchat.history.tool_pruning import prune_messages
-            llm_messages = prune_messages(messages, _ctx_window)
+            ignored = set(result.forgotten_tool_call_ids or [])
+            llm_messages = prune_messages(
+                messages, _ctx_window, ignored_tool_call_ids=ignored,
+            )
         else:
             llm_messages = messages
 
@@ -517,34 +523,21 @@ async def tool_loop(
                 thinking_blocks=response.thinking_blocks,
             ))
 
-            # ── Share last tool calls with ForgetTool ──
-            # ForgetTool reads this to know what previous calls exist.
-            # Save the previous batch before overwriting, so forget can target
-            # the calls from the *previous* round (not the current batch that
-            # includes forget itself).
-            try:
-                from nanobot.tools.forget import ForgetTool
-                _prev = ForgetTool._shared.get("last_tool_calls", [])
-                ForgetTool.set_shared("prev_tool_calls", _prev)
-                ForgetTool.set_shared("last_tool_calls", [
-                    {
-                        "tool_call_id": tc.id,
-                        "name": tc.name,
-                        "args_str": json.dumps(tc.arguments, ensure_ascii=False),
-                    }
-                    for tc in response.tool_calls
-                ])
-            except Exception:
-                pass
-
             # ── Phase 1: Sequential pre-check (dedup, permission, progress) ──
             pending: list[tuple] = []  # (tc, args_str, dedup_key)
             _batch_dedup_keys: set[str] = set()  # track dedup keys within this batch
+            current_tool_batch: list[dict] = []
             for tc in response.tool_calls:
                 result.tools_used.append(tc.name)
 
                 args_str = json.dumps(tc.arguments, ensure_ascii=False)
                 logger.info("tool_loop: {}({})", tc.name, args_str)
+
+                current_tool_batch.append({
+                    "tool_call_id": tc.id,
+                    "name": tc.name,
+                    "args_str": args_str,
+                })
 
                 # Dedup check BEFORE display (so dupes are silent)
                 dedup_key = None
@@ -599,6 +592,16 @@ async def tool_loop(
                     await on_tool_start(tc.name, tc.arguments, tool_call_id=tc.id)
 
                 pending.append((tc, args_str, dedup_key))
+
+            # ── Prepare per-agent ForgetTool context (prev/last batch rotation) ──
+            forget_tool = tool_registry.get("forget") if tool_registry is not None else None
+            if forget_tool is not None:
+                if not hasattr(forget_tool, "_ctx") or forget_tool._ctx is None:
+                    forget_tool._ctx = {}
+                fctx = forget_tool._ctx
+                fctx["prev_tool_calls"] = fctx.get("last_tool_calls", []) or []
+                fctx["last_tool_calls"] = current_tool_batch
+                fctx.setdefault("_forgot_ids", set())
 
             # ── Checkpoint 2.5: interrupt check before tool execution ──
             # After LLM has decided on tools (expending one LLM call) but
@@ -754,14 +757,12 @@ async def tool_loop(
                         len(_forget_ids), ", ".join(_forget_names),
                     )
 
-                    # Track forgot IDs so ForgetTool can skip already-forgot entries
-                    try:
-                        from nanobot.tools.forget import ForgetTool
-                        existing: set = ForgetTool._shared.get("_forgot_ids", set())
-                        existing.update(_forget_ids)
-                        ForgetTool._shared["_forgot_ids"] = existing
-                    except Exception:
-                        pass
+                    result.forgotten_tool_call_ids.extend(
+                        sorted(tid for tid in _forget_ids if tid)
+                    )
+
+                    if forget_tool is not None and hasattr(forget_tool, "_ctx"):
+                        forget_tool._ctx.setdefault("_forgot_ids", set()).update(_forget_ids)
 
                 # ── Checkpoint 2: cooperative interrupt check (after tool batch) ──
                 # Checked after all tools in this iteration have finished so
