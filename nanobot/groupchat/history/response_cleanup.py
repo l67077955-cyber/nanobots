@@ -23,17 +23,7 @@ def clean_response(content: str, agent_name: str, all_agent_names: list[str]) ->
     # 1. Strip <think>...</think> blocks (deepseek, some models)
     content = re.sub(r"<think>[\s\S]*?</think>", "", content).strip()
 
-    # 2. Strip Grok-style reasoning prefix (starts with "A: " or similar)
-    if content.startswith("A: ") or content.startswith("A："):
-        lines = content.split("\n")
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if stripped and not stripped.startswith("A:") and not stripped.startswith("A："):
-                if i > 0 and not lines[i - 1].strip():
-                    content = "\n".join(lines[i:])
-                    break
-
-    # 3. Strip fake/hallucinated tool calls in text
+    # 2. Strip fake/hallucinated tool calls in text
     # Qwen/NIM style: <|tool_calls_section_begin|>...<|tool_calls_section_end|>
     content = re.sub(
         r"<\|tool_calls_section_begin\|>[\s\S]*?<\|tool_calls_section_end\|>",
