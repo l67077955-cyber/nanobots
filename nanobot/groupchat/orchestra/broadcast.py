@@ -303,7 +303,7 @@ class BroadcastOrchestrator:
         for ag in self.exec_agents:
             cfg = self.engine.registry.get(ag, {})
             rank = cfg.get("rank", "basic")
-            cap = MODERN_CAP.get(rank, 3)
+            cap = MODERN_CAP.get(rank, 2)  # unknown rank → basic capacity (aligns with RANK_ORDER fallback)
             if ag == self.leader_name:
                 cap += 1  # leader gets +1
             per_agent_cap[ag] = cap
@@ -574,79 +574,24 @@ async def broadcast_round(
         # Removed stale prompt_overrides.json lookup; .md files are the source of truth.
 
         if is_leader:
-            # ── Leader prompt: active orchestrator ──
+            # Runtime-only context; static leader rules live in prompt_builder leader_prompt
             agent_caps = []
             for a in non_leader_agents:
                 on = engine.get_agent_enabled_tool_names(a)
                 agent_caps.append(f"  {a}: {', '.join(on) if on else '(无工具)'}")
 
-            # Determine Leader's own base tools
             leader_on = engine.get_agent_enabled_tool_names(leader_name)
             leader_base_tools_str = f"（{', '.join(leader_on)}）" if leader_on else "（无基础工具）"
 
-            leader_hint = (
-                f"[Leader 模式 — 你是团队指挥官 👑]\n"
-                f"你是 {name}，负责分析问题、分配任务、整合结果。\n\n"
-                f"用户请求: {user_question}\n\n"
-                f"## 团队成员及工具能力\n"
-                + "\n".join(agent_caps) + "\n\n"
-                f"## 你的专属工具\n"
-                f"- chatroom_send(to, message): 给队友发任务/指令\n"
-                f"- wait(): 等待队友汇报结果\n"
-                f"- manage_agent(action, agent, ...): 管理队友\n"
-                f"    • disable: 踢出并取消该 agent 的任务\n"
-                f"    • restart: 将已踢出的 agent 拉回并重新启动（最常用）\n"
-                f"    • enable: 仅标记为激活（不重启任务）\n"
-                f"    • set_tools: 修改 agent 的工具权限（如 {{\"web_search\": true}}）\n"
-                f"    • set_status: 向 agent 注入一条状态消息（修改其下次循环的指令）\n"
-                f"- clear_context(agent, keep_last, reason): 清理 agent 的上下文历史\n"
-                f"    • 从共享历史移除该 agent 的消息，让其重置思路\n"
-                f"    • keep_last=N 可保留最近 N 条不删\n"
-                f"- end_discussion(reason): 结束讨论，进入最终总结\n"
-                f"- transfer_credits(from_agent, to_agent, amount): 划拨搜索额度\n"
-                f"- 你也拥有自己的基础工具{leader_base_tools_str}，可以自己做部分工作\n\n"
-                f"## 🧠 记忆宫殿（所有 Agent 共享）\n"
-                f"memory_palace 工具在本轮结束后仍然保留，下次启动自动加载。\n"
-                f"- memory_palace(action='store', content=..., wing=..., hall=..., room=...)\n"
-                f"    存入记忆。wing=大类（如'项目知识'），hall=子类（如'2026-04'），room=具体槽位\n"
-                f"- memory_palace(action='search', query=..., top_k=5)\n"
-                f"    关键词检索所有记忆，返回最相关的 top_k 条\n"
-                f"- memory_palace(action='list')\n"
-                f"    查看当前宫殿结构（Wing/Hall/Room 及记忆数量）\n"
-                f"- memory_palace(action='delete', wing=..., hall=..., room=...)\n"
-                f"    删除指定路径的记忆\n\n"
-                f"每个 agent 有独立的搜索额度，详见下方的 [本轮状态汇总]。\n"
-                f"你可以用 transfer_credits 把闲置额度划拨给需要的队友。\n\n"
-                f"## 工作流程\n"
-                f"1. 先用 memory_palace(action='search') 检索是否有相关历史记忆\n"
-                f"2. 分析问题，决定如何分工\n"
-                f"3. 用 chatroom_send 给队友分配具体任务（写清楚要做什么）\n"
-                f"   ⚠️ 只分配队友有工具能力完成的任务！无 web_search 的队友不要让他搜索\n"
-                f"4. 用 wait() 等待队友回复结果\n"
-                f"5. 根据结果：追加任务 / 纠正方向 / 自己补充搜索\n"
-                f"6. 信息充分后，先完成以下两步，再调用 end_discussion()：\n"
-                f"   a. 输出结构化最终总结（必须包含以下部分，禁止省略）：\n"
-                f"      ## 结论\n"
-                f"      （直接回答用户问题的核心结论，1-3句话）\n\n"
-                f"      ## 关键发现\n"
-                f"      （讨论中确认的事实、数据、来源，用列表形式）\n\n"
-                f"      ## 备注\n"
-                f"      （可选：分歧说明、局限、后续建议）\n\n"
-                f"   b. 用 memory_palace(action='store') 将关键结论写入记忆宫殿\n"
-                f"      示例: memory_palace(action='store', content='用户偏好：...', wing='用户', hall='偏好', room='main')\n"
-                f"7. 完成记忆存入后，调用 end_discussion() 结束任务\n\n"
-                f"## 关键规则\n"
-                f"- 发现队友空转或无法完成任务时：果断 end_discussion\n"
-                f"- 可以一次给多个队友同时发任务（并行工作）\n"
-                f"- ⚠️ 如果你打算自己做搜索/验证，必须先完成工具调用，再调用 end_discussion。\n"
-                f"  end_discussion 一旦触发无法撤销，之后再说'我来搜索'只是文字，不会执行。\n"
-                f"- ⚠️ 原假设被否证时，不要立即结束。应转向：'那么最近的可验证链条是什么？'\n"
-                f"  继续搜索直到能给出正面结论（即使度数更高），而不是仅报告'不成立'。\n"
-                f"- ⚠️ 禁止在未存记忆的情况下调用 end_discussion。存记忆 → end_discussion 是强制顺序。\n"
-            )
             messages.insert(max(len(messages) - 1, 0), {
                 "role": "system",
-                "content": leader_hint,
+                "content": (
+                    f"[Leader 本轮上下文]\n"
+                    f"## 团队成员及工具能力\n"
+                    + "\n".join(agent_caps) + "\n"
+                    f"你的基础工具{leader_base_tools_str}\n"
+                    f"⚠️ 只分配队友有工具能力完成的任务。权限与搜索额度见末尾 [本轮状态汇总]。"
+                ),
             })
         else:
             # ── Non-leader: broadcast_hint already expanded by build_agent_prompt ──
