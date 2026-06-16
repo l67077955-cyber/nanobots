@@ -818,8 +818,8 @@ async def broadcast_round(
                 # Exception: leader called end_discussion but hasn't produced valid
                 # synthesis yet — allow the cycle loop to continue so the leader
                 # can retry (guards at line ~1125/1140 force a text-producing cycle).
-                if not engine._running and not (is_leader and _leader_ended_discussion):
-                    logger.info("Broadcast: {} exiting — engine stopped", name)
+                if (not engine._running or (mailbox and getattr(mailbox, "is_discussion_ended", lambda: False)())) and not (is_leader and _leader_ended_discussion):
+                    logger.info("Broadcast: {} exiting — engine stopped or discussion ended", name)
                     break
                 cycle += 1
                 # Re-read model from registry each cycle so mid-round changes take effect
@@ -1377,9 +1377,11 @@ async def broadcast_round(
 
                 if msg is None:
                     # No message — check if engine stopped or leader ended discussion
-                    if not engine._running or leader_end_event.is_set():
-                        await tracker.set_state(name, "done", reason="engine stopped")
-                        logger.info("Broadcast: {} wait returned None, engine stopped, exiting", name)
+                    ended = (not engine._running or leader_end_event.is_set() or
+                             (mailbox and getattr(mailbox, "is_discussion_ended", lambda: False)()))
+                    if ended:
+                        await tracker.set_state(name, "done", reason="discussion ended")
+                        logger.info("Broadcast: {} wait returned None, discussion ended, exiting", name)
                         break
                     # Leader fallback: if no text was produced, force synthesis
                     if is_leader and not content:

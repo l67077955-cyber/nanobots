@@ -1279,6 +1279,9 @@ class CallbacksMixin:
                         agent_hp = agent.get("hyperparams") or {}
                         agent_hp.update(global_hp)
                         agent["hyperparams"] = agent_hp
+                        # Note: editagent 超参数修改无需重启/新命令。
+                        # 直接 mutate 活的 registry + 磁盘；_chat_with_tools 在调用前
+                        # 现读 registry（见 engine.py），下一次该 agent turn 自动生效。
                         cfg_path = Path.home() / ".nanobot" / "agents" / a_name.lower() / "config.json"
                         if cfg_path.exists():
                             try:

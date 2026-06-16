@@ -768,12 +768,23 @@ class GroupChatEngine:
 
         session_id = self._session_dir.name if self._session_dir else "direct"
 
-        # Per-agent hyperparams: merge with global defaults (agent overrides win)
+        # Per-agent hyperparams: fresh read from live registry as late as possible
+        # so that changes made via /editagent (which directly mutates the dict
+        # in registry + writes per-agent config.json) take effect on this turn
+        # without restart. We pass the value down; the standalone function
+        # uses it for the temporary override of provider.sampling_params.
         agent_sampling = None
         agent_cfg_data = self.registry.get(agent_name, {})
         if isinstance(agent_cfg_data.get("hyperparams"), dict):
             agent_sampling = dict(agent_cfg_data["hyperparams"])
 
+        # NOTE on concurrency: broadcast runs multiple agent tasks concurrently.
+        # The temp override below (and restore) on the shared provider can race
+        # if two agents' LLM calls interleave. The per-turn snapshot + restore
+        # mitigates leakage for sequential turns, but true isolation would require
+        # threading the effective sampling all the way into the provider builders
+        # instead of mutating self.sampling_params. For now we rely on the
+        # short critical sections around individual provider.chat calls.
         return await chat_with_tools(
             provider=self.provider,
             messages=messages,
@@ -1467,18 +1478,21 @@ async def chat_with_tools(
 
     # Snapshot messages before tool_loop mutates them
     messages_snap = snapshot_messages(messages)
-    sampling = dict(getattr(provider, "sampling_params", {}))
-    # Merge per-agent hyperparams (agent overrides global)
+
+    # Use the (caller-provided) per-agent hyperparams override if present.
+    # Note: the caller (_chat_with_tools) performs a fresh read from the live
+    # engine.registry right before invoking us, so /editagent changes are visible
+    # without restart. The passed agent_sampling is the effective merged value
+    # for this turn.
+    base = getattr(provider, "sampling_params", {}) or {}
+    sampling = dict(base)  # copy to avoid mutating caller's base unintentionally
     if agent_sampling:
-        sampling = {**sampling, **agent_sampling}
+        sampling.update(agent_sampling)  # agent overrides win
         logger.info("chat_with_tools: agent={} merged hyperparams: {}", agent_name, list(agent_sampling.keys()))
 
-    # Inject merged sampling params into provider so _build_body/_build_kwargs
-    # (which read self.sampling_params) use the per-agent overrides.
-    # Restore original after call to avoid leaking between agents.
     _orig_sampling = getattr(provider, "sampling_params", None)
     if _orig_sampling is not None:
-        provider.sampling_params = sampling
+        provider.sampling_params = sampling  # temporary per-turn override (see concurrency note at call site)
     tool_names = [d.get("function", {}).get("name", "?") for d in (tool_defs or [])]
 
     # Per-iteration token usage callback — update shared ref so tool callbacks
@@ -1507,9 +1521,11 @@ async def chat_with_tools(
             result_max_chars=_direct_result_max,
         )
     finally:
-        # Restore original sampling params to avoid leaking between agents
+        # Restore original sampling params to avoid leaking between agents.
+        # Use a copy of the saved original in case the provider object was
+        # further mutated during the turn.
         if _orig_sampling is not None:
-            provider.sampling_params = _orig_sampling
+            provider.sampling_params = dict(_orig_sampling) if isinstance(_orig_sampling, dict) else _orig_sampling
 
     content = result.content or ""
     # Use effective_defs (not original tool_defs) for accurate stats

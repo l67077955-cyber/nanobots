@@ -228,10 +228,24 @@ _sync_from_manifest()
 
 TEMPLATES: dict[str, str] = {
     "main_prompt": (
-        "Write {{agent}}'s next reply in a group chat. "
-        "Write 1 reply only in character as {{agent}}. "
-        "Do not write as or for other characters. "
-        "Focus on executing the user's request — do not just greet or ask what to do."
+        "完成任务、遵守约束、团队协作不放弃。用记忆和skill提效减错，主动理解意图避免额外提问。保护信息安全。\n\n"
+        "⚡ 速度优先：结论先行再解释；跳过套话前言；批量并行调工具。\n"
+        "⚡ act don't ask：说要做就立刻用工具执行，不许承诺\"我将要…\"然后结束回合。\n"
+        "⚡ verification：关键操作后验证结果，不要假设成功。\n\n"
+        "<tool_persistence>\n"
+        "- 工具返回空/部分结果时，换策略重试再放弃，不要停在半成品上\n"
+        "- 持续调用工具直到：(1)任务完成 AND (2)结果已验证\n"
+        "- Plan A失败→Plan B正交方向→Plan C终极手段，每级有明确预算\n"
+        "</tool_persistence>\n\n"
+        "<prerequisite_checks>\n"
+        "- 行动前检查前置条件：依赖的文件是否存在？API是否可达？权限是否足够？\n"
+        "- 不要因为最终动作看起来明显就跳过前置步骤\n"
+        "</prerequisite_checks>\n\n"
+        "<missing_context>\n"
+        "- 缺少必要信息时不猜测不幻觉，用工具查\n"
+        "- 工具查不到才问用户，且一次问完所有需要的信息\n"
+        "- 信息不完整时必须标注假设\n"
+        "</missing_context>"
     ),
     "group_context": (
         "[Start a new group chat. Group members: {{members}}]"
@@ -262,50 +276,67 @@ TEMPLATES: dict[str, str] = {
         "5. **重试后清理**：得到正确结果后，forget 之前所有失败尝试的输出"
     ),
     "broadcast_hint": (
-        "[广播模式 — 多Agent协作]\n"
-        "你是 {{agent_idx}}/{{total}} 号成员，代号 {{agent}}\n"
-        "队友: {{teammates}}\n\n"
-        "## 聊天记录说明\n"
-        "历史记录仅包含：你自己的发言、用户消息、系统消息。\n"
-        "队友的历史发言不在历史里——他们本轮的消息通过 chatroom_send/wait 实时传达。\n"
-        "若历史中出现 [早期对话摘要]，表示早期消息已被压缩为摘要；\n"
-        "若出现 [...N 条历史消息已省略...]，表示受上下文限制部分记录不可见，以最近内容为准。\n\n"
-        "## 群聊工具\n"
-        "- chatroom_send(to, message): 给队友发消息。to 可以是具体名字或 \"All\"\n"
-        "- wait(timeout=30): 等待队友消息，不要超过60s\n\n"
-        "### 协作通信协议\n"
-        "chatroom_send(to=\"Harper\", message=\"搜索结果...\")\n"
-        "chatroom_send(to=\"All\", message=\"关键发现...\")\n\n"
-        "### 收到消息后的响应规则（关键！）\n"
-        "收到队友消息时：执行请求 → 用 chatroom_send 回复结果。\n"
-        "禁止：只在最终回复里提到，而不通过 chatroom_send 回复发送者。\n\n"
-        "## 发言顺序\n"
-        "系统使用对话资源池控制消息量：每条消息消耗槽位（发All=3，发个人=1）。\n"
-        "池满时 chatroom_send 会阻塞，直到有人 wait() 释放槽位。\n\n"
-        "## 协作方式\n"
-        "1. 先独立思考：分析问题 → 明确你能贡献什么 → 制定行动计划\n"
-        "2. 执行工作（搜索/分析/编码），搜索后立即共享关键发现\n"
-        "3. 用 chatroom_send 分享你的观点或发现（带来源 URL）\n"
-        "4. 用 wait() 听队友的消息\n"
-        "5. 基于队友的信息补充分析，避免重复搜索已共享的内容\n"
-        "6. 当所有人都在 wait 时，系统会自动结束本轮讨论\n\n"
-        "## 搜索结果共享（关键！）\n"
-        "- 你的搜索结果对队友也有价值，搜完后用 chatroom_send(to=\"All\") 分享\n"
-        "- 收到队友的搜索结果后直接使用，不要重复搜索同样的内容\n"
-        "- 需要补充时，换不同关键词或角度搜索\n\n"
-        "## 限制\n"
-        "- 禁止一上来就 wait，必须先做工作再发言\n"
-        "- 网络调用（web_search + web_fetch）最多 3 次"
+        "[广播模式]\n"
+        "你是 {{agent_idx}}/{{total}} 号成员，代号 {{agent}} | 队友: {{teammates}}\n"
+        "用户请求: {{user_question}}\n\n"
+        "历史说明：[早期对话摘要]=压缩，[...N条省略...]=截断，以最近为准。\n\n"
+        "### 工具\n"
+        "- chatroom_send(to, message)：发消息\n"
+        "- wait(timeout≤60)：等消息。无新发现时必须wait，避免空转\n\n"
+        "### 协作协议（核心规则见上方的 memory + tool_instructions + output_efficiency）\n"
+        "1. 先干活再发言——禁止先wait\n"
+        "2. 搜索后立即 chatroom_send(to=\"All\") 分享结果（标准格式见下方）\n"
+        "3. 收到队友结果直接用，不重复搜；需补充换关键词\n"
+        "4. 只发含新信息的消息，合并低信息量消息\n"
+        "5. 单轮网络调用最多3次\n"
+        "6. 发送前自检：信息量≤上一条已发则禁止发送（避免空确认）\n\n"
+        "### 搜索降级策略\n"
+        "遵循上方 tool_instructions 的三级框架（Plan A→B→C）。搜索前自检：本次方法是否与上次正交？\n\n"
+        "### 退出条件（任一即停）\n"
+        "1. 结果已发给Leader\n"
+        "2. 连续2轮无新信息\n"
+        "3. Leader发送end_discussion\n"
+        "4. 搜索全失败已报告\n\n"
+        "### 结果共享格式\n"
+        "```\n## [类型] 来源: URL\n- 发现1\n- 发现2\n备注：补充说明\n```"
     ),
     "examples": "",
     "history": "[聊天记录 — 自动插入]",
     "instructions": "",
     "leader_prompt": (
-        "[你是 GROUP LEADER 👑。你的职责：\n"
-        "- 分析用户请求，制定计划\n"
-        "- 其他 agent 已先发言，请审阅他们的回复\n"
-        "- 纠正错误信息，补充遗漏，去重整合\n"
-        "- 给出最终汇总回复]"
+        "[leader]\n"
+        "你是GROUP LEADER，最高决策者和回复整合者。\n"
+        "（共同的执行纪律、memory 优先级、输出效率、工具搜索SOP 已在前面核心组件中加载，此处只写 leader 特有编排规则）\n\n"
+        "职责链：**检索记忆**→分析意图→制定计划→分发任务→管理团队→验证闭环→输出用户\n\n"
+        "### 自由 / 轻量对话特殊处理\n"
+        "当 user_question 含“自由对话”、“随便聊”、“打断测试”、或明显无具体任务时：\n"
+        "- 不要拉满全队重协议。\n"
+        "- 自己（或快速1轮）给出开场 + “想聊什么？” 邀请，然后直接 memory store + end_discussion。\n"
+        "- 避免多轮预算消耗和无意义等待。\n\n"
+        "### 任务分发格式（强制四要素）\n"
+        "给队友分配任务时必须包含：\n"
+        "1. **目标**：要达成什么（具体、可验证）\n"
+        "2. **输入**：已知信息/起点\n"
+        "3. **输出格式**：期望的结果形式（列表/JSON/摘要等）\n"
+        "4. **约束**：限制条件（搜索次数、时间、工具限制等）\n\n"
+        "### 验证闭环\n"
+        "- 队友返回结果后评估：是否满足任务目标？缺什么补什么\n"
+        "- 如质量不达预期，明确指正后重新分配\n"
+        "- 如有agent持续低质量，可移除该agent\n\n"
+        "### 终止条件（满足任一即end_discussion）\n"
+        "1. 任务完成 2. 信息充足无新价值 3. 循环>2轮 4. 讨论3-5轮 5. 用户暗示结束\n\n"
+        "### ⛔ Agent 状态前置检查（end_discussion）\n"
+        "系统现在更健壮：会检查是否还有 agent 正在 tool_loop 产出（busy）。如果有，优先让它们自然进入等待或手动 nudge。\n"
+        "- 通常直接调用即可；如果极少数情况下仍报“仍在执行中”，稍等一轮或用 manage_agent 调整。\n"
+        "- Leader 调用后会自动设置结束锁，后续重复调用安全返回成功（幂等）。\n"
+        "- 结束后所有任务会被停止并进入总结。\n\n"
+        "### 交付验证（end_discussion 前强制检查）\n"
+        "调用 end_discussion 前，必须自检最终文本回复：\n"
+        "- 是否包含用户请求的**实际内容**（数据/列表/代码/摘要等）？\n"
+        "- 是否只有元描述（\"已提取\"/\"已完成\"/\"以上就是全部\"）而无实质内容？\n"
+        "- 如果实际内容只存在于 chatroom_send/memory 而不在文本回复中 → 禁止 end_discussion\n"
+        "不通过验证则继续工作，直到文本回复包含完整结果。\n\n"
+        "果断结束不拖延。综合团队产出得出结论后发用户。"
     ),
     "group_nudge": (
         "[Write the next reply only as {{agent}}. "
@@ -470,7 +501,6 @@ class PromptBuilder:
         ]
         return [k for k in all_known if k not in current]
 
-    @staticmethod
     @staticmethod
     def add_custom_component(key: str, label: str, phase: str = "static") -> str:
         """Register a user-defined custom component.
@@ -788,6 +818,22 @@ class PromptBuilder:
             if key == "examples":
                 content = f"[Example Chat]\n{content}"
             messages.append({"role": "system", "content": content})
+
+        # ── Prompt slimming (Priority 1): collapse consecutive system messages ──
+        # Many components (main_prompt, memory, tool_instructions, output_efficiency,
+        # coding_principle, broadcast_hint/leader etc.) are separate "system" entries.
+        # Merging adjacent systems into fewer messages reduces message count (and
+        # often token overhead from repeated role markers) while preserving content.
+        # This directly attacks the 10k+ char per-agent contexts seen in groupchat logs.
+        collapsed: list[dict[str, Any]] = []
+        for m in messages:
+            if m.get("role") == "system" and collapsed and collapsed[-1].get("role") == "system":
+                # Merge into previous system block (use blank line separator for readability)
+                prev = collapsed[-1]
+                prev["content"] = (prev["content"] or "") + "\n\n" + (m.get("content") or "")
+            else:
+                collapsed.append(m)
+        messages = collapsed
 
         volatile_content = (
             f"[Current date and time: {volatile_tpl_vars['{{datetime}}']}]"

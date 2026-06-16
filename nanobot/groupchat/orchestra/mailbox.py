@@ -326,6 +326,8 @@ class MailboxHub:
         self._busy_agents: set[str] = set()
         # Auto-incrementing message ID for quote_message support
         self._next_msg_id: int = 0
+        # Discussion end state (for idempotency and final lock)
+        self._discussion_ended: bool = False
 
     def set_leader_name(self, leader_name: str) -> None:
         """Set/update the leader name (may not be known at construction time)."""
@@ -374,6 +376,7 @@ class MailboxHub:
         self._listener_restrictions.clear()
         for evt in self._interrupt_events.values():
             evt.clear()
+        self._discussion_ended = False
         logger.debug("MailboxHub: round started, {} agents", len(self._queues))
 
     # ── Forced interrupt methods ─────────────────────────────────────────────
@@ -848,3 +851,20 @@ class MailboxHub:
         if self._active_agents and self._waiting >= self._active_agents:
             self._all_waiting.set()
             self._nudge_random_agent(reason="agent-done")
+
+    def is_discussion_ended(self) -> bool:
+        """Whether end_discussion has been successfully called (idempotency / final lock)."""
+        return self._discussion_ended
+
+    def mark_discussion_ended(self) -> None:
+        """Mark the discussion as ended (prevents re-entrancy and further busy work)."""
+        self._discussion_ended = True
+        # Also ensure all_waiting to unblock any lingering wait() calls
+        self._all_waiting.set()
+        # Force-clear busy/interrupt state so any mid-turn agents exit their tool_loops promptly
+        # (important for interrupt + end races and the old "waiting guard" brittleness).
+        for name in list(self._busy_agents):
+            self.mark_idle(name)
+        for evt in self._interrupt_events.values():
+            evt.set()  # wake any polling loops
+        self._interrupt_counts.clear()

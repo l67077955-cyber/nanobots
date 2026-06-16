@@ -1112,18 +1112,29 @@ class EndDiscussionTool(Tool):
         }
 
     async def execute(self, reason: str = "", **kwargs: Any) -> str:
-        # ── Guard: reject if any non-leader agent is still busy — leader must retry ──
+        # Idempotency + final state lock (P2 hardening)
+        if self._mailbox is not None:
+            if getattr(self._mailbox, "is_discussion_ended", lambda: False)():
+                return "✅ 讨论已经结束（重复调用已忽略），即将/已在总结阶段。"
+            if not getattr(self._engine, "_running", True):
+                self._mailbox.mark_discussion_ended()
+                return "✅ 讨论已经结束（引擎已停止）。"
+
+        # ── Guard: reject if any non-leader agent is *still producing output* (busy in tool_loop).
+        # Relaxed from strict "all in _waiting" (which happens *after* the cycle) to "no one actively executing".
+        # This makes end_discussion far more reliable under interrupts, variable timing, and partial disables.
+        # Leader can still be "executing" its own call.
         if self._mailbox is not None:
             active = getattr(self._mailbox, "_active_agents", set())
-            waiting = getattr(self._mailbox, "_waiting", set())
+            busy = getattr(self._mailbox, "_busy_agents", set())
             leader = getattr(self._mailbox, "_leader_name", "")
-            # Exclude leader (the caller) — leader is always "executing" when calling this
-            non_waiting = (active - waiting) - {leader}
-            if non_waiting:
-                names = ", ".join(sorted(non_waiting))
+            # Agents that are active AND currently inside tool_loop (producing) — excluding the leader caller.
+            still_producing = (active & busy) - {leader}
+            if still_producing:
+                names = ", ".join(sorted(still_producing))
                 return (
-                    f"❌ 结束讨论失败：以下 agent 尚未进入等待状态：{names}。\n"
-                    "请在所有 agent 进入等待状态后，再次调用 end_discussion。"
+                    f"❌ 结束讨论失败：以下 agent 仍在执行中：{names}。\n"
+                    "请稍等或使用 manage_agent 调整后再试。"
                 )
 
         reason_str = f"（原因: {reason}）" if reason else ""
@@ -1132,6 +1143,8 @@ class EndDiscussionTool(Tool):
         self._engine._leader_end_reason = reason
         self._end_event.set()
         self._engine._running = False
+        if self._mailbox is not None:
+            self._mailbox.mark_discussion_ended()
         return f"✅ 讨论已结束{reason_str}，即将进入总结阶段"
 
 
