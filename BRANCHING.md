@@ -151,4 +151,4 @@ git remote prune upstream
 - [x] 推送本地 21 个积压 commit 到远程（2026-06-16 完成）
 - [x] 发布 `v-stable-20260527` 稳定版 tag（2026-06-16）
 - [x] 清理重复 tag：`015`、`v0.1.5-stable`、`v0.1.6-stable`、`stable/pre-history-...`（2026-06-16）
-- [ ] 配置仓库打同名 `v-stable-20260527` tag（`capture-config.sh`）
+- [x] 配置仓库打同名 `v-stable-20260527` tag（`capture-config.sh` + `.nanobot` `0620799`）
