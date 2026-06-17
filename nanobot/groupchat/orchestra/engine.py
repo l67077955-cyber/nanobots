@@ -309,6 +309,8 @@ class GroupChatEngine:
         self._prompt_order: dict[str, list[str]] = self._prompt_builder._load_prompt_order()
         self._current_group_name: str | None = None
         self._session_tools_override: dict[str, dict] = {}
+        self._view_channel: str | None = None
+        self._view_chat_id: str | None = None
 
         # Direct chat interjection state (single-agent mode)
         self._direct_chat_task: asyncio.Task | None = None
@@ -334,6 +336,11 @@ class GroupChatEngine:
     def available_agents(self) -> list[str]:
         return list(self.registry.keys())
 
+    @property
+    def room_id(self) -> str:
+        from nanobot.groupchat.room_observability import resolve_room_id
+        return resolve_room_id(self._view_channel, self._view_chat_id)
+
     def set_tool_context(self, channel: str, chat_id: str) -> None:
         """Set channel/chat context for cron CLI script via env vars.
 
@@ -341,6 +348,8 @@ class GroupChatEngine:
         Telegram channel wires its send callback.
         """
         import os
+        self._view_channel = channel
+        self._view_chat_id = chat_id
         os.environ["NANOBOT_CHANNEL"] = channel
         os.environ["NANOBOT_CHAT_ID"] = chat_id
         # Also update MessageTool context in all cached registries so agents
@@ -832,6 +841,15 @@ class GroupChatEngine:
 
     def inject(self, message: str) -> None:
         """Inject a user message into the chat loop (1+ agents)."""
+        from nanobot.groupchat.room_observability import emit_room_event
+        emit_room_event(
+            room_id=self.room_id,
+            kind="user_input",
+            source="inject",
+            agent="User",
+            content=message,
+            extra={"active_agents": list(self._active_agents)},
+        )
         # Lazy start: if any agents and loop not running, start it now
         if not self._running and len(self._active_agents) >= 1:
             self._start_group_loop()
@@ -907,6 +925,14 @@ class GroupChatEngine:
         self._broadcast_tasks.clear()
 
     async def _send(self, text: str) -> None:
+        from nanobot.groupchat.room_observability import emit_room_event
+        emit_room_event(
+            room_id=self.room_id,
+            kind="ui_push",
+            source="telegram_view",
+            content=text,
+            extra={"chars": len(text)},
+        )
         if self._send_fn:
             try:
                 await self._send_fn(text)
@@ -936,7 +962,16 @@ class GroupChatEngine:
         content: str = "",
         extra: dict[str, Any] | None = None,
     ) -> None:
-        """Delegate to persistence layer."""
+        """Delegate to persistence layer + phase-0 observability log."""
+        from nanobot.groupchat.room_observability import emit_room_event
+        emit_room_event(
+            room_id=self.room_id,
+            kind=event_type,
+            source="session",
+            agent=agent,
+            content=content,
+            extra=extra,
+        )
         self._state.save_event(event_type, agent=agent, content=content, extra=extra)
 
     def _save_round_summary(
