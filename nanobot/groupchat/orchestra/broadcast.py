@@ -361,22 +361,19 @@ class BroadcastOrchestrator:
             wait_tool._send_tool = send_tool
             registry.register(send_tool)
             registry.register(wait_tool)
-            # memory_palace: register only if enabled in agent's tool config
             agent_cfg = self.engine.registry.get(name, {})
-            mp_enabled = False  # default: off (opt-in via tools config)
-            tools_cfg = agent_cfg.get("tools")
-            if isinstance(tools_cfg, dict) and "memory_palace" in tools_cfg:
-                mp_enabled = bool(tools_cfg["memory_palace"])
-            # Also check session override
+            session_cfg = None
             if hasattr(self.engine, "_session_tools_override") and name in self.engine._session_tools_override:
                 session_cfg = self.engine._session_tools_override[name]
-                if isinstance(session_cfg, dict) and "memory_palace" in session_cfg:
-                    mp_enabled = bool(session_cfg["memory_palace"])
-            if mp_enabled:
+            from nanobot.groupchat.tool_policy import (
+                forget_tool_enabled,
+                memory_palace_tool_enabled,
+            )
+            if memory_palace_tool_enabled(agent_cfg, session_override=session_cfg):
                 registry.register(memory_palace)
-            # forget tool: delete previous tool call results from context
-            from nanobot.tools.forget import ForgetTool
-            registry.register(ForgetTool())
+            if forget_tool_enabled(agent_cfg, session_override=session_cfg):
+                from nanobot.tools.forget import ForgetTool
+                registry.register(ForgetTool())
             registry.register(QuoteMessageTool(mailbox=self.mailbox))
             registry.register(ListMessagesTool(mailbox=self.mailbox))
             self.agent_tool_registries[name] = registry
@@ -1545,11 +1542,18 @@ async def broadcast_round(
                 new_reg.register(wait_tool)
                 new_reg.register(QuoteMessageTool(mailbox=mailbox))
                 new_reg.register(ListMessagesTool(mailbox=mailbox))
-                from nanobot.tools.forget import ForgetTool
-                new_reg.register(ForgetTool())
                 new_cfg = engine.registry.get(new_name, {})
-                new_tools_cfg = new_cfg.get("tools")
-                if isinstance(new_tools_cfg, dict) and new_tools_cfg.get("memory_palace"):
+                new_session_cfg = None
+                if hasattr(engine, "_session_tools_override") and new_name in engine._session_tools_override:
+                    new_session_cfg = engine._session_tools_override[new_name]
+                from nanobot.groupchat.tool_policy import (
+                    forget_tool_enabled,
+                    memory_palace_tool_enabled,
+                )
+                if forget_tool_enabled(new_cfg, session_override=new_session_cfg):
+                    from nanobot.tools.forget import ForgetTool
+                    new_reg.register(ForgetTool())
+                if memory_palace_tool_enabled(new_cfg, session_override=new_session_cfg):
                     from nanobot.tools.memory_palace import MemoryPalaceTool
                     new_reg.register(MemoryPalaceTool())
                 agent_tool_registries[new_name] = new_reg

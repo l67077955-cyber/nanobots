@@ -642,8 +642,8 @@ class PromptBuilder:
         elif key == "tool_instructions":
             return self.get_component_template("tool_instructions")
         elif key == "forget_guidance":
-            tools_cfg = agent.get("tools")
-            if isinstance(tools_cfg, dict) and tools_cfg.get("forget") is False:
+            from nanobot.groupchat.tool_policy import forget_tool_enabled
+            if not forget_tool_enabled(agent):
                 return ""
             return self.get_component_template("forget_guidance")
         elif key == "skills":

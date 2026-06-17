@@ -20,7 +20,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from nanobot.groupchat.middleware.config import GroupChatConfig
+from nanobot.groupchat.config import GroupChatConfig
 from nanobot.groupchat.orchestra.engine import GroupChatEngine
 from nanobot.providers.litellm_provider import LiteLLMProvider
 

@@ -173,10 +173,21 @@ class GroupChatEngine:
         if self._send_outbound_fn:
             from nanobot.tools.message import MessageTool
             registry.register(MessageTool(send_callback=self._send_outbound_fn))
-        # Register ForgetTool so agents can delete previous tool call results from context
-        from nanobot.tools.forget import ForgetTool
-        registry.register(ForgetTool())
         return registry
+
+    def _sync_forget_tool(self, registry: "ToolRegistry", agent_name: str) -> None:
+        """Register or unregister ForgetTool according to per-agent config."""
+        from nanobot.groupchat.tool_policy import forget_tool_enabled
+        from nanobot.tools.forget import ForgetTool
+
+        agent_cfg = self.registry.get(agent_name, {})
+        session_cfg = getattr(self, "_session_tools_override", {}).get(agent_name)
+        enabled = forget_tool_enabled(agent_cfg, session_override=session_cfg)
+        if enabled:
+            if registry.get("forget") is None:
+                registry.register(ForgetTool())
+        elif registry.get("forget") is not None:
+            registry.unregister("forget")
 
     def _get_reader_model(self) -> str:
         """Read the reader agent's model from config. Falls back to default."""
@@ -205,7 +216,9 @@ class GroupChatEngine:
             reg.register(WaitTool(mailbox=self._mailbox))
             self._tool_registry_cache[key] = reg
             logger.info("Groupchat: built tool registry for {} → {}", agent_name, ws)
-        return self._tool_registry_cache[key]
+        reg = self._tool_registry_cache[key]
+        self._sync_forget_tool(reg, agent_name)
+        return reg
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers and inject tools into all registries (lazy, one-time)."""
