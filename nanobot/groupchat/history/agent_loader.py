@@ -199,11 +199,27 @@ def _scan_agents_dir(
             hyperparams = hyperparams or {}
             hyperparams.setdefault("reasoning_effort", acfg["reasoning_effort"])
 
+        max_tool_iterations = None
+        for key in ("max_tool_iterations", "maxToolIterations"):
+            val = acfg.get(key)
+            if isinstance(val, int) and val > 0:
+                max_tool_iterations = val
+                break
+        if max_tool_iterations is None:
+            defaults = (acfg.get("agents") or {}).get("defaults") or {}
+            for key in ("max_tool_iterations", "maxToolIterations"):
+                val = defaults.get(key)
+                if isinstance(val, int) and val > 0:
+                    max_tool_iterations = val
+                    break
+
         agent_data: dict[str, Any] = {
             "model": model,
             "prompt": prompt,
             "tools_enabled": tools_enabled,
         }
+        if max_tool_iterations is not None:
+            agent_data["max_tool_iterations"] = max_tool_iterations
         if "rank" in acfg:
             agent_data["rank"] = acfg["rank"]
         if tools_cfg is not None:

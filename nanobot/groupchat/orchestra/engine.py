@@ -790,6 +790,9 @@ class GroupChatEngine:
         if isinstance(agent_cfg_data.get("hyperparams"), dict):
             agent_sampling = dict(agent_cfg_data["hyperparams"])
 
+        if max_iterations == 5:
+            max_iterations = resolve_max_tool_iterations(self, agent_name, is_direct=is_direct)
+
         # NOTE on concurrency: broadcast runs multiple agent tasks concurrently.
         # The temp override below (and restore) on the shared provider can race
         # if two agents' LLM calls interleave. The per-turn snapshot + restore
@@ -1187,7 +1190,7 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
                     p, c = tok.get("prompt", 0), tok.get("completion", 0)
                     cost = stats.get("cost", 0) or 0
                     cache_t = stats.get("cache_tokens", 0) or 0
-                    reasoning_t = (stats.get("provider_meta") or {}).get("reasoning_tokens", 0) or 0
+                    reasoning_t = reasoning_tokens_from_provider_meta(stats.get("provider_meta"))
                     stat_line = _d.format_token_stats(p, c, cost=cost, cache_tokens=cache_t, reasoning_tokens=reasoning_t)
                     display_content = f"{display_content}\n\n{stat_line}"
                 await stream.finalize(display_content, fallback_send=engine._send)
@@ -1279,6 +1282,59 @@ def snapshot_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             entry["tool_call_id"] = m["tool_call_id"]
         snap.append(entry)
     return snap
+
+
+def reasoning_tokens_from_provider_meta(provider_meta: Any) -> int:
+    """Sum reasoning token counts from provider_meta (dict or list of dicts)."""
+    if isinstance(provider_meta, dict):
+        return int(provider_meta.get("reasoning_tokens") or 0)
+    if isinstance(provider_meta, list):
+        return sum(
+            int(m.get("reasoning_tokens") or 0)
+            for m in provider_meta
+            if isinstance(m, dict)
+        )
+    return 0
+
+
+def resolve_max_tool_iterations(engine: Any, agent_name: str, *, is_direct: bool = False) -> int:
+    """Resolve per-agent tool iteration budget for direct chat / tool loops."""
+    default = 12 if is_direct else 8
+    agent_cfg = engine.registry.get(agent_name, {}) if hasattr(engine, "registry") else {}
+
+    for key in ("max_tool_iterations", "maxToolIterations"):
+        val = agent_cfg.get(key)
+        if isinstance(val, int) and val > 0:
+            return val
+
+    agent_dir = agent_cfg.get("agent_dir")
+    if agent_dir:
+        config_file = Path(agent_dir) / "config.json"
+        if config_file.exists():
+            try:
+                import json as _json
+                raw = _json.loads(config_file.read_text())
+                for key in ("max_tool_iterations", "maxToolIterations"):
+                    val = raw.get(key)
+                    if isinstance(val, int) and val > 0:
+                        return val
+                defaults = (raw.get("agents") or {}).get("defaults") or {}
+                for key in ("max_tool_iterations", "maxToolIterations"):
+                    val = defaults.get(key)
+                    if isinstance(val, int) and val > 0:
+                        return val
+            except Exception:
+                pass
+
+    try:
+        from nanobot.config.loader import load_config
+        global_defaults = load_config().agents.defaults
+        if global_defaults.max_tool_iterations > 0:
+            return global_defaults.max_tool_iterations
+    except Exception:
+        pass
+
+    return default
 
 
 def build_stats(result: Any, tool_defs: list | None, tool_names: list[str],
@@ -1634,6 +1690,8 @@ def build_tool_log(tool_calls_detail: list[dict[str, Any]]) -> str:
                 _mp_args = __import__("json").loads(args_raw) if isinstance(args_raw, str) else args_raw
             except Exception:
                 _mp_args = {}
+            if not isinstance(_mp_args, dict):
+                _mp_args = {}
             if _mp_args.get("action") == "store" and _mp_args.get("visible") is False:
                 _mp_hidden = True
 
@@ -1641,6 +1699,8 @@ def build_tool_log(tool_calls_detail: list[dict[str, Any]]) -> str:
         try:
             args_dict = __import__("json").loads(args_raw) if isinstance(args_raw, str) else args_raw
         except Exception:
+            args_dict = {}
+        if not isinstance(args_dict, dict):
             args_dict = {}
         key_arg = (
             args_dict.get("query")
