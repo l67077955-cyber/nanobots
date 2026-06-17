@@ -51,8 +51,15 @@ exec command="cd WORKDIR && python3 -c \"import zipfile, pathlib; ...\"  # or zi
 ### 5. 本地服务 + 公网 tunnel
 ```bash
 exec command="cd WORKDIR && nohup python3 -m http.server 8091 > server.log 2>&1 & sleep 1 && curl -s -o /dev/null -w '%{http_code}' http://localhost:8091/"
-exec command="nohup cloudflared tunnel --url http://localhost:8091 > tunnel.log 2>&1 & sleep 8 && grep -o 'https://[^ ]*trycloudflare.com' tunnel.log | tail -1"
+exec command="cd WORKDIR && nohup cloudflared tunnel --url http://localhost:8091 > tunnel.log 2>&1 & sleep 10 && grep -oE 'https://[a-zA-Z0-9.-]+\\.trycloudflare\\.com' tunnel.log | tail -1"
 ```
+
+验证 tunnel（本机 DNS 常无法解析 trycloudflare.com，不要因此判失败）：
+```bash
+exec command="cd WORKDIR && TUNNEL=$(grep -oE 'https://[a-zA-Z0-9.-]+\\.trycloudflare\\.com' tunnel.log | tail -1) && echo tunnel=$TUNNEL && pgrep -af cloudflared | head -3 && curl -s -o /dev/null -w 'local=%{http_code}\\n' http://localhost:8091/"
+```
+- 本地 `curl` 200 + tunnel.log 有 URL + cloudflared 进程在跑 → 公网链接有效（外部用户可访问）
+- 仅当 tunnel.log 无 URL 或 cloudflared 未启动 → 重试 tunnel
 
 ### 6. 交付总结（中文）
 必须包含：
@@ -65,8 +72,8 @@ exec command="nohup cloudflared tunnel --url http://localhost:8091 > tunnel.log 
 
 全部满足才算完成：
 - [ ] `WORKDIR` 下有 ≥3 张图片或用户要求数量
-- [ ] `index.html` 存在且 `curl` 返回 200
+- [ ] `index.html` 存在且本地 `curl` 返回 200
 - [ ] ZIP 存在且 >1MB（或合理大小）
-- [ ] 公网 URL 可访问（`curl` 200）
+- [ ] tunnel.log 含 `https://*.trycloudflare.com` 且 cloudflared 进程存活
 
 任一不满足 → 继续工具调用，不要结束回合。
