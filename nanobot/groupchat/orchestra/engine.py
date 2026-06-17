@@ -581,6 +581,20 @@ class GroupChatEngine:
     def leader(self) -> str | None:
         return self._leader
 
+    @property
+    def mailbox(self) -> MailboxHub:
+        return self._mailbox
+
+    def refresh_interrupt_ranks(self) -> None:
+        """Recompute mailbox interrupt hierarchy from live registry ranks."""
+        if not self.is_running:
+            return
+        ranks_map: dict[str, str] = {}
+        for ag in self.active_agents:
+            cfg = self.registry.get(ag, {})
+            ranks_map[ag] = str(cfg["rank"]) if "rank" in cfg else "basic"
+        self._mailbox.set_ranks(ranks_map, leader=self.leader or "")
+
     def set_leader(self, name: str | None) -> str:
         """Set or clear the leader agent."""
         if name is None:

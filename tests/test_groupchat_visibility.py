@@ -12,6 +12,7 @@ from nanobot.groupchat.display.visibility import (
     rank_pool_capacity,
     resolve_rank,
 )
+from nanobot.groupchat.config_normalize import normalize_agent_config, unwrap_config_value
 from nanobot.groupchat.tool_policy import (
     agent_tool_enabled,
     forget_tool_enabled,
@@ -70,6 +71,25 @@ class TestRankCapacities:
         ranks = compute_agent_ranks(["Kirk", "Harper"], registry, leader_name="Kirk")
         assert ranks["Harper"] == rank_interrupt_level("standard")
         assert ranks["Kirk"] > ranks["Harper"]
+
+
+class TestConfigNormalize:
+    def test_unwraps_env_metadata_tail(self):
+        raw = {
+            "role": ["system", {"NANOBOT_MAXTOKENS": "8192"}],
+            "tools": {
+                "web_search": [True, {"NANOBOT_MAXTOKENS": "8192"}],
+            },
+            "maxToolIterations": [30, {"NANOBOT_MAXTOKENS": "8192"}],
+        }
+        cleaned = normalize_agent_config(raw)
+        assert cleaned["role"] == "system"
+        assert cleaned["tools"]["web_search"] is True
+        assert cleaned["maxToolIterations"] == 30
+
+    def test_preserves_legitimate_lists(self):
+        values = ["a", "b", "c"]
+        assert unwrap_config_value(values) == values
 
 
 class TestToolPolicy:

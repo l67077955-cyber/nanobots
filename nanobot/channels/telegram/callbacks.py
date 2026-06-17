@@ -586,16 +586,10 @@ class CallbacksMixin:
                 except Exception:
                     pass
 
-                # Live-update interrupt hierarchy for active broadcast agents
                 try:
                     eng = self._groupchat_engine
                     if eng and eng.is_running:
-                        ranks_map: dict[str, str] = {}
-                        for ag in eng.active_agents:
-                            acfg = eng.registry.get(ag, {})
-                            ranks_map[ag] = str(acfg["rank"]) if "rank" in acfg else "basic"
-                        leader = eng.leader or ""
-                        eng._mailbox.set_ranks(ranks_map, leader=leader)
+                        eng.refresh_interrupt_ranks()
                         logger.info("Live rank update for interrupt hierarchy: {} -> {}", name, rank_val)
                 except Exception as e:
                     logger.debug("Live rank refresh skipped: {}", e)

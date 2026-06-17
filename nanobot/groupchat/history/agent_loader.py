@@ -14,6 +14,17 @@ from typing import Any
 from loguru import logger
 
 from nanobot.groupchat.config import GroupChatConfig
+from nanobot.groupchat.config_normalize import normalize_agent_config
+
+
+def _read_agent_config(path: Path) -> dict[str, Any]:
+    try:
+        raw = json.loads(path.read_text())
+        if isinstance(raw, dict):
+            return normalize_agent_config(raw)
+    except Exception as e:
+        logger.warning("Groupchat: failed to read agent config {}: {}", path, e)
+    return {}
 
 
 def load_agents(config: GroupChatConfig, workspace: Path) -> dict[str, dict[str, Any]]:
@@ -43,7 +54,7 @@ def load_agents(config: GroupChatConfig, workspace: Path) -> dict[str, dict[str,
                 cfg_file = agent_subdir / "config.json"
                 if cfg_file.exists():
                     try:
-                        _cfg = json.loads(cfg_file.read_text())
+                        _cfg = _read_agent_config(cfg_file)
                         if isinstance(_cfg.get("tools"), dict):
                             agent_data["tools"] = _cfg["tools"]
                         if _cfg.get("tools_enabled"):
@@ -130,7 +141,7 @@ def _scan_agents_dir(
         config_file = d / "config.json"
         if config_file.exists():
             try:
-                _cfg = json.loads(config_file.read_text())
+                _cfg = _read_agent_config(config_file)
                 if _cfg.get("role") == "system":
                     model = _cfg.get("model", "?")
                     desc = _cfg.get("description", "系统 agent")
@@ -173,12 +184,7 @@ def _scan_agents_dir(
         workspace_scope = "workspace"
         hyperparams = None
         if config_file.exists():
-            try:
-                loaded = json.loads(config_file.read_text())
-                if isinstance(loaded, dict):
-                    acfg = loaded
-            except Exception as e:
-                logger.warning("Groupchat: failed to parse {}: {}", config_file, e)
+            acfg = _read_agent_config(config_file)
 
         model = acfg.get("model") if acfg else None
         if not model:
