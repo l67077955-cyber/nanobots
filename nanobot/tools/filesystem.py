@@ -70,6 +70,19 @@ def _is_unchanged_since_last_read(path: str | Path, offset: int = 1, limit: int 
     return True
 
 
+def _resolve_builtin_skill_path(path: str) -> Path | None:
+    """Map ``skills/<name>/...`` to bundled skill files when absent from workspace."""
+    norm = path.replace("\\", "/").lstrip("./")
+    if not norm.startswith("skills/"):
+        return None
+    from nanobot.skills.loader import BUILTIN_SKILLS_DIR
+
+    candidate = (BUILTIN_SKILLS_DIR / norm.removeprefix("skills/")).resolve()
+    if candidate.exists():
+        return candidate
+    return None
+
+
 def _resolve_path(
     path: str,
     workspace: Path | None = None,
@@ -81,6 +94,10 @@ def _resolve_path(
     if not p.is_absolute() and workspace:
         p = workspace / p
     resolved = p.resolve()
+    if not resolved.exists():
+        builtin = _resolve_builtin_skill_path(path)
+        if builtin is not None:
+            resolved = builtin
     if allowed_dir:
         all_dirs = [allowed_dir] + (extra_allowed_dirs or [])
         if not any(_is_under(resolved, d) for d in all_dirs):
