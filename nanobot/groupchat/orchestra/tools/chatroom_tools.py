@@ -34,15 +34,33 @@ class SearchPool:
         # Per-agent quotas: support dict (per-agent) or int (uniform)
         if isinstance(initial_per_agent, dict):
             self._initial_per = dict(initial_per_agent)
-            self._credits: dict[str, float] = {a: float(initial_per_agent.get(a, 2)) for a in agents}
+            missing = [a for a in agents if a not in self._initial_per]
+            if missing:
+                raise ValueError(
+                    f"SearchPool: missing initial credits for agents: {missing}"
+                )
+            self._credits: dict[str, float] = {
+                a: float(self._initial_per[a]) for a in agents
+            }
         else:
             self._initial_per = {a: initial_per_agent for a in agents}
             self._credits = {a: float(initial_per_agent) for a in agents}
-        self._initial = max(self._initial_per.values()) if self._initial_per else 2
         # Fractional accumulator: sub-integer credits that haven't been awarded yet
         self._fractional: dict[str, float] = {a: 0.0 for a in agents}
         self._tool_calls: dict[str, int] = {a: 0 for a in agents}
         self._outputs: dict[str, int] = {a: 0 for a in agents}
+
+    def register_agent(self, name: str, initial_credits: int) -> None:
+        """Register a mid-round agent with an explicit credit budget."""
+        with self._lock:
+            if name in self._credits:
+                return
+            self._agents.append(name)
+            self._initial_per[name] = initial_credits
+            self._credits[name] = float(initial_credits)
+            self._fractional[name] = 0.0
+            self._tool_calls[name] = 0
+            self._outputs[name] = 0
 
     @property
     def pool(self) -> float:

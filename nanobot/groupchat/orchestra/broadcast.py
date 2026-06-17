@@ -296,17 +296,11 @@ class BroadcastOrchestrator:
         from nanobot.tools.memory_palace import MemoryPalaceTool
         import os
 
-        n = len(self.exec_agents)
-        # Build per-agent capacity from ranks (higher rank = more conversation pool capacity)
-        MODERN_CAP = {"basic": 2, "standard": 3, "advanced": 4, "expert": 5}
-        per_agent_cap: dict[str, int] = {}
-        for ag in self.exec_agents:
-            cfg = self.engine.registry.get(ag, {})
-            rank = cfg.get("rank", "basic")
-            cap = MODERN_CAP.get(rank, 2)  # unknown rank → basic capacity (aligns with RANK_ORDER fallback)
-            if ag == self.leader_name:
-                cap += 1  # leader gets +1
-            per_agent_cap[ag] = cap
+        from nanobot.groupchat.display.visibility import per_agent_pool_capacities
+
+        per_agent_cap = per_agent_pool_capacities(
+            self.exec_agents, self.engine.registry, self.leader_name,
+        )
 
         # ConversationPool: rank-based per-agent, with settings fallback
         pool_capacity_setting = self.gc_settings.get("context_pool_capacity", 0)
@@ -455,9 +449,10 @@ async def broadcast_round(
     ranks_map: dict[str, str] = {}
     for ag in agents:
         cfg = engine.registry.get(ag, {})
-        rank = cfg.get("rank", "basic")
-        ranks_map[ag] = rank
-        cfg["rank"] = rank
+        if "rank" in cfg:
+            ranks_map[ag] = str(cfg["rank"])
+        else:
+            ranks_map[ag] = "basic"
     mailbox.set_ranks(ranks_map, leader=leader_name or "")
 
     # ── Clear any leftover session tool overrides ──
@@ -1550,18 +1545,29 @@ async def broadcast_round(
                 new_reg.register(wait_tool)
                 new_reg.register(QuoteMessageTool(mailbox=mailbox))
                 new_reg.register(ListMessagesTool(mailbox=mailbox))
+                from nanobot.tools.forget import ForgetTool
+                new_reg.register(ForgetTool())
+                new_cfg = engine.registry.get(new_name, {})
+                new_tools_cfg = new_cfg.get("tools")
+                if isinstance(new_tools_cfg, dict) and new_tools_cfg.get("memory_palace"):
+                    from nanobot.tools.memory_palace import MemoryPalaceTool
+                    new_reg.register(MemoryPalaceTool())
                 agent_tool_registries[new_name] = new_reg
-                # Register with search pool (initialize credits for new agent)
-                with search_pool._lock:
-                    search_pool._agents.append(new_name)
-                    search_pool._credits[new_name] = search_pool._initial
-                    search_pool._searches[new_name] = 0
-                    search_pool._outputs[new_name] = 0
-                # Register with conversation pool to prevent slot leaks
-                if pool and new_name not in pool._pending:
-                    pool._pending[new_name] = []
-                # Register with mailbox
+
+                from nanobot.groupchat.display.visibility import per_agent_pool_capacities
+                join_cap = per_agent_pool_capacities(
+                    [new_name], engine.registry, leader_name,
+                )[new_name]
+                if pool:
+                    pool.register_agent(new_name, join_cap)
+                search_pool.register_agent(new_name, join_cap)
+
                 mailbox.create(new_name)
+                ranks_map: dict[str, str] = {}
+                for ag in mailbox._active_agents | {new_name}:
+                    cfg = engine.registry.get(ag, {})
+                    ranks_map[ag] = str(cfg["rank"]) if "rank" in cfg else "basic"
+                mailbox.set_ranks(ranks_map, leader=leader_name or "")
                 mailbox._active_agents.add(new_name)
                 idx = total
                 total += 1
@@ -1576,7 +1582,6 @@ async def broadcast_round(
                 )
                 # Notify leader so it can assign tasks to the new agent
                 if leader_name and leader_name != new_name:
-                    new_cfg = engine.registry.get(new_name, {})
                     new_tools = new_cfg.get("tools", {})
                     if isinstance(new_tools, dict):
                         tool_list = [k for k, v in new_tools.items() if v]

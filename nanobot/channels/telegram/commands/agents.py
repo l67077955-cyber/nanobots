@@ -251,14 +251,15 @@ class AgentCommandsMixin:
             tools_str = "全部开启"
         else:
             tools_str = "全部关闭"
-        rank = agent.get("rank", "basic")
-        MODERN_LABELS = {
-            "basic": "基础 basic",
-            "standard": "标准 standard",
-            "advanced": "高级 advanced",
-            "expert": "专家 expert",
-        }
-        rank_str = MODERN_LABELS.get(rank, rank)
+        from nanobot.groupchat.display.visibility import RANK_DISPLAY, resolve_rank
+        raw_rank = agent.get("rank")
+        resolved = resolve_rank(raw_rank, agent=agent_name) if raw_rank is not None else "basic"
+        if resolved:
+            rank_str = RANK_DISPLAY[resolved]
+        elif raw_rank is not None:
+            rank_str = f"无效: {raw_rank}"
+        else:
+            rank_str = RANK_DISPLAY["basic"]
         return (
             f"✏️ 编辑 {agent_name}\n\n"
             f"🎖️ 等级: {rank_str}\n"

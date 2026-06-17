@@ -164,18 +164,21 @@ def tool_in_progress_msg(header: str) -> str:
 # ── Broadcast-specific ───────────────────────────────────────
 
 def broadcast_start_msg(agents: list[str], timeout: int, leader: str | None = None, ranks: dict[str, str] | None = None) -> str:
-    """Render broadcast start banner with role indicators and rank badges.
-    Always shows friendly modern labels even if old chess names are stored in config.
-    """
-    from nanobot.groupchat.display.visibility import RANK_DISPLAY
+    """Render broadcast start banner with role indicators and rank badges."""
+    from nanobot.groupchat.display.visibility import RANK_DISPLAY, resolve_rank
 
     total = len(agents)
     lines = [f"══ Broadcast · {total} agents · {timeout}s ══"]
     _r = ranks or {}
 
     def _label(a: str) -> str:
-        raw = _r.get(a, "basic")
-        return RANK_DISPLAY.get(raw, raw)
+        raw = _r.get(a)
+        resolved = resolve_rank(raw, agent=a) if raw is not None else "basic"
+        if resolved:
+            return RANK_DISPLAY[resolved]
+        if raw:
+            return f"无效:{raw}"
+        return RANK_DISPLAY["basic"]
 
     def _short_label(a: str) -> str:
         full = _label(a)

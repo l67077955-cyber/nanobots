@@ -48,7 +48,7 @@ def load_agents(config: GroupChatConfig, workspace: Path) -> dict[str, dict[str,
                             agent_data["tools"] = _cfg["tools"]
                         if _cfg.get("tools_enabled"):
                             agent_data["tools_enabled"] = True
-                        if _cfg.get("rank"):
+                        if "rank" in _cfg:
                             agent_data["rank"] = _cfg["rank"]
                         if _cfg.get("workspace"):
                             agent_data["workspace_scope"] = _cfg["workspace"]
@@ -135,14 +135,13 @@ def _scan_agents_dir(
                     model = _cfg.get("model", "?")
                     desc = _cfg.get("description", "系统 agent")
                     tools_enabled = _cfg.get("tools_enabled", False)
-                    raw_rank = _cfg.get("rank", "basic")
-                    rank = raw_rank
                     agent_data = {
                         "model": model, "prompt": "", "role": "system",
                         "description": desc, "tools_enabled": tools_enabled,
                         "workspace_scope": "workspace", "agent_dir": str(d),
-                        "rank": rank,
                     }
+                    if "rank" in _cfg:
+                        agent_data["rank"] = _cfg["rank"]
                     if isinstance(_cfg.get("tools"), dict):
                         agent_data["tools"] = _cfg["tools"]
                     
@@ -166,38 +165,41 @@ def _scan_agents_dir(
         if not prompt:
             continue
 
-        # Read model from agent's config.json
-        model = None
+        # Read model from agent's config.json (no silent default model)
         config_file = d / "config.json"
-        tools_cfg = None  # Will be dict or None
+        acfg: dict[str, Any] = {}
+        tools_cfg = None
         tools_enabled = False
-        workspace_scope = "workspace"  # default
-        hyperparams = None  # Per-agent sampling overrides
+        workspace_scope = "workspace"
+        hyperparams = None
         if config_file.exists():
             try:
-                acfg = json.loads(config_file.read_text())
-                # Top-level 'model' takes priority (written by /editagent)
-                model = acfg.get("model", model) or "?"
-                # Granular tools config: {web_search: true, exec: false, ...}
-                if isinstance(acfg.get("tools"), dict):
-                    tools_cfg = acfg["tools"]
-                # Legacy: tools_enabled: true/false
-                tools_enabled = acfg.get("tools_enabled", False)
-                # Per-agent workspace scope
-                workspace_scope = acfg.get("workspace", "workspace")
-                # Per-agent hyperparams (temperature, top_p, max_tokens, reasoning_effort, etc.)
-                hyperparams = acfg.get("hyperparams") or (dict(global_hyperparams) if global_hyperparams else None)
-                if acfg.get("reasoning_effort"):
-                    hyperparams = hyperparams or {}
-                    hyperparams.setdefault("reasoning_effort", acfg["reasoning_effort"])
-            except Exception:
-                pass
+                loaded = json.loads(config_file.read_text())
+                if isinstance(loaded, dict):
+                    acfg = loaded
+            except Exception as e:
+                logger.warning("Groupchat: failed to parse {}: {}", config_file, e)
 
-        # Rank: basic < standard < advanced < expert (controls who-can-interrupt-whom)
-        raw_rank = acfg.get("rank", "basic") if config_file.exists() else "basic"
-        rank = raw_rank
-        
-        agent_data: dict[str, Any] = {"model": model, "prompt": prompt, "tools_enabled": tools_enabled, "rank": rank}
+        model = acfg.get("model") if acfg else None
+        if not model:
+            model = "?"
+
+        if isinstance(acfg.get("tools"), dict):
+            tools_cfg = acfg["tools"]
+        tools_enabled = bool(acfg.get("tools_enabled", False))
+        workspace_scope = acfg.get("workspace", "workspace")
+        hyperparams = acfg.get("hyperparams") or (dict(global_hyperparams) if global_hyperparams else None)
+        if acfg.get("reasoning_effort"):
+            hyperparams = hyperparams or {}
+            hyperparams.setdefault("reasoning_effort", acfg["reasoning_effort"])
+
+        agent_data: dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "tools_enabled": tools_enabled,
+        }
+        if "rank" in acfg:
+            agent_data["rank"] = acfg["rank"]
         if tools_cfg is not None:
             agent_data["tools"] = tools_cfg
         if hyperparams:

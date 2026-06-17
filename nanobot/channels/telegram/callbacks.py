@@ -218,24 +218,29 @@ class CallbacksMixin:
                     )
                     return
                 elif field == "rank":
+                    from nanobot.groupchat.display.visibility import RANK_DISPLAY, RANK_ORDER, resolve_rank
+
                     agent = self._groupchat_engine.registry.get(name, {})
-                    current = agent.get("rank", "basic")
-                    MODERN_RANKS = ["basic", "standard", "advanced", "expert"]
-                    MODERN_LABELS = {
-                        "basic": "基础 basic",
-                        "standard": "标准 standard",
-                        "advanced": "高级 advanced",
-                        "expert": "专家 expert",
-                    }
+                    current = agent.get("rank")
+                    MODERN_RANKS = list(RANK_ORDER.keys())
+                    resolved = resolve_rank(current, agent=name) if current is not None else "basic"
+                    if resolved:
+                        current_label = RANK_DISPLAY[resolved]
+                    elif current is not None:
+                        current_label = f"无效: {current}"
+                    else:
+                        current_label = RANK_DISPLAY["basic"]
+                    selected = resolved if resolved else (current if current in MODERN_RANKS else None)
                     buttons = []
                     for r in MODERN_RANKS:
-                        icon = "✅ " if r == current else "  "
+                        icon = "✅ " if r == selected else "  "
                         buttons.append([InlineKeyboardButton(
-                            f"{icon}{MODERN_LABELS[r]}", callback_data=f"srr:{name}:{r}"
+                            f"{icon}{RANK_DISPLAY[r]}", callback_data=f"srr:{name}:{r}"
                         )])
                     buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
                     await query.edit_message_text(
-                        f"🎖️ {name} 等级设置 (当前: {MODERN_LABELS.get(current, current)})\n\n更改后需要重新开始广播轮次才能更新中断层级和对话池容量。",
+                        f"🎖️ {name} 等级设置 (当前: {current_label})\n\n"
+                        f"更改 rank 会立即更新中断权限；对话池/搜索额度在本轮内不变，新轮次生效。",
                         reply_markup=InlineKeyboardMarkup(buttons)
                     )
                     return
@@ -550,30 +555,21 @@ class CallbacksMixin:
                 )
 
             elif data.startswith("srr:"):
-                # srr:AgentName:rank — set agent rank (modern names preferred)
+                # srr:AgentName:rank — set agent rank (basic/standard/advanced/expert only)
                 parts = data.split(":", 2)
                 if len(parts) < 3:
                     return
                 name, rank_val = parts[1], parts[2]
 
-                # Only modern ranks for new UI. Legacy chess names are auto-migrated on load/start.
-                MODERN_RANKS = ["basic", "standard", "advanced", "expert"]
-                MODERN_LABELS = {
-                    "basic": "基础 basic",
-                    "standard": "标准 standard",
-                    "advanced": "高级 advanced",
-                    "expert": "专家 expert",
-                }
+                from nanobot.groupchat.display.visibility import RANK_DISPLAY, RANK_ORDER
 
-                # Accept legacy for old button data in chat history, but normalize immediately
-                LEGACY_TO_MODERN = {"pawn": "basic", "knight": "standard", "bishop": "advanced", "queen": "expert"}
-                normalized = LEGACY_TO_MODERN.get(rank_val, rank_val)
-                if normalized not in MODERN_RANKS:
+                MODERN_RANKS = list(RANK_ORDER.keys())
+                if rank_val not in MODERN_RANKS:
                     return
 
                 agent = self._groupchat_engine.registry.get(name, {})
                 old_rank = agent.get("rank")
-                agent["rank"] = normalized
+                agent["rank"] = rank_val
 
                 # Persist to config.json
                 cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
@@ -584,38 +580,41 @@ class CallbacksMixin:
                         cfg = json.loads(cfg_path.read_text())
                     except Exception:
                         pass
-                cfg["rank"] = normalized
+                cfg["rank"] = rank_val
                 try:
                     cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
                 except Exception:
                     pass
 
-                # Live-update the current round's interrupt hierarchy if broadcast is active
+                # Live-update interrupt hierarchy for active broadcast agents
                 try:
                     eng = self._groupchat_engine
-                    if eng and hasattr(eng, 'mailbox') and eng.mailbox:
-                        # Recompute all current ranks from the live registry
-                        ranks_map = {a: eng.registry.get(a, {}).get("rank", "basic") for a in eng.registry.keys()}
-                        leader = getattr(eng, '_leader', None) or ""
-                        eng.mailbox.set_ranks(ranks_map, leader=leader)
-                        logger.info("Live rank update for interrupt hierarchy: {} -> {}", name, normalized)
+                    if eng and eng.is_running:
+                        ranks_map: dict[str, str] = {}
+                        for ag in eng.active_agents:
+                            acfg = eng.registry.get(ag, {})
+                            ranks_map[ag] = str(acfg["rank"]) if "rank" in acfg else "basic"
+                        leader = eng.leader or ""
+                        eng._mailbox.set_ranks(ranks_map, leader=leader)
+                        logger.info("Live rank update for interrupt hierarchy: {} -> {}", name, rank_val)
                 except Exception as e:
                     logger.debug("Live rank refresh skipped: {}", e)
 
-                # Rebuild buttons with modern labels
                 buttons = []
                 for r in MODERN_RANKS:
-                    icon = "✅ " if r == normalized else "  "
+                    icon = "✅ " if r == rank_val else "  "
                     buttons.append([InlineKeyboardButton(
-                        f"{icon}{MODERN_LABELS[r]}", callback_data=f"srr:{name}:{r}"
+                        f"{icon}{RANK_DISPLAY[r]}", callback_data=f"srr:{name}:{r}"
                     )])
                 buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
 
                 note = ""
-                if old_rank and old_rank != normalized:
-                    note = "\n\n⚠️ 等级已更新。当前广播轮次的中断权限和容量**不会立即改变**，需要结束本轮（end_discussion 或让所有 agent 完成）并开始新广播才会完全生效。"
+                if old_rank and old_rank != rank_val:
+                    note = (
+                        "\n\n⚠️ 中断权限已更新；对话池/搜索额度在本轮内不变，新广播轮次生效。"
+                    )
                 await query.edit_message_text(
-                    f"🎖️ {name} 等级已设为 {MODERN_LABELS[normalized]}{note}",
+                    f"🎖️ {name} 等级已设为 {RANK_DISPLAY[rank_val]}{note}",
                     reply_markup=InlineKeyboardMarkup(buttons)
                 )
 

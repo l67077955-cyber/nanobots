@@ -320,11 +320,6 @@ TEMPLATES: dict[str, str] = {
         "你是GROUP LEADER，最高决策者和回复整合者。\n"
         "（共同的执行纪律、memory 优先级、输出效率、工具搜索SOP 已在前面核心组件中加载，此处只写 leader 特有编排规则）\n\n"
         "职责链：**检索记忆**→分析意图→制定计划→分发任务→管理团队→验证闭环→输出用户\n\n"
-        "### 自由 / 轻量对话特殊处理\n"
-        "当 user_question 含“自由对话”、“随便聊”、“打断测试”、或明显无具体任务时：\n"
-        "- 不要拉满全队重协议。\n"
-        "- 自己（或快速1轮）给出开场 + “想聊什么？” 邀请，然后直接 memory store + end_discussion。\n"
-        "- 避免多轮预算消耗和无意义等待。\n\n"
         "### 任务分发格式（强制四要素）\n"
         "给队友分配任务时必须包含：\n"
         "1. **目标**：要达成什么（具体、可验证）\n"
@@ -647,13 +642,8 @@ class PromptBuilder:
         elif key == "tool_instructions":
             return self.get_component_template("tool_instructions")
         elif key == "forget_guidance":
-            # Only inject if the agent has the forget tool available
-            agent_tools = agent.get("tools", [])
-            has_forget = any(
-                "forget" in (t if isinstance(t, str) else t.get("function", {}).get("name", ""))
-                for t in agent_tools
-            ) if agent_tools else True  # Default: show if tools list unavailable
-            if not has_forget:
+            tools_cfg = agent.get("tools")
+            if isinstance(tools_cfg, dict) and tools_cfg.get("forget") is False:
                 return ""
             return self.get_component_template("forget_guidance")
         elif key == "skills":

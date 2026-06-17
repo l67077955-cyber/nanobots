@@ -14,7 +14,7 @@ from typing import Any
 
 from loguru import logger
 
-from nanobot.groupchat.display.visibility import RANK_ORDER
+from nanobot.groupchat.display.visibility import resolve_rank, rank_interrupt_level
 
 
 @dataclass
@@ -47,6 +47,16 @@ class ConversationPool:
     """
 
     ALLOCATE_TIMEOUT = 15.0  # max seconds to wait for slots
+
+    def register_agent(self, name: str, capacity: int) -> None:
+        """Register a mid-round agent with an explicit slot budget."""
+        if name in self._per_cap:
+            return
+        self._agents.append(name)
+        self._per_cap[name] = capacity
+        self._sems[name] = asyncio.Semaphore(capacity)
+        self._available[name] = capacity
+        self._pending[name] = []
 
     def __init__(
         self,
@@ -412,7 +422,10 @@ class MailboxHub:
         self._leader = leader
         # First assign base ranks for everyone (consistent with compute_agent_ranks)
         for name, r in ranks.items():
-            self._ranks[name] = RANK_ORDER.get(r, 0) if isinstance(r, str) else int(r)
+            if isinstance(r, str):
+                self._ranks[name] = rank_interrupt_level(resolve_rank(r, agent=name))
+            else:
+                self._ranks[name] = int(r)
         # Then force leader to be strictly highest (max of assigned + 1)
         if leader and leader in self._ranks:
             self._ranks[leader] = max(self._ranks.values()) + 1
