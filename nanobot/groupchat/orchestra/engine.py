@@ -1194,7 +1194,9 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
                     stat_line = _d.format_token_stats(p, c, cost=cost, cache_tokens=cache_t, reasoning_tokens=reasoning_t)
                     display_content = f"{display_content}\n\n{stat_line}"
                 await stream.finalize(display_content, fallback_send=engine._send)
-                last_response = content or ""
+                last_response = content or (
+                    "[仅调用了工具，无文字回复]" if _tool_details else ""
+                )
             else:
                 if stream.msg_id and engine._edit_fn:
                     try:
@@ -1235,8 +1237,8 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
             messages.append({"role": "assistant", "content": content})
         messages.append({"role": "user", "content": new_msg})
 
-    # Return None — all output already sent via streaming/send
-    return None
+    # Streaming channels already displayed output; still return text for CLI/cron callers.
+    return last_response
 
 
 """Tool-augmented chat for group chat agents.

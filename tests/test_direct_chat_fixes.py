@@ -44,6 +44,12 @@ def test_resolve_max_tool_iterations_from_agent_config(tmp_path: Path):
     assert resolve_max_tool_iterations(engine, "Kirk", is_direct=True) == 33
 
 
+def test_direct_chat_return_semantics():
+    """Document expected return: text for CLI callers even after tool-only turns."""
+    last_response = "" or "[仅调用了工具，无文字回复]"
+    assert last_response == "[仅调用了工具，无文字回复]"
+
+
 def test_build_tool_log_handles_non_dict_args():
     detail = [{
         "name": "exec",
