@@ -16,7 +16,8 @@ import sys
 import unittest
 from pathlib import Path
 
-SRC = Path("/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py")
+BROADCAST = Path("/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py")
+AGENT = Path("/root/nanobot-src/nanobot/groupchat/orchestra/broadcast_agent.py")
 HISTORY = Path("/root/nanobot-src/nanobot/groupchat/history/component_manager.py")
 
 # ── Test 1: Syntax Integrity ──────────────────────────────
@@ -25,9 +26,14 @@ class TestSyntax(unittest.TestCase):
     """Verify all modified files parse cleanly."""
 
     def test_broadcast_syntax(self):
-        with open(SRC) as f:
+        with open(BROADCAST) as f:
             ast.parse(f.read())
         self.assertTrue(True, "broadcast.py syntax OK")
+
+    def test_broadcast_agent_syntax(self):
+        with open(AGENT) as f:
+            ast.parse(f.read())
+        self.assertTrue(True, "broadcast_agent.py syntax OK")
 
     def test_component_manager_syntax(self):
         with open(HISTORY) as f:
@@ -45,26 +51,27 @@ class TestUsedChatroomSendGuard(unittest.TestCase):
 
     def test_guard_removed_from_synthesis_display(self):
         """Verify line ~1249 has `if content:` not `if content and not _used_chatroom_send`"""
-        with open(SRC) as f:
+        with open(AGENT) as f:
             lines = f.readlines()
         # Find the synthesis display block — the line that has
         # "if content:" near a comment about chatroom_send
-        found = False
-        for i, line in enumerate(lines, 1):
-            stripped = line.strip()
-            # The fixed line should: (a) start with `if content:` 
-            # but NOT contain `_used_chatroom_send`
-            if stripped.startswith("if content:") and not "_used_chatroom_send" in stripped:
-                # Verify it's in the right context — preceded by the comment
-                before = lines[i-2].strip() if i >= 2 else ""
-                if "chatroom_send" in before:
-                    found = True
-                    break
-        self.assertTrue(found, "Line `if content:` found near chatroom_send comment (removed _used_chatroom_send guard)")
+        marker = "chatroom_send targets teammates"
+        idx = None
+        for i, line in enumerate(lines):
+            if marker in line:
+                idx = i
+                break
+        self.assertIsNotNone(idx, "Synthesis display comment about chatroom_send found")
+        block = lines[idx:idx + 6]
+        has_display_guard = any(
+            l.strip().startswith("if content:") and "_used_chatroom_send" not in l
+            for l in block
+        )
+        self.assertTrue(has_display_guard, "Synthesis display uses `if content:` without _used_chatroom_send guard")
 
     def test_no_used_chatroom_send_in_display_block(self):
         """Verify the synthesis display block (~L1249-1260) does NOT reference _used_chatroom_send"""
-        with open(SRC) as f:
+        with open(AGENT) as f:
             content = f.read()
         # Find the post-validation display section
         marker = "Synthesis passed validation"
@@ -83,7 +90,7 @@ class TestRetryPromptToolData(unittest.TestCase):
     """
 
     def test_length_retry_has_tool_injection(self):
-        with open(SRC) as f:
+        with open(AGENT) as f:
             content = f.read()
         # Marker for the length-based retry
         marker = "synthesis too short"
@@ -96,7 +103,7 @@ class TestRetryPromptToolData(unittest.TestCase):
         self.assertIn("本轮工具调用结果", block, "Length retry injects tool data header")
 
     def test_quality_retry_has_tool_injection(self):
-        with open(SRC) as f:
+        with open(AGENT) as f:
             content = f.read()
         marker = "质量检查失败"
         idx = content.find(marker)
@@ -135,12 +142,14 @@ class TestSynthesisSimulation(unittest.TestCase):
         from nanobot.groupchat.orchestra.engine import build_tool_log
         
         calls = [
-            {"name": "web_search", "args": {"query": "AI news today 2026"}, 
-             "content": "Google I/O 2026: Gemini 4.0 announced\nOpenAI GPT-5 leaks\nMeta Llama 4 release date"},
-            {"name": "web_fetch", "args": {"url": "https://example.com/ai-news"}, 
-             "content": "Key announcements from Google I/O...\nGemini 4.0 features multimodal...\n200+ tokens context window..."},
-            {"name": "chatroom_send", "args": {"to": "Harper", "message": "搜索完毕"}, 
-             "content": ""},
+            {"name": "web_search", "args": {"query": "AI news today 2026"},
+             "result_preview": "Google I/O 2026: Gemini 4.0 announced\nOpenAI GPT-5 leaks\nMeta Llama 4 release date",
+             "result_len": 120},
+            {"name": "web_fetch", "args": {"url": "https://example.com/ai-news"},
+             "result_preview": "Key announcements from Google I/O...\nGemini 4.0 features multimodal...\n200+ tokens context window...",
+             "result_len": 200},
+            {"name": "chatroom_send", "args": {"to": "Harper", "message": "搜索完毕"},
+             "result_len": 0},
         ]
         
         tool_log = build_tool_log(calls)

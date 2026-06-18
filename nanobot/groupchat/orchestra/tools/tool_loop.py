@@ -1,8 +1,10 @@
 """Shared LLM + tool-calling loop.
 
-Provides a single ``tool_loop()`` coroutine that both ``AgentLoop`` (core)
-and ``GroupChatEngine`` (group chat) delegate to for the iterative
+Provides a single ``tool_loop()`` coroutine that ``GroupChatEngine``
+(the agent core) delegates to for the iterative
 call-LLM → execute-tools → append-messages cycle.
+Tool implementations live in ``nanobot.tools``; this module is the
+orchestration loop only.
 
 Callers customise behaviour through optional callbacks rather than
 subclassing, keeping the core loop logic in one place.

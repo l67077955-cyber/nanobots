@@ -1,21 +1,17 @@
 """Tool-augmented chat for group chat agents.
 
-Extracts the tool calling loop from ``engine.py``, including:
-- Tool callback factories (on_tool_start / on_tool_result display)
-- Message snapshot for structured logging
-- Stats packaging from tool_loop result
+Provides chat_with_tools() and helpers used by GroupChatEngine._chat_with_tools.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from loguru import logger
 
-from nanobot.groupchat import display as _d
+from nanobot.groupchat.display import display as _d
 
-
-# ── Helpers ──────────────────────────────────────────────────
 
 def snapshot_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Create a full snapshot of messages for logging (before tool_loop mutates them)."""
@@ -44,8 +40,54 @@ def snapshot_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return snap
 
 
-def build_stats(result: Any, tool_defs: list | None, tool_names: list[str],
-                messages_snapshot: list[dict], sampling: dict, max_tokens: int) -> dict[str, Any]:
+def resolve_max_tool_iterations(engine: Any, agent_name: str, *, is_direct: bool = False) -> int:
+    """Resolve per-agent tool iteration budget for direct chat / tool loops."""
+    default = 12 if is_direct else 8
+    agent_cfg = engine.registry.get(agent_name, {}) if hasattr(engine, "registry") else {}
+
+    for key in ("max_tool_iterations", "maxToolIterations"):
+        val = agent_cfg.get(key)
+        if isinstance(val, int) and val > 0:
+            return val
+
+    agent_dir = agent_cfg.get("agent_dir")
+    if agent_dir:
+        config_file = Path(agent_dir) / "config.json"
+        if config_file.exists():
+            try:
+                import json as _json
+                raw = _json.loads(config_file.read_text())
+                for key in ("max_tool_iterations", "maxToolIterations"):
+                    val = raw.get(key)
+                    if isinstance(val, int) and val > 0:
+                        return val
+                defaults = (raw.get("agents") or {}).get("defaults") or {}
+                for key in ("max_tool_iterations", "maxToolIterations"):
+                    val = defaults.get(key)
+                    if isinstance(val, int) and val > 0:
+                        return val
+            except Exception:
+                pass
+
+    try:
+        from nanobot.config.loader import load_config
+        global_defaults = load_config().agents.defaults
+        if global_defaults.max_tool_iterations > 0:
+            return global_defaults.max_tool_iterations
+    except Exception:
+        pass
+
+    return default
+
+
+def build_stats(
+    result: Any,
+    tool_defs: list | None,
+    tool_names: list[str],
+    messages_snapshot: list[dict],
+    sampling: dict,
+    max_tokens: int,
+) -> dict[str, Any]:
     """Package tool_loop result into a stats dict."""
     return {
         "iterations": result.iterations,
@@ -67,8 +109,6 @@ def build_stats(result: Any, tool_defs: list | None, tool_names: list[str],
     }
 
 
-# ── Tool callback factory ───────────────────────────────────
-
 def make_tool_callbacks(
     agent_name: str,
     save_event: Callable,
@@ -77,20 +117,7 @@ def make_tool_callbacks(
     edit_fn: Callable[[int, str], Awaitable[None]] | None,
     iter_usage_ref: dict | None = None,
 ) -> tuple[Callable, Callable]:
-    """Create on_tool_start / on_tool_result callbacks for an agent.
-
-    Supports parallel tool calls by keying state on tool_call_id rather
-    than using a single shared variable pair.
-
-    Args:
-        iter_usage_ref: Shared mutable dict updated with per-iteration token
-            usage before tool execution. When provided, a token suffix is
-            appended to the tool result message.
-
-    Returns:
-        (on_tool_start, on_tool_result) async callbacks.
-    """
-    # tool_call_id → (msg_id, original_text)
+    """Create on_tool_start / on_tool_result callbacks for an agent."""
     _pending_tools: dict[str, tuple[int | None, str]] = {}
     _temp_counter = 0
 
@@ -102,12 +129,10 @@ def make_tool_callbacks(
         nonlocal _temp_counter
         if not isinstance(args, dict):
             args = {}
-        # Persist tool_call event
         save_event("tool_call", agent=agent_name, extra={
             "tool": name,
             "args": dict(args),
         })
-        # Full logging to server log
         import json as _json_tc
         logger.info(
             "tool_chat [{}] tool_call: {}({})",
@@ -123,7 +148,6 @@ def make_tool_callbacks(
             short = short[:80] + "…"
         text = _d.tool_call_line(agent_name, name, short if isinstance(short, str) else str(short))
 
-        # Generate a fallback key when tool_loop doesn't pass tool_call_id
         if tool_call_id is None:
             _temp_counter += 1
             tool_call_id = f"_temp-{agent_name}-{_temp_counter}"
@@ -137,24 +161,23 @@ def make_tool_callbacks(
         _pending_tools[tool_call_id] = (msg_id, text)
 
     async def on_tool_result(name: str, tool_call_id: str, result: str) -> None:
+        result_str = str(result or "")
         save_event("tool_result", agent=agent_name, extra={
             "tool": name,
-            "result_len": len(result) if result else 0,
-            "success": not (result or "").startswith("Error:"),
+            "result_len": len(result_str),
+            "success": not result_str.startswith("Error:"),
         })
-        # Full result logging to server log
         logger.info(
             "tool_chat [{}] tool_result: {} ({}c): {}",
-            agent_name, name, len(result) if result else 0, result,
+            agent_name, name, len(result_str), result_str,
         )
-        if not result:
+        if not result_str:
             _pending_tools.pop(tool_call_id, None)
             return
-        rlen = len(result)
-        preview = result.strip().replace("\n", " ")[:60]
+        rlen = len(result_str)
+        preview = result_str.strip().replace("\n", " ")[:60]
         result_line = f"↳ {preview}{'…' if rlen > 60 else ''} ({rlen:,}字)"
 
-        # Build token suffix from per-iteration usage if available
         token_suffix = ""
         if iter_usage_ref:
             u = iter_usage_ref
@@ -181,8 +204,6 @@ def make_tool_callbacks(
     return on_tool_start, on_tool_result
 
 
-# ── Main function ────────────────────────────────────────────
-
 async def chat_with_tools(
     *,
     provider: Any,
@@ -194,6 +215,7 @@ async def chat_with_tools(
     max_tokens: int,
     max_iterations: int = 5,
     session_id: str = "direct",
+    agent_sampling: dict[str, Any] | None = None,
     is_direct: bool = False,
     debug_context: bool = False,
     topic: str = "",
@@ -208,14 +230,9 @@ async def chat_with_tools(
     edit_fn: Callable[[int, str], Awaitable[None]] | None = None,
     force_no_tools: bool = False,
 ) -> tuple[str, list[str], dict[str, Any]]:
-    """Run tool-augmented chat loop. Standalone version of engine._chat_with_tools.
+    """Run tool-augmented chat loop."""
+    from nanobot.groupchat.orchestra.tools.tool_loop import tool_loop
 
-    Returns:
-        (content, tools_used, stats)
-    """
-    from nanobot.agent.tool_loop import tool_loop
-
-    # Langfuse trace metadata
     trace_metadata = {
         "trace_name": f"{'direct' if is_direct else 'group'}_{agent_name}",
         "trace_user_id": "groupchat",
@@ -228,17 +245,13 @@ async def chat_with_tools(
         "log_mode": "direct" if is_direct else "group",
     }
 
-    # Default tool callbacks
     _save_event = save_event or (lambda *a, **kw: None)
-    # Shared mutable dict updated with per-iteration token usage so that
-    # on_tool_result can append a token suffix to the tool call message.
     _iter_usage_ref: dict = {}
     default_start, default_result = make_tool_callbacks(
         agent_name, _save_event, send_fn, send_and_get_id_fn, edit_fn,
         iter_usage_ref=_iter_usage_ref,
     )
 
-    # Load configurable result_max_chars for direct mode
     try:
         from nanobot.groupchat.history.history_settings import direct_result_max_chars
         _direct_result_max = direct_result_max_chars()
@@ -247,7 +260,6 @@ async def chat_with_tools(
 
     effective_defs = None if force_no_tools else tool_defs
 
-    # Compute context stats for logging
     def _calc_total_chars(msgs: list[dict]) -> int:
         total = 0
         for m in msgs:
@@ -267,41 +279,52 @@ async def chat_with_tools(
         len(messages), _total_chars,
     )
 
-    # Snapshot messages before tool_loop mutates them
     messages_snap = snapshot_messages(messages)
-    sampling = dict(getattr(provider, "sampling_params", {}))
+
+    base = getattr(provider, "sampling_params", {}) or {}
+    sampling = dict(base)
+    if agent_sampling:
+        sampling.update(agent_sampling)
+        logger.info("chat_with_tools: agent={} merged hyperparams: {}", agent_name, list(agent_sampling.keys()))
+
+    _orig_sampling = getattr(provider, "sampling_params", None)
+    if _orig_sampling is not None:
+        provider.sampling_params = sampling
+
     tool_names = [d.get("function", {}).get("name", "?") for d in (tool_defs or [])]
 
-    # Per-iteration token usage callback — update shared ref so tool callbacks
-    # can show a token suffix on each tool call message.
     async def _on_iter_usage(usage: dict) -> None:
         _iter_usage_ref.clear()
         _iter_usage_ref.update(usage)
 
-    result = await tool_loop(
-        provider=provider,
-        messages=messages,
-        tool_registry=tool_registry,
-        model=model,
-        max_tokens=max_tokens,
-        max_iterations=max_iterations,
-        tool_defs=effective_defs,
-        metadata=trace_metadata,
-        on_tool_start=on_tool_start_override or default_start,
-        on_tool_result=on_tool_result_override or default_result,
-        on_iteration_usage=_on_iter_usage,
-        on_content_delta=on_content_delta,
-        on_content_reset=on_content_reset,
-        clean_response=clean_response,
-        result_max_chars=_direct_result_max,
-    )
+    try:
+        result = await tool_loop(
+            provider=provider,
+            messages=messages,
+            tool_registry=tool_registry,
+            model=model,
+            max_tokens=max_tokens,
+            max_iterations=max_iterations,
+            tool_defs=effective_defs,
+            metadata=trace_metadata,
+            reasoning_effort=sampling.get("reasoning_effort") if sampling else None,
+            on_tool_start=on_tool_start_override or default_start,
+            on_tool_result=on_tool_result_override or default_result,
+            on_iteration_usage=_on_iter_usage,
+            on_content_delta=on_content_delta,
+            on_content_reset=on_content_reset,
+            clean_response=clean_response,
+            result_max_chars=_direct_result_max,
+        )
+    finally:
+        if _orig_sampling is not None:
+            provider.sampling_params = (
+                dict(_orig_sampling) if isinstance(_orig_sampling, dict) else _orig_sampling
+            )
 
     content = result.content or ""
-    # Use effective_defs (not original tool_defs) for accurate stats
-    # when force_no_tools=True
     stats = build_stats(result, effective_defs, tool_names, messages_snap, sampling, max_tokens)
 
-    # Log complete result
     logger.info(
         "chat_with_tools result: agent={} iters={} latency={:.2f}s "
         "tokens={} tools_used={} finish={} content={}",

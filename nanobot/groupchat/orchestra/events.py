@@ -1,5 +1,13 @@
-"""Event dispatcher for decoupling the broadcast orchestrator from UI rendering."""
-from typing import Any, Callable, Awaitable
+"""Orchestra events and cross-layer hooks for group chat broadcast."""
+
+from __future__ import annotations
+
+from typing import Any, Awaitable, Callable
+
+from loguru import logger
+
+from nanobot.groupchat.orchestra.mailbox import MailboxHub
+
 
 class BroadcastEventDispatcher:
     def __init__(self):
@@ -16,5 +24,35 @@ class BroadcastEventDispatcher:
             try:
                 await cb(**kwargs)
             except Exception as e:
-                from loguru import logger
                 logger.error(f"Error in event listener for {event_name}: {e}")
+
+
+async def trigger_realtime_interrupts(
+    sender: str,
+    targets: list[str],
+    mailbox: MailboxHub,
+    engine: Any,
+    leader_name: str | None,
+) -> None:
+    """Handle bi-directional real-time interrupts after a successful chatroom_send."""
+    _targets_lower = [t.lower() for t in targets]
+
+    has_others = "all" in _targets_lower or any(t != sender.lower() for t in _targets_lower)
+    if not has_others:
+        return
+
+    _interrupted_count = 0
+    for _tgt in targets:
+        if _tgt.lower() == "all":
+            _interrupted_count += mailbox.interrupt_busy_agents(sender)
+            break
+        if mailbox._try_interrupt(_tgt, sender):
+            _interrupted_count += 1
+
+    if _interrupted_count > 0:
+        _dir = "队友" if sender != leader_name else "Leader"
+        _recv_str = ", ".join(targets)
+        logger.info(
+            "Broadcast: {} {} → {} 实时打断 {} 个 busy agent",
+            _dir, sender, _recv_str, _interrupted_count,
+        )
