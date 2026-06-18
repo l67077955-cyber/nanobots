@@ -7,6 +7,7 @@ from typing import Any
 
 from loguru import logger
 
+from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.schema import Config
@@ -27,8 +28,14 @@ class ChannelManager:
         self.bus = bus
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task | None = None
+        self._inbound_task: asyncio.Task | None = None
+        self._gc_engine = None
 
         self._init_channels()
+
+    def set_groupchat_engine(self, engine) -> None:
+        """Wire GroupChatEngine for inbound message routing."""
+        self._gc_engine = engine
 
     def _init_channels(self) -> None:
         """Initialize channels discovered via pkgutil scan + entry_points plugins."""
@@ -78,7 +85,8 @@ class ChannelManager:
             logger.warning("No channels enabled")
             return
 
-        # Start outbound dispatcher
+        # Start inbound/outbound dispatchers
+        self._inbound_task = asyncio.create_task(self._dispatch_inbound())
         self._dispatch_task = asyncio.create_task(self._dispatch_outbound())
 
         # Start channels
@@ -94,13 +102,15 @@ class ChannelManager:
         """Stop all channels and the dispatcher."""
         logger.info("Stopping all channels...")
 
-        # Stop dispatcher
-        if self._dispatch_task:
-            self._dispatch_task.cancel()
-            try:
-                await self._dispatch_task
-            except asyncio.CancelledError:
-                pass
+        for task in (self._inbound_task, self._dispatch_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        self._inbound_task = None
+        self._dispatch_task = None
 
         # Stop all channels
         for name, channel in self.channels.items():
@@ -109,6 +119,40 @@ class ChannelManager:
                 logger.info("Stopped {} channel", name)
             except Exception as e:
                 logger.error("Error stopping {}: {}", name, e)
+
+    async def _dispatch_inbound(self) -> None:
+        """Route inbound messages to GroupChatEngine."""
+        logger.info("Inbound dispatcher started")
+
+        while True:
+            try:
+                msg = await asyncio.wait_for(self.bus.consume_inbound(), timeout=1.0)
+                await self._route_inbound(msg)
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+
+    async def _route_inbound(self, msg: InboundMessage) -> None:
+        engine = self._gc_engine
+        if not engine:
+            logger.warning("Inbound dropped (no groupchat engine): {}:{}", msg.channel, msg.chat_id)
+            return
+
+        channel = self.channels.get(msg.channel)
+        if channel and hasattr(channel, "_ensure_gc_send"):
+            channel._ensure_gc_send(msg.chat_id)
+
+        if engine.active_agents:
+            engine.inject(msg.content)
+            return
+
+        await self.bus.publish_outbound(OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content="💤 没有活跃 agent，用 /addagent 加入一个",
+            metadata=msg.metadata,
+        ))
 
     async def _dispatch_outbound(self) -> None:
         """Dispatch outbound messages to the appropriate channel."""

@@ -385,12 +385,13 @@ def gateway(
 #     # Inject agent config into AgentLoop for cron/heartbeat prompt building
 #     agent.set_agent_config("Nanobot", nanobot_entry)
 
+    channels.set_groupchat_engine(gc_engine)
     tg_channel = channels.get_channel("telegram")
     if tg_channel:
         from nanobot.channels.telegram import TelegramChannel
         if isinstance(tg_channel, TelegramChannel):
             tg_channel.set_groupchat_engine(gc_engine)
-            logger.info("Group chat engine wired to Telegram channel")
+            logger.info("Group chat engine wired to Telegram channel and inbound bus")
 
     def _pick_heartbeat_target() -> tuple[str, str]:
         """Pick a routable channel/chat target for heartbeat-triggered messages."""

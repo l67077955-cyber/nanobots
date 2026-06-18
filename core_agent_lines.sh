@@ -5,17 +5,19 @@ cd "$(dirname "$0")" || exit 1
 echo "nanobot core agent line count"
 echo "================================"
 echo ""
+echo "  Core = groupchat/ (GroupChatEngine multi-agent collaboration)"
+echo ""
 
-for dir in agent agent/tools bus config cron heartbeat session utils; do
-  count=$(find "nanobot/$dir" -maxdepth 1 -name "*.py" -exec cat {} + | wc -l)
-  printf "  %-16s %5s lines\n" "$dir/" "$count"
+for dir in groupchat/orchestra groupchat/history groupchat/display bus config cron heartbeat session utils tools; do
+  count=$(find "nanobot/$dir" -name "*.py" 2>/dev/null -exec cat {} + | wc -l)
+  printf "  %-24s %6s lines\n" "$dir/" "$count"
 done
 
-root=$(cat nanobot/__init__.py nanobot/__main__.py | wc -l)
-printf "  %-16s %5s lines\n" "(root)" "$root"
+root=$(cat nanobot/__init__.py nanobot/__main__.py nanobot/agent/__init__.py 2>/dev/null | wc -l)
+printf "  %-24s %6s lines\n" "(root+agent entry)" "$root"
 
 echo ""
-total=$(find nanobot -name "*.py" ! -path "*/channels/*" ! -path "*/cli/*" ! -path "*/providers/*" ! -path "*/skills/*" | xargs cat | wc -l)
-echo "  Core total:     $total lines"
+total=$(find nanobot/groupchat nanobot/bus nanobot/config nanobot/cron nanobot/heartbeat nanobot/session nanobot/utils nanobot/tools nanobot/command -name "*.py" 2>/dev/null | xargs cat 2>/dev/null | wc -l)
+echo "  Core total (groupchat+bus+tools+…):  $total lines"
 echo ""
 echo "  (excludes: channels/, cli/, providers/, skills/)"
