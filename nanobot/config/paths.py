@@ -34,6 +34,16 @@ def get_logs_dir() -> Path:
     return get_runtime_subdir("logs")
 
 
+def get_inbox_dir() -> Path:
+    """Return the file-drop inbox directory."""
+    return get_runtime_subdir("inbox")
+
+
+def get_inbox_done_dir() -> Path:
+    """Return the processed inbox archive directory."""
+    return ensure_dir(get_inbox_dir() / "done")
+
+
 def get_workspace_path(workspace: str | None = None) -> Path:
     """Resolve and ensure the agent workspace path."""
     path = Path(workspace).expanduser() if workspace else Path.home() / ".nanobot" / "workspace"

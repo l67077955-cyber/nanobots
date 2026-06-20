@@ -1,6 +1,7 @@
 """CLI commands for nanobot."""
 
 import asyncio
+import contextlib
 import os
 import sys
 from pathlib import Path
@@ -279,8 +280,39 @@ def gateway(
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+    foreground: bool = typer.Option(
+        False,
+        "--foreground",
+        "-f",
+        help="Run attached to this terminal (default: background)",
+    ),
+    stop: bool = typer.Option(False, "--stop", help="Stop the background gateway"),
 ):
-    """Start the nanobot gateway."""
+    """Start the nanobot gateway (background by default)."""
+    from nanobot.headless import log_file_path, spawn as spawn_gateway, stop as stop_gateway
+
+    if stop:
+        if stop_gateway():
+            console.print("[green]✓[/green] Gateway stopped")
+        else:
+            console.print("[yellow]No running gateway found[/yellow]")
+        return
+
+    if not foreground:
+        try:
+            pid = spawn_gateway(
+                port=port,
+                workspace=workspace,
+                config=config,
+                verbose=verbose,
+            )
+        except RuntimeError as exc:
+            console.print(f"[red]Error: {exc}[/red]")
+            raise typer.Exit(1) from exc
+        console.print(f"{__logo__} Gateway started in background (pid {pid})")
+        console.print(f"[dim]Logs: {log_file_path()}[/dim]")
+        return
+
     from nanobot.bus.queue import MessageBus
     from nanobot.channels.manager import ChannelManager
     from nanobot.config.paths import get_cron_dir, get_logs_dir
@@ -363,27 +395,6 @@ def gateway(
         cron_service=cron,
         send_outbound_fn=bus.publish_outbound,
     )
-#     # Register the base model as an agent too
-#     base_model = config.agents.defaults.model or "anthropic/claude-opus-4.5"
-#     base_workspace = Path(config.agents.defaults.workspace or "~/.nanobot/workspace").expanduser()
-#     base_soul = base_workspace / "SOUL.md"
-#     base_prompt = base_soul.read_text() if base_soul.exists() else "I am nanobot, a personal AI assistant."
-#     nanobot_entry = {"model": base_model, "prompt": base_prompt, "_default": True}
-#     # Load saved tool toggles from separate file
-#     try:
-#         import json as _json
-#         tools_path = Path.home() / ".nanobot" / "nanobot_tools.json"
-#         if tools_path.exists():
-#             nanobot_entry["tools"] = _json.loads(tools_path.read_text())
-#             logger.info("Loaded Nanobot tools: {}", nanobot_entry["tools"])
-#     except Exception:
-#         pass
-#     gc_engine.registry["Nanobot"] = nanobot_entry
-#     gc_engine._active_agents.append("Nanobot")
-#     logger.info("Registered base model '{}' as Nanobot agent (auto-active)", base_model)
-# 
-#     # Inject agent config into AgentLoop for cron/heartbeat prompt building
-#     agent.set_agent_config("Nanobot", nanobot_entry)
 
     channels.set_groupchat_engine(gc_engine)
     tg_channel = channels.get_channel("telegram")
@@ -392,6 +403,52 @@ def gateway(
         if isinstance(tg_channel, TelegramChannel):
             tg_channel.set_groupchat_engine(gc_engine)
             logger.info("Group chat engine wired to Telegram channel and inbound bus")
+
+    from nanobot.channels.web import WebChannel, WebConfig
+    from nanobot.runtime.chat_hub import ChatHub
+    from nanobot.runtime.dashboard import DashboardServer, resolve_repo
+
+    watch_cfg = config.gateway.watch
+    chat_hub: ChatHub | None = ChatHub() if watch_cfg.enabled else None
+    dashboard_server: DashboardServer | None = None
+
+    web_channel = channels.get_channel("web")
+    if watch_cfg.enabled and not web_channel:
+        web_cfg_raw = getattr(config.channels, "web", None)
+        if isinstance(web_cfg_raw, dict):
+            wc = WebConfig.model_validate({**web_cfg_raw, "enabled": True, "serveWs": False})
+        else:
+            wc = WebConfig(enabled=True, serve_ws=False)
+        web_channel = WebChannel(wc, bus)
+        channels.register_channel(web_channel)
+
+    if web_channel and isinstance(web_channel, WebChannel):
+        web_channel.set_groupchat_engine(gc_engine)
+        if chat_hub:
+            web_channel.set_chat_hub(chat_hub)
+        if web_channel.config.serve_ws:
+            logger.info(
+                "Web channel WS ws://{}:{}",
+                web_channel.config.host,
+                web_channel.config.port,
+            )
+
+    if watch_cfg.enabled and chat_hub:
+        import os
+        from pathlib import Path as _Path
+
+        repo = resolve_repo(_Path(watch_cfg.repo) if watch_cfg.repo else None)
+        password = watch_cfg.password or os.environ.get("CODE_WATCH_PASSWORD") or ""
+        dashboard_server = DashboardServer(
+            host=config.gateway.host,
+            port=port,
+            repo=repo,
+            chat_hub=chat_hub,
+            password=password or None,
+            refresh_s=watch_cfg.refresh_s,
+        )
+        dash_url = dashboard_server.start()
+        console.print(f"[green]✓[/green] Dashboard: {dash_url}")
 
     def _pick_heartbeat_target() -> tuple[str, str]:
         """Pick a routable channel/chat target for heartbeat-triggered messages."""
@@ -443,7 +500,17 @@ def gateway(
 
     console.print(f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s")
 
+    from nanobot.config.paths import get_inbox_dir
+    from nanobot.runtime.inbox import start_inbox_poller
+
+    inbox_dir = get_inbox_dir()
+    console.print(f"[green]✓[/green] Inbox: drop .txt/.md into {inbox_dir}")
+
     async def run():
+        loop = asyncio.get_running_loop()
+        if chat_hub and web_channel and isinstance(web_channel, WebChannel):
+            chat_hub.attach(loop, web_channel._dispatch_inbound)
+        inbox_task, inbox_stop = start_inbox_poller(gc_engine)
         try:
             await cron.start()
             await heartbeat.start()
@@ -458,13 +525,23 @@ def gateway(
             console.print("\n[red]Error: Gateway crashed unexpectedly[/red]")
             console.print(traceback.format_exc())
         finally:
+            inbox_stop.set()
+            inbox_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await inbox_task
+            if chat_hub:
+                chat_hub.detach()
+            if dashboard_server:
+                dashboard_server.stop()
             heartbeat.stop()
             cron.stop()
             await channels.stop_all()
+            from nanobot.headless import clear_pid, read_pid
+
+            if read_pid() == os.getpid():
+                clear_pid()
 
     asyncio.run(run())
-
-
 
 
 # ============================================================================
@@ -641,6 +718,31 @@ def plugins_list():
 
 
 # ============================================================================
+# Dev: code-watch dashboard
+# ============================================================================
+
+
+@app.command("watch")
+def code_watch(
+    foreground: bool = typer.Option(True, "--foreground/--background", "-f/-b", help="Run gateway attached"),
+    port: int | None = typer.Option(None, "--port", "-p", help="Gateway/dashboard HTTP port"),
+    password: str | None = typer.Option(None, "--password", help="Dashboard login password"),
+):
+    """Open the code-watch dashboard (served by `nanobot gateway`, same process)."""
+    console.print("[dim]Dashboard is integrated into the gateway — one headless backend.[/dim]")
+    if password:
+        console.print("[yellow]Set gateway.watch.password in config or CODE_WATCH_PASSWORD env.[/yellow]")
+    gateway(
+        port=port,
+        foreground=foreground,
+        stop=False,
+        verbose=False,
+        workspace=None,
+        config=None,
+    )
+
+
+# ============================================================================
 # Status Commands
 # ============================================================================
 
@@ -658,6 +760,15 @@ def status():
 
     console.print(f"Config: {config_path} {'[green]✓[/green]' if config_path.exists() else '[red]✗[/red]'}")
     console.print(f"Workspace: {workspace} {'[green]✓[/green]' if workspace.exists() else '[red]✗[/red]'}")
+
+    from nanobot.headless import status as gateway_status
+
+    gw = gateway_status()
+    if gw.running:
+        console.print(f"Gateway: [green]running[/green] (pid {gw.pid})")
+    else:
+        console.print("Gateway: [dim]not running[/dim]")
+    console.print(f"[dim]Log: {gw.log_file}[/dim]")
 
     if config_path.exists():
         from nanobot.providers.registry import PROVIDERS
