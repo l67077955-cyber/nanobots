@@ -6,16 +6,19 @@ import asyncio
 import json
 import re
 import time
+from contextlib import suppress
 from pathlib import Path
 
 from loguru import logger
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters, Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
+from nanobot.channels.commands_core import CoreCommandsMixin
+from nanobot.runtime.dispatch import InboundDispatcher
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import TelegramConfig
 from nanobot.groupchat.orchestra.engine import GroupChatEngine
@@ -31,8 +34,8 @@ from .formatting import (
     _strip_md,
     _render_table_box,
     _markdown_to_telegram_html,
-    to_cli_style,
 )
+
 from .callbacks import CallbacksMixin
 from .message_handler import MessageHandlerMixin
 from .commands.agents import AgentCommandsMixin
@@ -46,6 +49,7 @@ __all__ = ["TelegramChannel", "TELEGRAM_MAX_MESSAGE_LEN"]
 
 
 class TelegramChannel(
+    CoreCommandsMixin,
     AgentCommandsMixin,
     ProviderCommandsMixin,
     SettingsCommandsMixin,
@@ -119,6 +123,7 @@ class TelegramChannel(
         self._groupchat_engine: GroupChatEngine | None = None
         # Edit state for interactive /editagent flow
         self._edit_state: dict[str, dict] = {}  # chat_id -> {agent, field}
+        self._dispatcher = InboundDispatcher()
 
     def set_groupchat_engine(self, engine: GroupChatEngine) -> None:
         """Set the group chat engine for multi-agent discussions."""
@@ -190,39 +195,8 @@ class TelegramChannel(
         self._app = builder.build()
         self._app.add_error_handler(self._on_error)
 
-        # Add command handlers
-        self._app.add_handler(CommandHandler("start", self._on_start))
-        self._app.add_handler(CommandHandler("new", self._forward_command))
-        self._app.add_handler(CommandHandler("clear", self._forward_command))
-        self._app.add_handler(CommandHandler("stop", self._forward_command))
-        self._app.add_handler(CommandHandler("cancel", self._on_cancel))
-        self._app.add_handler(CommandHandler("help", self._on_help))
-        # Agent management commands
-        self._app.add_handler(CommandHandler("agents", self._on_agents))
-        self._app.add_handler(CommandHandler("addagent", self._on_addagent))
-        self._app.add_handler(CommandHandler("removeagent", self._on_removeagent))
-        self._app.add_handler(CommandHandler("newagent", self._on_newagent))
-        self._app.add_handler(CommandHandler("editagent", self._on_editagent))
-        self._app.add_handler(CommandHandler("hyperparams", self._on_hyperparams))
-        self._app.add_handler(CommandHandler("restart", self._on_restart))
-        self._app.add_handler(CommandHandler("log", self._on_log))
-        self._app.add_handler(CommandHandler("savegroup", self._on_savegroup))
-        self._app.add_handler(CommandHandler("loadgroup", self._on_loadgroup))
-        self._app.add_handler(CommandHandler("delgroup", self._on_delgroup))
-        self._app.add_handler(CommandHandler("groups", self._on_groups))
-        self._app.add_handler(CommandHandler("order", self._on_order))
-        self._app.add_handler(CommandHandler("setleader", self._on_setleader))
-        self._app.add_handler(CommandHandler("prompt", self._on_prompt))
-        self._app.add_handler(CommandHandler("history", self._on_history))
-        # Provider & model management
-        self._app.add_handler(CommandHandler("newprovider", self._on_newprovider))
-        self._app.add_handler(CommandHandler("newmodel", self._on_newmodel))
-        self._app.add_handler(CommandHandler("deleteprovider", self._on_deleteprovider))
-        self._app.add_handler(CommandHandler("deletemodel", self._on_deletemodel))
-        self._app.add_handler(CommandHandler("editprovider", self._on_editprovider))
-        self._app.add_handler(CommandHandler("providers", self._on_providers))
-        self._app.add_handler(CommandHandler("speedtest", self._on_speedtest))
-        self._app.add_handler(CommandHandler("groupchat", self._on_groupchat))
+        # All slash commands → unified runtime dispatcher
+        self._app.add_handler(MessageHandler(filters.COMMAND, self._on_slash_command))
         self._app.add_handler(CallbackQueryHandler(self._on_callback))
 
         # Add message handler for text, photos, voice, documents
@@ -266,12 +240,17 @@ class TelegramChannel(
                 info = _json.loads(restart_file.read_text())
                 chat_id = info.get("chat_id")
                 ts = info.get("ts", "?")
-                if chat_id:
+                if chat_id and str(chat_id).isdigit():
                     import time as _time
                     boot_time = _time.strftime("%H:%M:%S")
+                    elapsed = ""
+                    started_at = info.get("started_at")
+                    if started_at:
+                        with suppress(ValueError, TypeError):
+                            elapsed = f"\n耗时: {max(0.0, _time.time() - float(started_at)):.1f}s"
                     await self._app.bot.send_message(
                         chat_id=int(chat_id),
-                        text=f"✅ 重启完成\n请求时间: {ts}\n启动时间: {boot_time}",
+                        text=f"✅ 重启完成\n请求时间: {ts}\n启动时间: {boot_time}{elapsed}",
                     )
             except Exception as e:
                 logger.warning("Failed to send restart notification: {}", e)
@@ -434,131 +413,25 @@ class TelegramChannel(
             pass
         await self._send_text(chat_id, text, reply_params, thread_kwargs)
 
-    async def _on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /start command."""
+    async def _on_slash_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Route all slash commands through the runtime dispatcher."""
         if not update.message or not update.effective_user:
             return
-
-        user = update.effective_user
-        await update.message.reply_text(
-            f"👋 Hi {user.first_name}! I'm nanobot.\n\n"
-            "Send me a message and I'll respond!\n"
-            "Type /help to see available commands."
-        )
-
-    async def _on_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /help command, bypassing ACL so all users can access it."""
-        if not update.message:
-            return
-        help_text = to_cli_style(
-            "🐈 nanobot commands:\n"
-            "/new — 新对话\n"
-            "/clear — 清空上下文\n"
-            "/stop — 停止当前任务\n"
-            "/cancel — 取消交互操作\n\n"
-            "🎭 Agent 管理:\n"
-            "/agents — 查看所有 agent\n"
-            "/addagent <name> — 加入 agent\n"
-            "/removeagent <name> — 移除 agent\n"
-            "/newagent <name> — 创建新 agent\n"
-            "/editagent <name> — 编辑 agent (名字/人设/模型/工具/超参数/预设)\n"
-            "/hyperparams — 查看/修改超参数\n"
-            "/restart — 硬重置（卡死时用）\n\n"
-            "📁 分组管理：\n"
-            "/savegroup <名称> — 保存当前成员\n"
-            "/loadgroup <名称> — 载入分组\n"
-            "/delgroup <名称> — 删除分组\n"
-            "/groups — 查看所有分组\n"
-            "/order — 调整发言顺序\n"
-            "/setleader <name> — 设置/取消 Leader 👑\n\n"
-            "🏢 提供商 & 模型：\n"
-            "/providers — 查看提供商和模型\n"
-            "/newprovider — 添加提供商\n"
-            "/editprovider — 编辑提供商 (URL/Key/拉取模型)\n"
-            "/deleteprovider — 删除提供商\n"
-            "/newmodel — 添加模型\n"
-            "/deletemodel — 删除模型\n"
-            "/speedtest — 提供商测速\n\n"
-            "📊 日志 & 调试：\n"
-            "/log — 查看 LLM 调用记录 (tokens/延迟/工具)\n"
-            "/prompt [agent] — 查看/编辑/排序提示词组件\n"
-            "/summary — 生成对话总结\n\n"
-            "⚙️ 群聊设置：\n"
-            "/groupchat — 对话池/搜索预算等参数\n"
-            "💡 加入 agent 后直接发消息即可对话\n"
-            "2+ agent 自动进入群聊模式"
-        )
-        await update.message.reply_text(help_text, parse_mode="Markdown")
-
-    # ── Agent Management Commands ────────────────────────────
-
-    # ── Forward command ──
-    async def _forward_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Forward /new, /clear and /stop as inbound messages."""
-        if not update.message or not update.effective_user:
-            return
-        sender = self._sender_id(update.effective_user)
-        if not self.is_allowed(sender):
-            return
+        sender_id = self._sender_id(update.effective_user)
         chat_id = str(update.message.chat_id)
-        command = update.message.text or ""
-        # Extract bare command name (strip @botname suffix)
-        cmd = command.strip().split()[0].lower().split("@")[0]
-
-        # All commands handled by GroupChatEngine — no forwarding to AgentLoop bus
-        if self._groupchat_engine:
-            if cmd == "/stop":
-                was_running = self._groupchat_engine._running
-                self._groupchat_engine.stop()
-                msg = "✅ 群聊已停止。" if was_running else "ℹ️ 当前没有运行中的任务。"
-                from nanobot.bus.events import OutboundMessage
-                await self.bus.publish_outbound(OutboundMessage(
-                    channel="telegram",
-                    chat_id=chat_id,
-                    content=msg,
-                    metadata={
-                        "message_id": update.message.message_id,
-                        "message_thread_id": update.message.message_thread_id,
-                    },
-                ))
-            elif cmd in ("/clear", "/new"):
-                self._groupchat_engine.clear_history()
-                action = "新对话已开始" if cmd == "/new" else "上下文已清空"
-                from nanobot.bus.events import OutboundMessage
-                await self.bus.publish_outbound(OutboundMessage(
-                    channel="telegram",
-                    chat_id=chat_id,
-                    content=f"✅ {action}。",
-                    metadata={
-                        "message_id": update.message.message_id,
-                        "message_thread_id": update.message.message_thread_id,
-                    },
-                ))
-            return
-
-        # Fallback: no groupchat engine configured (shouldn't happen in normal operation)
-        from nanobot.bus.events import InboundMessage
-        await self.bus.publish_inbound(InboundMessage(
-            channel="telegram",
-            sender_id=sender,
-            chat_id=chat_id,
-            content=command,
-            metadata={
-                "message_id": update.message.message_id,
-                "message_thread_id": update.message.message_thread_id,
-            },
-        ))
-
-    async def _on_cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /cancel command to abort interactive edits."""
-        if not update.message or not update.effective_user:
-            return
-        sender = self._sender_id(update.effective_user)
-        if not self.is_allowed(sender):
-            return
-        chat_id = str(update.message.chat_id)
-        if chat_id in self._edit_state:
-            del self._edit_state[chat_id]
-            await update.message.reply_text("❌ 已取消")
-        else:
-            await update.message.reply_text("ℹ️ 当前没有进行中的交互操作。")
+        content = update.message.text or ""
+        metadata = self._build_message_metadata(update.message, update.effective_user)
+        self._start_typing(chat_id)
+        try:
+            await self._dispatcher.handle(
+                self,
+                chat_id,
+                sender_id,
+                content,
+                bus=self.bus,
+                metadata=metadata,
+                tg_update=update,
+                tg_context=context,
+            )
+        finally:
+            self._stop_typing(chat_id)

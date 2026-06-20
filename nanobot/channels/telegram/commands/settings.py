@@ -185,27 +185,29 @@ class SettingsCommandsMixin:
 
         # Save restart notification info (read by start() after reboot)
         Path("/tmp/nanobot_restart.json").write_text(
-            _json.dumps({"chat_id": chat_id, "ts": ts})
+            _json.dumps({"chat_id": chat_id, "ts": ts, "started_at": _time.time()})
         )
 
         await update.message.reply_text(f"🔄 正在重启...\n请求时间: {ts}")
 
         async def _do_restart():
-            # Always do background restart: this ensures that if nanobot was started
-            # from a command line / attached terminal (the "frontend"), that terminal
-            # is released and the new instance runs fully detached in the background.
-            # We still write the /tmp notice for telegram post-restart notification.
-            from nanobot.utils.restart import perform_background_restart
+            await asyncio.sleep(0.8)  # let "正在重启" reply flush
+            from nanobot.utils.restart import (
+                is_systemd_service,
+                perform_background_restart,
+                perform_inplace_restart,
+                set_restart_notice_to_env,
+            )
 
-            # Also set env notice so that any CLI restart notice consumer in the child can pick it up.
-            # (The /tmp json is the primary mechanism for telegram channel notification.)
             try:
-                from nanobot.utils.restart import set_restart_notice_to_env
                 set_restart_notice_to_env(channel="telegram", chat_id=chat_id, metadata={})
             except Exception:
                 pass
 
-            perform_background_restart(delay_s=0.8)
+            if is_systemd_service():
+                perform_inplace_restart()
+            else:
+                perform_background_restart(delay_s=0)
 
         asyncio.create_task(_do_restart())
 
@@ -231,7 +233,7 @@ class SettingsCommandsMixin:
         lines.append("⚙️ 引擎状态:")
         lines.append(f"  running: {engine._running}")
         lines.append(f"  task: {'✅ 活跃' if engine._task and not engine._task.done() else '❌ 无'}")
-        lines.append(f"  send_fn: {'✅' if engine._send_fn else '❌ None'}")
+        lines.append(f"  outbound: {'✅' if engine.has_outbound else '❌ None'}")
         lines.append(f"  topic: {engine._topic[:50] or '(空)'}")
         lines.append("")
 
@@ -326,6 +328,9 @@ class SettingsCommandsMixin:
     # Components that are only injected under specific conditions
     _CONDITIONAL_TAGS: dict[str, str] = {
         "leader_prompt": "Leader",
+        "broadcast_hint": "Group",
+        "group_context": "Group",
+        "group_nudge": "Group",
     }
 
     def _build_prompt_order_view(self, engine, manage_mode: bool = False) -> tuple[str, "InlineKeyboardMarkup"]:

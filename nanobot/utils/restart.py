@@ -92,6 +92,11 @@ def should_show_cli_restart_notice(notice: RestartNotice, session_id: str) -> bo
     return not notice.chat_id or notice.chat_id == cli_chat_id
 
 
+def is_systemd_service() -> bool:
+    """True when running as a systemd service unit."""
+    return bool(os.environ.get("INVOCATION_ID"))
+
+
 def _build_child_command() -> list[str]:
     """Reconstruct a command line that will start an equivalent nanobot process."""
     if not sys.argv:
@@ -108,6 +113,19 @@ def _build_child_command() -> list[str]:
 
     # Direct python invocation: keep the script path as-is.
     return [sys.executable] + sys.argv[:]
+
+
+def perform_inplace_restart(*, delay_s: float = 0.0) -> None:
+    """Replace the current process in-place (for systemd --foreground services).
+
+    Avoids spawn + exit, so systemd does not wait RestartSec before the new
+    instance is running.
+    """
+    if delay_s > 0:
+        time.sleep(delay_s)
+    cmd = _build_child_command()
+    logger.info("Performing inplace restart: {}", cmd)
+    os.execv(cmd[0], cmd)
 
 
 def perform_background_restart(
