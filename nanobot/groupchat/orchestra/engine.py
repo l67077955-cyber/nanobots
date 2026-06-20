@@ -114,34 +114,16 @@ class GroupChatEngine:
             return self.workspace
 
     def _register_tools(self) -> None:
-        """Register default tool registries and per-agent registry cache."""
-        # Lazy import to avoid circular: engine → agent.tools → agent → config → groupchat
-        from nanobot.tools.registry import ToolRegistry
-
-        ws = self.workspace
-
-        # Default group chat tools (used for agents without custom workspace)
-        self.tools = self._build_tool_registry(ws)
-
-        # Register chatroom tools on default registry
+        """Register chatroom tools and warm the default workspace registry cache."""
         from nanobot.groupchat.orchestra.tools.chatroom_tools import ChatroomSendTool, WaitTool
+
         self._chatroom_send_tool = ChatroomSendTool(mailbox=self._mailbox)
         self._wait_tool = WaitTool(mailbox=self._mailbox)
-        self.tools.register(self._chatroom_send_tool)
-        self.tools.register(self._wait_tool)
-
-        # Direct chat tools (default agent — workspace scope)
-        self.direct_tools = self._build_tool_registry(ws)
-
-        # Per-agent registry cache {workspace_path_str: ToolRegistry}
-        self._tool_registry_cache: dict[str, ToolRegistry] = {
-            str(ws): self.tools,
-        }
-
-        logger.info("Groupchat: registered {} group tools, {} direct tools",
-                    len(self.tools), len(self.direct_tools))
-
-        # CronTool removed — cron is now a pure skill (skills/cron/scripts/cron_cli.py)
+        self._tool_registry_cache: dict[str, "ToolRegistry"] = {}
+        self.tools = self._ensure_tool_registry(
+            self.workspace, include_chatroom=True,
+        )
+        logger.info("Groupchat: warmed default tool registry ({} tools)", len(self.tools))
 
     def _build_tool_registry(self, ws: Path) -> "ToolRegistry":
         """Build a ToolRegistry scoped to the given workspace path."""
@@ -204,21 +186,40 @@ class GroupChatEngine:
                 pass
         return default_model
 
-    def _get_agent_registry(self, agent_name: str) -> "ToolRegistry":
-        """Get (or build and cache) the tool registry for an agent's workspace scope."""
-        ws = self._resolve_agent_workspace(agent_name)
-        key = str(ws)
+    def _registry_cache_key(self, ws: Path, *, include_chatroom: bool) -> str:
+        suffix = "g" if include_chatroom else "d"
+        return f"{ws}:{suffix}"
+
+    def _ensure_tool_registry(
+        self,
+        ws: Path,
+        *,
+        include_chatroom: bool,
+        agent_name: str | None = None,
+    ) -> "ToolRegistry":
+        """Get or build a cached ToolRegistry for a workspace scope."""
+        key = self._registry_cache_key(ws, include_chatroom=include_chatroom)
         if key not in self._tool_registry_cache:
             reg = self._build_tool_registry(ws)
-            # Add chatroom tools to custom registries too
-            from nanobot.groupchat.orchestra.tools.chatroom_tools import ChatroomSendTool, WaitTool
-            reg.register(ChatroomSendTool(mailbox=self._mailbox))
-            reg.register(WaitTool(mailbox=self._mailbox))
+            if include_chatroom:
+                reg.register(self._chatroom_send_tool)
+                reg.register(self._wait_tool)
             self._tool_registry_cache[key] = reg
-            logger.info("Groupchat: built tool registry for {} → {}", agent_name, ws)
+            logger.info(
+                "Groupchat: built tool registry for {} (chatroom={})",
+                ws, include_chatroom,
+            )
         reg = self._tool_registry_cache[key]
-        self._sync_forget_tool(reg, agent_name)
+        if agent_name:
+            self._sync_forget_tool(reg, agent_name)
         return reg
+
+    def _get_agent_registry(self, agent_name: str) -> "ToolRegistry":
+        """Get (or build and cache) the group-mode registry for an agent."""
+        ws = self._resolve_agent_workspace(agent_name)
+        return self._ensure_tool_registry(
+            ws, include_chatroom=True, agent_name=agent_name,
+        )
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers and inject tools into all registries (lazy, one-time)."""
@@ -229,20 +230,17 @@ class GroupChatEngine:
         try:
             self._mcp_stack = AsyncExitStack()
             await self._mcp_stack.__aenter__()
-            # Inject into all known registries (default tools + direct_tools + cache)
-            all_registries = set()
-            all_registries.add(id(self.tools))
-            all_registries.add(id(self.direct_tools))
-            await connect_mcp_servers(self._mcp_servers, self.tools, self._mcp_stack)
-            await connect_mcp_servers(self._mcp_servers, self.direct_tools, self._mcp_stack)
-            # Also inject into any already-cached per-agent registries
-            for key, reg in self._tool_registry_cache.items():
-                if id(reg) not in all_registries:
-                    all_registries.add(id(reg))
-                    await connect_mcp_servers(self._mcp_servers, reg, self._mcp_stack)
+            seen: set[int] = set()
+            for reg in self._tool_registry_cache.values():
+                if id(reg) in seen:
+                    continue
+                seen.add(id(reg))
+                await connect_mcp_servers(self._mcp_servers, reg, self._mcp_stack)
             self._mcp_connected = True
-            logger.info("GroupChat MCP: connected {} server(s), tools injected into {} registries",
-                        len(self._mcp_servers), len(all_registries))
+            logger.info(
+                "GroupChat MCP: connected {} server(s), tools injected into {} registries",
+                len(self._mcp_servers), len(seen),
+            )
         except BaseException as e:
             logger.error("GroupChat MCP: failed to connect (will retry next message): {}", e)
             if self._mcp_stack:
@@ -311,10 +309,14 @@ class GroupChatEngine:
         self._session_tools_override: dict[str, dict] = {}
         self._view_channel: str | None = None
         self._view_chat_id: str | None = None
+        # Pinned outbound route for in-flight direct chat (survives dashboard stomp)
+        self._reply_channel: str | None = None
+        self._reply_chat_id: str | None = None
+        self._stream_chat_id: str | None = None
 
         # Direct chat interjection state (single-agent mode)
         self._direct_chat_task: asyncio.Task | None = None
-        self._direct_chat_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._direct_chat_queue: asyncio.Queue[tuple[str, list[str] | None]] = asyncio.Queue()
 
     # ── Public access to PromptBuilder ────────────────────────
 
@@ -341,13 +343,30 @@ class GroupChatEngine:
         from nanobot.groupchat.room_observability import resolve_room_id
         return resolve_room_id(self._view_channel, self._view_chat_id)
 
+    def pin_reply_route(self, channel: str, chat_id: str) -> None:
+        """Pin outbound delivery for an in-flight user turn."""
+        self._reply_channel = channel
+        self._reply_chat_id = chat_id
+        self.set_tool_context(channel, chat_id)
+
+    def clear_reply_route(self) -> None:
+        """Release pinned outbound route after direct chat completes."""
+        self._reply_channel = None
+        self._reply_chat_id = None
+
     def set_tool_context(self, channel: str, chat_id: str) -> None:
         """Set channel/chat context for cron CLI script via env vars.
 
-        Mirrors AgentLoop._set_tool_context() — called once when the
-        Telegram channel wires its send callback.
+        Called when a channel wires routing context (channel + chat_id).
         """
         import os
+        if (
+            self._reply_channel
+            and self._direct_chat_task
+            and not self._direct_chat_task.done()
+            and (channel, chat_id) != (self._reply_channel, self._reply_chat_id)
+        ):
+            return
         self._view_channel = channel
         self._view_chat_id = chat_id
         os.environ["NANOBOT_CHANNEL"] = channel
@@ -392,6 +411,13 @@ class GroupChatEngine:
     def has_send_fn(self) -> bool:
         """Whether a send callback is registered."""
         return self._send_fn is not None
+
+    @property
+    def has_outbound(self) -> bool:
+        """Whether outbound delivery is wired (bus or legacy send_fn)."""
+        return self.has_send_fn or bool(
+            self._send_outbound_fn and self._view_channel and self._view_chat_id,
+        )
 
     @property
     def has_edit_fn(self) -> bool:
@@ -697,7 +723,7 @@ class GroupChatEngine:
         """Clean up model response — delegates to response_cleanup module."""
         return _clean_response_fn(content, agent_name, list(self.registry.keys()))
 
-    # ── Tool-augmented chat (matching AgentLoop._run_agent_loop) ───
+    # ── Tool-augmented chat ───
 
     def get_agent_enabled_tool_names(self, agent_name: str) -> list[str]:
         """Get the names of tools currently enabled for an agent."""
@@ -772,7 +798,10 @@ class GroupChatEngine:
 
         # Tool selection — use per-agent registry based on workspace_scope
         agent_cfg = self.registry.get(agent_name, {})
-        tool_registry = self.direct_tools if is_direct else self._get_agent_registry(agent_name)
+        ws = self._resolve_agent_workspace(agent_name)
+        tool_registry = self._ensure_tool_registry(
+            ws, include_chatroom=not is_direct, agent_name=agent_name,
+        )
         tool_defs = self._get_agent_tools(agent_cfg, tool_registry)
 
         # Set chatroom tool context for this agent
@@ -829,24 +858,47 @@ class GroupChatEngine:
             force_no_tools=force_no_tools,
         )
 
-    def direct_chat_inject(self, user_message: str) -> bool:
+    def direct_chat_inject(
+        self,
+        user_message: str,
+        *,
+        media: list[str] | None = None,
+    ) -> bool:
         """Inject a user interjection into an in-progress direct chat.
 
         Returns True if injected, False if no direct chat is running.
         """
         if self._direct_chat_task and not self._direct_chat_task.done():
-            self._direct_chat_queue.put_nowait(user_message)
-            logger.info("Direct chat: interjection queued ({} chars)", len(user_message))
+            self._direct_chat_queue.put_nowait((user_message, media))
+            logger.info(
+                "Direct chat: interjection queued ({} chars, {} media)",
+                len(user_message), len(media or []),
+            )
             return True
         return False
 
-    async def direct_chat(self, user_message: str) -> str | None:
+    async def direct_chat(
+        self,
+        user_message: str,
+        *,
+        media: list[str] | None = None,
+    ) -> str | None:
         """Send message to single active agent — delegates to direct_chat module."""
         from nanobot.groupchat.orchestra.direct_chat import direct_chat as _direct_chat
-        return await _direct_chat(self, user_message)
+        return await _direct_chat(self, user_message, media=media)
 
-    def inject(self, message: str) -> None:
-        """Inject a user message into the chat loop (1+ agents)."""
+    def inject(
+        self,
+        message: str,
+        *,
+        media: list[str] | None = None,
+    ) -> None:
+        """Inject a user message into the chat loop.
+
+        Routes by active agent count:
+        - 1 agent → direct_chat (lightweight 1-on-1)
+        - 2+ agents → broadcast group loop
+        """
         from nanobot.groupchat.room_observability import emit_room_event
         emit_room_event(
             room_id=self.room_id,
@@ -854,10 +906,24 @@ class GroupChatEngine:
             source="inject",
             agent="User",
             content=message,
-            extra={"active_agents": list(self._active_agents)},
+            extra={
+                "active_agents": list(self._active_agents),
+                "media_count": len(media or []),
+            },
         )
-        # Lazy start: if any agents and loop not running, start it now
-        if not self._running and len(self._active_agents) >= 1:
+        n = len(self._active_agents)
+        if n == 0:
+            return
+        if n == 1:
+            if self.direct_chat_inject(message, media=media):
+                return
+            self._stop_group_loop()
+            self._direct_chat_task = asyncio.create_task(
+                self._run_direct_chat(message, media=media),
+            )
+            return
+        self._cancel_direct_chat()
+        if not self._running:
             self._start_group_loop()
         if self._running:
             self._input_queue.put_nowait(message)
@@ -868,14 +934,40 @@ class GroupChatEngine:
             self._input_queue.put_nowait("__SUMMARY__")
 
     def stop(self) -> None:
-        """Stop the group loop but keep active agents."""
+        """Stop the group loop and any in-flight direct chat; keep active agents."""
         self._stop_group_loop()
+        self._cancel_direct_chat()
         try:
             asyncio.ensure_future(self._disconnect_mcp())
         except RuntimeError:
             pass  # no event loop — shutdown scenario
 
     # ── Internal ─────────────────────────────────────────────
+
+    def _cancel_direct_chat(self) -> None:
+        """Cancel an in-flight direct chat task, if any."""
+        task = self._direct_chat_task
+        if task and not task.done():
+            task.cancel()
+        self._direct_chat_task = None
+
+    async def _run_direct_chat(
+        self,
+        message: str,
+        *,
+        media: list[str] | None = None,
+    ) -> None:
+        """Run direct_chat as a tracked background task (for inject routing)."""
+        try:
+            await self.direct_chat(message, media=media)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error("Direct chat task failed: {}", e)
+        finally:
+            self.clear_reply_route()
+            if self._direct_chat_task is asyncio.current_task():
+                self._direct_chat_task = None
 
     def _resolve_agent_name(self, name: str) -> str | None:
         """Case-insensitive agent name resolution."""
@@ -885,7 +977,8 @@ class GroupChatEngine:
         return None
 
     def _start_group_loop(self) -> None:
-        """Start the async group chat loop."""
+        """Start the async group chat loop (2+ agents)."""
+        self._cancel_direct_chat()
         # Always cancel any prior task to avoid duplicate loops
         if self._task and not self._task.done():
             self._task.cancel()
@@ -896,21 +989,7 @@ class GroupChatEngine:
         if not self._topic:
             self._topic = "自由讨论"
 
-        # Session directory
-        timestamp = _cn_now().strftime("%Y%m%d-%H%M%S")
-        sessions_dir = Path.home() / ".nanobot" / "collab-sessions"
-        sessions_dir.mkdir(parents=True, exist_ok=True)
-        self._session_dir = sessions_dir / f"gc-{timestamp}"
-        self._session_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write session metadata to structured log
-        self._save_event("session_start", extra={
-            "agents": list(self._active_agents),
-            "mode": "broadcast",
-            "topic": self._topic,
-            "leader": self._leader,
-            "models": {n: self.registry.get(n, {}).get("model", "?") for n in self._active_agents},
-        })
+        self._ensure_session_dir("broadcast")
 
         self._task = asyncio.create_task(self._run_loop())
         logger.info("Group chat loop started with {}", self._active_agents)
@@ -930,7 +1009,43 @@ class GroupChatEngine:
                 logger.info("Groupchat: stop cancelled broadcast task for {}", name)
         self._broadcast_tasks.clear()
 
+    def _ensure_session_dir(self, mode: str, *, agent_name: str | None = None) -> None:
+        """Create collab session directory and log session_start (idempotent)."""
+        if self._session_dir:
+            return
+        timestamp = _cn_now().strftime("%Y%m%d-%H%M%S")
+        sessions_dir = Path.home() / ".nanobot" / "collab-sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        self._session_dir = sessions_dir / f"gc-{timestamp}"
+        self._session_dir.mkdir(parents=True, exist_ok=True)
+        if mode == "direct":
+            agents = [agent_name] if agent_name else []
+            models = (
+                {agent_name: self.registry.get(agent_name, {}).get("model", "?")}
+                if agent_name else {}
+            )
+            extra = {
+                "agents": agents,
+                "mode": "direct",
+                "topic": self._topic or "",
+                "leader": None,
+                "models": models,
+            }
+        else:
+            extra = {
+                "agents": list(self._active_agents),
+                "mode": "broadcast",
+                "topic": self._topic,
+                "leader": self._leader,
+                "models": {
+                    n: self.registry.get(n, {}).get("model", "?")
+                    for n in self._active_agents
+                },
+            }
+        self._save_event("session_start", extra=extra)
+
     async def _send(self, text: str) -> None:
+        from nanobot.bus.events import OutboundMessage
         from nanobot.groupchat.room_observability import emit_room_event
         emit_room_event(
             room_id=self.room_id,
@@ -939,11 +1054,19 @@ class GroupChatEngine:
             content=text,
             extra={"chars": len(text)},
         )
-        if self._send_fn:
-            try:
+        try:
+            channel = self._reply_channel or self._view_channel
+            chat_id = self._reply_chat_id or self._view_chat_id
+            if channel and chat_id and self._send_outbound_fn:
+                await self._send_outbound_fn(OutboundMessage(
+                    channel=channel,
+                    chat_id=chat_id,
+                    content=text,
+                ))
+            elif self._send_fn:
                 await self._send_fn(text)
-            except Exception as e:
-                logger.error("Groupchat send failed: {}", e)
+        except Exception as e:
+            logger.error("Groupchat send failed: {}", e)
 
     @property
     def _session_dir(self) -> Path | None:

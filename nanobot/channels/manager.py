@@ -144,7 +144,8 @@ class ChannelManager:
             channel._ensure_gc_send(msg.chat_id)
 
         if engine.active_agents:
-            engine.inject(msg.content)
+            engine.pin_reply_route(msg.channel, msg.chat_id)
+            engine.inject(msg.content, media=msg.media or None)
             return
 
         await self.bus.publish_outbound(OutboundMessage(
@@ -188,6 +189,10 @@ class ChannelManager:
     def get_channel(self, name: str) -> BaseChannel | None:
         """Get a channel by name."""
         return self.channels.get(name)
+
+    def register_channel(self, channel: BaseChannel) -> None:
+        """Register an extra channel (e.g. dashboard-only web adapter)."""
+        self.channels[channel.name] = channel
 
     def get_status(self) -> dict[str, Any]:
         """Get status of all channels."""

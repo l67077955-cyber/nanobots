@@ -7,6 +7,7 @@ from telegram.ext import ContextTypes
 
 from loguru import logger
 
+from nanobot.groupchat.display import agent_badge
 from nanobot.groupchat import display as _d
 from nanobot.utils.helpers import split_message
 from ..formatting import TELEGRAM_MAX_MESSAGE_LEN, to_cli_style
@@ -16,15 +17,15 @@ class AgentCommandsMixin:
     """Mixin providing agent management commands."""
 
     def _ensure_gc_send(self, chat_id: str) -> None:
-        """Ensure the group chat engine has send/edit callbacks for this chat."""
-        if self._groupchat_engine and not self._groupchat_engine.has_send_fn:
-            async def send_fn(text: str) -> None:
-                await self._gc_send(chat_id, text)
-            self._groupchat_engine.set_send_fn(send_fn)
-            # Set tool routing context so cron/message tools know the target
-            self._groupchat_engine.set_tool_context("telegram", chat_id)
+        """Ensure the group chat engine has outbound context and stream callbacks."""
+        if not self._groupchat_engine:
+            return
 
-        if self._groupchat_engine and not self._groupchat_engine.has_edit_fn:
+        # Route plain sends via MessageBus; wire channel/chat for tools + outbound.
+        self._groupchat_engine.set_tool_context("telegram", chat_id)
+
+        need_stream_bind = self._groupchat_engine._stream_chat_id != chat_id
+        if need_stream_bind:
             int_chat_id = int(chat_id)
 
             async def send_and_get_id_fn(text: str) -> int | None:
@@ -53,6 +54,7 @@ class AgentCommandsMixin:
                 except Exception as e:
                     logger.debug("gc_edit failed (likely text unchanged): {}", e)
 
+            self._groupchat_engine._stream_chat_id = chat_id
             self._groupchat_engine.set_edit_fn(edit_fn, send_and_get_id_fn)
 
         if self._groupchat_engine and not self._groupchat_engine.has_on_round_done:
@@ -80,7 +82,7 @@ class AgentCommandsMixin:
         pm = self._load_pm()
         for name, info in registry.items():
             status = "🟢" if name in active else "⚪"
-            leader = _d.agent_badge(name, self._groupchat_engine.leader)
+            leader = agent_badge(name, self._groupchat_engine.leader)
             model = info.get("model", "?")
             # Tools summary
             from nanobot.groupchat.orchestra.engine import GroupChatEngine
