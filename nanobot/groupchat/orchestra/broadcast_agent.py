@@ -209,7 +209,7 @@ async def run_agent_turn(
     _header = f"◍ {name}{badge}: "
 
     # Send initial status
-    await engine._send(_d.thinking_msg(name, model_short, leader=leader_name, idx=agent_idx + 1, total=total))
+    await engine._send(_d.thinking_msg(name, model_short, leader=leader_name, idx=agent_idx + 1, total=total), progress=True)
     async def _on_tool_start(tool_name: str, args: dict, **_kw) -> None:
         tool_call_id = _kw.get("tool_call_id", "")
         if not isinstance(args, dict):
@@ -486,7 +486,7 @@ async def run_agent_turn(
                         _timeout_recovery_count += 1
                         _retry_timeout = min(float(_base_timeout) * 2, 300.0)
                         await tracker.set_state(name, "thinking", detail="retry...")
-                        await engine._send(f"⏰ {name} 超时，延长到 {_retry_timeout:.0f}s 重试...")
+                        await engine._send(f"⏰ {name} 超时，延长到 {_retry_timeout:.0f}s 重试...", progress=True)
                         logger.warning(
                             "Broadcast: {} LLM timeout ({:.1f}s), retrying once (tools kept, {:.0f}s)",
                             name, latency, _retry_timeout,
@@ -511,7 +511,7 @@ async def run_agent_turn(
                                 await engine._send(
                                     _d.chatroom_send_msg(
                                         name, "重试输出", content, max_len=1000, leader=leader_name
-                                    )
+                                    ), progress=True,
                                 )
                                 logger.info(
                                     "Broadcast: {} retry succeeded ({:.1f}s): {}",
@@ -536,7 +536,7 @@ async def run_agent_turn(
                         await engine._send(
                             _d.chatroom_send_msg(
                                 name, "超时占位", _placeholder, max_len=1000, leader=leader_name
-                            )
+                            ), progress=True,
                             )
                         await tracker.set_state(name, "waiting", detail="timeout recovery")
                         logger.warning(
@@ -551,12 +551,12 @@ async def run_agent_turn(
                         # Repeated timeout (shouldn't normally reach here due to counter reset above)
                         err_short_disp = f"LLM 超时 ({_base_timeout}s)"
                         await tracker.set_state(name, "error", reason=err_short_disp[:40])
-                        await engine._send(f"  ✗ {name} timeout ({latency:.1f}s): {err_short_disp}")
+                        await engine._send(f"  ✗ {name} timeout ({latency:.1f}s): {err_short_disp}", progress=True)
 
                 else:  # is_error
                     err_short = content[:150] if content else "Unknown error"
                     await tracker.set_state(name, "error", reason=err_short[:40])
-                    await engine._send(f"  ✗ {name} failed ({latency:.1f}s): {err_short}")
+                    await engine._send(f"  ✗ {name} failed ({latency:.1f}s): {err_short}", progress=True)
 
                     _consecutive_error_count += 1
                     if _consecutive_error_count >= MAX_CONSECUTIVE_ERRORS:
@@ -565,7 +565,7 @@ async def run_agent_turn(
                             name, _consecutive_error_count,
                         )
                         await engine._send(
-                            f"  ✗ {name} 连续 {_consecutive_error_count} 次 LLM 错误，强制退出"
+                            f"  ✗ {name} 连续 {_consecutive_error_count} 次 LLM 错误，强制退出", progress=True,
                         )
                         # If the leader crashes, end the entire group chat
                         # so other agents don't hang until timeout.
@@ -591,7 +591,7 @@ async def run_agent_turn(
                     await engine._send(
                         _d.chatroom_send_msg(
                             name, "错误恢复", _placeholder, max_len=1000, leader=leader_name
-                        )
+                        ), progress=True,
                     )
                     await tracker.set_state(name, "waiting", detail="error recovery")
                     logger.warning(
@@ -681,15 +681,15 @@ async def run_agent_turn(
                 await tracker.set_state(name, "interrupted", detail=f"from {_sender_name}")
                 if _sender_name == "用户":
                     await engine._send(
-                        f"⚡ {_badge(name)} 被【用户消息】打断，正在立即响应..."
+                        f"⚡ {_badge(name)} 被【用户消息】打断，正在立即响应...", progress=True,
                     )
                 elif is_leader and _sender_name != "用户":
                     await engine._send(
-                        f"⚡ {_badge(name)}（Leader）被队友 **{_badge(_sender_name)}** 汇报实时打断，正在响应..."
+                        f"⚡ {_badge(name)}（Leader）被队友 **{_badge(_sender_name)}** 汇报实时打断，正在响应...", progress=True,
                     )
                 else:
                     await engine._send(
-                        f"⚡ {_badge(name)} 被 {_badge(_sender_name)} 的消息打断，正在立即响应..."
+                        f"⚡ {_badge(name)} 被 {_badge(_sender_name)} 的消息打断，正在立即响应...", progress=True,
                     )
                 logger.info(
                     "Broadcast: ⚡ {} interrupted by {} mid-turn (cycle {})",
@@ -826,7 +826,7 @@ async def run_agent_turn(
                         )
 
                     target_label = f"Output [{cycle}]"
-                    await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
+                    await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name), progress=True)
                     logger.info("Broadcast: displayed {} cycle {} output ({} chars) [Local Only]", name, cycle, len(content))
                 # else: chatroom_send already displayed the message — no duplicate needed
             
@@ -913,7 +913,7 @@ async def run_agent_turn(
                             reasoning_tokens=reasoning_t,
                         )
                     target_label = f"Output [{cycle}]"
-                    await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
+                    await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name), progress=True)
                     logger.info("Broadcast: displayed {} synthesis output ({} chars) [post-validation]", name, len(content))
                 logger.info("Broadcast: leader {} called end_discussion, exiting cycle loop", name)
                 break
@@ -970,7 +970,7 @@ async def run_agent_turn(
             _consecutive_waits = 0  # reset — we got a real message
             logger.info("Broadcast: {} reactivated by {}: {}", name, msg.sender, msg.content[:60])
             await tracker.set_state(name, "thinking")
-            await engine._send(_d.chatroom_wait_msg(name, str(msg), leader=leader_name))
+            await engine._send(_d.chatroom_wait_msg(name, str(msg), leader=leader_name), progress=True)
 
             _history_grew = len(engine._history) > _prefix_history_len
             _needs_rebuild = msg.sender == "用户" or _history_grew
@@ -1033,7 +1033,7 @@ async def run_agent_turn(
         await tracker.set_state(name, "done")
         comp = _d.completion_msg(name, round(total_latency, 1), total_iterations, all_tools_used, leader=leader_name)
         if comp:
-            await engine._send(comp)
+            await engine._send(comp, progress=True)
 
         log_request(engine, name, model, "broadcast",
                     reply_len=len(content) if content else 0,
@@ -1046,13 +1046,13 @@ async def run_agent_turn(
         await tracker.set_state(name, "cancelled")
         comp = _d.completion_msg(name, round(total_latency, 1), total_iterations, all_tools_used, leader=leader_name)
         if comp:
-            await engine._send(comp)
+            await engine._send(comp, progress=True)
         return (name, content, all_tools_used, {})
 
     except Exception as e:
         await tracker.set_state(name, "error", reason=str(e)[:40])
         logger.error("Broadcast: {} failed: {}", name, e)
-        await engine._send(f"  ✗ {name} error: {e}")
+        await engine._send(f"  ✗ {name} error: {e}", progress=True)
         log_request(engine, name, model, "broadcast",
                     error=str(e))
         return (name, None, [], {})

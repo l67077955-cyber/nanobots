@@ -93,12 +93,14 @@ async def run_loop(engine: Any) -> None:
                 await engine._send(
                     f"🎭 群聊模式！\n"
                     f"👥 成员: {', '.join(engine._active_agents)}\n"
-                    f"📌 直接发消息，所有 agent 会轮流回复"
+                    f"📌 直接发消息，所有 agent 会轮流回复",
+                    progress=True,
                 )
             else:
                 await engine._send(
                     f"💬 对话模式\n"
-                    f"👤 {engine._active_agents[0]}"
+                    f"👤 {engine._active_agents[0]}",
+                    progress=True,
                 )
 
         if not any(m["sender"] == "系统" for m in engine._history):

@@ -1005,7 +1005,7 @@ class ManageAgentTool(Tool):
             if active:
                 self._mailbox.send("系统", active,
                     f"[系统通知] {agent} 已被 Leader 移除本轮讨论")
-            await self._engine._send(f"⛔ Leader 已移除 {agent}")
+            await self._engine._send(f"⛔ Leader 已移除 {agent}", progress=True)
             return f"✅ {agent} 已被 disable，其 task 已取消"
 
         elif action == "restart":
@@ -1032,7 +1032,7 @@ class ManageAgentTool(Tool):
             if others:
                 self._mailbox.send("系统", others,
                     f"[系统通知] {agent} 已被 Leader 拉回，重新加入讨论")
-            await self._engine._send(f"🔄 Leader 已重启 {agent}")
+            await self._engine._send(f"🔄 Leader 已重启 {agent}", progress=True)
             return f"✅ {agent} 已重新启动，新 task 已创建"
 
         elif action == "enable":
@@ -1044,7 +1044,7 @@ class ManageAgentTool(Tool):
             if active:
                 self._mailbox.send("系统", active,
                     f"[系统通知] {agent} 已被 Leader 标记为激活")
-            await self._engine._send(f"✅ Leader 已激活 {agent}（标记，未重启任务）")
+            await self._engine._send(f"✅ Leader 已激活 {agent}（标记，未重启任务）", progress=True)
             return f"✅ {agent} 已标记为 enable。如需重新参与讨论请用 restart。"
 
         elif action == "set_tools":
@@ -1064,7 +1064,7 @@ class ManageAgentTool(Tool):
             if active:
                 self._mailbox.send("系统", active,
                     f"[系统通知] Leader 已修改 {agent} 的工具权限: {changes}")
-            await self._engine._send(f"🔧 Leader 修改 {agent} 权限: {changes}")
+            await self._engine._send(f"🔧 Leader 修改 {agent} 权限: {changes}", progress=True)
             return f"✅ {agent} 工具权限已更新: {changes}"
 
         elif action == "set_status":
@@ -1074,7 +1074,7 @@ class ManageAgentTool(Tool):
             # Send status message directly to the agent's mailbox so it sees it on next wait()
             self._mailbox.send("系统", [agent],
                 f"[Leader 状态更新] {status}")
-            await self._engine._send(f"📋 Leader 已更新 {agent} 状态: {status[:80]}")
+            await self._engine._send(f"📋 Leader 已更新 {agent} 状态: {status[:80]}", progress=True)
             return f"✅ {agent} 状态已更新，消息已注入其收件箱"
 
         elif action == "set_listener":
@@ -1277,7 +1277,7 @@ class ClearContextTool(Tool):
             summary = " | ".join(results)
             reason_str = f"（原因: {reason}）" if reason else ""
             await self._engine._send(
-                f"🧹 Leader 已清理所有 agent 的上下文{reason_str}: {summary}"
+                f"🧹 Leader 已清理所有 agent 的上下文{reason_str}: {summary}", progress=True
             )
             return f"✅ 已清理所有 agent 的上下文: {summary}"
         else:
@@ -1289,7 +1289,7 @@ class ClearContextTool(Tool):
             result = await self._clear_one(agent, keep_last, reason)
             keep_info = f"，保留最后 {keep_last} 条" if keep_last > 0 else ""
             await self._engine._send(
-                f"🧹 Leader 已清理 {agent} 的上下文{keep_info}: {result}"
+                f"🧹 Leader 已清理 {agent} 的上下文{keep_info}: {result}", progress=True
             )
             return f"✅ {result}，已通知该 agent 重置思路"
 
@@ -1339,7 +1339,7 @@ class TransferCreditsTool(Tool):
             return "Error: 必须指定 from_agent 和 to_agent"
         success, msg = self._pool.transfer(from_agent, to_agent, amount)
         if success:
-            await self._engine._send(f"🔄 {msg}")
+            await self._engine._send(f"🔄 {msg}", progress=True)
             return f"{msg}\n当前额度: {self._pool.status()}"
         return f"Error: {msg}"
 

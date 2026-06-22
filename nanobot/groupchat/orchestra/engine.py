@@ -1096,7 +1096,7 @@ class GroupChatEngine:
             leader=self._leader if mode != "direct" else None,
         )
 
-    async def _send(self, text: str) -> None:
+    async def _send(self, text: str, progress: bool = False) -> None:
         from nanobot.bus.events import OutboundMessage
         from nanobot.groupchat.room_observability import emit_room_event
         emit_room_event(
@@ -1114,6 +1114,7 @@ class GroupChatEngine:
                     channel=channel,
                     chat_id=chat_id,
                     content=text,
+                    metadata={"_progress": progress} if progress else {},
                 ))
             elif self._send_fn:
                 await self._send_fn(text)

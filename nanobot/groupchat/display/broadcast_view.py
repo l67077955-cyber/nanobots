@@ -80,7 +80,8 @@ class BroadcastView:
                 stats_suffix = "\n" + _d.format_token_stats(p, c, elapsed=elapsed)
 
             await self.engine._send(
-                _d.chatroom_send_msg(name, to_str, msg_full + stats_suffix, leader=self.leader_name)
+                _d.chatroom_send_msg(name, to_str, msg_full + stats_suffix, leader=self.leader_name),
+                progress=True,
             )
 
         elif tool_name == "wait":
@@ -96,9 +97,9 @@ class BroadcastView:
                 try:
                     msg_id = await self.engine._send_and_get_id_fn(text)
                 except Exception:
-                    await self.engine._send(text)
+                    await self.engine._send(text, progress=True)
             else:
-                await self.engine._send(text)
+                await self.engine._send(text, progress=True)
             self.pending_tool_msgs[tool_call_id] = (msg_id, text)
 
     async def on_tool_result(
@@ -126,11 +127,11 @@ class BroadcastView:
         if tool_name == "chatroom_send" and result_str:
             if "BLOCKED:" in result_str:
                 await self.engine._send(
-                    f"✗ {name} dropped ── {self.pool.status()}"
+                    f"✗ {name} dropped ── {self.pool.status()}", progress=True,
                 )
             elif "threads]" in result_str:
                 await self.engine._send(
-                    f"  {self.pool.status()}"
+                    f"  {self.pool.status()}", progress=True,
                 )
                 await trigger_realtime_interrupts(
                     sender=name,
@@ -149,7 +150,7 @@ class BroadcastView:
                 )
 
         elif tool_name == "wait" and result_str and not result_str.startswith("⏰"):
-            await self.engine._send(_d.chatroom_wait_msg(name, result_str, leader=self.leader_name))
+            await self.engine._send(_d.chatroom_wait_msg(name, result_str, leader=self.leader_name), progress=True)
 
         elif tool_name not in ("chatroom_send", "wait") and result_str:
             brief = _d.tool_result_brief(name, tool_name, result_str)
@@ -169,8 +170,8 @@ class BroadcastView:
                     try:
                         await self.engine._edit_fn(msg_id, updated)
                     except Exception:
-                        await self.engine._send(updated)
+                        await self.engine._send(updated, progress=True)
                 else:
-                    await self.engine._send(updated)
+                    await self.engine._send(updated, progress=True)
             else:
-                await self.engine._send(brief)
+                await self.engine._send(brief, progress=True)

@@ -105,7 +105,7 @@ async def broadcast_round(
         list(agents),
         int(global_timeout),
     )
-    await engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout), leader=leader_name, ranks=ranks_map))
+    await engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout), leader=leader_name, ranks=ranks_map), progress=True)
 
     orch = BroadcastOrchestrator(agents, engine, mailbox)
 
@@ -244,7 +244,7 @@ async def broadcast_round(
                 engine._add_message("用户", msg)
                 await engine._send(
                     f"── User ──\n{msg}\n"
-                    f"  {pool.status()}"
+                    f"  {pool.status()}", progress=True
                 )
                 logger.info("Broadcast: user interjected: {} ({} agent(s) interrupted)", msg[:60], _interrupted)
 
@@ -332,7 +332,7 @@ async def broadcast_round(
                 engine._broadcast_tasks[new_name] = new_task
                 await engine._send(
                     f"✅ {new_name} 加入当前讨论\n"
-                    f"👥 当前成员: {', '.join(mailbox._active_agents)}"
+                    f"👥 当前成员: {', '.join(mailbox._active_agents)}", progress=True
                 )
                 # Notify leader so it can assign tasks to the new agent
                 if leader_name and leader_name != new_name:
@@ -390,7 +390,7 @@ async def broadcast_round(
                     logger.info("Broadcast: leader ended discussion")
                     _end_reason = getattr(engine, '_leader_end_reason', '')
                     _reason_suffix = f"（{_end_reason}）" if _end_reason else ""
-                    await engine._send(f"━━ Leader 结束讨论{_reason_suffix} — entering synthesis ━━")
+                    await engine._send(f"━━ Leader 结束讨论{_reason_suffix} — entering synthesis ━━", progress=True)
 
                     # Graceful shutdown: give agents time to finish their current
                     # LLM generation cycle before force-cancelling. This prevents
@@ -448,7 +448,7 @@ async def broadcast_round(
                     except Exception as e:
                         completed += 1
                         logger.error("Broadcast: agent task error: {}", e)
-                        await engine._send(f"\u2717 Agent error: {e}")
+                        await engine._send(f"\u2717 Agent error: {e}", progress=True)
 
         # Cancel any remaining agent tasks
         for task_obj in tasks:
@@ -476,7 +476,7 @@ async def broadcast_round(
             if not task.done():
                 task.cancel()
                 logger.warning("Broadcast: {} cancelled (global timeout)", name)
-                await engine._send(f"\u23f0 {name} timeout")
+                await engine._send(f"\u23f0 {name} timeout", progress=True)
     finally:
         # ── Guarantee cleanup of ALL sub-tasks, even on CancelledError ──
         # Without this, /stop causes CancelledError which bypasses the normal
@@ -516,7 +516,7 @@ async def broadcast_round(
         comm_count=comm_count,
         duration=round_duration,
     )
-    await engine._send(_d.broadcast_complete_msg(completed, total, comm_count))
+    await engine._send(_d.broadcast_complete_msg(completed, total, comm_count), progress=True)
 
     # Output chat chain summary
     # chain = _d.chat_chain_summary(mailbox.history, leader=leader_name)
