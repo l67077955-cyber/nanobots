@@ -333,7 +333,7 @@ async def run_agent_turn(
                             model=model,
                             max_tokens=engine.config.max_tokens,
                             max_iterations=1,
-                            tool_defs=None,
+                            tool_defs=list(broadcast_defs) if broadcast_defs else None,
                         )
                         content = _r.content or ""
                     except Exception:

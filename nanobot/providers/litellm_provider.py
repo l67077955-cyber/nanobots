@@ -204,35 +204,54 @@ class LiteLLMProvider(LLMProvider):
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
         """Return copies of messages and tools with cache_control injected.
 
-        Anthropic (and Azure) support at most 4 cache_control breakpoints total.
-        tools gets 1 breakpoint, leaving at most 3 for system messages.
-        We mark only the last N system messages to stay within this limit.
+        Strategy (up to 4 breakpoints):
+
+        BP-tools: Last tool definition, caching the complete tool schema.
+        BP1: Last message of the initial contiguous system-only prefix.  This
+             anchors the cache to the stable base prompt instead of dynamic
+             runtime/system messages injected later in the conversation.
+        Conversation history is intentionally not marked here.  It grows and is
+        pruned/rebuilt during interrupts, which makes provider-side prefix
+        accounting bounce between unrelated hashes.
         """
         _MAX_CACHE_BLOCKS = 4
-        sys_quota = _MAX_CACHE_BLOCKS - (1 if tools else 0)
-
-        # Collect indices of system messages (in order)
-        sys_indices = [i for i, m in enumerate(messages) if m.get("role") == "system"]
-        # Only cache the last sys_quota system messages
-        cacheable = set(sys_indices[-sys_quota:]) if sys_quota > 0 else set()
-
-        new_messages = []
-        for i, msg in enumerate(messages):
-            if i in cacheable:
-                content = msg["content"]
-                if isinstance(content, str):
-                    new_content = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
-                else:
-                    new_content = list(content)
-                    new_content[-1] = {**new_content[-1], "cache_control": {"type": "ephemeral"}}
-                new_messages.append({**msg, "content": new_content})
-            else:
-                new_messages.append(msg)
+        remaining = _MAX_CACHE_BLOCKS
+        cacheable: set[int] = set()
 
         new_tools = tools
-        if tools:
+        if tools and remaining > 0:
             new_tools = list(tools)
             new_tools[-1] = {**new_tools[-1], "cache_control": {"type": "ephemeral"}}
+            remaining -= 1
+
+        first_non_system = next(
+            (i for i, m in enumerate(messages) if m.get("role") != "system"),
+            len(messages),
+        )
+        if first_non_system > 0 and remaining > 0:
+            cacheable.add(first_non_system - 1)
+            remaining -= 1
+
+        new_messages: list[dict[str, Any]] = []
+        for i, msg in enumerate(messages):
+            if i not in cacheable:
+                new_messages.append(msg)
+                continue
+            content = msg.get("content")
+            if content is None:
+                new_messages.append(msg)
+                continue
+            if isinstance(content, str):
+                new_content: list[dict[str, Any]] = [
+                    {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+                ]
+            elif isinstance(content, list) and content:
+                new_content = list(content)
+                new_content[-1] = {**new_content[-1], "cache_control": {"type": "ephemeral"}}
+            else:
+                new_messages.append(msg)
+                continue
+            new_messages.append({**msg, "content": new_content})
 
         return new_messages, new_tools
 
