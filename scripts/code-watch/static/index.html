@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>nanobot agent 工程</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css?v=4" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="dot" id="live-dot"></span>
+      <div>
+        <h1>nanobot agent 工程</h1>
+        <p class="subtitle">代码库 · agent 工程 · 对话</p>
+      </div>
+    </div>
+    <div class="header-meta">
+      <span><strong id="branch">—</strong> @ <strong id="head">—</strong></span>
+      <span id="gateway-status">Gateway —</span>
+      <span>改动 <strong id="dirty">0</strong> 文件</span>
+    </div>
+    <div class="controls">
+      <div class="view-tabs" id="view-tabs">
+        <button type="button" class="view-tab" data-view="code">工程</button>
+        <button type="button" class="view-tab active" data-view="chat">对话</button>
+      </div>
+      <label class="chip"><input type="checkbox" id="auto-refresh" checked /> 自动 <span id="refresh-label">5s</span></label>
+      <button id="refresh-btn" type="button">刷新</button>
+    </div>
+  </header>
+
+  <div class="app-split view-chat" id="app-split">
+  <div class="pane pane-code">
+
+  <section class="runtime-bar" id="runtime-bar">
+    <div class="mode-pill" id="mode-pill">加载中…</div>
+    <div class="agents" id="active-agents">—</div>
+    <div class="route-hint" id="route-hint">—</div>
+  </section>
+
+  <section class="headless-section" id="headless-section">
+    <h2>无头 Gateway <span class="hint">nanobot gateway 后台进程</span></h2>
+    <div class="headless-grid">
+      <div class="headless-card" id="headless-status-card">加载中…</div>
+      <div class="headless-card log-card">
+        <h3>gateway.log 尾部</h3>
+        <pre class="log-tail" id="gateway-log-tail">—</pre>
+      </div>
+      <div class="headless-card activity-card">
+        <h3>实时活动 <span class="hint">room_events.jsonl</span></h3>
+        <ul class="activity-feed" id="activity-feed"><li class="empty">加载中…</li></ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="arch-section">
+    <h2>消息路由</h2>
+    <div class="flow" id="flow-diagram"></div>
+    <div class="shared-strip" id="shared-strip"></div>
+  </section>
+
+  <section class="agents-section">
+    <h2>Agent  roster <span class="hint">人设 · 模型 · 活跃状态</span></h2>
+    <div class="agent-grid" id="agent-grid"></div>
+  </section>
+
+  <section class="prompt-section">
+    <h2>提示词栈 <span class="hint" id="prompt-mode-hint">PromptBuilder 组装顺序</span></h2>
+    <div class="prompt-stack" id="prompt-stack"></div>
+    <div class="prompt-preview-wrap">
+      <div class="prompt-preview-title" id="prompt-preview-title">点击组件查看内容</div>
+      <pre class="prompt-preview" id="prompt-preview">选择左侧提示词组件或 agent 文件</pre>
+    </div>
+  </section>
+
+  <section class="modules-section">
+    <h2>模块地图 <span class="hint">行数 + 未提交改动</span></h2>
+    <div class="module-grid" id="module-grid"></div>
+  </section>
+
+  <section class="workspace-section">
+    <div class="workspace-tabs">
+      <button class="wtab active" id="wtab-changes" type="button">改动 &amp; Diff</button>
+      <button class="wtab" id="wtab-commits" type="button">提交历史</button>
+      <button class="wtab" id="wtab-runtime" type="button">运行时</button>
+      <button class="wtab" id="wtab-grok" type="button">Grok Build</button>
+    </div>
+
+    <div class="workspace-panel" id="panel-changes">
+      <div class="stat-bar" id="stat-bar">加载中…</div>
+      <div class="layout">
+        <aside class="panel">
+          <h3>按模块</h3>
+          <ul class="module-file-groups" id="module-file-groups"></ul>
+          <h3>全部文件</h3>
+          <ul class="file-list" id="file-list"><li class="empty">加载中…</li></ul>
+        </aside>
+        <main class="main">
+          <div class="tabs">
+            <button class="tab active" id="tab-all" type="button">全部 diff</button>
+            <button class="tab" id="tab-staged" type="button">已暂存</button>
+            <button class="tab" id="tab-working" type="button">单文件</button>
+          </div>
+          <div class="diff-wrap">
+            <div class="diff-title" id="diff-title"></div>
+            <div id="diff-body"><div class="empty">选择文件或查看全部 diff</div></div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <div class="workspace-panel hidden" id="panel-commits">
+      <ul class="commit-list" id="commit-list"><li class="empty">加载中…</li></ul>
+      <div class="commit-diff-wrap">
+        <div class="diff-title" id="commit-diff-title"></div>
+        <div id="commit-diff-body"><div class="empty">点击提交查看 patch</div></div>
+      </div>
+    </div>
+
+    <div class="workspace-panel hidden" id="panel-runtime">
+      <div class="runtime-detail-grid">
+        <div class="runtime-detail-card" id="runtime-detail-agents"></div>
+        <div class="runtime-detail-card" id="runtime-detail-prompt"></div>
+        <div class="runtime-detail-card full" id="runtime-detail-activity"></div>
+      </div>
+    </div>
+
+    <div class="workspace-panel hidden" id="panel-grok">
+      <div class="grok-card">
+        <h3>网页里和 Grok Build 对话</h3>
+        <p>code-watch 只看 git；要浏览器里持续对话 agent，用 Grok Build 的远程通道：</p>
+        <ol>
+          <li><code>grok agent serve --bind 127.0.0.1:PORT --secret TOKEN</code> — 本地 WebSocket，自建前端连上来</li>
+          <li><code>grok agent headless --grok-ws-url wss://relay/ws</code> — agent 连 relay，浏览器也连同一 relay（适合公网）</li>
+          <li><code>grok -p "..."</code> — 单次 headless prompt，适合脚本</li>
+        </ol>
+        <p class="muted">与 nanobot gateway 独立；可并行跑：gateway 处理 Telegram，Grok serve 处理网页调试。</p>
+      </div>
+    </div>
+  </section>
+
+  </div>
+
+  <aside class="pane pane-chat">
+    <div class="chat-header">
+      <div>
+        <h2 id="chat-title">Harper</h2>
+        <p class="chat-sub" id="chat-status-line">检查连接…</p>
+      </div>
+      <span class="chat-dot" id="chat-dot"></span>
+    </div>
+    <div class="chat-agents" id="chat-agents-bar">—</div>
+    <ul class="chat-messages" id="chat-messages"></ul>
+    <div class="chat-compose" id="chat-compose">
+      <form class="chat-form" id="chat-form">
+        <textarea id="chat-input" rows="2" placeholder="跟 Harper 说点什么…" required></textarea>
+        <button type="submit" id="chat-send-btn">发送</button>
+      </form>
+      <p class="chat-hint" id="chat-hint">普通文字 → 与 Harper 对话</p>
+    </div>
+  </aside>
+
+  </div>
+
+  <div class="login-overlay hidden" id="login-overlay">
+    <form class="login-card" id="login-form">
+      <h2>nanobot agent 工程</h2>
+      <p>输入密码查看代码库与运行时状态</p>
+      <input type="password" id="login-password" placeholder="密码" autocomplete="current-password" required />
+      <p class="login-error hidden" id="login-error">密码错误</p>
+      <button type="submit">登录</button>
+    </form>
+  </div>
+
+  <script src="/app.js?v=4"></script>
+</body>
+</html>

@@ -219,12 +219,10 @@ class WebSearchTool(Tool):
 
     async def _search_duckduckgo(self, query: str, n: int) -> str:
         try:
-            # Note: duckduckgo_search is synchronous and does its own requests
-            # We run it in a thread to avoid blocking the loop
             from ddgs import DDGS
 
             ddgs = DDGS(timeout=10)
-            raw = await asyncio.to_thread(ddgs.text, query, max_results=n)
+            raw = ddgs.text(query, max_results=n)
             if not raw:
                 return f"No results for: {query}"
             items = [
@@ -261,22 +259,6 @@ class WebFetchTool(Tool):
         is_valid, error_msg = _validate_url_safe(url)
         if not is_valid:
             return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
-
-        # Detect and fetch images directly to avoid Jina's textual image captioning
-        try:
-            async with httpx.AsyncClient(proxy=self.proxy, follow_redirects=True, max_redirects=MAX_REDIRECTS, timeout=15.0) as client:
-                async with client.stream("GET", url, headers={"User-Agent": USER_AGENT}) as r:
-                    ctype = r.headers.get("content-type", "")
-                    if ctype.startswith("image/"):
-                        await r.aread()
-                        r.raise_for_status()
-                        b64 = base64.b64encode(r.content).decode()
-                        return [
-                            {"type": "image_url", "image_url": {"url": f"data:{ctype};base64,{b64}"}, "_meta": {"path": url}},
-                            {"type": "text", "text": f"(Image fetched from: {url})"}
-                        ]
-        except Exception as e:
-            logger.debug("Pre-fetch image detection failed for {}: {}", url, e)
 
         # Only use Jina Reader when API key is available (free mode truncates heavily)
         result = None

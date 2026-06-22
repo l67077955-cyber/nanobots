@@ -13,6 +13,48 @@ from nanobot.groupchat.orchestra.broadcast_context import BroadcastContext
 from nanobot.groupchat.orchestra.broadcast_status import AgentStatusTracker
 from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool
 
+_GC_SETTINGS_DEFAULTS = {
+    "search_initial": 2,
+    "search_earn_interval": 4,
+    "allocate_timeout": 15,
+    "call_timeout": 90,
+    "leader_call_timeout": 120,
+    "global_timeout": 600,
+    "conv_keep_turns": 3,
+}
+
+
+_KNOWN_GC_KEYS = frozenset({
+    "tool_initial", "tool_earn_per_output", "allocate_timeout",
+    "context_pool_capacity", "context_points_per_agent",
+    "call_timeout", "leader_call_timeout", "global_timeout",
+    "conv_keep_turns", "memory_palace_path",
+    "search_initial", "search_earn_interval", "tool_earn_interval",
+})
+
+
+def load_groupchat_settings() -> dict:
+    """Load ~/.nanobot/groupchat_settings.json merged with defaults."""
+    settings = dict(_GC_SETTINGS_DEFAULTS)
+    path = Path.home() / ".nanobot" / "groupchat_settings.json"
+    if path.exists():
+        try:
+            saved = _json.loads(path.read_text())
+            if isinstance(saved, dict):
+                for k, v in saved.items():
+                    if k in _KNOWN_GC_KEYS:
+                        settings[k] = v
+                    else:
+                        logger.warning(
+                            "groupchat_settings: ignored unknown key '{}' "
+                            "(sampling params belong in hyperparams.json)",
+                            k,
+                        )
+        except Exception as e:
+            logger.warning("groupchat_settings: load failed: {}", e)
+    return settings
+
+
 class BroadcastOrchestrator:
     """State manager for a single broadcast round."""
     
@@ -28,14 +70,7 @@ class BroadcastOrchestrator:
         self.non_leader_agents = [a for a in agents if a != self.leader_name] if self.leader_name else list(agents)
         self.total = len(self.exec_agents)
         
-        _gc_settings_path = Path.home() / ".nanobot" / "groupchat_settings.json"
-        _gc_defaults = {"search_initial": 2, "search_earn_interval": 4, "allocate_timeout": 15, "call_timeout": 90, "conv_keep_turns": 3}
-        self.gc_settings = dict(_gc_defaults)
-        if _gc_settings_path.exists():
-            try:
-                self.gc_settings.update(_json.loads(_gc_settings_path.read_text()))
-            except Exception:
-                pass
+        self.gc_settings = load_groupchat_settings()
                 
         self.pool: Any = None
         self.tracker: AgentStatusTracker = None # type: ignore

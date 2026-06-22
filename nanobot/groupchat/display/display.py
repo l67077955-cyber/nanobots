@@ -427,7 +427,9 @@ def tool_result_brief(
         return f"    └ {lines_count} lines"
     elif tool_name in ("write_file", "edit_file"):
         if (result or "").startswith("Error:"):
-            return f"    └ ❌ {result.split(chr(10))[0][:60]}"
+            # Show the core error without the long hint, keep first meaningful part
+            first = (result or "").split("\n\n")[0][:90].replace("Error: Invalid parameters for tool ", "bad args: ")
+            return f"    └ ❌ {first}"
         return f"    └ ✅ saved"
     elif tool_name == "list_dir":
         count = result.count("\n") if result else 0

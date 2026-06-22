@@ -317,6 +317,11 @@ class GroupChatEngine:
         # Direct chat interjection state (single-agent mode)
         self._direct_chat_task: asyncio.Task | None = None
         self._direct_chat_queue: asyncio.Queue[tuple[str, list[str] | None]] = asyncio.Queue()
+        self._active_stream: Any | None = None
+        self.stream_replies: bool = True  # set from config.channels.send_progress at gateway startup
+
+        # Restore persisted chat state last so defaults above do not clobber it.
+        self._restore_chat_state()
 
     # ── Public access to PromptBuilder ────────────────────────
 
@@ -378,7 +383,7 @@ class GroupChatEngine:
     def _update_message_tool_context(self, channel: str, chat_id: str) -> None:
         """Push channel/chat_id into all MessageTool instances in the registry cache."""
         from nanobot.tools.message import MessageTool
-        for reg in self._tool_registry_cache.values():
+        for reg in getattr(self, "_tool_registry_cache", {}).values():
             mt = reg.get("message")
             if isinstance(mt, MessageTool):
                 mt.set_context(channel, chat_id)
@@ -447,9 +452,15 @@ class GroupChatEngine:
 
     def clear_history(self) -> None:
         """Clear conversation history and request log, but keep active agents and loop running."""
+        self.interrupt_active_turn()
         self.history.clear()
         self._history = self.history.messages  # keep shim in sync
         self._request_log.clear()
+        state = getattr(self, "_state", None)
+        if state is not None:
+            state.clear_history_snapshot()
+        self._round = 0
+        self._topic = ""
 
     def reset(self) -> None:
         """Clear history, request log, active agents, and stop the loop."""
@@ -458,6 +469,11 @@ class GroupChatEngine:
         self._history = self.history.messages  # keep shim in sync
         self._request_log.clear()
         self._active_agents.clear()
+        state = getattr(self, "_state", None)
+        if state is not None:
+            state.clear_history_snapshot()
+        self._round = 0
+        self._topic = ""
 
     # ── Agent Management ─────────────────────────────────────
 
@@ -474,7 +490,11 @@ class GroupChatEngine:
         if matched in self._active_agents:
             return f"⚠️ {matched} 已在对话中\n👥 当前成员: {', '.join(self._active_agents)}"
 
+        was_single = len(self._active_agents) == 1
         self._active_agents.append(matched)
+        if was_single and len(self._active_agents) >= 2:
+            # End in-flight 1-on-1 turn before switching to group mode.
+            self.interrupt_active_turn()
         self._state.save_active(self._active_agents)
         logger.info("Groupchat: added agent {}, active={}", matched, self._active_agents)
 
@@ -922,7 +942,7 @@ class GroupChatEngine:
                 self._run_direct_chat(message, media=media),
             )
             return
-        self._cancel_direct_chat()
+        self.interrupt_active_turn()
         if not self._running:
             self._start_group_loop()
         if self._running:
@@ -936,13 +956,38 @@ class GroupChatEngine:
     def stop(self) -> None:
         """Stop the group loop and any in-flight direct chat; keep active agents."""
         self._stop_group_loop()
-        self._cancel_direct_chat()
+        self.interrupt_active_turn(reason="⏹ 已停止")
         try:
             asyncio.ensure_future(self._disconnect_mcp())
         except RuntimeError:
             pass  # no event loop — shutdown scenario
 
     # ── Internal ─────────────────────────────────────────────
+
+    def register_active_stream(self, stream: Any) -> None:
+        """Track the in-flight StreamingDisplay for command interrupts."""
+        self._active_stream = stream
+
+    def clear_active_stream(self, stream: Any) -> None:
+        if self._active_stream is stream:
+            self._active_stream = None
+
+    def _abort_active_stream_sync(self, reason: str = "⏹ 已中断") -> None:
+        """Best-effort stream cleanup from sync code (/commands, inject, etc.)."""
+        stream = getattr(self, "_active_stream", None)
+        if stream is None:
+            return
+        self._active_stream = None
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(stream.abort(reason=reason))
+        except RuntimeError:
+            pass
+
+    def interrupt_active_turn(self, *, reason: str = "⏹ 已中断") -> None:
+        """Abort streaming UI and cancel in-flight direct chat (not full /stop)."""
+        self._abort_active_stream_sync(reason)
+        self._cancel_direct_chat()
 
     def _cancel_direct_chat(self) -> None:
         """Cancel an in-flight direct chat task, if any."""
@@ -978,7 +1023,7 @@ class GroupChatEngine:
 
     def _start_group_loop(self) -> None:
         """Start the async group chat loop (2+ agents)."""
-        self._cancel_direct_chat()
+        self.interrupt_active_turn()
         # Always cancel any prior task to avoid duplicate loops
         if self._task and not self._task.done():
             self._task.cancel()
@@ -1043,6 +1088,13 @@ class GroupChatEngine:
                 },
             }
         self._save_event("session_start", extra=extra)
+        self._state.save_current_session(
+            self._session_dir,
+            topic=self._topic,
+            round_num=self._round,
+            agents=list(self._active_agents) if mode != "direct" else extra.get("agents", []),
+            leader=self._leader if mode != "direct" else None,
+        )
 
     async def _send(self, text: str) -> None:
         from nanobot.bus.events import OutboundMessage
@@ -1077,11 +1129,56 @@ class GroupChatEngine:
     def _session_dir(self, value: Path | None) -> None:
         self._state.session_dir = value
 
+    def _persist_chat_state(self) -> None:
+        """Write live history to disk so gateway restarts do not lose context."""
+        if not self._history:
+            return
+        self._state.save_history_snapshot(
+            history=self._history,
+            topic=self._topic,
+            round_num=self._round,
+            session_dir=self._session_dir,
+        )
+
+    def _restore_chat_state(self) -> None:
+        """Reload chat history from the last persisted snapshot (gateway restart)."""
+        snapshot = self._state.load_history_snapshot()
+        if not snapshot:
+            return
+        restored = [
+            {"sender": m.get("sender", "?"), "content": m.get("content", "")}
+            for m in snapshot.get("history", [])
+            if isinstance(m, dict) and m.get("content")
+        ]
+        if not restored:
+            return
+        self.history.messages[:] = restored
+        self._history = self.history.messages
+        self._topic = str(snapshot.get("topic") or "")
+        self._round = int(snapshot.get("round") or 0)
+        session_path = str(snapshot.get("session_dir") or "").strip()
+        if session_path:
+            p = Path(session_path)
+            if p.is_dir():
+                self._state.session_dir = p
+                self._state.save_current_session(
+                    p,
+                    topic=self._topic,
+                    round_num=self._round,
+                    agents=list(self._active_agents),
+                    leader=self._leader,
+                )
+        logger.info(
+            "Restored chat history: {} messages, topic={!r}, round={}",
+            len(restored), self._topic, self._round,
+        )
+
     def _add_message(self, sender: str, content: str) -> None:
         """Append a message — delegates to HistoryContext."""
         self.history.add_message(sender, content)
         # Keep the shim alias in sync after HistoryContext may have rebuilt the list
         self._history = self.history.messages
+        self._persist_chat_state()
 
     def _save_event(
         self,
@@ -1093,13 +1190,17 @@ class GroupChatEngine:
     ) -> None:
         """Delegate to persistence layer + phase-0 observability log."""
         from nanobot.groupchat.room_observability import emit_room_event
+
+        merged_extra = dict(extra or {})
+        if self._session_dir:
+            merged_extra.setdefault("session_id", self._session_dir.name)
         emit_room_event(
             room_id=self.room_id,
             kind=event_type,
             source="session",
             agent=agent,
             content=content,
-            extra=extra,
+            extra=merged_extra or None,
         )
         self._state.save_event(event_type, agent=agent, content=content, extra=extra)
 
@@ -1123,6 +1224,7 @@ class GroupChatEngine:
         """Compress history if needed — delegates to HistoryContext."""
         await self.history.maybe_compress()
         self._history = self.history.messages  # keep shim in sync
+        self._persist_chat_state()
 
     def _format_history(self) -> str:
         """Format history as string — delegates to HistoryContext."""

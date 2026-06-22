@@ -802,7 +802,6 @@ class FeishuChannel(BaseChannel):
         Returns:
             (file_path, content_text) - file_path is None if download failed
         """
-        loop = asyncio.get_running_loop()
         media_dir = get_media_dir("feishu")
 
         data, filename = None, None
@@ -810,18 +809,14 @@ class FeishuChannel(BaseChannel):
         if msg_type == "image":
             image_key = content_json.get("image_key")
             if image_key and message_id:
-                data, filename = await loop.run_in_executor(
-                    None, self._download_image_sync, message_id, image_key
-                )
+                data, filename = self._download_image_sync(message_id, image_key)
                 if not filename:
                     filename = f"{image_key[:16]}.jpg"
 
         elif msg_type in ("audio", "file", "media"):
             file_key = content_json.get("file_key")
             if file_key and message_id:
-                data, filename = await loop.run_in_executor(
-                    None, self._download_file_sync, message_id, file_key, msg_type
-                )
+                data, filename = self._download_file_sync(message_id, file_key, msg_type)
                 if not filename:
                     filename = file_key[:16]
                 if msg_type == "audio" and not filename.endswith(".opus"):
@@ -980,14 +975,11 @@ class FeishuChannel(BaseChannel):
                     continue
                 ext = os.path.splitext(file_path)[1].lower()
                 if ext in self._IMAGE_EXTS:
-                    key = await loop.run_in_executor(None, self._upload_image_sync, file_path)
+                    key = self._upload_image_sync(file_path)
                     if key:
-                        await loop.run_in_executor(
-                            None, _do_send,
-                            "image", json.dumps({"image_key": key}, ensure_ascii=False),
-                        )
+                        _do_send("image", json.dumps({"image_key": key}, ensure_ascii=False))
                 else:
-                    key = await loop.run_in_executor(None, self._upload_file_sync, file_path)
+                    key = self._upload_file_sync(file_path)
                     if key:
                         # Use msg_type "audio" for audio, "video" for video, "file" for documents.
                         # Feishu requires these specific msg_types for inline playback.
@@ -998,10 +990,7 @@ class FeishuChannel(BaseChannel):
                             media_type = "video"
                         else:
                             media_type = "file"
-                        await loop.run_in_executor(
-                            None, _do_send,
-                            media_type, json.dumps({"file_key": key}, ensure_ascii=False),
-                        )
+                        _do_send(media_type, json.dumps({"file_key": key}, ensure_ascii=False))
 
             if msg.content and msg.content.strip():
                 fmt = self._detect_msg_format(msg.content)
@@ -1009,22 +998,19 @@ class FeishuChannel(BaseChannel):
                 if fmt == "text":
                     # Short plain text – send as simple text message
                     text_body = json.dumps({"text": msg.content.strip()}, ensure_ascii=False)
-                    await loop.run_in_executor(None, _do_send, "text", text_body)
+                    _do_send("text", text_body)
 
                 elif fmt == "post":
                     # Medium content with links – send as rich-text post
                     post_body = self._markdown_to_post(msg.content)
-                    await loop.run_in_executor(None, _do_send, "post", post_body)
+                    _do_send("post", post_body)
 
                 else:
                     # Complex / long content – send as interactive card
                     elements = self._build_card_elements(msg.content)
                     for chunk in self._split_elements_by_table_limit(elements):
                         card = {"config": {"wide_screen_mode": True}, "elements": chunk}
-                        await loop.run_in_executor(
-                            None, _do_send,
-                            "interactive", json.dumps(card, ensure_ascii=False),
-                        )
+                        _do_send("interactive", json.dumps(card, ensure_ascii=False))
 
         except Exception as e:
             logger.error("Error sending Feishu message: {}", e)
@@ -1124,10 +1110,7 @@ class FeishuChannel(BaseChannel):
 
             # Prepend quoted message text when the user replied to another message
             if parent_id and self._client:
-                loop = asyncio.get_running_loop()
-                reply_ctx = await loop.run_in_executor(
-                    None, self._get_message_content_sync, parent_id
-                )
+                reply_ctx = self._get_message_content_sync(parent_id)
                 if reply_ctx:
                     content_parts.insert(0, reply_ctx)
 
@@ -1222,8 +1205,6 @@ class FeishuChannel(BaseChannel):
             receive_id: The target chat or user ID
             tool_hint: Formatted tool hint string (e.g., 'web_search("q"), read_file("path")')
         """
-        loop = asyncio.get_running_loop()
-
         # Put each top-level tool call on its own line without altering commas inside arguments.
         formatted_code = self._format_tool_hint_lines(tool_hint)
 
@@ -1237,8 +1218,9 @@ class FeishuChannel(BaseChannel):
             ]
         }
 
-        await loop.run_in_executor(
-            None, self._send_message_sync,
-            receive_id_type, receive_id, "interactive",
+        self._send_message_sync(
+            receive_id_type,
+            receive_id,
+            "interactive",
             json.dumps(card, ensure_ascii=False),
         )

@@ -18,6 +18,7 @@ import httpx
 import json_repair
 from loguru import logger
 
+from nanobot.observability.context_trace import hash_messages
 from nanobot.providers.cache_probe import estimate_cache_ratio
 
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
@@ -66,12 +67,20 @@ class HttpxProvider(LLMProvider):
         defaults = {k: v for k, v in RECOMMENDED_AGENT_SAMPLING.items()
                     if k in ("temperature", "top_p", "frequency_penalty",
                              "presence_penalty", "repetition_penalty")}
+        from nanobot.config.validate import SAMPLING_KEYS
         hp_path = Path.home() / ".nanobot" / "hyperparams.json"
         if hp_path.exists():
             try:
                 saved = _json.loads(hp_path.read_text())
                 if isinstance(saved, dict):
-                    defaults.update(saved)
+                    for k, v in saved.items():
+                        if k in SAMPLING_KEYS or k.startswith("reasoning"):
+                            defaults[k] = v
+                        else:
+                            logger.warning(
+                                "hyperparams: ignored '{}' (groupchat params belong in groupchat_settings.json)",
+                                k,
+                            )
                     logger.info("Loaded saved hyperparams from {}", hp_path)
             except Exception:
                 pass
@@ -492,6 +501,11 @@ class HttpxProvider(LLMProvider):
                 "session": meta.get("log_session"),
                 "topic": meta.get("log_topic"),
                 "mode": meta.get("log_mode"),
+                "request_id": meta.get("log_request_id"),
+                "context_id": meta.get("log_context_id"),
+                "parent_context_id": meta.get("log_parent_context_id"),
+                "context_iteration": meta.get("log_iteration"),
+                "context_snapshot_path": meta.get("log_context_snapshot_path"),
                 "model": model,
                 "api_base": api_base,
                 "max_tokens": max_tokens,
@@ -524,6 +538,7 @@ class HttpxProvider(LLMProvider):
             record["messages"] = msgs_log
             record["total_chars"] = total_chars
             record["msg_count"] = len(msgs_log)
+            record["payload_hash"] = hash_messages(messages)
             record["latency"] = round(latency, 2)
             if cache_headers:
                 record["cache_probe"] = cache_headers
@@ -844,4 +859,3 @@ class _APIError(Exception):
     def __init__(self, status_code: int, message: str):
         self.status_code = status_code
         super().__init__(f"HTTP {status_code}: {message[:200]}")
-

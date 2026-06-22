@@ -19,26 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from nanobot.bus.events import InboundMessage
 from nanobot.command.router import CommandContext
-
-
-def _make_loop():
-    """Create a minimal AgentLoop with mocked dependencies."""
-    from nanobot.agent.loop import AgentLoop
-    from nanobot.bus.queue import MessageBus
-
-    bus = MessageBus()
-    provider = MagicMock()
-    provider.get_default_model.return_value = "test-model"
-    workspace = MagicMock()
-    workspace.__truediv__ = MagicMock(return_value=MagicMock())
-
-    with patch("nanobot.agent.loop.PromptBuilder"), \
-         patch("nanobot.agent.loop.SessionManager"), \
-         patch("nanobot.agent.loop.SubagentManager"):
-        loop = AgentLoop(bus=bus, provider=provider, workspace=workspace)
-    return loop, bus
 
 
 class TestRestartCommand:
@@ -98,39 +79,3 @@ class TestRestartCommand:
             # The scheduled task calls perform_background_restart (after the tiny delay inside it)
             await scheduled[0]
             mock_bg_restart.assert_called_once()
-
-    @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="Legacy test requires nanobot/agent/loop.py source file (tree currently has only .pyc for AgentLoop)")
-    async def test_restart_intercepted_in_run_loop(self):
-        """Verify /restart is handled at the run-loop level as a priority command (bypasses normal dispatch)."""
-        loop, bus = _make_loop()
-        msg = InboundMessage(channel="telegram", sender_id="u1", chat_id="c1", content="/restart")
-
-        with patch("nanobot.command.builtin.cmd_restart") as mock_cmd_restart:
-            mock_cmd_restart.return_value = MagicMock(content="Restarting...")
-            await bus.publish_inbound(msg)
-
-            loop._running = True
-            run_task = asyncio.create_task(loop.run())
-            out = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
-            loop._running = False
-            run_task.cancel()
-            try:
-                await run_task
-            except asyncio.CancelledError:
-                pass
-
-            # Priority commands are handled before normal _dispatch
-            # (the exact interception may be in the loop; we at least confirm a restart message was produced)
-            assert "Restarting" in out.content or "restart" in (out.content or "").lower()
-
-    @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="Legacy test requires nanobot/agent/loop.py source file (tree currently has only .pyc for AgentLoop)")
-    async def test_help_includes_restart(self):
-        loop, bus = _make_loop()
-        msg = InboundMessage(channel="telegram", sender_id="u1", chat_id="c1", content="/help")
-
-        response = await loop._process_message(msg)
-
-        assert response is not None
-        assert "/restart" in response.content

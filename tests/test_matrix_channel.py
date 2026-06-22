@@ -4,15 +4,18 @@ from types import SimpleNamespace
 
 import pytest
 
-import nanobot.channels.matrix as matrix_module
+matrix_module = pytest.importorskip(
+    "nanobot.channels.matrix",
+    exc_type=ImportError,
+    reason="Matrix optional dependencies are not installed",
+)
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
-from nanobot.channels.matrix import (
-    MATRIX_HTML_FORMAT,
-    TYPING_NOTICE_TIMEOUT_MS,
-    MatrixChannel,
-)
-from nanobot.channels.matrix import MatrixConfig
+
+MATRIX_HTML_FORMAT = matrix_module.MATRIX_HTML_FORMAT
+TYPING_NOTICE_TIMEOUT_MS = matrix_module.TYPING_NOTICE_TIMEOUT_MS
+MatrixChannel = matrix_module.MatrixChannel
+MatrixConfig = matrix_module.MatrixConfig
 
 _ROOM_SEND_UNSET = object()
 

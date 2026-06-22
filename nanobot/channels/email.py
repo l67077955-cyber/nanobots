@@ -197,7 +197,7 @@ class EmailChannel(BaseChannel):
             email_msg["References"] = in_reply_to
 
         try:
-            await asyncio.to_thread(self._smtp_send, email_msg)
+            self._smtp_send(email_msg)
         except Exception as e:
             logger.error("Error sending email to {}: {}", to_addr, e)
             raise

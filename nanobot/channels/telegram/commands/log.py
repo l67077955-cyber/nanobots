@@ -307,7 +307,7 @@ class LogCommandsMixin:
             self._message_threads.pop(next(iter(self._message_threads)))
 
     async def _forward_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Forward slash commands to the bus for unified handling in AgentLoop."""
+        """Forward slash commands through the inbound message bus."""
         if not update.message or not update.effective_user:
             return
         message = update.message

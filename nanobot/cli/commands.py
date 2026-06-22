@@ -34,6 +34,12 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
+logs_app = typer.Typer(
+    name="logs",
+    help="Discover and recover groupchat session logs.",
+    no_args_is_help=False,
+)
+
 console = Console()
 
 def version_callback(value: bool):
@@ -61,7 +67,7 @@ def main(
 def onboard(
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
-    interactive: bool = typer.Option(True, "--interactive/--no-interactive", help="Use interactive wizard"),
+    interactive: bool = typer.Option(False, "--interactive/--no-interactive", help="Use interactive wizard"),
 ):
     """Initialize nanobot configuration and workspace."""
     from nanobot.config.loader import get_config_path, load_config, save_config, set_config_path
@@ -282,8 +288,8 @@ def gateway(
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
     foreground: bool = typer.Option(
         False,
-        "--foreground",
-        "-f",
+        "--foreground/--background",
+        "-f/-b",
         help="Run attached to this terminal (default: background)",
     ),
     stop: bool = typer.Option(False, "--stop", help="Stop the background gateway"),
@@ -337,7 +343,10 @@ def gateway(
         compression="gz",
         level="DEBUG" if verbose else "INFO",
         enqueue=True,
+        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<8} | {name}:{function}:{line} | {message}",
     )
+    from nanobot.config.validate import log_effective_config
+    log_effective_config()
     _print_deprecated_memory_window_notice(config)
     port = port if port is not None else config.gateway.port
 
@@ -396,6 +405,7 @@ def gateway(
         send_outbound_fn=bus.publish_outbound,
     )
 
+    gc_engine.stream_replies = config.channels.send_progress
     channels.set_groupchat_engine(gc_engine)
     tg_channel = channels.get_channel("telegram")
     if tg_channel:
@@ -874,6 +884,89 @@ def _login_github_copilot() -> None:
     except Exception as e:
         console.print(f"[red]Authentication error: {e}[/red]")
         raise typer.Exit(1)
+
+
+# ============================================================================
+# Logs — session discovery & recovery
+# ============================================================================
+
+
+@logs_app.callback(invoke_without_command=True)
+def logs_show(
+    ctx: typer.Context,
+    session: str | None = typer.Option(None, "--session", "-s", help="Session id (e.g. gc-20260620-141846)"),
+):
+    """Show current (or specified) session log locations and stats."""
+    from nanobot.cli.logs import resolve_session_dir, show_session_summary
+
+    if ctx.invoked_subcommand is not None:
+        return
+    session_dir = resolve_session_dir(session)
+    if not session_dir:
+        console.print("[red]No session found.[/red] Try --session gc-YYYYMMDD-HHMMSS")
+        raise typer.Exit(1)
+    show_session_summary(console, session_dir)
+
+
+@logs_app.command("timeline")
+def logs_timeline(
+    session: str | None = typer.Option(None, "--session", "-s"),
+    last: int = typer.Option(30, "--last", "-n"),
+    tools: bool = typer.Option(False, "--tools", help="Include tool_call / tool_result lines"),
+):
+    """Print recent messages (and optionally tools) from session.jsonl."""
+    from nanobot.cli.logs import print_timeline, resolve_session_dir
+
+    session_dir = resolve_session_dir(session)
+    if not session_dir:
+        console.print("[red]No session found.[/red]")
+        raise typer.Exit(1)
+    print_timeline(console, session_dir, last=last, include_tools=tools)
+
+
+@logs_app.command("recover")
+def logs_recover(
+    session: str | None = typer.Option(None, "--session", "-s"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Write markdown transcript to file"),
+):
+    """Export a readable conversation transcript."""
+    from nanobot.cli.logs import recover_conversation, resolve_session_dir
+
+    session_dir = resolve_session_dir(session)
+    if not session_dir:
+        console.print("[red]No session found.[/red]")
+        raise typer.Exit(1)
+    text = recover_conversation(session_dir)
+    if output:
+        output.write_text(text, encoding="utf-8")
+        console.print(f"[green]Wrote transcript → {output}[/green]")
+    else:
+        console.print(text)
+
+
+@logs_app.command("grep")
+def logs_grep(
+    pattern: str = typer.Argument(..., help="Regex to search in session.jsonl events"),
+    session: str | None = typer.Option(None, "--session", "-s"),
+    limit: int = typer.Option(20, "--limit", "-n"),
+):
+    """Search structured session events."""
+    from nanobot.cli.logs import grep_session, resolve_session_dir
+
+    session_dir = resolve_session_dir(session)
+    if not session_dir:
+        console.print("[red]No session found.[/red]")
+        raise typer.Exit(1)
+    hits = grep_session(session_dir, pattern, limit=limit)
+    if not hits:
+        console.print("[yellow]No matches.[/yellow]")
+        raise typer.Exit(0)
+    for hit in hits:
+        console.print(hit)
+        console.print()
+
+
+app.add_typer(logs_app, name="logs")
 
 
 if __name__ == "__main__":

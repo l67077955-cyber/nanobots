@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -46,56 +45,19 @@ class MessageHandlerMixin:
         if message.caption:
             content_parts.append(message.caption)
 
-        # Handle media files
-        media_file = None
-        media_type = None
+        downloaded_paths, downloaded_parts = await self._download_message_media(message)
+        media_paths.extend(downloaded_paths)
+        content_parts.extend(downloaded_parts)
 
-        if message.photo:
-            media_file = message.photo[-1]  # Largest photo
-            media_type = "image"
-        elif message.voice:
-            media_file = message.voice
-            media_type = "voice"
-        elif message.audio:
-            media_file = message.audio
-            media_type = "audio"
-        elif message.document:
-            media_file = message.document
-            media_type = "file"
-
-        # Download media if present
-        if media_file and self._app:
-            try:
-                file = await self._app.bot.get_file(media_file.file_id)
-                ext = self._get_extension(
-                    media_type,
-                    getattr(media_file, 'mime_type', None),
-                    getattr(media_file, 'file_name', None),
-                )
-                media_dir = get_media_dir("telegram")
-
-                file_path = media_dir / f"{media_file.file_id[:16]}{ext}"
-                await file.download_to_drive(str(file_path))
-
-                media_paths.append(str(file_path))
-
-                # Handle voice transcription
-                if media_type == "voice" or media_type == "audio":
-                    from nanobot.providers.transcription import GroqTranscriptionProvider
-                    transcriber = GroqTranscriptionProvider(api_key=self.groq_api_key)
-                    transcription = await transcriber.transcribe(file_path)
-                    if transcription:
-                        logger.info("Transcribed {}: {}...", media_type, transcription[:50])
-                        content_parts.append(f"[transcription: {transcription}]")
-                    else:
-                        content_parts.append(f"[{media_type}: {file_path}]")
-                else:
-                    content_parts.append(f"[{media_type}: {file_path}]")
-
-                logger.debug("Downloaded {} to {}", media_type, file_path)
-            except Exception as e:
-                logger.error("Failed to download media: {}", e)
-                content_parts.append(f"[{media_type}: download failed]")
+        reply_ctx = self._extract_reply_context(message)
+        if reply_ctx:
+            content_parts.insert(0, reply_ctx)
+        if getattr(message, "reply_to_message", None):
+            reply_paths, reply_parts = await self._download_message_media(message.reply_to_message)
+            if reply_paths:
+                media_paths.extend(reply_paths)
+            if not reply_ctx and reply_parts:
+                content_parts.insert(0, f"[Reply to: {reply_parts[0]}]")
 
         content = "\n".join(content_parts) if content_parts else "[empty message]"
 
@@ -127,26 +89,28 @@ class MessageHandlerMixin:
         # Start typing indicator before processing
         self._start_typing(str_chat_id)
 
-        # Check for interactive edit state
-        if str_chat_id in self._edit_state:
-            await self._handle_edit_input(str_chat_id, content)
-            self._stop_typing(str_chat_id)
-            return
-
         if not self._groupchat_engine:
-            await self._send_text(int(str_chat_id), "⚠️ 群聊引擎未初始化")
+            await self._handle_message(
+                sender_id=sender_id,
+                chat_id=str_chat_id,
+                content=content,
+                media=media_paths,
+                metadata=metadata,
+                session_key=session_key,
+            )
             self._stop_typing(str_chat_id)
             return
 
-        await self.bus.publish_inbound(InboundMessage(
-            channel="telegram",
-            sender_id=sender_id,
-            chat_id=str_chat_id,
-            content=content,
-            media=media_paths,
+        await self._dispatcher.handle(
+            self,
+            str_chat_id,
+            sender_id,
+            content,
+            bus=self.bus,
             metadata=metadata,
             session_key_override=session_key,
-        ))
+            media=media_paths,
+        )
 
     async def _flush_media_group(self, key: str) -> None:
         """Wait briefly, then forward buffered media-group as one turn."""
@@ -174,6 +138,64 @@ class MessageHandlerMixin:
                 )
         finally:
             self._media_group_tasks.pop(key, None)
+
+    @staticmethod
+    def _extract_reply_context(message) -> str | None:
+        reply = getattr(message, "reply_to_message", None)
+        if not reply:
+            return None
+        text = getattr(reply, "text", None) or getattr(reply, "caption", None)
+        if not text:
+            return None
+        return f"[Reply to: {text}]"
+
+    async def _download_message_media(self, message) -> tuple[list[str], list[str]]:
+        """Download Telegram media from a message and return paths + content markers."""
+        media_file = None
+        media_type = None
+        if getattr(message, "photo", None):
+            media_file = message.photo[-1]
+            media_type = "image"
+        elif getattr(message, "voice", None):
+            media_file = message.voice
+            media_type = "voice"
+        elif getattr(message, "audio", None):
+            media_file = message.audio
+            media_type = "audio"
+        elif getattr(message, "document", None):
+            media_file = message.document
+            media_type = "file"
+        elif getattr(message, "video", None):
+            media_file = message.video
+            media_type = "file"
+        elif getattr(message, "video_note", None):
+            media_file = message.video_note
+            media_type = "file"
+        elif getattr(message, "animation", None):
+            media_file = message.animation
+            media_type = "file"
+
+        if not media_file or not self._app or not getattr(self._app.bot, "get_file", None):
+            return [], []
+
+        try:
+            file = await self._app.bot.get_file(media_file.file_id)
+            ext = self._get_extension(
+                media_type,
+                getattr(media_file, "mime_type", None),
+                getattr(media_file, "file_name", None),
+            )
+            import nanobot.channels.telegram as telegram_module
+
+            media_dir = telegram_module.get_media_dir("telegram")
+            stem = getattr(media_file, "file_unique_id", None) or getattr(media_file, "file_id", "file")
+            file_path = media_dir / f"{stem[:64]}{ext}"
+            await file.download_to_drive(str(file_path))
+            path = str(file_path)
+            return [path], [f"[{media_type}: {file_path}]"]
+        except Exception as e:
+            logger.error("Failed to download media: {}", e)
+            return [], []
 
     def _start_typing(self, chat_id: str) -> None:
         """Start sending 'typing...' indicator for a chat."""
@@ -235,4 +257,3 @@ class MessageHandlerMixin:
             return "".join(Path(filename).suffixes)
 
         return ""
-

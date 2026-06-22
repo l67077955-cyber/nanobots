@@ -140,8 +140,6 @@ class ProvidersCallbackMixin:
 
         if data.startswith("em_mi:") or data.startswith("em_model:"):
             # em_mi:agent:prov:index — resolve model from index cache
-            return True
-
             if data.startswith("em_mi:"):
                 parts = data.split(":")
                 agent_name, prov, idx = parts[1], parts[2], int(parts[3])
@@ -294,6 +292,53 @@ class ProvidersCallbackMixin:
                 import json as _json
                 if "openrouter" in url.lower():
                     models_url = "https://openrouter.ai/api/v1/models"
+                elif "/v1" in url:
+                    models_url = f"{url}/models"
+                else:
+                    models_url = f"{url}/v1/models"
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        headers = {"Authorization": f"Bearer {api_key}"}
+                        async with session.get(models_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                            body = await resp.text()
+                            if resp.status != 200:
+                                await query.edit_message_text(f"❌ 拉取失败 (HTTP {resp.status})\n{body[:200]}")
+                                return
+                            try:
+                                result = _json.loads(body)
+                            except Exception:
+                                await query.edit_message_text(f"❌ 解析失败\n{body[:200]}")
+                                return
+                except Exception as e:
+                    await query.edit_message_text(f"❌ 请求异常: {str(e)[:100]}")
+                    return
+
+                model_list = result.get("data", []) if isinstance(result, dict) else []
+                if not model_list:
+                    await query.edit_message_text(f"⚠️ {prov} 无可用模型")
+                    return
+                model_ids = sorted(set(m.get("id", "") for m in model_list if m.get("id")))
+                if not hasattr(self, "_model_cache"):
+                    self._model_cache = {}
+                self._model_cache[prov] = model_ids
+
+            # Show prefix filters
+            prefixes: dict[str, int] = {}
+            for mid in model_ids:
+                pfx = mid.split("/")[0] if "/" in mid else "other"
+                prefixes[pfx] = prefixes.get(pfx, 0) + 1
+            sorted_pfx = sorted(prefixes.items(), key=lambda x: -x[1])
+            lines = [f"📋 {prov} 可用模型 ({len(model_ids)}):\n", "选择厂商前缀筛选:"]
+            buttons = []
+            for pfx, cnt in sorted_pfx[:20]:
+                buttons.append([InlineKeyboardButton(f"📂 {pfx} ({cnt})", callback_data=f"ml_pfx:{prov}:{pfx}")])
+            buttons.append([InlineKeyboardButton("🔍 搜索模型", callback_data=f"ml_srch:{prov}")])
+            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")])
+            await query.edit_message_text(
+                "\n".join(lines)[:4000],
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+
             return True
 
         if data.startswith("ml_pfx:"):

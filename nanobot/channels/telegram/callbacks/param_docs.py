@@ -18,13 +18,12 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
         },
         "__top__:tool_result_max_chars": {
             "label": "工具结果截断上限 (字符)",
-            "location": "全局 → agent loop 入口处",
+            "location": "全局 → 未知工具 fallback",
             "doc": (
-                "工具返回的原始输出在进入任何后处理之前的"
-                "字符硬上限。超过即截断。\n\n"
-                "位置: agent/loop.py 初始化时读取\n"
-                "时机: 最早的一刀 — 在 Stage 1 分工具截断之前\n"
-                "截断方式: 保留首尾各一半，中间标记 truncated\n\n"
+                "仅当工具名不在 exec/web_fetch/web_search 映射中时使用。\n\n"
+                "已知工具走 process_tool_result 的 per-tool 上限。\n"
+                "tool_loop 默认 result_max_chars 也读此值，但广播/直接模式"
+                "会传入 broadcast/direct_result_max_chars (目前未接入注入路径)。\n\n"
                 "建议: 应 ≥ 各工具 max_chars 中的最大值"
             ),
         },
@@ -43,25 +42,23 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
         },
         "tool_results:web_fetch_max_chars": {
             "label": "web_fetch 截断 (字符)",
-            "location": "Stage 1 → 网页抓取输出",
+            "location": "Stage 1 → process_tool_result",
             "doc": (
                 "web_fetch 工具 (URL 抓取) 返回内容的最大字符数。\n\n"
                 "场景: 抓取网页/API 的 HTML→Markdown 转换结果\n"
-                "截断方式: head + truncated 标记 + tail\n"
-                "特点: 网页内容通常含大量导航/页脚噪音，"
-                "适当降低可提升信噪比\n\n"
+                "截断方式: head_only — 保留头部 + truncated 标记\n"
+                "位置: result_processor.py\n\n"
                 "建议: 一般 8,000-15,000 即可覆盖正文"
             ),
         },
         "tool_results:web_search_max_chars": {
             "label": "web_search 截断 (字符)",
-            "location": "Stage 1 → 搜索结果输出",
+            "location": "Stage 1 → process_tool_result",
             "doc": (
                 "web_search 工具返回的搜索结果最大字符数。\n\n"
                 "场景: 搜索引擎结果摘要列表\n"
-                "截断方式: head + truncated 标记 + tail\n"
-                "特点: 搜索结果结构化程度高、信息密度大，"
-                "通常比网页内容更紧凑\n\n"
+                "截断方式: head_only — 保留头部 + truncated 标记\n"
+                "位置: result_processor.py\n\n"
                 "建议: 5,000-10,000 即可包含足够条目"
             ),
         },
@@ -81,11 +78,12 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
         },
         "tool_results:summarize_enabled": {
             "label": "AI 总结开关",
-            "location": "Stage 2 → 总结器启用/禁用",
+            "location": "Stage 2 → 配置项 (未接线)",
             "doc": (
-                "控制是否启用 LLM 自动总结工具输出。\n\n"
-                "开启: 超过阈值的工具结果用小模型压缩\n"
-                "关闭: 跳过总结，仅依靠 Stage 1 截断"
+                "⚠ 当前未接入通用 tool_loop 管线。\n\n"
+                "实际仅 SmartSearchTool 在 3000 字符处硬编码总结。\n"
+                "历史压缩使用的是 history.history_summarize_enabled。\n\n"
+                "保留此开关以便后续接线。"
             ),
         },
         "tool_results:summarize_model": {
@@ -119,23 +117,21 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
         },
         "tool_results:broadcast_result_max_chars": {
             "label": "广播模式 result_max_chars",
-            "location": "Stage 2 → broadcast tool_loop",
+            "location": "Stage 2 → broadcast tool_loop (未接线)",
             "doc": (
-                "广播模式下 tool_loop 的 result_max_chars 参数。\n\n"
-                "控制每个工具结果注入 LLM 上下文前的最大字符数。\n"
-                "超过此值会触发 AI 总结或截断。\n"
-                "广播模式通常需要更大的值，因为多 agent 并行。\n\n"
-                "建议: 15,000-30,000"
+                "传入 broadcast tool_loop 的 result_max_chars 参数。\n\n"
+                "⚠ 当前仅用于 dedup 缓存截断，不截断注入 messages 的内容。\n"
+                "实际截断由 process_tool_result (Stage 1) 完成。\n\n"
+                "建议: 15,000-30,000 (待接线后生效)"
             ),
         },
         "tool_results:direct_result_max_chars": {
             "label": "直接模式 result_max_chars",
-            "location": "Stage 2 → direct/serial tool_loop",
+            "location": "Stage 2 → direct tool_loop (未接线)",
             "doc": (
-                "直接对话/串行模式下 tool_loop 的 result_max_chars。\n\n"
-                "控制每个工具结果注入 LLM 上下文前的最大字符数。\n"
-                "超过此值会触发 AI 总结或截断。\n\n"
-                "建议: 6,000-12,000"
+                "传入 direct/serial tool_loop 的 result_max_chars。\n\n"
+                "⚠ 当前仅用于 dedup 缓存截断，不截断注入 messages 的内容。\n\n"
+                "建议: 6,000-12,000 (待接线后生效)"
             ),
         },
         "history:max_messages": {
@@ -180,32 +176,62 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
         },
         "history:compress_max_summary_tokens": {
             "label": "历史压缩摘要长度 (tokens)",
-            "location": "Stage 3 → 历史压缩",
+            "location": "Stage 3 → maybe_compress",
             "doc": (
-                "压缩历史时，摘要模型的最大输出 token 数。\n\n"
-                "控制生成摘要的长度上限。\n"
-                "建议: 400-800"
+                "HistoryContext.maybe_compress 调用 summarize_model 时的\n"
+                "max_tokens 上限。\n\n"
+                "控制生成摘要的长度。\n"
+                "建议: 400-2000"
+            ),
+        },
+        "history:compression_keep_recent": {
+            "label": "压缩尾保条数",
+            "location": "Stage 3 → maybe_compress 尾部保护",
+            "doc": (
+                "历史压缩时，最近 N 条消息完整保留、不进入摘要。\n\n"
+                "对应 HistoryContext.maybe_compress 的 compression_keep_recent。\n"
+                "与 context_pruning.keep_recent (assistant 轮) 是不同概念。\n\n"
+                "建议: 4-10"
+            ),
+        },
+        "history:keep_user_messages": {
+            "label": "保护全部用户消息",
+            "location": "Stage 3 → add_message / maybe_compress 头部保护",
+            "doc": (
+                "开启: 所有用户消息在裁剪和压缩时均受头部保护。\n"
+                "关闭: 仅保护首条用户消息 (及 index 0)。\n\n"
+                "位置: HistoryContext._find_head_indices\n\n"
+                "长对话中开启会占用更多上下文预算。"
+            ),
+        },
+        "history:history_summarize_enabled": {
+            "label": "历史 AI 压缩开关",
+            "location": "Stage 3 → maybe_compress",
+            "doc": (
+                "控制历史中间段是否用 summarize_model 做 AI 摘要。\n\n"
+                "关闭: 中间段直接丢弃 (head + tail 保留)。\n"
+                "与 tool_results.summarize_enabled 无关。\n\n"
+                "建议: 长对话保持开启"
             ),
         },
         "context_pruning:soft_ratio": {
             "label": "软裁剪触发比例",
-            "location": "Stage 4 → context_pruning",
+            "location": "Stage 4 → prune_messages",
             "doc": (
-                "tool_loop 迭代 2+ 时，当上下文字符数超过\n"
-                "context_window_tokens × CHARS_PER_TOKEN × 此比例\n"
-                "时触发软裁剪。\n\n"
-                "软裁剪: 旧 tool result 截断为 head+tail，"
-                "中间部分提取关键事实。\n\n"
-                "建议: 0.2-0.4"
+                "tool_loop 迭代 2+ 时，当\n"
+                "estimate_tokens(messages) / context_window_tokens ≥ 此比例\n"
+                "时触发裁剪。\n\n"
+                "行为: 旧 tool result (>soft_max_chars) 替换为一行摘要。\n\n"
+                "建议: 0.3-0.6"
             ),
         },
         "context_pruning:keep_recent": {
             "label": "保护最近 N 轮",
-            "location": "Stage 4 → context_pruning",
+            "location": "Stage 4 → prune_messages",
             "doc": (
-                "最近 N 个 assistant turn 的 tool result 不被裁剪。\n\n"
-                "保护最近的工具结果，确保模型能引用最新数据。\n"
-                "建议: 2-5"
+                "最近 N 个 assistant turn 内的 tool result 不被裁剪。\n\n"
+                "按 assistant 消息计数，不是按 tool 消息条数。\n"
+                "建议: 2-6"
             ),
         },
         "context_pruning:soft_max_chars": {

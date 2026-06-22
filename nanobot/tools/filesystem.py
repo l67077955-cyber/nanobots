@@ -265,7 +265,8 @@ class WriteFileTool(_FsTool):
     def description(self) -> str:
         return (
             "Write (overwrite) content to a file at the given path. Creates parent directories if needed. "
-            "For precise edits on existing files, prefer edit_file (or read_file then targeted edit_file) over write_file — write_file replaces the ENTIRE file content."
+            "For precise edits on existing files, prefer edit_file (or read_file then targeted edit_file) over write_file — write_file replaces the ENTIRE file content. "
+            "Always provide both 'path' and 'content'."
         )
 
     @property
@@ -277,6 +278,7 @@ class WriteFileTool(_FsTool):
                 "content": {"type": "string", "description": "The content to write"},
             },
             "required": ["path", "content"],
+            "additionalProperties": False,
         }
 
     async def execute(self, path: str, content: str, **kwargs: Any) -> str:

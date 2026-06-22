@@ -3,6 +3,8 @@
 import asyncio
 import os
 import re
+import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -165,6 +167,7 @@ class ExecTool(Tool):
         self, command: str, working_dir: str | None = None,
         timeout: int | None = None,
     ) -> str:
+        command = self._normalize_command(command)
         cwd = working_dir or self.working_dir or os.getcwd()
         guard_error = self._guard_command(command, cwd)
         if guard_error:
@@ -212,10 +215,24 @@ class ExecTool(Tool):
 
             result = "\n".join(output_parts) if output_parts else "(no output)"
 
-            return result
+            return self._truncate_output(result)
 
         except Exception as e:
             return f"Error executing command: {str(e)}"
+
+    @staticmethod
+    def _normalize_command(command: str) -> str:
+        """Map bare `python` to the current interpreter when no python shim exists."""
+        if shutil.which("python"):
+            return command
+        return re.sub(r"(^|[;&|]\s*)python(\s+)", rf"\1{sys.executable}\2", command)
+
+    def _truncate_output(self, text: str) -> str:
+        if len(text) <= self._MAX_OUTPUT:
+            return text
+        keep = self._MAX_OUTPUT // 2
+        omitted = len(text) - (keep * 2)
+        return f"{text[:keep]}\n... [{omitted} chars truncated] ...\n{text[-keep:]}"
 
     def _guard_command(self, command: str, cwd: str) -> str | None:
         """Best-effort safety guard for potentially destructive commands."""
@@ -230,7 +247,11 @@ class ExecTool(Tool):
             if not any(re.search(p, lower) for p in self.allow_patterns):
                 return "Error: Command blocked by safety guard (not in allowlist)"
 
-        from nanobot.security.network import contains_internal_url
+        from nanobot.security.network import _URL_RE, contains_internal_url, validate_url_target
+        for match in _URL_RE.finditer(cmd):
+            ok, _err = validate_url_target(match.group(0))
+            if not ok:
+                return "Error: Command blocked by safety guard (internal/private URL detected)"
         if contains_internal_url(cmd):
             return "Error: Command blocked by safety guard (internal/private URL detected)"
 

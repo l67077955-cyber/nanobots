@@ -88,6 +88,29 @@ class StreamingDisplay:
             self._pre_tool_msg_id = self.msg_id
             self.msg_id = None
 
+    async def abort(self, *, reason: str = "⏹ 已中断") -> None:
+        """Clean up an in-progress stream when the task is cancelled (/stop)."""
+        partial = self.buffer_text.strip()
+        if self._pre_tool_msg_id and self._edit:
+            try:
+                await self._edit(self._pre_tool_msg_id, f"{self.header}↓")
+            except Exception:
+                pass
+            self._pre_tool_msg_id = None
+
+        if self.msg_id and self._edit:
+            if partial:
+                text = f"{self.header}{partial}\n\n{reason}"[:4096]
+            else:
+                text = f"{self.header}{reason}"[:4096]
+            try:
+                await self._edit(self.msg_id, text)
+            except Exception:
+                pass
+
+        self.msg_id = None
+        self._buffer.clear()
+
     async def finalize(
         self,
         content: str,

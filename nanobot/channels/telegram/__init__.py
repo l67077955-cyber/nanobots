@@ -11,14 +11,14 @@ from pathlib import Path
 
 from loguru import logger
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters, Update
-from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram.error import TimedOut
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.channels.commands_core import CoreCommandsMixin
-from nanobot.runtime.dispatch import InboundDispatcher
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import TelegramConfig
 from nanobot.groupchat.orchestra.engine import GroupChatEngine
@@ -27,6 +27,8 @@ from nanobot.groupchat.history.prompt_builder import (
     PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
     GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
 )
+from nanobot.runtime.dispatch import InboundDispatcher
+from nanobot.security.network import validate_url_target
 from nanobot.utils.helpers import split_message
 
 from .formatting import (
@@ -47,6 +49,9 @@ from .commands.log import LogCommandsMixin
 # Re-export for backward compatibility
 __all__ = ["TelegramChannel", "TELEGRAM_MAX_MESSAGE_LEN"]
 
+_SEND_RETRY_BASE_DELAY = 1.0
+_SEND_RETRY_MAX_ATTEMPTS = 3
+
 
 class TelegramChannel(
     CoreCommandsMixin,
@@ -66,6 +71,10 @@ class TelegramChannel(
     """
 
     name = "telegram"
+
+    @classmethod
+    def default_config(cls) -> dict:
+        return {"enabled": False, **TelegramConfig().model_dump(by_alias=True)}
 
     BOT_COMMANDS = [
         BotCommand("new", "Start a new conversation"),
@@ -164,6 +173,8 @@ class TelegramChannel(
         if "|" in sender_str:
             try:
                 sid, username = sender_str.split("|", 1)
+                if not sid.isdigit():
+                    return False
                 if sid in allow_list or (username and username in allow_list):
                     return True
             except ValueError:
@@ -175,6 +186,56 @@ class TelegramChannel(
 
         return False
 
+    def _interrupt_before_command(self) -> None:
+        """Abort in-flight agent streaming before any slash command or button."""
+        if self._groupchat_engine:
+            self._groupchat_engine.interrupt_active_turn()
+
+    def _wrap_command(self, handler):
+        """Wrap a command handler to cleanly interrupt active agent turns first."""
+        async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+            self._interrupt_before_command()
+            await handler(update, context)
+        return wrapped
+
+    def _register_commands(self) -> None:
+        """Register per-command handlers (stable UX + interrupt-safe)."""
+        commands = (
+            ("start", self._on_start),
+            ("new", self._forward_command),
+            ("clear", self._forward_command),
+            ("stop", self._forward_command),
+            ("cancel", self._on_cancel),
+            ("help", self._on_help),
+            ("agents", self._on_agents),
+            ("addagent", self._on_addagent),
+            ("removeagent", self._on_removeagent),
+            ("newagent", self._on_newagent),
+            ("editagent", self._on_editagent),
+            ("hyperparams", self._on_hyperparams),
+            ("restart", self._on_restart),
+            ("log", self._on_log),
+            ("summary", self._on_summary),
+            ("savegroup", self._on_savegroup),
+            ("loadgroup", self._on_loadgroup),
+            ("delgroup", self._on_delgroup),
+            ("groups", self._on_groups),
+            ("order", self._on_order),
+            ("setleader", self._on_setleader),
+            ("prompt", self._on_prompt),
+            ("history", self._on_history),
+            ("newprovider", self._on_newprovider),
+            ("newmodel", self._on_newmodel),
+            ("deleteprovider", self._on_deleteprovider),
+            ("deletemodel", self._on_deletemodel),
+            ("editprovider", self._on_editprovider),
+            ("providers", self._on_providers),
+            ("speedtest", self._on_speedtest),
+            ("groupchat", self._on_groupchat),
+        )
+        for name, handler in commands:
+            self._app.add_handler(CommandHandler(name, self._wrap_command(handler)))
+
     async def start(self) -> None:
         """Start the Telegram bot with long polling."""
         if not self.config.token:
@@ -183,21 +244,27 @@ class TelegramChannel(
 
         self._running = True
 
-        # Build the application with larger connection pool to avoid pool-timeout on long runs
-        req = HTTPXRequest(
-            connection_pool_size=16,
-            pool_timeout=5.0,
-            connect_timeout=30.0,
-            read_timeout=30.0,
+        # Use separate pools for API calls and getUpdates long polling.
+        api_req = HTTPXRequest(
+            connection_pool_size=self.config.connection_pool_size,
+            pool_timeout=self.config.pool_timeout,
+            connect_timeout=self.config.connect_timeout,
+            read_timeout=self.config.read_timeout,
             proxy=self.config.proxy if self.config.proxy else None,
         )
-        builder = Application.builder().token(self.config.token).request(req).get_updates_request(req)
+        poll_req = HTTPXRequest(
+            connection_pool_size=self.config.get_updates_connection_pool_size,
+            pool_timeout=self.config.pool_timeout,
+            connect_timeout=self.config.connect_timeout,
+            read_timeout=self.config.read_timeout,
+            proxy=self.config.proxy if self.config.proxy else None,
+        )
+        builder = Application.builder().token(self.config.token).request(api_req).get_updates_request(poll_req)
         self._app = builder.build()
         self._app.add_error_handler(self._on_error)
 
-        # All slash commands → unified runtime dispatcher
-        self._app.add_handler(MessageHandler(filters.COMMAND, self._on_slash_command))
-        self._app.add_handler(CallbackQueryHandler(self._on_callback))
+        self._register_commands()
+        self._app.add_handler(CallbackQueryHandler(self._wrap_command(self._on_callback)))
 
         # Add message handler for text, photos, voice, documents
         self._app.add_handler(
@@ -327,6 +394,32 @@ class TelegramChannel(
         # Send media files
         for media_path in (msg.media or []):
             try:
+                if str(media_path).startswith(("http://", "https://")):
+                    ok, err = validate_url_target(str(media_path))
+                    if not ok:
+                        filename = str(media_path).rstrip("/").rsplit("/", 1)[-1] or "media"
+                        logger.warning("Blocked Telegram remote media URL {}: {}", media_path, err)
+                        await self._app.bot.send_message(
+                            chat_id=chat_id,
+                            text=f"[Failed to send: {filename}]",
+                            reply_parameters=reply_params,
+                            **thread_kwargs,
+                        )
+                        continue
+                    media_type = self._get_media_type(str(media_path))
+                    sender = {
+                        "photo": self._app.bot.send_photo,
+                        "voice": self._app.bot.send_voice,
+                        "audio": self._app.bot.send_audio,
+                    }.get(media_type, self._app.bot.send_document)
+                    param = "photo" if media_type == "photo" else media_type if media_type in ("voice", "audio") else "document"
+                    await sender(
+                        chat_id=chat_id,
+                        **{param: str(media_path)},
+                        reply_parameters=reply_params,
+                        **thread_kwargs,
+                    )
+                    continue
                 media_type = self._get_media_type(media_path)
                 sender = {
                     "photo": self._app.bot.send_photo,
@@ -369,16 +462,29 @@ class TelegramChannel(
         reply_params=None,
         thread_kwargs: dict | None = None,
     ) -> None:
-        """Send a plain text message with HTML fallback."""
-        try:
-            html = _markdown_to_telegram_html(text)
-            await self._app.bot.send_message(
-                chat_id=chat_id, text=html, parse_mode="HTML",
-                reply_parameters=reply_params,
-                **(thread_kwargs or {}),
-            )
-        except Exception as e:
-            logger.warning("HTML parse failed, falling back to plain text: {}", e)
+        """Send a plain text message with HTML fallback and timeout retries."""
+        last_error = None
+        for attempt in range(_SEND_RETRY_MAX_ATTEMPTS):
+            try:
+                html = _markdown_to_telegram_html(text)
+                await self._app.bot.send_message(
+                    chat_id=chat_id, text=html, parse_mode="HTML",
+                    reply_parameters=reply_params,
+                    **(thread_kwargs or {}),
+                )
+                return
+            except TimedOut as e:
+                last_error = e
+                if attempt < _SEND_RETRY_MAX_ATTEMPTS - 1:
+                    await asyncio.sleep(_SEND_RETRY_BASE_DELAY * (2 ** attempt))
+                    continue
+                logger.error("Error sending Telegram message after retries: {}", e)
+                return
+            except Exception as e:
+                logger.warning("HTML parse failed, falling back to plain text: {}", e)
+                break
+
+        for attempt in range(_SEND_RETRY_MAX_ATTEMPTS):
             try:
                 await self._app.bot.send_message(
                     chat_id=chat_id,
@@ -386,8 +492,20 @@ class TelegramChannel(
                     reply_parameters=reply_params,
                     **(thread_kwargs or {}),
                 )
+                return
+            except TimedOut as e:
+                last_error = e
+                if attempt < _SEND_RETRY_MAX_ATTEMPTS - 1:
+                    await asyncio.sleep(_SEND_RETRY_BASE_DELAY * (2 ** attempt))
+                    continue
+                logger.error("Error sending Telegram message after retries: {}", e)
+                return
             except Exception as e2:
+                last_error = e2
                 logger.error("Error sending Telegram message: {}", e2)
+                break
+        if last_error:
+            logger.error("Error sending Telegram message: {}", last_error)
 
     async def _send_with_streaming(
         self,
@@ -412,26 +530,3 @@ class TelegramChannel(
         except Exception:
             pass
         await self._send_text(chat_id, text, reply_params, thread_kwargs)
-
-    async def _on_slash_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Route all slash commands through the runtime dispatcher."""
-        if not update.message or not update.effective_user:
-            return
-        sender_id = self._sender_id(update.effective_user)
-        chat_id = str(update.message.chat_id)
-        content = update.message.text or ""
-        metadata = self._build_message_metadata(update.message, update.effective_user)
-        self._start_typing(chat_id)
-        try:
-            await self._dispatcher.handle(
-                self,
-                chat_id,
-                sender_id,
-                content,
-                bus=self.bus,
-                metadata=metadata,
-                tg_update=update,
-                tg_context=context,
-            )
-        finally:
-            self._stop_typing(chat_id)

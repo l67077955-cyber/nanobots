@@ -131,13 +131,15 @@ async def run_loop(engine: Any) -> None:
             # Determine speaking order
             speak_order = list(engine._active_agents)
 
-            # ── 关键修复：给 broadcast_round 加上全局超时保护 ──
-            # 防止某一轮卡死导致整个群聊永久阻塞
+            from nanobot.groupchat.orchestra.broadcast_orchestrator import load_groupchat_settings
+            _gc = load_groupchat_settings()
+            _global_timeout = float(_gc.get("global_timeout", 600))
+
             await broadcast_round(
                 speak_order,
                 engine,
                 engine._mailbox,
-                global_timeout=600.0,   # 10 分钟（可根据需要调整）
+                global_timeout=_global_timeout,
             )
 
             # Compress history if approaching the message limit

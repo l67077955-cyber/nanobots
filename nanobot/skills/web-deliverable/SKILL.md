@@ -11,9 +11,12 @@ always: false
 ## 铁律
 
 1. **先查现有资源** — `list_dir` / `exec ls` 看工作目录和相邻目录是否已有成品；有则 `cp -r` 复制后改路径，禁止从零重复搜图。
-2. **先执行后汇报** — 每个阶段必须 `exec` 并检查 exit code / 文件大小。
-3. **搜索预算 ≤2 轮** — 两轮搜不到直链就换 Capcom 官方 / Alpha Coders / 复制本地已有目录。
-4. **必须验证** — 结束前 `curl -I` 本地页面、ZIP、公网 tunnel URL。
+2. **大 HTML 只用 write_file** — 禁止 `exec` + `cat`/`heredoc`/`python3 -c` 写整页 HTML（>500 字符）。弱模型会把 CSS 拆成 JSON 数组导致 `dictionary update sequence` 崩溃。
+3. **先执行后汇报** — 每个阶段必须 `exec` 并检查 exit code / 文件大小。
+4. **搜索预算 ≤2 轮** — 两轮搜不到直链就换官方源 / 复制本地已有目录。
+5. **必须验证** — 结束前 `curl -I` 本地页面、ZIP、公网 tunnel URL。
+
+> 单页品牌/产品/赛博朋克落地页（非画廊）→ 读 `skills/static-landing-page/SKILL.md`，本 skill 只管画廊+ZIP 流水线。
 
 ## 标准流程（按顺序）
 

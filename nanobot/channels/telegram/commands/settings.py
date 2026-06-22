@@ -97,6 +97,9 @@ class SettingsCommandsMixin:
         "allocate_timeout": 15,          # seconds before message is dropped
         "context_pool_capacity": 0,      # 0 = auto (n × (n-1)), >0 = custom capacity
         "context_points_per_agent": 0,   # 0 = disabled, >0 = custom points per agent
+        "call_timeout": 90,              # per-agent LLM call timeout (seconds)
+        "leader_call_timeout": 120,      # leader LLM call timeout (seconds)
+        "global_timeout": 600,           # whole broadcast round hard limit (seconds)
     }
     GC_SETTINGS_LABELS = {
         "tool_initial":           "初始工具额度 (每 agent × N)",
@@ -104,6 +107,9 @@ class SettingsCommandsMixin:
         "allocate_timeout":       "消息分配超时 (秒)",
         "context_pool_capacity":  "对话池容量 (0=自动, >0=自定义)",
         "context_points_per_agent": "对话池点数 (0=禁用, >0=每agent点数)",
+        "call_timeout":           "Agent LLM 超时 (秒)",
+        "leader_call_timeout":    "Leader LLM 超时 (秒)",
+        "global_timeout":         "整轮广播超时 (秒)",
     }
 
     @staticmethod
@@ -450,149 +456,18 @@ class SettingsCommandsMixin:
     # ── Group Config Commands ───────────────────────────────
 
     async def _on_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Display history management as a precise visual pipeline conversation."""
+        """Display history management panel (shared builder with hs_* callbacks)."""
         if not update.message or not update.effective_user:
             return
         if not self.is_allowed(self._sender_id(update.effective_user)):
             return
 
-        from nanobot.groupchat.history import history_settings as hs
-        settings = hs.get_all()
-        tr = settings["tool_results"]
-        hist = settings["history"]
-        cp = settings.get("context_pruning", {})
+        from nanobot.channels.telegram.history_panel import build_history_panel
 
-        engine = self._groupchat_engine
-        current_msgs = len(engine._history) if engine else 0
-        current_chars = sum(len(m.get("content", "")) for m in (engine._history if engine else []))
-        compress_trigger = int(hist["max_messages"] * hist.get("compress_ratio", 0.8))
-        ctx_chars_limit = settings["context_window_tokens"] * 4  # rough chars estimate
-
-        ai_on = tr["summarize_enabled"]
-        prune_soft_budget = int(ctx_chars_limit * cp.get("soft_ratio", 0.3))
-
-        # ── Estimate compiled LLM context size per active agent ──
-        # engine._history only stores final turn messages (user + agent final replies).
-        # Tool calls live inside agent messages as appended text logs, not separate entries.
-        # Actual LLM context = system prompts + history_to_messages(history).
-        compiled_info = ""
-        if engine and getattr(engine, "_active_agents", None):
-            from nanobot.groupchat.history.prompt_builder import PromptBuilder
-            parts = []
-            for a in engine._active_agents:
-                try:
-                    compiled = PromptBuilder.history_to_messages(
-                        engine._history, current_agent=a
-                    )
-                    c_chars = sum(len(m.get("content") or "") for m in compiled)
-                    parts.append(f"{a}~{c_chars:,}字")
-                except Exception:
-                    parts.append(f"{a}:?")
-            compiled_info = " | ".join(parts)
-
-        status_line = (
-            f"📊 历史轮次(不含工具调用): {current_msgs}/{hist['max_messages']}条"
-            f" | {current_chars:,}/{hist['max_context_chars']:,}字\n"
-            f"📌 编译后上下文(估): {compiled_info if compiled_info else '(engine未启动)'}"
-        )
-
-        text = (
-            "─── 上下文管线 · 实时演示 ───\n"
-            f"全局: context_window={settings['context_window_tokens']:,} tokens"
-            f" | tool_result_max={settings['tool_result_max_chars']:,} 字符\n"
-            f"历史: max_messages={hist['max_messages']}条(仅用户+agent最终回复)"
-            f" | max_context_chars={hist['max_context_chars']:,}\n"
-            f"ℹ️  工具调用结果以文本追加在agent消息内，不计入条数\n"
-            f"{status_line}\n"
-            "━━━━━━━━━━━━━━━━━━━━━\n"
-            "\n"
-            "👤 用户: 帮我搜索特朗普的图片并下载\n"
-            f" └─ 🛡 [头部永久保护] 此消息不压缩不截断\n"
-            "\n"
-            "── 轮次 1 ──\n"
-            "🤖 Agent: 我来搜索… → web_search(query='特朗普图片')\n"
-            "\n"
-            f"📡 web_search 返回 12,000 字符:\n"
-            f" └─ [截断①] web_search_max_chars={tr['web_search_max_chars']:,}\n"
-            f"    原始 12,000 > {tr['web_search_max_chars']:,} → 仅保留前后各一半\n"
-            f" └─ [截断②] tool_result_max_chars={settings['tool_result_max_chars']:,}\n"
-            f"    全局硬上限，截断后结果不超此值\n"
-            f" └─ [AI压缩] summarize_enabled={'✅' if ai_on else '❌'}"
-            f" | 触发阈值=>{tr['summarize_threshold']:,}字符\n"
-            f"    {'✅ 触发: ' if ai_on else '🚫 未触发(已关闭): '}"
-            f"model={tr['summarize_model']}"
-            f" | 最大输入={tr.get('summarize_max_input_chars', 8000):,}"
-            f" | 最大输出={tr.get('summarize_max_output_chars', 4000):,}tokens\n"
-            f"    → 摘要注入上下文(广播模式最大={tr.get('broadcast_result_max_chars', 20000):,}"
-            f" | 直接模式最大={tr.get('direct_result_max_chars', 8000):,})\n"
-            "\n"
-            "── 轮次 2 ──\n"
-            "🤖 Agent: 现在执行下载 → exec(python send_photo.py)\n"
-            "\n"
-            f"💻 exec 返回报错 3,000 字符:\n"
-            f" └─ [截断①] exec_max_chars={tr['exec_max_chars']:,}\n"
-            f"    3,000 < {tr['exec_max_chars']:,} → 未触发截断，完整保留\n"
-            f" └─ [AI压缩] 3,000 < {tr['summarize_threshold']:,} → 未触发AI压缩\n"
-            "\n"
-            f"── [上下文裁剪] tool_loop 第2次迭代起自动检查 ──\n"
-            f" 软裁剪: 上下文>{prune_soft_budget:,}字符({cp.get('soft_ratio',0.3)}×窗口)\n"
-            f"   → 对超过soft_max_chars={cp.get('soft_max_chars',4000):,}的旧工具结果\n"
-            f"      替换为精简摘要(仅保留路径/错误/kv)\n"
-            f" 保护: 最近{cp.get('keep_recent',3)}轮的工具结果不裁剪\n"
-            "\n"
-            f"── [历史记忆压缩] 消息数>={compress_trigger}条触发 ──\n"
-            f"   compress_ratio={hist.get('compress_ratio',0.8)} × max_messages={hist['max_messages']}"
-            f" = {compress_trigger}条时触发\n"
-            f"   🛡 头部保护: 首条消息+首条用户消息 → 永不压缩\n"
-            f"   🗜 压缩中间段 → model={tr['summarize_model']}"
-            f" | max_tokens={hist.get('compress_max_summary_tokens',600)}\n"
-            f"   🛡 尾部保护: 最近6轮完整保留\n"
-            "\n"
-            "── 超过总限制时 ──\n"
-            f"   max_messages={hist['max_messages']}条 或 max_context_chars={hist['max_context_chars']:,}字符\n"
-            f"   → 从最早消息开始丢弃(tool_call与result配对一起丢)\n"
-            f"\n{status_line}\n"
-        )
-
-        buttons = [
-            [
-                InlineKeyboardButton(
-                    f"🌐 全局: ctx={settings['context_window_tokens']:,}tok / max_result={settings['tool_result_max_chars']:,}",
-                    callback_data="hs_global",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    f"✂️ 工具截断: exec={tr['exec_max_chars']:,} fetch={tr['web_fetch_max_chars']:,} search={tr['web_search_max_chars']:,}",
-                    callback_data="hs_stage1",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    f"🧠 AI压缩: {'✅' if ai_on else '❌'} 阈值={tr['summarize_threshold']:,} 模型={tr['summarize_model'].split('/')[-1]}",
-                    callback_data="hs_stage2",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    f"📚 历史: max={hist['max_messages']}条/{hist['max_context_chars']:,}字 压缩@{compress_trigger}条",
-                    callback_data="hs_stage3",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    f"🔪 迭代裁剪: soft@{cp.get('soft_ratio',0.3)} 保留最近{cp.get('keep_recent',3)}轮",
-                    callback_data="hs_stage4",
-                )
-            ],
-            [
-                InlineKeyboardButton("🔄 重载配置", callback_data="hs_reload"),
-            ],
-        ]
-
+        text, markup = build_history_panel(self._groupchat_engine)
         hist_text = to_cli_style(text, title="📚 上下文 & 历史")
         await update.message.reply_text(
-            hist_text, reply_markup=InlineKeyboardMarkup(buttons),
+            hist_text, reply_markup=markup,
             parse_mode="Markdown",
         )
 

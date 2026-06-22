@@ -19,6 +19,91 @@ from nanobot.groupchat.history.component_manager import (
     synthesis_quality_check,
     _MIN_SYNTHESIS_LEN,
 )
+from nanobot.groupchat.history.message_converter import latest_user_question
+
+
+def _rebuild_prompt_prefix(
+    engine: Any,
+    name: str,
+    *,
+    agent_ranks: dict[str, int],
+    agent_idx: int,
+    total: int,
+    teammates: list[str],
+    user_question: str,
+    is_leader: bool,
+    leader_name: str | None,
+    non_leader_agents: list[str],
+) -> tuple[list[dict], str]:
+    """Rebuild stable prompt prefix from live ``engine._history`` (tier-trimmed)."""
+    live_uq = latest_user_question(engine._history) or user_question
+    fresh = engine._build_agent_prompt(
+        name,
+        relevant_agents=None,
+        agent_ranks=agent_ranks,
+        agent_idx=agent_idx,
+        total=total,
+        teammates=teammates,
+        user_question=live_uq,
+    )
+    _apply_broadcast_runtime_inserts(
+        fresh,
+        is_leader=is_leader,
+        leader_name=leader_name,
+        non_leader_agents=non_leader_agents,
+        engine=engine,
+    )
+    return fresh, live_uq
+
+
+def _apply_broadcast_runtime_inserts(
+    messages: list[dict],
+    *,
+    is_leader: bool,
+    leader_name: str | None,
+    non_leader_agents: list[str],
+    engine: Any,
+) -> None:
+    """Leader / non-leader runtime system inserts before the volatile tail."""
+    if is_leader:
+        agent_caps = []
+        for a in non_leader_agents:
+            on = engine.get_agent_enabled_tool_names(a)
+            agent_caps.append(f"  {a}: {', '.join(on) if on else '(无工具)'}")
+
+        leader_on = engine.get_agent_enabled_tool_names(leader_name)
+        leader_base_tools_str = f"（{', '.join(leader_on)}）" if leader_on else "（无基础工具）"
+
+        messages.insert(max(len(messages) - 1, 0), {
+            "role": "system",
+            "content": (
+                f"[Leader 本轮上下文]\n"
+                f"## 团队成员及工具能力\n"
+                + "\n".join(agent_caps) + "\n"
+                f"你的基础工具{leader_base_tools_str}\n"
+                f"⚠️ 只分配队友有工具能力完成的任务。权限与搜索额度见末尾 [本轮状态汇总]。"
+            ),
+        })
+    elif leader_name:
+        messages.insert(max(len(messages) - 1, 0), {
+            "role": "system",
+            "content": (
+                f"[团队协作模式 — 严格发言规则]\n"
+                f"Leader {leader_name} 会通过 chatroom_send 给你分配任务。\n\n"
+                f"━━ 发言规则（强制执行）━━\n"
+                f"1. 你每次只能发送 **1 条消息**，然后必须 wait() 等待 Leader 发言\n"
+                f"2. Leader 发言后你的配额重置，可以再发 1 条\n"
+                f"3. 违反此规则的消息会被系统拦截\n"
+                f"4. 有问题必须向 Leader 提出并等待回复\n\n"
+                f"正确流程: 做工作 → chatroom_send(结果) → wait() → 收到 Leader 指令 → 继续"
+            ),
+        })
+
+    perm_insert_idx = max(len(messages) - 1, 0)
+    messages.insert(perm_insert_idx, {
+        "role": "system",
+        "content": "[团队工具权限及搜索额度见消息末尾 [本轮状态汇总]]",
+    })
 
 
 @dataclass
@@ -102,52 +187,13 @@ async def run_agent_turn(
     # Load from override system (editable via /prompt), fallback to default
     # Removed stale prompt_overrides.json lookup; .md files are the source of truth.
 
-    if is_leader:
-        # Runtime-only context; static leader rules live in prompt_builder leader_prompt
-        agent_caps = []
-        for a in non_leader_agents:
-            on = engine.get_agent_enabled_tool_names(a)
-            agent_caps.append(f"  {a}: {', '.join(on) if on else '(无工具)'}")
-
-        leader_on = engine.get_agent_enabled_tool_names(leader_name)
-        leader_base_tools_str = f"（{', '.join(leader_on)}）" if leader_on else "（无基础工具）"
-
-        messages.insert(max(len(messages) - 1, 0), {
-            "role": "system",
-            "content": (
-                f"[Leader 本轮上下文]\n"
-                f"## 团队成员及工具能力\n"
-                + "\n".join(agent_caps) + "\n"
-                f"你的基础工具{leader_base_tools_str}\n"
-                f"⚠️ 只分配队友有工具能力完成的任务。权限与搜索额度见末尾 [本轮状态汇总]。"
-            ),
-        })
-    else:
-        # ── Non-leader: broadcast_hint already expanded by build_agent_prompt ──
-        pass
-
-        # If there's a leader, tell non-leader agents to expect instructions
-        if leader_name:
-            messages.insert(max(len(messages) - 1, 0), {
-                "role": "system",
-                "content": (
-                    f"[团队协作模式 — 严格发言规则]\n"
-                    f"Leader {leader_name} 会通过 chatroom_send 给你分配任务。\n\n"
-                    f"━━ 发言规则（强制执行）━━\n"
-                    f"1. 你每次只能发送 **1 条消息**，然后必须 wait() 等待 Leader 发言\n"
-                    f"2. Leader 发言后你的配额重置，可以再发 1 条\n"
-                    f"3. 违反此规则的消息会被系统拦截\n"
-                    f"4. 有问题必须向 Leader 提出并等待回复\n\n"
-                    f"正确流程: 做工作 → chatroom_send(结果) → wait() → 收到 Leader 指令 → 继续"
-                ),
-            })
-
-    # ── Inject agent permissions context (Placeholder) ──
-    perm_insert_idx = max(len(messages) - 1, 0)
-    messages.insert(perm_insert_idx, {
-        "role": "system",
-        "content": "[团队工具权限及搜索额度见消息末尾 [本轮状态汇总]]",
-    })
+    _apply_broadcast_runtime_inserts(
+        messages,
+        is_leader=is_leader,
+        leader_name=leader_name,
+        non_leader_agents=non_leader_agents,
+        engine=engine,
+    )
 
     # The volatile state message is always the last one (added by PromptBuilder)
     volatile_msg_idx = len(messages) - 1
@@ -213,6 +259,31 @@ async def run_agent_turn(
     # Separate system-prompt messages (stable prefix) from conversation messages
     # so we can prune conversation turns without touching the system prompt.
     _sys_msg_count = len(messages)
+    _prefix_history_len = len(engine._history)
+
+    def _apply_live_prefix(cycle_tail: list[dict], *, reason: str) -> None:
+        nonlocal messages, _sys_msg_count, volatile_msg_idx, user_question, _prefix_history_len
+        fresh_prefix, live_uq = _rebuild_prompt_prefix(
+            engine,
+            name,
+            agent_ranks=agent_ranks,
+            agent_idx=agent_idx,
+            total=total,
+            teammates=teammates,
+            user_question=user_question,
+            is_leader=is_leader,
+            leader_name=leader_name,
+            non_leader_agents=non_leader_agents,
+        )
+        messages[:] = fresh_prefix + cycle_tail
+        _sys_msg_count = len(fresh_prefix)
+        volatile_msg_idx = len(fresh_prefix) - 1
+        user_question = live_uq
+        _prefix_history_len = len(engine._history)
+        logger.info(
+            "Broadcast: {} rebuilt prompt prefix ({}, history={} msgs, uq={!r})",
+            name, reason, len(engine._history), live_uq[:60],
+        )
 
     # ── Consecutive wait-timeout tracker ──
     # Prevents agents from looping wait→timeout→wait forever when no one
@@ -409,16 +480,16 @@ async def run_agent_turn(
                     err_short = f"LLM 超时 ({_base_timeout}s)"
 
                     # ── Clean retry on first timeout ──
-                    # Re-use the same messages context (no injection) so history
-                    # stays clean. Run one short no-tool call to get at least a
-                    # brief output rather than abandoning the turn entirely.
+                    # Keep tools enabled so write_file/exec tasks can finish;
+                    # use a longer timeout on retry instead of stripping tools.
                     if _timeout_recovery_count == 0:
                         _timeout_recovery_count += 1
+                        _retry_timeout = min(float(_base_timeout) * 2, 300.0)
                         await tracker.set_state(name, "thinking", detail="retry...")
-                        await engine._send(f"⏰ {name} 超时，重试中...")
+                        await engine._send(f"⏰ {name} 超时，延长到 {_retry_timeout:.0f}s 重试...")
                         logger.warning(
-                            "Broadcast: {} LLM timeout ({:.1f}s), retrying once (no tools)",
-                            name, latency,
+                            "Broadcast: {} LLM timeout ({:.1f}s), retrying once (tools kept, {:.0f}s)",
+                            name, latency, _retry_timeout,
                         )
                         try:
                             _r = await tool_loop(
@@ -426,10 +497,10 @@ async def run_agent_turn(
                                 messages=messages,          # unchanged — no injection
                                 tool_registry=reg,
                                 model=model,
-                                max_tokens=600,             # short answer only
-                                max_iterations=1,
-                                tool_defs=None,             # text-only, no tools
-                                call_timeout=60.0,          # hard cap for retry
+                                max_tokens=engine.config.max_tokens,
+                                max_iterations=agent_max_iters,
+                                tool_defs=tool_defs if tool_defs else None,
+                                call_timeout=_retry_timeout,
                             )
                             if _r.content:
                                 content = _r.content
@@ -632,24 +703,15 @@ async def run_agent_turn(
                     search_pool.on_output(name)
                     # Don't re-display partial content — it may be incomplete/mid-thought
 
-                # NOTE: Do NOT prune messages here.  Keeping the full
-                # prefix intact guarantees prompt-cache hits on the next
-                # LLM call.  Pruning would shift the prefix and force a
-                # full recompute, wasting cached tokens.
-
-                # Inject any partial content so LLM knows what it said already
+                cycle_tail: list[dict[str, str]] = []
                 if content:
-                    messages.append({"role": "assistant", "content": content})
+                    cycle_tail.append({"role": "assistant", "content": content})
 
-                # Inject the interrupt message as a "user" message from the sender.
-                # If multiple messages accumulated, inject earlier ones as
-                # summarised context first, then the LATEST as the primary
-                # message so the LLM responds to the newest state.
                 if _intr_earlier:
                     _earlier_lines = "\n".join(
                         f"- [{m.sender}]: {m.content[:200]}" for m in _intr_earlier
                     )
-                    messages.append({
+                    cycle_tail.append({
                         "role": "system",
                         "content": (
                             f"[打断期间积压的 {len(_intr_earlier)} 条较早消息（仅供参考）]\n"
@@ -658,16 +720,35 @@ async def run_agent_turn(
                         ),
                     })
                 if _intr_msg:
-                    messages.append({
+                    cycle_tail.append({
                         "role": "user",
                         "content": f"[{_intr_msg.sender} — 最新消息]: {_intr_msg.content}",
                     })
                 else:
-                    # Fallback: no message in queue (already consumed by auto-wait?)
-                    messages.append({
+                    cycle_tail.append({
                         "role": "system",
-                        "content": f"[打断通知] 你的执行被中断，请立即总结当前进展并响应队友的最新需求。",
+                        "content": "[打断通知] 你的执行被中断，请立即总结当前进展并响应队友的最新需求。",
                     })
+
+                if _sender_name == "用户" or len(engine._history) > _prefix_history_len:
+                    _apply_live_prefix(cycle_tail, reason=f"interrupt from {_sender_name}")
+                else:
+                    # ── Prune conversation tail (no history rebuild needed) ──
+                    from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
+                    from nanobot.groupchat.history.history_settings import summarize_model as _summarize_model
+                    _conv_keep_turns = gc_settings.get("conv_keep_turns", 3)
+                    dropped = await prune_conversation_tail_with_summary(
+                        messages, _sys_msg_count, _conv_keep_turns,
+                        provider=engine.provider,
+                        model=_summarize_model(),
+                        agent_name=name,
+                    )
+                    if dropped > 0:
+                        logger.debug(
+                            "Broadcast: {} interrupt pruned {} msgs (kept {})",
+                            name, dropped, _conv_keep_turns * 3,
+                        )
+                    messages.extend(cycle_tail)
 
                 await tracker.set_state(name, "thinking")
                 mailbox.mark_busy(name)
@@ -891,14 +972,50 @@ async def run_agent_turn(
             await tracker.set_state(name, "thinking")
             await engine._send(_d.chatroom_wait_msg(name, str(msg), leader=leader_name))
 
-            # ── Prune conversation tail to prevent unbounded growth ──
-            # Keep system-prompt prefix intact; only retain the last
-            # _CONV_KEEP_TURNS conversation turns (3 msgs per turn).
-            # Dropped messages are AI-summarised before removal so the
-            # agent retains context of earlier discussion.
+            _history_grew = len(engine._history) > _prefix_history_len
+            _needs_rebuild = msg.sender == "用户" or _history_grew
+
+            cycle_tail: list[dict] = []
+            if content:
+                cycle_tail.append({"role": "assistant", "content": content})
+
+            _anti_repeat_tag = f"[提醒] 你（{name}）已经发表过上述观点"
+            if not any(
+                m.get("role") == "system"
+                and isinstance(m.get("content"), str)
+                and _anti_repeat_tag in m["content"]
+                for m in messages[-6:]
+            ):
+                cycle_tail.append({
+                    "role": "system",
+                    "content": (
+                        f"{_anti_repeat_tag}。"
+                        f"针对队友的新消息做出回应或补充新观点，不要重复已说的内容。"
+                    ),
+                })
+
+            if msg.sender == "用户":
+                cycle_tail.append({
+                    "role": "user",
+                    "content": f"[用户 — 最新消息]: {msg.content}",
+                })
+            else:
+                cycle_tail.append({
+                    "role": "user",
+                    "content": f"[队友消息] {msg}",
+                })
+
+            if _needs_rebuild:
+                _apply_live_prefix(
+                    cycle_tail,
+                    reason=f"wait wake from {msg.sender}",
+                )
+                continue
+
+            # ── Prune conversation tail (no history rebuild needed) ──
             from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
             from nanobot.groupchat.history.history_settings import summarize_model as _summarize_model
-            _conv_keep_turns = gc_settings.get("conv_keep_turns", 3)  # configurable via groupchat_settings.json
+            _conv_keep_turns = gc_settings.get("conv_keep_turns", 3)
             dropped = await prune_conversation_tail_with_summary(
                 messages, _sys_msg_count, _conv_keep_turns,
                 provider=engine.provider,
@@ -910,35 +1027,7 @@ async def run_agent_turn(
                     "Broadcast: {} pruned {} conversation messages (kept {})",
                     name, dropped, _conv_keep_turns * 3,
                 )
-
-            # Inject agent's own previous output so LLM knows what it already said
-            if content:
-                messages.append({
-                    "role": "assistant",
-                    "content": content,
-                })
-            # Anti-repeat injection: remind agent not to repeat itself
-            # Only inject if not already present (avoid accumulation across rounds)
-            _anti_repeat_tag = f"[提醒] 你（{name}）已经发表过上述观点"
-            _already_injected = any(
-                m.get("role") == "system"
-                and isinstance(m.get("content"), str)
-                and _anti_repeat_tag in m["content"]
-                for m in messages[-6:]  # check last 6 only — sufficient
-            )
-            if not _already_injected:
-                messages.append({
-                    "role": "system",
-                    "content": (
-                        f"{_anti_repeat_tag}。"
-                        f"针对队友的新消息做出回应或补充新观点，不要重复已说的内容。"
-                    ),
-                })
-            # Then inject the received teammate message
-            messages.append({
-                "role": "user",
-                "content": f"[队友消息] {msg}",
-            })
+            messages.extend(cycle_tail)
 
         # ── Final completion ──
         await tracker.set_state(name, "done")

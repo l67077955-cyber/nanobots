@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from nanobot.groupchat.history.message_converter import age_tool_log
+from nanobot.groupchat.history.message_converter import age_tool_log, trim_sender_history
 
 if TYPE_CHECKING:
     from nanobot.groupchat.history.persistence import GroupChatState
@@ -131,41 +131,14 @@ class HistoryContext:
             extra_head = [m for m in head_msgs if id(m) not in tail_ids]
             self.messages = extra_head + tail
 
-        # Step 2: char-budget trimming — head is counted but always kept
+        # Step 2: char-budget trimming — tiered (用户 > agent > tools > 群聊工具)
         if char_budget > 0:
             head_indices = self._find_head_indices(self.messages, keep_all_users=_keep_users)
-            head_msgs = [self.messages[i] for i in sorted(head_indices)]
-            head_chars = sum(len(m.get("content", "")) for m in head_msgs)
-            available = max(0, char_budget - head_chars)
-
-            tail: list[dict] = []
-            head_id_set = {id(m) for m in head_msgs}
-            for m in reversed(self.messages):
-                if id(m) in head_id_set:
-                    continue
-                c = len(m.get("content", ""))
-                if available - c < 0:
-                    # Try aging tool logs to reduce size before skipping
-                    aged_content = age_tool_log(m.get("content", ""))
-                    aged_c = len(aged_content)
-                    if aged_c < c and available - aged_c >= 0:
-                        tail.insert(0, {**m, "content": aged_content})
-                        available -= aged_c
-                        continue
-                    # Skip this message but keep trying smaller ones
-                    continue
-                tail.insert(0, m)
-                available -= c
-
-            # Rebuild: preserve original chronological order (Kirk audit issue #6)
-            # Previously used head_msgs + tail which pulled all head (user) messages
-            # to the front, breaking chronological order when keep_all_users=True.
-            tail_id_set = {id(m) for m in tail}
-            rebuilt: list[dict] = []
-            for m in self.messages:
-                if id(m) in head_id_set or id(m) in tail_id_set:
-                    rebuilt.append(m)
-            self.messages = rebuilt
+            self.messages = trim_sender_history(
+                self.messages,
+                char_budget,
+                protected_indices=head_indices,
+            )
 
         # ── Step 2b: token-budget trimming (new, more accurate) ──
         # Uses the project's tiktoken estimator (estimate_message_tokens) so
@@ -184,48 +157,21 @@ class HistoryContext:
                     role = "user" if m.get("sender") in ("User", "user", "用户") else "assistant"
                     return {"role": role, "content": m.get("content", "")}
 
-                # Re-identify head after previous trims (char or count)
                 head_indices = self._find_head_indices(self.messages, keep_all_users=_keep_users)
-                head_msgs = [self.messages[i] for i in sorted(head_indices)]
-                head_id_set = {id(m) for m in head_msgs}
-
-                head_toks = sum(int(_est_tok(_as_llm(m)) or 0) for m in head_msgs)
-
-                # Conservative fraction for the conversation history itself
                 token_budget = int(token_window * 0.65)
-                available_toks = max(0, token_budget - head_toks)
 
-                tail: list[dict] = []
-                for m in reversed(self.messages):
-                    if id(m) in head_id_set:
-                        continue
+                def _tok_len(m: dict) -> int:
                     try:
-                        mtoks = int(_est_tok(_as_llm(m)) or 0)
+                        return int(_est_tok(_as_llm(m)) or 0)
                     except Exception:
-                        mtoks = len(m.get("content", "")) // 4 + 4
+                        return len(m.get("content", "")) // 4 + 4
 
-                    if available_toks - mtoks < 0:
-                        # Try aging tool logs to shrink before dropping
-                        aged_content = age_tool_log(m.get("content", ""))
-                        try:
-                            atoks = int(_est_tok(_as_llm({**m, "content": aged_content})) or 0)
-                        except Exception:
-                            atoks = len(aged_content) // 4 + 4
-                        if atoks < mtoks and available_toks - atoks >= 0:
-                            tail.insert(0, {**m, "content": aged_content})
-                            available_toks -= atoks
-                            continue
-                        continue
-                    tail.insert(0, m)
-                    available_toks -= mtoks
-
-                # Rebuild preserving chronological order
-                tail_id_set = {id(m) for m in tail}
-                rebuilt: list[dict] = []
-                for m in self.messages:
-                    if id(m) in head_id_set or id(m) in tail_id_set:
-                        rebuilt.append(m)
-                self.messages = rebuilt
+                self.messages = trim_sender_history(
+                    self.messages,
+                    token_budget,
+                    protected_indices=head_indices,
+                    length_fn=_tok_len,
+                )
         except Exception:
             # Estimator or settings not available; rely on previous char/count logic
             pass

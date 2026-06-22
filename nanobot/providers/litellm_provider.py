@@ -12,6 +12,7 @@ import litellm
 from litellm import acompletion
 from loguru import logger
 
+from nanobot.observability.context_trace import hash_messages
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from nanobot.providers.cache_probe import estimate_cache_ratio
 from nanobot.providers.registry import find_by_model, find_gateway
@@ -95,12 +96,21 @@ class LiteLLMProvider(LLMProvider):
         from nanobot.providers.base import RECOMMENDED_AGENT_SAMPLING
         defaults = dict(RECOMMENDED_AGENT_SAMPLING)
         # Load saved hyperparams from disk
+        from nanobot.config.validate import SAMPLING_KEYS
         hp_path = Path.home() / ".nanobot" / "hyperparams.json"
         if hp_path.exists():
             try:
                 import json as _json
                 saved = _json.loads(hp_path.read_text())
-                defaults.update(saved)
+                if isinstance(saved, dict):
+                    for k, v in saved.items():
+                        if k in SAMPLING_KEYS or k.startswith("reasoning"):
+                            defaults[k] = v
+                        else:
+                            logger.warning(
+                                "hyperparams: ignored '{}' (groupchat params belong in groupchat_settings.json)",
+                                k,
+                            )
                 logger.info("Loaded saved hyperparams from {}", hp_path)
             except Exception:
                 pass
@@ -265,6 +275,11 @@ class LiteLLMProvider(LLMProvider):
                 "session": meta.get("log_session"),
                 "topic": meta.get("log_topic"),
                 "mode": meta.get("log_mode"),
+                "request_id": meta.get("log_request_id"),
+                "context_id": meta.get("log_context_id"),
+                "parent_context_id": meta.get("log_parent_context_id"),
+                "context_iteration": meta.get("log_iteration"),
+                "context_snapshot_path": meta.get("log_context_snapshot_path"),
                 "model": kwargs.get("model"),
                 "api_base": kwargs.get("api_base"),
                 "max_tokens": kwargs.get("max_tokens"),
@@ -309,6 +324,7 @@ class LiteLLMProvider(LLMProvider):
             record["messages"] = msgs_log
             record["total_chars"] = total_chars
             record["msg_count"] = len(msgs_log)
+            record["payload_hash"] = hash_messages(kwargs.get("messages", []))
             record["latency"] = round(latency, 2)
             if cache_headers:
                 record["cache_probe"] = cache_headers
@@ -394,6 +410,11 @@ class LiteLLMProvider(LLMProvider):
                 "session": meta.get("log_session"),
                 "topic": meta.get("log_topic"),
                 "mode": meta.get("log_mode"),
+                "request_id": meta.get("log_request_id"),
+                "context_id": meta.get("log_context_id"),
+                "parent_context_id": meta.get("log_parent_context_id"),
+                "context_iteration": meta.get("log_iteration"),
+                "context_snapshot_path": meta.get("log_context_snapshot_path"),
                 "model": kwargs.get("model"),
                 "api_base": kwargs.get("api_base"),
                 "max_tokens": kwargs.get("max_tokens"),
@@ -437,6 +458,7 @@ class LiteLLMProvider(LLMProvider):
             record["messages"] = msgs_log
             record["total_chars"] = total_chars
             record["msg_count"] = len(msgs_log)
+            record["payload_hash"] = hash_messages(kwargs.get("messages", []))
             record["latency"] = round(latency, 2)
             if cache_headers:
                 record["cache_probe"] = cache_headers
@@ -1050,6 +1072,11 @@ class LiteLLMProvider(LLMProvider):
             args = tc.function.arguments
             if isinstance(args, str):
                 args = json_repair.loads(args)
+            if isinstance(args, list):
+                from nanobot.tools.registry import ToolRegistry
+                args = ToolRegistry._recover_list_params(
+                    args, tool_name=tc.function.name or "",
+                )
 
             provider_specific_fields = getattr(tc, "provider_specific_fields", None) or None
             function_provider_specific_fields = (

@@ -24,7 +24,7 @@ class ChannelsConfig(Base):
 
     model_config = ConfigDict(extra="allow")
 
-    send_progress: bool = True  # stream agent's text progress to the channel
+    send_progress: bool = True  # stream 1v1 reply text (Telegram edit-in-place); false = send once when complete
     send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("…"))
 
 
@@ -33,8 +33,13 @@ class TelegramConfig(Base):
 
     token: str = ""
     proxy: str | None = None
+    connection_pool_size: int = 32
+    get_updates_connection_pool_size: int = 4
+    pool_timeout: float = 5.0
+    connect_timeout: float = 30.0
+    read_timeout: float = 30.0
     reply_to_message: bool = True
-    group_policy: str = "restricted"  # "open" or "restricted"
+    group_policy: str = "mention"  # "open", "mention", or "restricted"
     allow_from: list[str] = []
 
 
@@ -108,12 +113,22 @@ class HeartbeatConfig(Base):
     interval_s: int = 30 * 60  # 30 minutes
 
 
+class WatchConfig(Base):
+    """Code-watch dashboard (served by gateway HTTP, same port)."""
+
+    enabled: bool = True
+    password: str = ""
+    refresh_s: int = 5
+    repo: str | None = None
+
+
 class GatewayConfig(Base):
     """Gateway/server configuration."""
 
     host: str = "0.0.0.0"
     port: int = 18790
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
+    watch: WatchConfig = Field(default_factory=WatchConfig)
 
 
 class WebSearchConfig(Base):
@@ -188,6 +203,7 @@ class Config(BaseSettings):
             p = getattr(self.providers, forced, None)
             return (p, forced) if p else (None, None)
 
+        model = model or self.agents.defaults.model
         if not model:
             return None, None
         model_lower = model.lower()

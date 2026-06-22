@@ -20,8 +20,9 @@ import platform
 from nanobot.utils.helpers import cn_now as _cn_now
 
 from nanobot.groupchat.history.component_manager import get_system_warning
-from nanobot.groupchat.history.message_converter import history_to_messages
 from nanobot.groupchat.history.context_validator import validate_context
+from nanobot.groupchat.history.deliverable_hint import detect_deliverable_hint
+from nanobot.groupchat.history.message_converter import history_to_messages
 
 
 # ── Constants ─────────────────────────────────────────────────
@@ -365,7 +366,15 @@ TEMPLATES: dict[str, str] = {
         "- 自己做搜索/验证须**先完成工具调用**再 end_discussion（触发后无法撤销）\n"
         "- 假设被否证时转向可验证链条，勿仅报告「不成立」即结束\n"
         "- 禁止未 store 记忆就 end_discussion；搜索额度见 [本轮状态汇总]\n"
-        "- 队友空转或无法完成任务时可果断 end_discussion"
+        "- 队友空转或无法完成任务时可果断 end_discussion\n\n"
+        "### 网页交付任务分发（网站/落地页/画廊/公网链接）\n"
+        "识别到交付型网页任务时，分配给 Harper（或具 write_file 的 agent），任务单必须含：\n"
+        "1. **目标**：可浏览 URL + 本地 curl 200\n"
+        "2. **输入**：风格 brief（场景层/语气/区块清单）+ 事实来源\n"
+        "3. **输出**：`write_file` 产出的 index.html + tunnel URL\n"
+        "4. **约束**：禁止 exec 写大 HTML；必须先 `read_file skills/static-landing-page/SKILL.md`；"
+        "models 区独立卡片；@media 响应式；QA 全过才可汇报完成\n"
+        "验收失败 → 明确指出缺项（如无 ticker、models 复用 about-card、无响应式）并重新分配"
     ),
     "group_nudge": (
         "[Write the next reply only as {{agent}}. "
@@ -834,7 +843,6 @@ class PromptBuilder:
             vis = self.get_component_visibility(key)
             if vis == "leader" and leader != agent_name:
                 continue
-
             raw = self._get_component_content(agent_name, agent, key, active_agents, leader)
             if not raw:
                 continue
@@ -870,7 +878,11 @@ class PromptBuilder:
             f"\n[Round: {volatile_tpl_vars['{{round}}']}]"
         )
         if user_question:
-            volatile_content = f"用户请求: {user_question}\n\n" + volatile_content
+            deliverable_hint = detect_deliverable_hint(user_question)
+            prefix = f"用户请求: {user_question}\n\n"
+            if deliverable_hint:
+                prefix += deliverable_hint + "\n\n"
+            volatile_content = prefix + volatile_content
         messages.append({"role": "user", "content": volatile_content})
 
         return messages
@@ -891,7 +903,7 @@ class PromptBuilder:
 
         Combines PromptBuilder's component system with runtime context
         and user message handling (including multimodal media).
-        Used by AgentLoop as a replacement for ContextBuilder.build_messages().
+        Used by direct_chat (1-on-1 mode) via build_agent_prompt.
         """
         from nanobot.utils.helpers import build_runtime_context, build_user_content
 
@@ -989,4 +1001,3 @@ def _persist_agent_file(
             logger.info("Persisted {} for agent {} ({} chars)", filename, agent_name, len(content))
             return
     logger.warning("Could not find agent dir for {}", agent_name)
-

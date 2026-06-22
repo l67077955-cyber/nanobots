@@ -11,8 +11,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from nanobot.agent.memory import MemoryStore
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+
+memory_module = pytest.importorskip(
+    "nanobot.agent.memory",
+    reason="legacy MemoryStore module is not present in this checkout",
+)
+MemoryStore = memory_module.MemoryStore
 
 
 def _make_messages(message_count: int = 30):

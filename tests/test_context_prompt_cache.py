@@ -60,3 +60,38 @@ def test_runtime_context_is_merged_with_user_message(tmp_path) -> None:
     assert "Channel: cli" in user_content
     assert "Chat ID: direct" in user_content
     assert "Return exactly: OK" in user_content
+
+
+def test_direct_mode_uses_same_system_prompt_components_as_group(tmp_path) -> None:
+    """1-on-1 prompts should keep the shared prompt component system."""
+    workspace = _make_workspace(tmp_path)
+    builder = PromptBuilder(config=GroupChatConfig(), workspace=workspace)
+    registry = {"Nanobot": {"model": "test", "prompt": "I am nanobot."}}
+
+    direct = builder.build_agent_prompt(
+        "Nanobot",
+        registry=registry,
+        active_agents=["Nanobot"],
+        history=[],
+        leader=None,
+        round_num=0,
+    )
+    group = builder.build_agent_prompt(
+        "Nanobot",
+        registry=registry,
+        active_agents=["Nanobot", "Grok"],
+        history=[],
+        leader=None,
+        round_num=0,
+        teammates=["Grok"],
+        agent_idx=0,
+        total=2,
+    )
+
+    direct_sys = "\n".join(m["content"] for m in direct if m["role"] == "system")
+    group_sys = "\n".join(m["content"] for m in group if m["role"] == "system")
+
+    assert "[广播模式]" in direct_sys
+    assert "Group members: Nanobot" in direct_sys
+    assert "[广播模式]" in group_sys
+    assert "Group members: Nanobot, Grok" in group_sys

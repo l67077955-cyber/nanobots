@@ -87,12 +87,24 @@ async def broadcast_round(
     total = len(exec_agents)
 
     # Announce broadcast start
+    _session_id = engine._session_dir.name if getattr(engine, "_session_dir", None) else "?"
     engine._save_event("round_start", extra={
         "round": engine._round + 1,
         "agents": list(agents),
         "mode": "broadcast",
         "leader": leader_name,
+        "session": _session_id,
+        "global_timeout": int(global_timeout),
     })
+    from loguru import logger
+    logger.info(
+        "[gc session={} round={} leader={}] broadcast start agents={} timeout={}s",
+        _session_id,
+        engine._round + 1,
+        leader_name or "?",
+        list(agents),
+        int(global_timeout),
+    )
     await engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout), leader=leader_name, ranks=ranks_map))
 
     orch = BroadcastOrchestrator(agents, engine, mailbox)

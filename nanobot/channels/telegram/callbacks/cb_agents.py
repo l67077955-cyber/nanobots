@@ -219,9 +219,6 @@ class AgentCallbackMixin:
                 prompts = {"name": "新名字"}
                 await query.edit_message_text(f"请输入{prompts.get(field, field)}:")
 
-
-        return True
-
         if data.startswith("ef_re:"):
             # ef_re:AgentName:level — set reasoning effort
             parts = data.split(":", 2)
@@ -486,8 +483,6 @@ class AgentCallbackMixin:
                 reply_markup=InlineKeyboardMarkup(buttons)
             )
 
-        return True
-
         if data.startswith("sl:"):
             name = data[3:]
             result = self._groupchat_engine.set_leader(name)
@@ -738,5 +733,4 @@ class AgentCallbackMixin:
                 await query.edit_message_text("📢 更新中...")
                 await self._send_order_keyboard(chat_id, self._groupchat_engine.active_agents)
 
-        return True
         return False

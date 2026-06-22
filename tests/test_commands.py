@@ -293,7 +293,7 @@ def test_gateway_uses_workspace_from_config_by_default(monkeypatch, tmp_path: Pa
         lambda _config: (_ for _ in ()).throw(_StopGateway("stop")),
     )
 
-    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    result = runner.invoke(app, ["gateway", "--foreground", "--config", str(config_file)])
 
     assert isinstance(result.exception, _StopGateway)
     assert seen["config_path"] == config_file.resolve()
@@ -323,7 +323,7 @@ def test_gateway_workspace_option_overrides_config(monkeypatch, tmp_path: Path) 
 
     result = runner.invoke(
         app,
-        ["gateway", "--config", str(config_file), "--workspace", str(override)],
+        ["gateway", "--foreground", "--config", str(config_file), "--workspace", str(override)],
     )
 
     assert isinstance(result.exception, _StopGateway)
@@ -347,7 +347,7 @@ def test_gateway_warns_about_deprecated_memory_window(monkeypatch, tmp_path: Pat
         lambda _config: (_ for _ in ()).throw(_StopGateway("stop")),
     )
 
-    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    result = runner.invoke(app, ["gateway", "--foreground", "--config", str(config_file)])
 
     assert isinstance(result.exception, _StopGateway)
     assert "memoryWindow" in result.stdout
@@ -377,7 +377,7 @@ def test_gateway_uses_config_directory_for_cron_store(monkeypatch, tmp_path: Pat
 
     monkeypatch.setattr("nanobot.cron.service.CronService", _StopCron)
 
-    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    result = runner.invoke(app, ["gateway", "--foreground", "--config", str(config_file)])
 
     assert isinstance(result.exception, _StopGateway)
     assert seen["cron_store"] == config_file.parent / "cron" / "jobs.json"
@@ -399,7 +399,7 @@ def test_gateway_uses_configured_port_when_cli_flag_is_missing(monkeypatch, tmp_
         lambda _config: (_ for _ in ()).throw(_StopGateway("stop")),
     )
 
-    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    result = runner.invoke(app, ["gateway", "--foreground", "--config", str(config_file)])
 
     assert isinstance(result.exception, _StopGateway)
     assert "port 18791" in result.stdout
@@ -421,7 +421,7 @@ def test_gateway_cli_port_overrides_configured_port(monkeypatch, tmp_path: Path)
         lambda _config: (_ for _ in ()).throw(_StopGateway("stop")),
     )
 
-    result = runner.invoke(app, ["gateway", "--config", str(config_file), "--port", "18792"])
+    result = runner.invoke(app, ["gateway", "--foreground", "--config", str(config_file), "--port", "18792"])
 
     assert isinstance(result.exception, _StopGateway)
     assert "port 18792" in result.stdout

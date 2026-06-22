@@ -28,6 +28,7 @@ class GroupChatState:
     - ``active_agents.json``  — ordered list of active agent names
     - ``leader.txt``          — current leader name (or absent)
     - ``groups.json``         — saved named groups
+    - ``chat_history.json``   — persisted in-memory chat state (survives gateway restart)
     - ``collab-sessions/``    — per-session event logs
     """
 
@@ -114,6 +115,50 @@ class GroupChatState:
     def session_dir(self, value: Path | None) -> None:
         self._session_dir = value
 
+    @property
+    def _current_session_file(self) -> Path:
+        return _NANOBOT_DIR / "current_session.json"
+
+    def save_current_session(
+        self,
+        session_dir: Path | None,
+        *,
+        topic: str = "",
+        round_num: int = 0,
+        agents: list[str] | None = None,
+        leader: str | None = None,
+    ) -> None:
+        """Persist a pointer to the active collab session for log discovery."""
+        if not session_dir:
+            return
+        payload: dict[str, Any] = {
+            "session_id": session_dir.name,
+            "session_dir": str(session_dir),
+            "topic": topic,
+            "round": round_num,
+            "agents": agents or [],
+            "leader": leader,
+            "updated_at": _cn_now().isoformat(),
+        }
+        try:
+            self._current_session_file.parent.mkdir(parents=True, exist_ok=True)
+            self._current_session_file.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+            )
+        except Exception as e:
+            logger.debug("save_current_session failed: {}", e)
+
+    def load_current_session(self) -> dict[str, Any] | None:
+        if not self._current_session_file.exists():
+            return None
+        try:
+            data = json.loads(self._current_session_file.read_text())
+            if data.get("session_dir") or data.get("session_id"):
+                return data
+        except Exception as e:
+            logger.debug("load_current_session failed: {}", e)
+        return None
+
     def create_session(self) -> Path:
         """Create a new session directory and return its path."""
         timestamp = _cn_now().strftime("%Y%m%d-%H%M%S")
@@ -121,6 +166,7 @@ class GroupChatState:
         sessions_dir.mkdir(parents=True, exist_ok=True)
         self._session_dir = sessions_dir / f"gc-{timestamp}"
         self._session_dir.mkdir(parents=True, exist_ok=True)
+        self.save_current_session(self._session_dir)
         return self._session_dir
 
     def save_event(
@@ -175,3 +221,55 @@ class GroupChatState:
             with open(self._session_dir / "chat_log.txt", "a") as f:
                 f.write(f"[{sender}]: {content}\n---\n")
         self.save_event("message", agent=sender, content=content)
+
+    # ── Chat history snapshot (survives gateway restart) ───────
+
+    @property
+    def _history_snapshot_file(self) -> Path:
+        return _NANOBOT_DIR / "chat_history.json"
+
+    def save_history_snapshot(
+        self,
+        *,
+        history: list[dict[str, str]],
+        topic: str = "",
+        round_num: int = 0,
+        session_dir: Path | None = None,
+    ) -> None:
+        """Persist the live chat state so a restarted gateway can resume context."""
+        if not history:
+            return
+        payload: dict[str, Any] = {
+            "history": history,
+            "topic": topic,
+            "round": round_num,
+            "session_dir": str(session_dir) if session_dir else "",
+            "updated_at": _cn_now().isoformat(),
+        }
+        try:
+            self._history_snapshot_file.parent.mkdir(parents=True, exist_ok=True)
+            self._history_snapshot_file.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+            )
+        except Exception as e:
+            logger.debug("save_history_snapshot failed: {}", e)
+
+    def load_history_snapshot(self) -> dict[str, Any] | None:
+        """Load the last persisted chat state, if any."""
+        if not self._history_snapshot_file.exists():
+            return None
+        try:
+            data = json.loads(self._history_snapshot_file.read_text())
+            if isinstance(data.get("history"), list) and data["history"]:
+                return data
+        except Exception as e:
+            logger.debug("load_history_snapshot failed: {}", e)
+        return None
+
+    def clear_history_snapshot(self) -> None:
+        """Remove persisted chat state (e.g. on /new or /clear)."""
+        try:
+            if self._history_snapshot_file.exists():
+                self._history_snapshot_file.unlink()
+        except Exception:
+            pass

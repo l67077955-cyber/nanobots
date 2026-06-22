@@ -317,10 +317,11 @@ class MailboxHub:
         self._expected_replies: dict[str, set[str]] = {}
 
         # ── Agent ranks (basic < standard < advanced < expert) ────────────
-        # Controls interrupt hierarchy: higher rank can interrupt lower rank.
-        # Same rank cannot interrupt each other.
+        # _base_ranks: configured tier for who-can-interrupt-whom comparisons.
+        # _ranks: display/attribution; leader gets outbound boost only.
+        self._base_ranks: dict[str, int] = {}
         self._ranks: dict[str, int] = {}
-        self._leader: str = ""  # Leader always has highest interrupt priority
+        self._leader: str = ""  # Leader as sender = high-priority interrupt
 
         # ── Forced interrupt state ──────────────────────────
         # Per-agent asyncio.Event: set when a forced interrupt is triggered.
@@ -416,22 +417,27 @@ class MailboxHub:
         
         Args:
             ranks: Mapping of agent_name -> rank_string ("basic", "standard", "advanced", "expert").
-            leader: Leader agent name — always gets highest priority regardless of rank.
+            leader: Leader agent name — gets high-priority **outbound** interrupts only
+                (as sender). Inbound interrupts to leader use configured tier ranks so
+                advanced teammates can still preempt a standard-tier leader.
         """
         self._ranks.clear()
+        self._base_ranks: dict[str, int] = {}
         self._leader = leader
-        # First assign base ranks for everyone (consistent with compute_agent_ranks)
         for name, r in ranks.items():
             if isinstance(r, str):
-                self._ranks[name] = rank_interrupt_level(resolve_rank(r, agent=name))
+                level = rank_interrupt_level(resolve_rank(r, agent=name))
             else:
-                self._ranks[name] = int(r)
-        # Then force leader to be strictly highest (max of assigned + 1)
+                level = int(r)
+            self._base_ranks[name] = level
+            self._ranks[name] = level
+        # Boosted rank for attribution / leader-as-sender priority display only
         if leader and leader in self._ranks:
-            self._ranks[leader] = max(self._ranks.values()) + 1
-        for name, val in self._ranks.items():
+            self._ranks[leader] = max(self._base_ranks.values()) + 1
+        for name, val in self._base_ranks.items():
             r_str = ranks.get(name, "?")
-            logger.debug("MailboxHub: rank({}) = {} ({})", name, val, r_str)
+            boost = f" → {self._ranks.get(name)}" if name == leader else ""
+            logger.debug("MailboxHub: rank({}) = {}{} ({})", name, val, boost, r_str)
 
     def _is_high_priority(self, sender: str) -> bool:
         """Check if sender is a high-priority source (user or leader).
@@ -441,19 +447,23 @@ class MailboxHub:
         """
         return sender == "用户" or sender == self._leader
 
+    def _tier_rank(self, agent: str) -> int:
+        """Configured tier rank for interrupt comparison (ignores leader outbound boost)."""
+        return self._base_ranks.get(agent, self._ranks.get(agent, 0))
+
     def _can_interrupt(self, sender: str, target: str) -> bool:
         """Check if sender has sufficient rank to interrupt target.
         
         Rules:
-        - Leader (or "用户") CAN interrupt anyone (highest priority)
-        - Higher rank CAN interrupt lower rank
-        - Equal rank CANNOT interrupt each other (they queue)
-        - Unknown rank defaults to 0 (lowest)
+        - Leader (or "用户") as **sender** CAN interrupt anyone
+        - Higher **configured tier** CAN interrupt lower tier (advanced > standard)
+        - Leader as **target** uses configured tier only — not immune to advanced peers
+        - Equal tier CANNOT interrupt each other (they queue)
         """
         if self._is_high_priority(sender):
             return True
-        s_rank = self._ranks.get(sender, 0)
-        t_rank = self._ranks.get(target, 0)
+        s_rank = self._tier_rank(sender)
+        t_rank = self._tier_rank(target)
         return s_rank > t_rank
 
     def _try_interrupt(self, target: str, sender: str) -> bool:
@@ -469,10 +479,10 @@ class MailboxHub:
             return False
         # Rank check: low-rank agents cannot interrupt higher-or-equal rank
         if not self._can_interrupt(sender, target):
-            logger.debug(
-                "MailboxHub: interrupt blocked — {} (rank {}) vs {} (rank {})",
-                sender, self._ranks.get(sender, 0),
-                target, self._ranks.get(target, 0),
+            logger.info(
+                "MailboxHub: interrupt blocked — {} (tier {}) cannot interrupt {} (tier {})",
+                sender, self._tier_rank(sender),
+                target, self._tier_rank(target),
             )
             return False
         if self._interrupt_counts.get(target, 0) >= 3:

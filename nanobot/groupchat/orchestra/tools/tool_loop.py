@@ -24,6 +24,7 @@ from loguru import logger
 
 from nanobot.tools.registry import ToolRegistry
 from nanobot.groupchat.history.result_processor import process_tool_result
+from nanobot.observability.context_trace import write_context_snapshot
 from nanobot.providers.base import LLMProvider, LLMResponse
 from nanobot.utils.helpers import build_assistant_message
 
@@ -339,6 +340,24 @@ async def tool_loop(
             iteration, model, "\n".join(_ctx_parts), _ctx_total, len(llm_messages), _pruned_note,
         )
 
+        trace_info = write_context_snapshot(
+            messages=llm_messages,
+            metadata=metadata,
+            model=model,
+            iteration=iteration,
+            parent_context_id=(metadata or {}).get("log_context_id") if metadata else None,
+            pruned_from_count=len(messages) if len(llm_messages) != len(messages) else None,
+            tools_count=len(tool_defs or []),
+        )
+        if metadata is not None:
+            metadata.update({
+                "log_request_id": trace_info["request_id"],
+                "log_context_id": trace_info["context_id"],
+                "log_parent_context_id": trace_info["parent_context_id"],
+                "log_iteration": trace_info["iteration"],
+                "log_context_snapshot_path": trace_info["snapshot_path"],
+            })
+
         t0 = _time.time()
 
         # On the last iteration, if tools were already used, skip passing
@@ -447,6 +466,8 @@ async def tool_loop(
 
         result.call_details.append({
             "iter": iteration,
+            "request_id": trace_info.get("request_id"),
+            "context_id": trace_info.get("context_id"),
             "latency": round(latency, 2),
             "tokens": dict(usage),
             "finish": response.finish_reason,
@@ -955,5 +976,3 @@ async def _stream_call(
         )
 
     return response
-
-

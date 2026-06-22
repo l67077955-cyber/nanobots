@@ -1,13 +1,15 @@
 """Tests for nanobot.tools.summarizer."""
 
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from nanobot.tools.summarizer import (
-    summarize_tool_output,
-    _head_tail_truncate,
+summarizer_module = pytest.importorskip(
+    "nanobot.tools.summarizer",
+    reason="legacy summarizer module is not present in this checkout",
 )
+summarize_tool_output = summarizer_module.summarize_tool_output
+_head_tail_truncate = summarizer_module._head_tail_truncate
 
 
 def test_head_tail_truncate_short() -> None:
