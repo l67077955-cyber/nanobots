@@ -1,0 +1,119 @@
+# Benchmark Configuration Matrix
+# Each entry defines a complete experiment run.
+# bench_runner.py iterates over these, applies config, restarts gateway, injects task, collects metrics.
+
+# ═══ Task Definitions ═══
+# Referenced by name in runs below. Each task is a self-contained prompt.
+tasks:
+  build_landing_page:
+    name: "建站-落地页"
+    type: delivery
+    timeout_s: 600
+    prompt: |
+      【交付任务 — 建一个落地页】
+      用 write_file 创建一个单页 HTML 落地页（含内联 CSS+JS），主题：AI 代码助手产品介绍页。
+      要求：
+      1. 响应式布局，含 hero section、feature cards、CTA button
+      2. 暗色主题，现代风格
+      3. 纯静态，无外部依赖
+      4. 保存到 /root/.nanobot/workspace/bench_output/landing_page.html
+      完成后用 exec 验证文件存在且 >2KB。
+
+  write_python_cli:
+    name: "编码-CLI工具"
+    type: delivery
+    timeout_s: 600
+    prompt: |
+      【交付任务 — 写一个 Python CLI 工具】
+      用 write_file 创建一个 Python 脚本，功能：统计指定目录下各文件类型的数量和总大小，输出 JSON。
+      要求：
+      1. 支持 --path 和 --depth 参数
+      2. 用 argparse，类型注解
+      3. 保存到 /root/.nanobot/workspace/bench_output/file_stats.py
+      完成后用 exec 运行 `python3 /root/.nanobot/workspace/bench_output/file_stats.py --path /tmp` 验证能跑。
+
+  search_and_summarize:
+    name: "搜索-调研总结"
+    type: research
+    timeout_s: 300
+    prompt: |
+      【调研任务 — 搜索并总结】
+      搜索 OpenRouter 上 GLM-5.2 和 DeepSeek V4 的价格对比，输出一个 markdown 表格。
+      要求：
+      1. 用 web_search 或 web_fetch 获取实际数据
+      2. 表格含：模型名、input价格、output价格、上下文窗口
+      3. 附一句话结论
+
+# ═══ Agent Roster ═══
+# Available agents in /root/.nanobot/agents/
+# Each run specifies which agents to activate.
+available_agents:
+  - kirk
+  - harper
+  - lucas
+  - scholar
+  - retriever
+  - verifier
+
+# ═══ Experiment Runs ═══
+# Each run = one experiment. Dimensions:
+#   agents: list of agent names to activate
+#   model_override: {agent_name: model_id}  (optional)
+#   temperature: override temperature for all agents
+#   max_tokens: override maxTokens for all agents
+#   reasoning_effort: override reasoning_effort for all agents
+#   task: task name from tasks above
+runs:
+  # --- Baseline: current production config ---
+  - id: baseline_harper_kirk
+    agents: [harper, kirk]
+    task: build_landing_page
+    description: "基线：Harper+Kirk 建站，当前配置"
+
+  - id: baseline_harper_kirk_code
+    agents: [harper, kirk]
+    task: write_python_cli
+    description: "基线：Harper+Kirk 编码，当前配置"
+
+  # --- Temperature sweep ---
+  - id: temp_02
+    agents: [harper, kirk]
+    task: build_landing_page
+    temperature: 0.2
+    description: "低温 0.2 建站"
+
+  - id: temp_08
+    agents: [harper, kirk]
+    task: build_landing_page
+    temperature: 0.8
+    description: "高温 0.8 建站"
+
+  # --- Single agent vs multi-agent ---
+  - id: solo_harper
+    agents: [harper]
+    task: build_landing_page
+    description: "单 agent Harper 建站"
+
+  - id: trio_harper_kirk_verifier
+    agents: [harper, kirk, verifier]
+    task: build_landing_page
+    description: "三 agent 建站（含验证者）"
+
+  # --- maxTokens sweep ---
+  - id: maxtok_16k
+    agents: [harper, kirk]
+    task: write_python_cli
+    max_tokens: 16384
+    description: "16K maxTokens 编码"
+
+  - id: maxtok_65k
+    agents: [harper, kirk]
+    task: write_python_cli
+    max_tokens: 65536
+    description: "65K maxTokens 编码"
+
+  # --- Research task ---
+  - id: research_harper_kirk
+    agents: [harper, kirk]
+    task: search_and_summarize
+    description: "搜索调研任务"
