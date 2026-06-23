@@ -81,6 +81,16 @@ class TestUsedChatroomSendGuard(unittest.TestCase):
         self.assertNotIn("_used_chatroom_send", block,
             "Synthesis display block must not reference _used_chatroom_send")
 
+    def test_single_agent_exits_before_auto_wait(self):
+        """Single-agent broadcast must not wait 600s for nonexistent teammates."""
+        with open(AGENT) as f:
+            content = f.read()
+        exit_idx = content.find("exiting after single-agent cycle")
+        wait_idx = content.find("entering auto-wait")
+        self.assertGreater(exit_idx, 0, "Single-agent exit branch exists")
+        self.assertGreater(wait_idx, 0, "Auto-wait branch exists")
+        self.assertLess(exit_idx, wait_idx, "Single-agent exit happens before auto-wait")
+
 
 # ── Test 3: Retry prompt includes tool data ────────────────
 

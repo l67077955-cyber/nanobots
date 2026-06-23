@@ -918,6 +918,15 @@ async def run_agent_turn(
                 logger.info("Broadcast: leader {} called end_discussion, exiting cycle loop", name)
                 break
 
+            # Single-agent broadcast has no teammate mailbox traffic to wait
+            # for. Once the agent has produced a usable cycle result, the
+            # round is complete; otherwise it can sit in wait() until the
+            # 600s timeout and make short follow-up messages look stuck.
+            if total <= 1:
+                await tracker.set_state(name, "done", reason="single agent")
+                logger.info("Broadcast: {} exiting after single-agent cycle {}", name, cycle)
+                break
+
             # Now wait for teammate messages
             await tracker.set_state(name, "waiting")
             logger.info("Broadcast: {} entering auto-wait (cycle {})", name, cycle)
