@@ -22,26 +22,6 @@ from nanobot.groupchat.history.component_manager import (
 from nanobot.groupchat.history.message_converter import latest_user_question
 
 
-def _resolve_loop_limits(*, is_leader: bool, total: int) -> tuple[int, int]:
-    """Return (max_tool_iterations, max_cycles) for one broadcast agent."""
-    agent_max_iters = 12 if is_leader else 8
-    max_cycles = 30 if is_leader else 20
-    if total <= 1:
-        return min(agent_max_iters, 4), min(max_cycles, 3)
-    return agent_max_iters, max_cycles
-
-
-def _resolve_call_timeout(gc_settings: dict, *, is_leader: bool, total: int) -> float | None:
-    """Resolve LLM call timeout, capped for single-agent broadcast."""
-    key = "leader_call_timeout" if is_leader else "call_timeout"
-    timeout = float(gc_settings.get(key, 90)) or 0.0
-    if timeout <= 0:
-        return None
-    if total <= 1:
-        timeout = min(timeout, 75.0)
-    return timeout
-
-
 def _rebuild_prompt_prefix(
     engine: Any,
     name: str,
@@ -273,9 +253,8 @@ async def run_agent_turn(
     total_latency = 0.0
     cycle = 0
     content = ""  # last cycle's text output
-    agent_max_iters, max_cycles = _resolve_loop_limits(
-        is_leader=is_leader, total=total,
-    )
+    agent_max_iters = 12 if is_leader else 8
+    max_cycles = 30 if is_leader else 20  # hard cap to prevent runaway agents
     _substantive_tools = {"web_search", "web_fetch", "exec", "read_file", "write_file"}
     # Separate system-prompt messages (stable prefix) from conversation messages
     # so we can prune conversation turns without touching the system prompt.
@@ -460,9 +439,7 @@ async def run_agent_turn(
                     on_content_reset=None,
                     clean_response=lambda c: engine._clean_response(c, name),
                     result_max_chars=_broadcast_result_max,
-                    call_timeout=_resolve_call_timeout(
-                        gc_settings, is_leader=is_leader, total=total,
-                    ),
+                    call_timeout=float(gc_settings.get("leader_call_timeout" if is_leader else "call_timeout", 90)) or None,
                     interrupt_event=_interrupt_event,
                 )
             finally:
@@ -496,9 +473,10 @@ async def run_agent_turn(
 
             if is_error or is_timeout:
                 if is_timeout:
-                    _base_timeout = _resolve_call_timeout(
-                        gc_settings, is_leader=is_leader, total=total,
-                    ) or 90.0
+                    _base_timeout = gc_settings.get(
+                        "leader_call_timeout" if is_leader else "call_timeout",
+                        90,
+                    )
                     err_short = f"LLM 超时 ({_base_timeout}s)"
 
                     # ── Clean retry on first timeout ──
