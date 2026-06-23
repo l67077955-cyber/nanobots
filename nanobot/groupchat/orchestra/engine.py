@@ -913,11 +913,11 @@ class GroupChatEngine:
         *,
         media: list[str] | None = None,
     ) -> None:
-        """Inject a user message into the chat loop.
+        """Inject a user message into the shared chat loop.
 
-        Routes by active agent count:
-        - 1 agent → direct_chat (lightweight 1-on-1)
-        - 2+ agents → broadcast group loop
+        The loop handles both one-agent and multi-agent conversations.  Keep
+        this path unified so single chat gets the same interrupt/mailbox
+        semantics as group chat.
         """
         from nanobot.groupchat.room_observability import emit_room_event
         emit_room_event(
@@ -933,14 +933,6 @@ class GroupChatEngine:
         )
         n = len(self._active_agents)
         if n == 0:
-            return
-        if n == 1:
-            if self.direct_chat_inject(message, media=media):
-                return
-            self._stop_group_loop()
-            self._direct_chat_task = asyncio.create_task(
-                self._run_direct_chat(message, media=media),
-            )
             return
         self.interrupt_active_turn()
         if not self._running:

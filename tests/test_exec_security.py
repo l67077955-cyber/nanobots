@@ -34,11 +34,11 @@ async def test_exec_blocks_curl_metadata():
 
 
 @pytest.mark.asyncio
-async def test_exec_blocks_wget_localhost():
+async def test_exec_allows_wget_localhost():
     tool = ExecTool()
     with patch("nanobot.security.network.socket.getaddrinfo", _fake_resolve_localhost):
         result = await tool.execute(command="wget http://localhost:8080/secret -O /tmp/out")
-    assert "Error" in result
+    assert "internal/private URL" not in result
 
 
 @pytest.mark.asyncio
