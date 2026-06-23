@@ -111,3 +111,5 @@ tail -3 /root/.nanobot/gateway.log 2>/dev/null
 - Workspace：`~/.nanobot/workspace/`
 - Cron：`~/.nanobot/cron/jobs.json`
 - 重启脚本：`~/.nanobot/restart_nanobot.sh`
+
+<!-- checklist commit footer: 2026-06-23 -->
