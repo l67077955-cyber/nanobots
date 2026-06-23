@@ -616,14 +616,26 @@ async def tool_loop(
 
                 pending.append((tc, args_str, dedup_key))
 
-            # ── Prepare per-agent ForgetTool context (prev/last batch rotation) ──
+            # ── Prepare per-agent ForgetTool context.
+            #
+            # When forget is called together with other tools, target the
+            # current non-forget calls so the model can clean up "this batch".
+            # When forget is called alone on the next iteration, target the
+            # previous non-forget batch.
             forget_tool = tool_registry.get("forget") if tool_registry is not None else None
             if forget_tool is not None:
                 if not hasattr(forget_tool, "_ctx") or forget_tool._ctx is None:
                     forget_tool._ctx = {}
                 fctx = forget_tool._ctx
-                fctx["prev_tool_calls"] = fctx.get("last_tool_calls", []) or []
-                fctx["last_tool_calls"] = current_tool_batch
+                prev_batch = fctx.get("last_tool_calls", []) or []
+                current_batch = [
+                    call for call in current_tool_batch
+                    if call.get("name") != "forget"
+                ]
+                fctx["prev_tool_calls"] = prev_batch
+                if current_batch:
+                    fctx["last_tool_calls"] = current_batch
+                fctx["target_tool_calls"] = current_batch or prev_batch
                 fctx.setdefault("_forgot_ids", set())
 
             # ── Checkpoint 2.5: interrupt check before tool execution ──

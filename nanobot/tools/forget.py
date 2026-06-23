@@ -88,7 +88,9 @@ class ForgetTool(Tool):
     ) -> str:
         ctx = self._active_ctx()
         last_calls: list[dict] = (
-            ctx.get("prev_tool_calls") or ctx.get("last_tool_calls", [])
+            ctx.get("target_tool_calls")
+            or ctx.get("prev_tool_calls")
+            or ctx.get("last_tool_calls", [])
         )
         forgot_ids: set[str] = ctx.setdefault("_forgot_ids", set())
 

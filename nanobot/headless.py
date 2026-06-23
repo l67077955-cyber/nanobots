@@ -68,8 +68,45 @@ def is_alive(pid: int) -> bool:
         return True
 
 
+def _is_gateway_cmdline(cmdline: list[str]) -> bool:
+    joined = " ".join(cmdline)
+    return (
+        "gateway" in cmdline
+        and "--foreground" in cmdline
+        and ("nanobot" in joined or "/nanobot/__main__.py" in joined)
+    )
+
+
+def discover_gateway_pid() -> int | None:
+    """Best-effort recovery for foreground gateway processes missing a pid file."""
+    proc_dir = Path("/proc")
+    if not proc_dir.exists():
+        return None
+    own_pid = os.getpid()
+    for entry in proc_dir.iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if pid == own_pid:
+            continue
+        try:
+            raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        if not raw:
+            continue
+        cmdline = [part.decode("utf-8", errors="replace") for part in raw.split(b"\0") if part]
+        if _is_gateway_cmdline(cmdline) and is_alive(pid):
+            return pid
+    return None
+
+
 def status() -> DaemonStatus:
     pid = read_pid()
+    if pid is None:
+        pid = discover_gateway_pid()
+        if pid is not None:
+            write_pid(pid)
     running = bool(pid and is_alive(pid))
     if pid and not running:
         clear_pid()

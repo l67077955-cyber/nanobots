@@ -18,6 +18,9 @@ from nanobot.groupchat.tool_policy import (
     forget_tool_enabled,
     memory_palace_tool_enabled,
 )
+from nanobot.groupchat.orchestra.engine import GroupChatEngine
+from nanobot.tools.forget import ForgetTool
+from nanobot.tools.registry import ToolRegistry
 
 
 class TestResolveRank:
@@ -112,3 +115,33 @@ class TestToolPolicy:
     def test_agent_tool_enabled_respects_default(self):
         assert agent_tool_enabled({}, "custom", default=False) is False
         assert agent_tool_enabled({"tools": {"custom": True}}, "custom", default=False) is True
+
+
+class TestForgetToolExposure:
+    def test_granular_tools_implicitly_include_forget(self):
+        engine = GroupChatEngine.__new__(GroupChatEngine)
+        engine.registry = {
+            "Kirk": {"tools": {"read_file": True}},
+        }
+        reg = ToolRegistry()
+        reg.register(ForgetTool())
+
+        names = engine.get_agent_enabled_tool_names("Kirk")
+        defs = engine._get_agent_tools(engine.registry["Kirk"], reg, agent_name="Kirk")
+
+        assert "forget" in names
+        assert [d["function"]["name"] for d in defs] == ["forget"]
+
+    def test_granular_tools_respect_explicit_forget_disable(self):
+        engine = GroupChatEngine.__new__(GroupChatEngine)
+        engine.registry = {
+            "Kirk": {"tools": {"read_file": True, "forget": False}},
+        }
+        reg = ToolRegistry()
+        reg.register(ForgetTool())
+
+        names = engine.get_agent_enabled_tool_names("Kirk")
+        defs = engine._get_agent_tools(engine.registry["Kirk"], reg, agent_name="Kirk")
+
+        assert "forget" not in names
+        assert defs == []

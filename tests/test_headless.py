@@ -27,6 +27,7 @@ def test_build_gateway_command_runs_foreground_child():
 
 def test_status_clears_stale_pid(tmp_path, monkeypatch):
     monkeypatch.setattr(headless, "get_logs_dir", lambda: tmp_path)
+    monkeypatch.setattr(headless, "discover_gateway_pid", lambda: None)
     pid_file = tmp_path / headless.PID_FILE
     pid_file.write_text("999999")
     info = headless.status()
@@ -35,8 +36,34 @@ def test_status_clears_stale_pid(tmp_path, monkeypatch):
     assert not pid_file.exists()
 
 
+def test_status_recovers_missing_pid_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(headless, "get_logs_dir", lambda: tmp_path)
+    monkeypatch.setattr(headless, "discover_gateway_pid", lambda: 4242)
+    monkeypatch.setattr(headless, "is_alive", lambda pid: pid == 4242)
+
+    info = headless.status()
+
+    assert info.running is True
+    assert info.pid == 4242
+    assert (tmp_path / headless.PID_FILE).read_text() == "4242"
+
+
+def test_gateway_cmdline_detection_accepts_module_and_script_forms():
+    assert headless._is_gateway_cmdline([
+        "/usr/bin/python3", "-m", "nanobot", "gateway", "--foreground",
+    ])
+    assert headless._is_gateway_cmdline([
+        "/usr/bin/python3", "/root/nanobot-src/nanobot/__main__.py",
+        "gateway", "--foreground",
+    ])
+    assert not headless._is_gateway_cmdline([
+        "/usr/bin/python3", "-m", "nanobot", "status",
+    ])
+
+
 def test_spawn_and_stop_lifecycle(tmp_path, monkeypatch):
     monkeypatch.setattr(headless, "get_logs_dir", lambda: tmp_path)
+    monkeypatch.setattr(headless, "discover_gateway_pid", lambda: None)
 
     child_started = False
 

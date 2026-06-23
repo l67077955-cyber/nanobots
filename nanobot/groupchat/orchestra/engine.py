@@ -755,10 +755,16 @@ class GroupChatEngine:
             tools_cfg = agent_cfg.get("tools")
             
         if isinstance(tools_cfg, dict):
-            return [k for k, v in tools_cfg.items() if v]
+            names = [k for k, v in tools_cfg.items() if v]
+            from nanobot.groupchat.tool_policy import forget_tool_enabled
+            if forget_tool_enabled(agent_cfg, session_override=tools_cfg) and "forget" not in names:
+                names.append("forget")
+            return names
         elif agent_cfg.get("tools_enabled", False) or agent_cfg.get("_default"):
             return list(self.TOOL_NAMES)
-        return []
+
+        from nanobot.groupchat.tool_policy import forget_tool_enabled
+        return ["forget"] if forget_tool_enabled(agent_cfg) else []
 
     def _get_agent_tools(self, agent_cfg: dict, registry, agent_name: str = None) -> list:
         """Get filtered tool definitions based on agent's per-tool config.
@@ -776,6 +782,9 @@ class GroupChatEngine:
         # Granular tools dict
         if isinstance(tools_cfg, dict):
             enabled = {k for k, v in tools_cfg.items() if v}
+            from nanobot.groupchat.tool_policy import forget_tool_enabled
+            if forget_tool_enabled(agent_cfg, session_override=tools_cfg):
+                enabled.add("forget")
             if not enabled:
                 return []
             return [d for d in registry.get_definitions()
@@ -788,6 +797,13 @@ class GroupChatEngine:
         # Default agent (_default flag)
         if agent_cfg.get("_default"):
             return registry.get_definitions()
+
+        from nanobot.groupchat.tool_policy import forget_tool_enabled
+        if forget_tool_enabled(agent_cfg):
+            return [
+                d for d in registry.get_definitions()
+                if d.get("function", {}).get("name") == "forget"
+            ]
 
         return []
 
