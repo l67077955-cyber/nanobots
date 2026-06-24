@@ -25,7 +25,7 @@ class AgentCommandsMixin:
         self._groupchat_engine.set_tool_context("telegram", chat_id)
 
         need_stream_bind = self._groupchat_engine._stream_chat_id != chat_id
-        if need_stream_bind:
+        if need_stream_bind and chat_id.isdigit():
             int_chat_id = int(chat_id)
 
             async def send_and_get_id_fn(text: str) -> int | None:
@@ -64,6 +64,11 @@ class AgentCommandsMixin:
 
     async def _gc_send(self, chat_id: str, text: str) -> None:
         if not self._app:
+            return
+        if not chat_id.isdigit():
+            if hasattr(self, "_reply_text"):
+                for chunk in split_message(text, TELEGRAM_MAX_MESSAGE_LEN):
+                    await self._reply_text(chat_id, chunk)  # type: ignore[attr-defined]
             return
         for chunk in split_message(text, TELEGRAM_MAX_MESSAGE_LEN):
             await self._send_text(int(chat_id), chunk)

@@ -84,7 +84,8 @@ class SettingsCommandsMixin:
         text = "\n".join(lines)
         hp_text = to_cli_style(text, title="⚙️ 默认超参数设置（全局）")
         await self._app.bot.send_message(
-            chat_id=int(chat_id), text=hp_text,
+            chat_id=int(chat_id) if chat_id.isdigit() else chat_id,
+            text=hp_text,
             reply_markup=InlineKeyboardMarkup(buttons),
             parse_mode="Markdown",
         )

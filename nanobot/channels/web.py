@@ -24,6 +24,7 @@ from nanobot.channels.telegram.commands.providers import ProviderCommandsMixin
 from nanobot.channels.telegram.commands.settings import SettingsCommandsMixin
 from nanobot.channels.web_shim import _FakeApp
 from nanobot.config.schema import Base
+from nanobot.runtime.chat_events import ChatEventBus, ChatEventSink, HubChatSink
 from nanobot.runtime.dispatch import InboundDispatcher
 
 
@@ -67,16 +68,16 @@ class WebChannel(
         self._groupchat_engine = None
         self._edit_state: dict[str, dict] = {}
         self._app = _FakeApp(self)
-        self._chat_hub = None
         self._dispatcher = InboundDispatcher()
+        self._chat_events = ChatEventBus()
 
     def set_chat_hub(self, hub) -> None:
         """Wire in-process dashboard chat polling (replaces HTTP→WS bridge)."""
-        self._chat_hub = hub
+        self.add_chat_sink(HubChatSink(hub))
 
-    def _push_hub(self, chat_id: str, payload: dict) -> None:
-        if self._chat_hub and chat_id == self._chat_hub.chat_id:
-            self._chat_hub.push(payload)
+    def add_chat_sink(self, sink: ChatEventSink) -> None:
+        """Subscribe a side-effect consumer to chat events."""
+        self._chat_events.subscribe(sink)
 
     def set_groupchat_engine(self, engine) -> None:
         self._groupchat_engine = engine
@@ -148,7 +149,7 @@ class WebChannel(
             "progress": bool(msg.metadata.get("_progress")),
             "tool_hint": bool(msg.metadata.get("_tool_hint")),
         }
-        self._push_hub(msg.chat_id, payload)
+        await self._chat_events.publish(msg.chat_id, payload)
         await self._broadcast(msg.chat_id, payload)
 
     async def _on_connect(self, websocket: WebSocketServerProtocol) -> None:
@@ -199,9 +200,17 @@ class WebChannel(
 
         await self._dispatch_inbound(chat_id, sender, content)
 
-    async def _dispatch_inbound(self, chat_id: str, sender: str, content: str) -> None:
+    async def _dispatch_inbound(
+        self,
+        chat_id: str,
+        sender: str,
+        content: str,
+        *,
+        emit_user: bool = True,
+    ) -> None:
         """Runtime dispatcher → slash commands / edit-state / MessageBus."""
-        await self._emit_chat(chat_id, {"type": "message", "role": "user", "content": content})
+        if emit_user:
+            await self._emit_chat(chat_id, {"type": "message", "role": "user", "content": content})
         handled = await self._dispatcher.handle(
             self, chat_id, sender, content, bus=self.bus,
         )
@@ -230,5 +239,5 @@ class WebChannel(
             await self._emit(ws, payload)
 
     async def _emit_chat(self, chat_id: str, payload: dict) -> None:
-        self._push_hub(chat_id, payload)
+        await self._chat_events.publish(chat_id, payload)
         await self._broadcast(chat_id, payload)

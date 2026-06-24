@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from pydantic.alias_generators import to_snake
+
 
 @dataclass(frozen=True)
 class ProviderSpec:
@@ -57,6 +59,15 @@ class ProviderSpec:
 
     # Direct providers bypass LiteLLM entirely (e.g., CustomProvider)
     is_direct: bool = False
+
+    # Provider implementation: openai_compat | anthropic | azure_openai | ...
+    backend: str = "openai_compat"
+
+    # Listed for shared credentials but cannot serve chat completions.
+    is_transcription_only: bool = False
+
+    # Strip only when the first model segment matches one of these prefixes.
+    strip_model_prefixes: tuple[str, ...] = ()
 
     # Provider supports cache_control on content blocks (e.g. Anthropic prompt caching)
     supports_prompt_caching: bool = False
@@ -526,7 +537,23 @@ def find_gateway(
 
 def find_by_name(name: str) -> ProviderSpec | None:
     """Find a provider spec by config field name, e.g. "dashscope"."""
+    normalized = to_snake(name.replace("-", "_"))
     for spec in PROVIDERS:
-        if spec.name == name:
+        if spec.name == normalized:
             return spec
     return None
+
+
+def create_dynamic_spec(name: str) -> ProviderSpec:
+    """Create a ProviderSpec for custom user-defined OpenAI-compatible providers."""
+    normalized = to_snake(name.replace("-", "_"))
+    strip_prefixes = tuple(dict.fromkeys((name, normalized)))
+    return ProviderSpec(
+        name=normalized,
+        keywords=(),
+        env_key="",
+        display_name=name,
+        backend="openai_compat",
+        is_direct=True,
+        strip_model_prefixes=strip_prefixes,
+    )

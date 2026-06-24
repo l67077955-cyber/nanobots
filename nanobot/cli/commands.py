@@ -415,6 +415,7 @@ def gateway(
             logger.info("Group chat engine wired to Telegram channel and inbound bus")
 
     from nanobot.channels.web import WebChannel, WebConfig
+    from nanobot.runtime.chat_events import OutboundMirrorSink
     from nanobot.runtime.chat_hub import ChatHub
     from nanobot.runtime.dashboard import DashboardServer, resolve_repo
 
@@ -436,6 +437,19 @@ def gateway(
         web_channel.set_groupchat_engine(gc_engine)
         if chat_hub:
             web_channel.set_chat_hub(chat_hub)
+        if tg_channel:
+            tg_cfg = getattr(config.channels, "telegram", None)
+            allow_from = (
+                tg_cfg.get("allowFrom") or tg_cfg.get("allow_from") or []
+                if isinstance(tg_cfg, dict)
+                else getattr(tg_cfg, "allow_from", [])
+            )
+            mirror_chat_id = next((str(v).strip() for v in allow_from if str(v).strip() and str(v).strip() != "*"), "")
+            if mirror_chat_id:
+                web_channel.add_chat_sink(OutboundMirrorSink(
+                    bus, channel="telegram", chat_id=mirror_chat_id,
+                ))
+                logger.info("Web dashboard chat mirrored to telegram:{}", mirror_chat_id)
         if web_channel.config.serve_ws:
             logger.info(
                 "Web channel WS ws://{}:{}",

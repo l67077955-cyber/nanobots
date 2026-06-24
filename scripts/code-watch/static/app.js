@@ -35,9 +35,60 @@ const state = {
   workspace: "changes",
   chatLastId: 0,
   chatTimer: null,
+  chatShowProgress: true,
   chatMode: "direct",
   chatAgents: [],
+  controlModules: [],
+  controlModule: "",
+  providerRows: [],
+  consoleCollapsed: false,
+  consoleConnected: false,
+  consoleReady: false,
+  consoleGatewayRunning: false,
 };
+
+const VIEW_STORAGE_KEY = "code-watch.view";
+
+const LOCAL_PREFS_KEY = "nanobot-webui.settings-preferences";
+const DEFAULT_LOCAL_PREFS = {
+  density: "comfortable",
+  activityMode: "auto",
+  codeWrap: true,
+  brandLogos: true,
+};
+
+const APPEARANCE_MODULE = {
+  id: "appearance",
+  title: "外观",
+  controls: [
+    { key: "density", label: "界面密度", kind: "select", value: "comfortable", options: ["comfortable", "compact"], action: "local_pref", config: "density" },
+    { key: "activityMode", label: "活动详情", kind: "select", value: "auto", options: ["auto", "expanded"], action: "local_pref", config: "activityMode" },
+    { key: "codeWrap", label: "代码换行", kind: "toggle", value: true, action: "local_pref", config: "codeWrap" },
+    { key: "brandLogos", label: "品牌 Logo", kind: "toggle", value: true, action: "local_pref", config: "brandLogos" },
+  ],
+};
+
+function readLocalPrefs() {
+  try {
+    const raw = localStorage.getItem(LOCAL_PREFS_KEY);
+    if (!raw) return { ...DEFAULT_LOCAL_PREFS };
+    const parsed = JSON.parse(raw);
+    return {
+      density: parsed.density === "compact" ? "compact" : "comfortable",
+      activityMode: parsed.activityMode === "expanded" ? "expanded" : "auto",
+      codeWrap: parsed.codeWrap !== false,
+      brandLogos: parsed.brandLogos !== false,
+    };
+  } catch {
+    return { ...DEFAULT_LOCAL_PREFS };
+  }
+}
+
+function writeLocalPref(key, value) {
+  const prefs = readLocalPrefs();
+  prefs[key] = value;
+  localStorage.setItem(LOCAL_PREFS_KEY, JSON.stringify(prefs));
+}
 
 const MODULE_LABELS = {
   orchestra: "Orchestra",
@@ -52,6 +103,54 @@ const MODULE_LABELS = {
   "nanobot-other": "nanobot 其他",
   other: "其他",
 };
+
+const CONSOLE_MODULE_LABELS = {
+  appearance: "APPEARANCE",
+  session: "SESSION",
+  agents: "AGENTS",
+  agent_edit: "AGENT EDIT",
+  hyperparams: "HYPERPARAMS",
+  groupchat: "GROUPCHAT",
+  history: "HISTORY",
+  providers: "PROVIDERS",
+  channels: "CHANNELS",
+  cli: "CLI",
+  tests: "TESTS",
+};
+
+function consoleModuleLabel(mod) {
+  if (!mod) return "CONSOLE";
+  if (CONSOLE_MODULE_LABELS[mod.id]) return CONSOLE_MODULE_LABELS[mod.id];
+  const raw = mod.id || mod.title || "CONSOLE";
+  return String(raw).replace(/_/g, " ").toUpperCase();
+}
+
+function updateConsoleLed({ connected = false, ready = false, gatewayRunning = false } = {}) {
+  const led = $("#console-led");
+  const text = $("#console-led-text");
+  if (!led || !text) return;
+
+  led.classList.remove("offline", "ready", "online");
+  let status = "STANDBY";
+  let blink = true;
+
+  if (!gatewayRunning) {
+    status = "OFFLINE";
+    blink = false;
+    led.classList.add("offline");
+  } else if (ready && connected) {
+    status = "ONLINE";
+    blink = false;
+    led.classList.add("online");
+  } else if (ready) {
+    status = "READY";
+    blink = true;
+    led.classList.add("ready");
+  }
+
+  text.textContent = `SYS::NANOBOT // ${status}`;
+  led.classList.toggle("led-blink", blink);
+}
 
 function badgeClass(status) {
   if (status.includes("modified")) return "modified";
@@ -129,6 +228,17 @@ async function fetchText(url) {
   return res.text();
 }
 
+async function sendChatContent(content, options = {}) {
+  const text = String(content || "").trim();
+  if (!text) return;
+  if (options.echo !== false) appendChatEvents([{ role: "user", content: text }]);
+  await fetchJson("/api/chat/send", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content: text, echo: options.echo !== false }),
+  });
+}
+
 function showLogin() {
   state.loggedIn = false;
   clearInterval(state.timer);
@@ -142,19 +252,52 @@ function hideLogin() {
 }
 
 function setAppView(view) {
+  const allowed = new Set(["code", "chat", "split"]);
+  const next = allowed.has(view) ? view : "chat";
+  if (next === "split" && window.matchMedia("(max-width: 1100px)").matches) {
+    setAppView("chat");
+    return;
+  }
   const split = $("#app-split");
-  split.classList.remove("view-code", "view-chat");
-  split.classList.add(view === "code" ? "view-code" : "view-chat");
+  split.classList.remove("view-code", "view-chat", "view-split");
+  split.classList.add(`view-${next}`);
   document.querySelectorAll(".view-tab").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.view === view);
+    btn.classList.toggle("active", btn.dataset.view === next);
   });
+  try {
+    localStorage.setItem(VIEW_STORAGE_KEY, next);
+  } catch (_) {
+    // ignore
+  }
 }
 
 function setupViewTabs() {
   document.querySelectorAll(".view-tab").forEach((btn) => {
     btn.addEventListener("click", () => setAppView(btn.dataset.view));
   });
-  setAppView("chat");
+  let saved = "chat";
+  try {
+    saved = localStorage.getItem(VIEW_STORAGE_KEY) || "chat";
+  } catch (_) {
+    saved = "chat";
+  }
+  setAppView(saved);
+}
+
+function setupConsoleToggle() {
+  const toggle = $("#chat-console-toggle");
+  const panel = $("#chat-controls-panel");
+  if (!toggle || !panel) return;
+  const apply = () => {
+    panel.classList.toggle("collapsed", state.consoleCollapsed);
+    toggle.classList.toggle("active", !state.consoleCollapsed);
+    toggle.textContent = state.consoleCollapsed ? "控制台" : "收起";
+  };
+  toggle.addEventListener("click", () => {
+    state.consoleCollapsed = !state.consoleCollapsed;
+    apply();
+  });
+  apply();
 }
 
 function setupLogin() {
@@ -177,6 +320,7 @@ function setupLogin() {
       setupAutoRefresh();
       await syncChatCursor();
       await loadChatStatus();
+      await loadChatCommands();
       await loadAll();
     } catch (_) {
       $("#login-error").classList.remove("hidden");
@@ -353,6 +497,7 @@ function renderRuntime(rt) {
 
   const gw = rt.gateway || {};
   const dot = $("#live-dot");
+  state.consoleGatewayRunning = Boolean(gw.running);
   if (gw.running) {
     dot.classList.remove("offline");
     $("#gateway-status").innerHTML = `Gateway <strong style="color:var(--green)">运行中</strong> pid ${gw.pid}`;
@@ -360,6 +505,11 @@ function renderRuntime(rt) {
     dot.classList.add("offline");
     $("#gateway-status").innerHTML = `Gateway <strong style="color:var(--red)">未运行</strong>`;
   }
+  updateConsoleLed({
+    gatewayRunning: state.consoleGatewayRunning,
+    ready: state.consoleReady,
+    connected: state.consoleConnected,
+  });
 }
 
 function renderFlow(arch) {
@@ -744,6 +894,7 @@ async function pollChat() {
       appendChatEvents(data.events);
     }
     const dot = $("#chat-dot");
+    state.consoleConnected = Boolean(data.connected);
     if (data.connected) {
       dot.classList.add("on");
       dot.classList.remove("off");
@@ -751,8 +902,19 @@ async function pollChat() {
       dot.classList.add("off");
       dot.classList.remove("on");
     }
+    updateConsoleLed({
+      gatewayRunning: state.consoleGatewayRunning,
+      ready: state.consoleReady,
+      connected: state.consoleConnected,
+    });
   } catch (_) {
     $("#chat-dot").classList.add("off");
+    state.consoleConnected = false;
+    updateConsoleLed({
+      gatewayRunning: state.consoleGatewayRunning,
+      ready: state.consoleReady,
+      connected: false,
+    });
   }
 }
 
@@ -788,6 +950,7 @@ async function loadChatStatus() {
     const hub = st.hub || {};
     const bridge = st.bridge || {};
     const ready = Boolean(st.ready || hub.connected || bridge.connected);
+    state.consoleReady = ready;
     const conn = ready ? "已连接" : (hub.last_error || bridge.last_error || "等待 gateway");
     $("#chat-status-line").textContent = agents.length === 1
       ? `${conn} · ${agents[0]} · direct_chat`
@@ -798,15 +961,214 @@ async function loadChatStatus() {
     if (!ready) {
       hint.textContent = "gateway 未就绪 — nanobot gateway --foreground";
     } else if (agents.length === 1) {
-      hint.textContent = `普通文字 → 与 ${agents[0]} 对话 · /help 查看命令`;
+      hint.textContent = `普通文字 → 与 ${agents[0]} 对话 · 加人发送 add:名字，例如 add:Harper`;
     } else if (agents.length > 1) {
-      hint.textContent = "普通文字 → 群聊广播 · /help 查看命令";
+      hint.textContent = "普通文字 → 群聊广播 · 加人发送 add:名字，数字不会选择列表项";
     } else {
-      hint.textContent = "发送 /addagent Harper 开始对话";
+      hint.textContent = "发送 /addagent 查看列表，再发送 add:名字 加入";
     }
+    updateConsoleLed({
+      gatewayRunning: state.consoleGatewayRunning,
+      ready,
+      connected: state.consoleConnected,
+    });
   } catch (_) {
     $("#chat-status-line").textContent = "无法获取对话状态";
+    state.consoleReady = false;
+    updateConsoleLed({
+      gatewayRunning: state.consoleGatewayRunning,
+      ready: false,
+      connected: state.consoleConnected,
+    });
   }
+}
+
+async function loadProviderRows() {
+  try {
+    const data = await fetchJson("/api/control/providers");
+    state.providerRows = data.providers || [];
+  } catch {
+    state.providerRows = [];
+  }
+}
+
+function injectAppearanceModule(modules) {
+  const prefs = readLocalPrefs();
+  const mod = {
+    ...APPEARANCE_MODULE,
+    controls: APPEARANCE_MODULE.controls.map((ctrl) => ({
+      ...ctrl,
+      value: prefs[ctrl.config] ?? ctrl.value,
+    })),
+  };
+  if (modules.some((item) => item.id === "appearance")) return modules;
+  return [mod, ...modules];
+}
+
+async function loadChatCommands() {
+  try {
+    const [schema] = await Promise.all([
+      fetchJson("/api/control/schema"),
+      loadProviderRows(),
+    ]);
+    state.controlModules = injectAppearanceModule(schema.modules || []);
+    state.controlModule = state.controlModule || state.controlModules[0]?.id || "";
+    renderChatControls();
+  } catch (_) {
+    const grid = $("#chat-control-grid");
+    if (grid) grid.innerHTML = '<div class="empty">控制台不可用</div>';
+  }
+}
+
+function renderChatControls() {
+  const tabs = $("#chat-control-tabs");
+  const grid = $("#chat-control-grid");
+  const title = $("#chat-console-title");
+  if (!tabs || !grid) return;
+
+  if (!state.controlModules.some((item) => item.id === state.controlModule)) {
+    state.controlModule = state.controlModules[0]?.id || "";
+  }
+
+  tabs.innerHTML = state.controlModules.map((mod) => (
+    `<button type="button" class="${mod.id === state.controlModule ? "active" : ""}" data-module="${escHtml(mod.id)}">${escHtml(mod.title)}</button>`
+  )).join("");
+
+  const mod = state.controlModules.find((item) => item.id === state.controlModule);
+  const controls = mod?.controls || [];
+  if (title) title.textContent = consoleModuleLabel(mod);
+  grid.innerHTML = controls.map(renderNativeControl).join("") || '<div class="empty">无控件</div>';
+
+  tabs.querySelectorAll("button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.controlModule = btn.dataset.module || "";
+      renderChatControls();
+    });
+  });
+  bindNativeControls(grid, controls);
+}
+
+function renderNativeControl(ctrl) {
+  const id = escHtml(ctrl.key);
+  const label = escHtml(ctrl.label);
+  const value = ctrl.value ?? "";
+  const meta = `data-control="${id}"`;
+  let body = "";
+  if (ctrl.kind === "button") {
+    body = `<button type="button" ${meta}>${label}</button>`;
+  } else if (ctrl.kind === "toggle") {
+    body = `<label class="switch"><input type="checkbox" ${meta} ${value ? "checked" : ""} /><span></span></label>`;
+  } else if (ctrl.kind === "select" || ctrl.kind === "select_action") {
+    body = `<select ${meta}>${(ctrl.options || []).map((opt) => `<option value="${escHtml(opt)}" ${opt === value ? "selected" : ""}>${escHtml(opt || "无")}</option>`).join("")}</select>`;
+  } else if (ctrl.kind === "multiselect") {
+    const selected = new Set(Array.isArray(value) ? value : []);
+    body = `<div class="check-grid">${(ctrl.options || []).map((opt) => `<label><input type="checkbox" ${meta} value="${escHtml(opt)}" ${selected.has(opt) ? "checked" : ""} />${escHtml(opt)}</label>`).join("")}</div>`;
+  } else if (ctrl.kind === "slider" || ctrl.kind === "slider_action") {
+    body = `<div class="range-control"><input type="range" ${meta} min="${escHtml(ctrl.min ?? 0)}" max="${escHtml(ctrl.max ?? 100)}" step="${escHtml(ctrl.step ?? 1)}" value="${escHtml(value)}" /><input type="number" data-number-for="${id}" min="${escHtml(ctrl.min ?? 0)}" max="${escHtml(ctrl.max ?? 100)}" step="${escHtml(ctrl.step ?? 1)}" value="${escHtml(value)}" /></div>`;
+  } else if (ctrl.kind === "number") {
+    body = `<input type="number" ${meta} min="${escHtml(ctrl.min ?? "")}" max="${escHtml(ctrl.max ?? "")}" step="${escHtml(ctrl.step ?? 1)}" value="${escHtml(value)}" />`;
+  } else if (ctrl.kind === "text_action") {
+    body = `<div class="inline-action"><input ${meta} placeholder="${label}" value="${escHtml(value)}" /><button type="button" data-action-for="${id}">执行</button></div>`;
+  } else if (ctrl.kind === "password") {
+    body = `<input type="password" ${meta} placeholder="留空则保持不变" value="" autocomplete="off" />`;
+  } else if (ctrl.kind === "hint") {
+    body = `<span class="control-hint" ${meta}>${escHtml(value || "—")}</span>`;
+  } else {
+    body = `<input ${meta} value="${escHtml(value)}" />`;
+  }
+  return `<div class="chat-command native"><div><strong>${label}</strong><span>${escHtml(ctrl.kind)}</span></div>${body}</div>`;
+}
+
+function fillProviderFields(grid, providerName) {
+  const row = state.providerRows.find((item) => item.name === providerName);
+  const urlInput = grid.querySelector('[data-control="provider_url"]');
+  const keyInput = grid.querySelector('[data-control="provider_key"]');
+  const hint = grid.querySelector('[data-control="provider_key_hint"]');
+  if (urlInput) urlInput.value = row?.url || "";
+  if (keyInput) keyInput.value = "";
+  if (hint) hint.textContent = row?.key_hint || "—";
+}
+
+async function saveProviderForm(grid) {
+  const provider = grid.querySelector('[data-control="providers"]')?.value || "";
+  const url = grid.querySelector('[data-control="provider_url"]')?.value?.trim() || "";
+  const apiKey = grid.querySelector('[data-control="provider_key"]')?.value?.trim() || "";
+  if (!provider) throw new Error("请选择提供商");
+  await fetchJson("/api/control/action", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "provider_save", provider, url, api_key: apiKey }),
+  });
+}
+
+function bindNativeControls(grid, controls) {
+  const byKey = Object.fromEntries(controls.map((c) => [c.key, c]));
+  const run = async (ctrl, value) => {
+    try {
+      if (ctrl.action === "local_pref") {
+        const next = ctrl.kind === "toggle" ? Boolean(value) : value;
+        writeLocalPref(ctrl.config, next);
+        return;
+      }
+      if (ctrl.action === "provider_save") {
+        await saveProviderForm(grid);
+        await loadChatCommands();
+        appendChatEvents([{ role: "system", content: `✅ 已保存提供商配置` }]);
+        return;
+      }
+      const payload = {
+        action: ctrl.action,
+        key: ctrl.key,
+        config: ctrl.config,
+        template: ctrl.config,
+        value,
+      };
+      await fetchJson("/api/control/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      await loadChatCommands();
+    } catch (err) {
+      appendChatEvents([{ role: "error", content: `控制失败: ${err.message}` }]);
+    }
+  };
+  grid.querySelectorAll("[data-control]").forEach((el) => {
+    const ctrl = byKey[el.dataset.control || ""];
+    if (!ctrl) return;
+    if (ctrl.kind === "button") {
+      el.addEventListener("click", () => run(ctrl, ctrl.value));
+    } else if (ctrl.kind === "toggle") {
+      el.addEventListener("change", () => run(ctrl, el.checked));
+    } else if (ctrl.kind === "multiselect") {
+      el.addEventListener("change", () => {
+        const checked = [...grid.querySelectorAll(`[data-control="${CSS.escape(ctrl.key)}"]:checked`)].map((x) => x.value);
+        run(ctrl, checked);
+      });
+    } else if (ctrl.kind === "select_action") {
+      el.addEventListener("change", () => run(ctrl, el.value));
+    } else if (ctrl.kind === "slider_action") {
+      el.addEventListener("change", () => run(ctrl, el.value));
+    } else if (ctrl.kind === "select" && ctrl.action === "provider_select") {
+      el.addEventListener("change", () => fillProviderFields(grid, el.value));
+    } else if (ctrl.kind === "select" && ctrl.action !== "noop") {
+      el.addEventListener("change", () => run(ctrl, el.value));
+    } else if (["slider", "number"].includes(ctrl.kind)) {
+      el.addEventListener("change", () => run(ctrl, Number(el.value)));
+    }
+  });
+  grid.querySelectorAll("[data-number-for]").forEach((input) => {
+    const range = grid.querySelector(`[data-control="${CSS.escape(input.dataset.numberFor || "")}"]`);
+    input.addEventListener("input", () => { if (range) range.value = input.value; });
+    range?.addEventListener("input", () => { input.value = range.value; });
+  });
+  grid.querySelectorAll("[data-action-for]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const ctrl = byKey[btn.dataset.actionFor || ""];
+      const input = grid.querySelector(`[data-control="${CSS.escape(btn.dataset.actionFor || "")}"]`);
+      if (ctrl && input?.value) run(ctrl, input.value);
+    });
+  });
 }
 
 function setupChat() {
@@ -816,19 +1178,13 @@ function setupChat() {
     const content = input.value.trim();
     if (!content) return;
     input.value = "";
-    appendChatEvents([{ role: "user", content }]);
     try {
-      await fetchJson("/api/chat/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content }),
-      });
+      await sendChatContent(content);
     } catch (err) {
       appendChatEvents([{ role: "error", content: `发送失败: ${err.message}` }]);
     }
   });
 
-  state.chatShowProgress = false;
   clearInterval(state.chatTimer);
   state.chatTimer = setInterval(() => {
     if (state.loggedIn) {
@@ -841,6 +1197,7 @@ function setupChat() {
 async function init() {
   setupLogin();
   setupViewTabs();
+  setupConsoleToggle();
   setupTabs();
   setupWorkspaceTabs();
   setupChat();
@@ -862,6 +1219,7 @@ async function init() {
     setActiveTab("tab-all");
     await syncChatCursor();
     await loadChatStatus();
+    await loadChatCommands();
     await loadAll();
   } catch (_) {
     showLogin();

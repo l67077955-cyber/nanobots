@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
 import mimetypes
 import secrets
 import sys
@@ -21,7 +23,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _WATCH_DIR = _REPO_ROOT / "scripts" / "code-watch"
 _STATIC = _WATCH_DIR / "static"
 _SESSION_COOKIE = "cw_session"
-_SESSION_TTL_S = 7 * 24 * 3600
+_SESSION_TTL_S = 30 * 24 * 3600
 
 
 class _ReuseHTTPServer(ThreadingHTTPServer):
@@ -85,16 +87,48 @@ class DashboardHandler(BaseHTTPRequestHandler):
         now = time.time()
         with self.sessions_lock:
             exp = self.sessions.get(sid)
-            if not exp or exp < now:
+            if exp and exp >= now:
+                return True
+            if exp:
                 self.sessions.pop(sid, None)
-                return False
-            return True
+        return self._signed_session_valid(sid)
 
     def _issue_session(self) -> str:
+        if self.auth_password:
+            exp = int(time.time() + _SESSION_TTL_S)
+            nonce = secrets.token_urlsafe(16)
+            body = f"{exp}.{nonce}"
+            sig = hmac.new(
+                self.auth_password.encode("utf-8"),
+                body.encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
+            return f"v1.{body}.{sig}"
         sid = secrets.token_urlsafe(32)
         with self.sessions_lock:
             self.sessions[sid] = time.time() + _SESSION_TTL_S
         return sid
+
+    def _signed_session_valid(self, sid: str) -> bool:
+        if not self.auth_password or not sid.startswith("v1."):
+            return False
+        parts = sid.split(".", 3)
+        if len(parts) != 4:
+            return False
+        _, exp_s, nonce, sig = parts
+        try:
+            exp = int(exp_s)
+        except ValueError:
+            return False
+        if exp < time.time() or not nonce:
+            return False
+        body = f"{exp_s}.{nonce}"
+        expected = hmac.new(
+            self.auth_password.encode("utf-8"),
+            body.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return hmac.compare_digest(sig, expected)
 
     def _clear_session(self) -> None:
         sid = self._session_id()
@@ -163,6 +197,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/chat/send":
                 self._chat_send()
                 return
+            if parsed.path == "/api/control/action":
+                self._control_action()
+                return
         self._error(404, "not found")
 
     def _login(self) -> None:
@@ -197,11 +234,52 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if not content:
             self._error(400, "content required")
             return
-        ok = hub.send(content)
+        ok = hub.send(content, echo=bool(body.get("echo", True)))
         if not ok:
             self._error(503, hub.last_error or "chat not ready")
             return
         self._json({"ok": True})
+
+    def _control_action(self) -> None:
+        body = self._read_json_body()
+        action = str(body.get("action", ""))
+        if action in {"command", "command_template"}:
+            hub = self.chat_hub
+            if not hub:
+                self._error(503, "chat hub not enabled")
+                return
+            content = str(body.get("value", "")).strip()
+            if action == "command_template":
+                template = str(body.get("template", ""))
+                content = template.replace("{value}", content)
+            if not content:
+                self._error(400, "content required")
+                return
+            ok = hub.send(content, echo=False)
+            if not ok:
+                self._error(503, hub.last_error or "chat not ready")
+                return
+            self._json({"ok": True, "message": "command dispatched"})
+            return
+        try:
+            from nanobot.runtime.chat_controls import apply_control_action, runtime_control_commands
+
+            commands = runtime_control_commands(body)
+            if commands:
+                hub = self.chat_hub
+                if not hub:
+                    self._error(503, "chat hub not enabled")
+                    return
+                for command in commands:
+                    ok = hub.send(command, echo=False)
+                    if not ok:
+                        self._error(503, hub.last_error or "chat not ready")
+                        return
+                self._json({"ok": True, "message": "runtime controls dispatched", "reload": True})
+                return
+            self._json(apply_control_action(body))
+        except ValueError as exc:
+            self._error(400, str(exc))
 
     def _logout(self) -> None:
         self._clear_session()
@@ -295,6 +373,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     payload["upstream_reachable"] = True
                     payload["mode"] = "gateway"
                 self._json(payload)
+            elif parsed.path == "/api/chat/commands":
+                from nanobot.runtime.chat_controls import command_catalog
+                self._json(command_catalog())
+            elif parsed.path == "/api/control/schema":
+                from nanobot.runtime.chat_controls import control_schema
+                self._json(control_schema())
+            elif parsed.path == "/api/control/providers":
+                from nanobot.runtime.chat_controls import providers_panel
+                self._json(providers_panel())
             elif parsed.path == "/api/chat/events":
                 after = int(qs.get("after", ["0"])[0])
                 hub = self.chat_hub

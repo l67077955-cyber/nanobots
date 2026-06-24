@@ -8,7 +8,7 @@ import time
 from collections import deque
 from typing import Any, Awaitable, Callable
 
-DispatchFn = Callable[[str, str, str], Awaitable[None]]
+DispatchFn = Callable[..., Awaitable[None]]
 
 
 class ChatHub:
@@ -44,7 +44,7 @@ class ChatHub:
             item["ts"] = time.time()
             self._events.append(item)
 
-    def send(self, content: str) -> bool:
+    def send(self, content: str, *, echo: bool = True) -> bool:
         if not self._loop or not self._dispatch or not self.connected:
             self.last_error = "chat runtime not ready"
             return False
@@ -54,10 +54,11 @@ class ChatHub:
             return False
         try:
             fut = asyncio.run_coroutine_threadsafe(
-                self._dispatch(self.chat_id, "web-user", text),
+                self._dispatch(self.chat_id, "web-user", text, emit_user=echo),
                 self._loop,
             )
             fut.add_done_callback(self._record_dispatch_error)
+            self.last_error = ""
             return True
         except Exception as exc:
             self.last_error = str(exc)

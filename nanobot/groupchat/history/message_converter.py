@@ -506,8 +506,23 @@ def history_to_messages(
     ]
 
     if not max_chars or not msgs_full:
-        return msgs_full
+        return _merge_consecutive_assistant(msgs_full)
 
     result, skipped = trim_llm_messages(msgs_full, max_chars)
+    result = _merge_consecutive_assistant(result)
     validate_context(result, current_agent, skipped)
     return result
+
+
+def _merge_consecutive_assistant(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge back-to-back assistant messages into one (LLM APIs reject consecutive same-role)."""
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        if out and msg.get("role") == "assistant" and out[-1].get("role") == "assistant":
+            prev = out[-1]
+            prev_text = prev.get("content") or ""
+            cur_text = msg.get("content") or ""
+            prev["content"] = f"{prev_text}\n\n{cur_text}".strip()
+        else:
+            out.append(msg)
+    return out
