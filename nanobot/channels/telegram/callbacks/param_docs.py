@@ -243,5 +243,176 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
                 "建议: 3,000-6,000"
             ),
         },
+
+    # ── Stage 5: tool_limits (工具硬限制) ──────────────────────────
+    "tool_limits:read_file_max_chars": {
+        "label": "read_file 输出上限 (字符)",
+        "location": "Stage 5 → ReadFileTool._MAX_CHARS",
+        "doc": (
+            "read_file 工具单次返回的字符硬上限。\n\n"
+            "超过此值的文件切片会被截断，并提示\n"
+            "'Showing lines X-Y of Z. Use offset=Y+1 to continue.'\n"
+            "位置: tools/filesystem.py ReadFileTool\n\n"
+            "建议: 64,000 (约 1500 行代码)，\n"
+            "代码任务可适当调大以减少分页次数"
+        ),
+    },
+    "tool_limits:read_file_default_lines": {
+        "label": "read_file 默认行数",
+        "location": "Stage 5 → ReadFileTool._DEFAULT_LIMIT",
+        "doc": (
+            "read_file 不传 limit 参数时的默认行数。\n\n"
+            "影响每次读取的窗口大小。值越大单次返回越多，\n"
+            "但受 read_file_max_chars 字符上限约束。\n"
+            "位置: tools/filesystem.py ReadFileTool\n\n"
+            "建议: 300 (默认)，代码任务可调到 500-800"
+        ),
+    },
+    "tool_limits:list_dir_default_max": {
+        "label": "list_dir 默认条目上限",
+        "location": "Stage 5 → ListDirTool._DEFAULT_MAX",
+        "doc": (
+            "list_dir 不传 max_entries 时的默认上限。\n\n"
+            "超过此值会截断并提示 '(truncated, showing first N of M)'\n"
+            "位置: tools/filesystem.py ListDirTool\n\n"
+            "建议: 200 (默认)，大型项目可调到 500"
+        ),
+    },
+    "tool_limits:exec_max_timeout": {
+        "label": "exec 最大超时 (秒)",
+        "location": "Stage 5 → ExecTool._MAX_TIMEOUT",
+        "doc": (
+            "exec 工具允许的最大超时时间。\n\n"
+            "模型传入的 timeout 参数会被 clamp 到此值。\n"
+            "同时作为 JSON schema 中 timeout.maximum 约束模型输出。\n"
+            "位置: tools/shell.py ExecTool\n\n"
+            "建议: 600 (10分钟)，编译/安装任务可适当增加"
+        ),
+    },
+    "tool_limits:exec_max_output": {
+        "label": "exec 输出截断 (字符)",
+        "location": "Stage 5 → ExecTool._MAX_OUTPUT",
+        "doc": (
+            "exec 工具返回输出的字符截断上限。\n\n"
+            "截断方式: head (前半) + 'N chars truncated' + tail (后半)\n"
+            "注意: 此截断在 tool_loop 内发生，独立于\n"
+            "tool_results.exec_max_chars (result_processor 阶段)\n"
+            "位置: tools/shell.py ExecTool._truncate_output\n\n"
+            "建议: 10,000 (默认)"
+        ),
+    },
+
+    # ── Stage 6: tool_log_preview (工具日志预览) ───────────────────
+    "tool_log_preview:web_search": {
+        "label": "web_search 日志预览 (字符)",
+        "location": "Stage 6 → build_tool_log _PREVIEW_LIMITS",
+        "doc": (
+            "<previous_tool_calls> 块中 web_search 结果的\n"
+            "预览字符上限。\n\n"
+            "决定模型在后续轮次能看到多少之前的搜索结果。\n"
+            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "建议: 1,500 (搜索结果需较长预览供回忆)"
+        ),
+    },
+    "tool_log_preview:web_fetch": {
+        "label": "web_fetch 日志预览 (字符)",
+        "location": "Stage 6 → build_tool_log _PREVIEW_LIMITS",
+        "doc": (
+            "web_fetch 结果在工具日志中的预览字符上限。\n\n"
+            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "建议: 1,500"
+        ),
+    },
+    "tool_log_preview:read_file": {
+        "label": "read_file 日志预览 (字符)",
+        "location": "Stage 6 → build_tool_log _PREVIEW_LIMITS",
+        "doc": (
+            "read_file 结果在工具日志中的预览字符上限。\n\n"
+            "代码任务中 read 的内容常是后续 edit 的依据，\n"
+            "预览过短会导致模型忘记之前读过什么。\n"
+            "旧硬编码值 800，已调高到 1500。\n"
+            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "建议: 1,500 (代码任务可调到 2,000+)"
+        ),
+    },
+    "tool_log_preview:exec": {
+        "label": "exec 日志预览 (字符)",
+        "location": "Stage 6 → build_tool_log _PREVIEW_LIMITS",
+        "doc": (
+            "exec 命令输出在工具日志中的预览字符上限。\n\n"
+            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "建议: 500 (命令输出只需结论性预览)"
+        ),
+    },
+    "tool_log_preview:list_dir": {
+        "label": "list_dir 日志预览 (字符)",
+        "location": "Stage 6 → build_tool_log _PREVIEW_LIMITS",
+        "doc": (
+            "list_dir 结果在工具日志中的预览字符上限。\n\n"
+            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "建议: 300 (目录列表信息密度低)"
+        ),
+    },
+    "tool_log_preview:chatroom_send": {
+        "label": "chatroom_send 日志预览 (字符)",
+        "location": "Stage 6 → build_tool_log _PREVIEW_LIMITS",
+        "doc": (
+            "chatroom_send 在工具日志中的预览字符上限。\n\n"
+            "仅显示 (N字) 或 OK，不展开内容。\n"
+            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "建议: 200"
+        ),
+    },
+    "tool_log_preview:wait": {
+        "label": "wait 日志预览 (字符)",
+        "location": "Stage 6 → build_tool_log _PREVIEW_LIMITS",
+        "doc": (
+            "wait 工具在工具日志中的预览字符上限。\n\n"
+            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "建议: 200"
+        ),
+    },
+    "tool_log_preview:write_file": {
+        "label": "write_file 日志预览 (字符)",
+        "location": "Stage 6 → build_tool_log _PREVIEW_LIMITS",
+        "doc": (
+            "write_file 在工具日志中的预览字符上限。\n\n"
+            "旧硬编码值 100，已调高到 300 以保留更多\n"
+            "写入路径信息供后续 edit 参考。\n"
+            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "建议: 300"
+        ),
+    },
+    "tool_log_preview:edit_file": {
+        "label": "edit_file 日志预览 (字符)",
+        "location": "Stage 6 → build_tool_log _PREVIEW_LIMITS",
+        "doc": (
+            "edit_file 在工具日志中的预览字符上限。\n\n"
+            "旧硬编码值 100，已调高到 300。\n"
+            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "建议: 300"
+        ),
+    },
+    "tool_log_preview:_default": {
+        "label": "默认日志预览 (字符)",
+        "location": "Stage 6 → build_tool_log _DEFAULT_PREVIEW",
+        "doc": (
+            "未在 _PREVIEW_LIMITS 中显式列出的工具的\n"
+            "兜底预览字符上限。\n\n"
+            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "建议: 500"
+        ),
+    },
+    "tool_log_preview:_total_cap": {
+        "label": "日志总上限 (字符)",
+        "location": "Stage 6 → build_tool_log _TOTAL_CAP",
+        "doc": (
+            "整个 <previous_tool_calls> 块的字符硬上限。\n\n"
+            "超过此值后剩余工具调用只显示 '(还有 N 个工具调用，已省略)'。\n"
+            "直接影响每轮 assistant 消息的工具日志体积。\n"
+            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "建议: 4,000 (上下文紧张时调到 2,000-3,000)"
+        ),
+    },
 }
 

@@ -200,6 +200,8 @@ def _pipeline_summary(metrics: dict[str, Any]) -> str:
     tr = metrics["tool_results"]
     hist = metrics["history"]
     cp = metrics["context_pruning"]
+    tl = settings.get("tool_limits", {})
+    pv = settings.get("tool_log_preview", {})
     keep_recent = int(cp.get("keep_recent", 4))
     tail_keep = int(hist.get("compression_keep_recent", 6))
 
@@ -219,6 +221,13 @@ def _pipeline_summary(metrics: dict[str, Any]) -> str:
         "S4 prune_messages (tool_loop iter≥2)\n"
         f"   tok/窗口≥{cp.get('soft_ratio', 0.55)} → 旧 tool 一行摘要"
         f" | 保最近 {keep_recent} 个 assistant 轮\n"
+        "S5 工具硬限制\n"
+        f"   read_file={tl.get('read_file_max_chars', 64000):,}字/{tl.get('read_file_default_lines', 300)}行"
+        f" | exec_out={tl.get('exec_max_output', 10000):,}"
+        f" | exec_timeout={tl.get('exec_max_timeout', 600)}s\n"
+        "S6 工具日志预览\n"
+        f"   read_file={pv.get('read_file', 1500):,} write/edit={pv.get('write_file', 300):,}/{pv.get('edit_file', 300):,}"
+        f" | 总cap={pv.get('_total_cap', 4000):,}\n"
         "丢弃      add_message 超 max_messages / max_context_chars 时从最早丢弃\n"
         f"全局      context_window={settings['context_window_tokens']:,}tok"
         f" | tool_result_max={settings['tool_result_max_chars']:,}"
@@ -287,6 +296,8 @@ def build_main_panel_buttons(
     tr = metrics["tool_results"]
     hist = metrics["history"]
     cp = metrics["context_pruning"]
+    tl = settings.get("tool_limits", {})
+    pv = settings.get("tool_log_preview", {})
     compress_trigger = metrics["compress_trigger"]
     ai_on = bool(tr["summarize_enabled"])
     hist_sum = bool(hist.get("history_summarize_enabled", True))
@@ -325,6 +336,18 @@ def build_main_panel_buttons(
             InlineKeyboardButton(
                 f"🔪 S4裁剪: soft@{cp.get('soft_ratio', 0.55)} 保{cp.get('keep_recent', 4)}轮",
                 callback_data="hs_stage4",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                f"🔧 S5工具限制: read={tl.get('read_file_max_chars', 64000):,} exec_out={tl.get('exec_max_output', 10000):,}",
+                callback_data="hs_stage5",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                f"📋 S6日志预览: read={pv.get('read_file', 1500):,} cap={pv.get('_total_cap', 4000):,}",
+                callback_data="hs_stage6",
             )
         ],
         [InlineKeyboardButton("🔄 重载配置", callback_data="hs_reload")],

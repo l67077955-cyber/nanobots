@@ -146,6 +146,62 @@ class HistoryCallbackMixin:
             ]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
+        elif data == "hs_stage5":
+            settings = hs.get_all()
+            tl = settings.get("tool_limits", {})
+            text = (
+                "🔧 Stage 5: 工具硬限制 (tool_limits)\n"
+                "工具类内部的单次输出/超时硬上限\n"
+                "原为类属性硬编码，现已集中到 settings\n\n"
+                f"  read_file 输出上限 → {tl.get('read_file_max_chars', 64000):,} 字符\n"
+                f"  read_file 默认行数 → {tl.get('read_file_default_lines', 300)} 行\n"
+                f"  list_dir 默认条目  → {tl.get('list_dir_default_max', 200)} 条\n"
+                f"  exec 最大超时      → {tl.get('exec_max_timeout', 600)} 秒\n"
+                f"  exec 输出截断      → {tl.get('exec_max_output', 10000):,} 字符"
+            )
+            buttons = [
+                [InlineKeyboardButton(f"read_file上限: {tl.get('read_file_max_chars', 64000):,}", callback_data="hs_edit:tool_limits:read_file_max_chars")],
+                [InlineKeyboardButton(f"read_file行数: {tl.get('read_file_default_lines', 300)}", callback_data="hs_edit:tool_limits:read_file_default_lines")],
+                [InlineKeyboardButton(f"list_dir条目: {tl.get('list_dir_default_max', 200)}", callback_data="hs_edit:tool_limits:list_dir_default_max")],
+                [InlineKeyboardButton(f"exec超时: {tl.get('exec_max_timeout', 600)}s", callback_data="hs_edit:tool_limits:exec_max_timeout")],
+                [InlineKeyboardButton(f"exec输出: {tl.get('exec_max_output', 10000):,}", callback_data="hs_edit:tool_limits:exec_max_output")],
+                [InlineKeyboardButton("⬅️ 返回", callback_data="hs_back")],
+            ]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+
+        elif data == "hs_stage6":
+            settings = hs.get_all()
+            pv = settings.get("tool_log_preview", {})
+            text = (
+                "📋 Stage 6: 工具日志预览 (tool_log_preview)\n"
+                "<previous_tool_calls> 块中各工具结果的预览字符上限\n"
+                "决定模型后续轮次能看到多少之前的工具调用结果\n\n"
+                f"  web_search → {pv.get('web_search', 1500):,}  | "
+                f"web_fetch → {pv.get('web_fetch', 1500):,}\n"
+                f"  read_file  → {pv.get('read_file', 1500):,}  | "
+                f"exec      → {pv.get('exec', 500):,}\n"
+                f"  list_dir   → {pv.get('list_dir', 300):,}  | "
+                f"_default  → {pv.get('_default', 500):,}\n"
+                f"  write_file → {pv.get('write_file', 300):,}  | "
+                f"edit_file  → {pv.get('edit_file', 300):,}\n"
+                f"  chatroom   → {pv.get('chatroom_send', 200):,}  | "
+                f"wait      → {pv.get('wait', 200):,}\n"
+                f"  📌 总上限  → {pv.get('_total_cap', 4000):,} 字符"
+            )
+            buttons = [
+                [InlineKeyboardButton(f"read_file预览: {pv.get('read_file', 1500):,}", callback_data="hs_edit:tool_log_preview:read_file")],
+                [InlineKeyboardButton(f"write_file预览: {pv.get('write_file', 300):,}", callback_data="hs_edit:tool_log_preview:write_file")],
+                [InlineKeyboardButton(f"edit_file预览: {pv.get('edit_file', 300):,}", callback_data="hs_edit:tool_log_preview:edit_file")],
+                [InlineKeyboardButton(f"exec预览: {pv.get('exec', 500):,}", callback_data="hs_edit:tool_log_preview:exec")],
+                [InlineKeyboardButton(f"web_search预览: {pv.get('web_search', 1500):,}", callback_data="hs_edit:tool_log_preview:web_search")],
+                [InlineKeyboardButton(f"web_fetch预览: {pv.get('web_fetch', 1500):,}", callback_data="hs_edit:tool_log_preview:web_fetch")],
+                [InlineKeyboardButton(f"list_dir预览: {pv.get('list_dir', 300):,}", callback_data="hs_edit:tool_log_preview:list_dir")],
+                [InlineKeyboardButton(f"总上限: {pv.get('_total_cap', 4000):,}", callback_data="hs_edit:tool_log_preview:_total_cap")],
+                [InlineKeyboardButton(f"默认预览: {pv.get('_default', 500):,}", callback_data="hs_edit:tool_log_preview:_default")],
+                [InlineKeyboardButton("⬅️ 返回", callback_data="hs_back")],
+            ]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+
         elif data.startswith("hs_set:"):
             parts = data.split(":", 3)
             if len(parts) == 4:
@@ -164,6 +220,10 @@ class HistoryCallbackMixin:
                     await self._handle_history_callback(query, "hs_stage4")
                 elif section == "history":
                     await self._handle_history_callback(query, "hs_stage3")
+                elif section == "tool_limits":
+                    await self._handle_history_callback(query, "hs_stage5")
+                elif section == "tool_log_preview":
+                    await self._handle_history_callback(query, "hs_stage6")
                 else:
                     await self._handle_history_callback(query, "hs_back")
 
