@@ -2,6 +2,9 @@ x-common-config: &common-config
   build:
     context: .
     dockerfile: Dockerfile
+  user: "0:0"
+  environment:
+    HOME: /root
   volumes:
     - ~/.nanobot:/root/.nanobot
 
@@ -9,7 +12,7 @@ services:
   nanobot-gateway:
     container_name: nanobot-gateway
     <<: *common-config
-    command: ["gateway"]
+    command: ["gateway", "--foreground"]
     restart: unless-stopped
     ports:
       - 18790:18790
@@ -21,7 +24,7 @@ services:
         reservations:
           cpus: '0.25'
           memory: 256M
-  
+
   nanobot-cli:
     <<: *common-config
     profiles:
