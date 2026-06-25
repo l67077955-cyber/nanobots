@@ -77,10 +77,41 @@ _DEFAULTS: dict[str, Any] = {
         "keep_recent": 4,
         "soft_max_chars": 8_000,
     },
+
+    # ── Stage 5: tool hard limits (per-tool caps inside tool classes) ──
+    # These replace previously hardcoded class attributes in filesystem.py,
+    # shell.py, etc. Now all tool-level limits are centrally configurable.
+    "tool_limits": {
+        # ReadFileTool
+        "read_file_max_chars": 64_000,   # single read output hard cap
+        "read_file_default_lines": 300, # default line limit per read
+        # ListDirTool
+        "list_dir_default_max": 200,     # default directory entry cap
+        # ExecTool
+        "exec_max_timeout": 600,        # maximum shell command timeout (seconds)
+        "exec_max_output": 10_000,      # shell output truncation cap (head+tail)
+    },
+
+    # ── Stage 6: tool log preview limits (chat_utils.build_tool_log) ──
+    # Controls how much of each tool's result preview is retained in the
+    # <previous_tool_calls> block appended to assistant messages.
+    "tool_log_preview": {
+        "web_search": 1500,
+        "web_fetch": 1500,
+        "read_file": 1500,
+        "exec": 500,
+        "list_dir": 300,
+        "chatroom_send": 200,
+        "wait": 200,
+        "write_file": 300,
+        "edit_file": 300,
+        "_default": 500,
+        "_total_cap": 4000,
+    },
 }
 
 # Flat list of all known sections for merge logic
-_SECTIONS = ("tool_results", "history", "context_pruning")
+_SECTIONS = ("tool_results", "history", "context_pruning", "tool_limits", "tool_log_preview")
 _TOP_LEVEL_KEYS = ("context_window_tokens", "tool_result_max_chars")
 
 # ── Singleton cache ───────────────────────────────────────────────────────
@@ -212,6 +243,49 @@ def pruning_keep_recent() -> int:
 
 def pruning_soft_max_chars() -> int:
     return int(_load()["context_pruning"]["soft_max_chars"])
+
+
+# ── tool_limits getters ──────────────────────────────────────────────────
+
+def read_file_max_chars() -> int:
+    return int(_load()["tool_limits"]["read_file_max_chars"])
+
+
+def read_file_default_lines() -> int:
+    return int(_load()["tool_limits"]["read_file_default_lines"])
+
+
+def list_dir_default_max() -> int:
+    return int(_load()["tool_limits"]["list_dir_default_max"])
+
+
+def exec_max_timeout() -> int:
+    return int(_load()["tool_limits"]["exec_max_timeout"])
+
+
+def exec_max_output() -> int:
+    return int(_load()["tool_limits"]["exec_max_output"])
+
+
+# ── tool_log_preview getters ──────────────────────────────────────────────
+
+def tool_log_preview_limits() -> dict[str, int]:
+    """Return the full preview-limits dict (copy)."""
+    return dict(_load()["tool_log_preview"])
+
+
+def tool_log_preview_for(tool_name: str) -> int:
+    """Get preview char limit for a specific tool name."""
+    limits = _load()["tool_log_preview"]
+    return int(limits.get(tool_name, limits.get("_default", 500)))
+
+
+def tool_log_default_preview() -> int:
+    return int(_load()["tool_log_preview"]["_default"])
+
+
+def tool_log_total_cap() -> int:
+    return int(_load()["tool_log_preview"]["_total_cap"])
 
 
 # ── Field update (Telegram UI) ──────────────────────────────────────────

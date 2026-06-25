@@ -137,8 +137,15 @@ class _FsTool(Tool):
 class ReadFileTool(_FsTool):
     """Read file contents with optional line-based pagination."""
 
-    _MAX_CHARS = 64_000
-    _DEFAULT_LIMIT = 300
+    @property
+    def _MAX_CHARS(self) -> int:
+        from nanobot.groupchat.history import history_settings as hs
+        return hs.read_file_max_chars()
+
+    @property
+    def _DEFAULT_LIMIT(self) -> int:
+        from nanobot.groupchat.history import history_settings as hs
+        return hs.read_file_default_lines()
 
     @property
     def name(self) -> str:
@@ -455,12 +462,16 @@ class EditFileTool(_FsTool):
 class ListDirTool(_FsTool):
     """List directory contents with optional recursion."""
 
-    _DEFAULT_MAX = 200
     _IGNORE_DIRS = {
         ".git", "node_modules", "__pycache__", ".venv", "venv",
         "dist", "build", ".tox", ".mypy_cache", ".pytest_cache",
         ".ruff_cache", ".coverage", "htmlcov",
     }
+
+    @property
+    def _DEFAULT_MAX(self) -> int:
+        from nanobot.groupchat.history import history_settings as hs
+        return hs.list_dir_default_max()
 
     @property
     def name(self) -> str:

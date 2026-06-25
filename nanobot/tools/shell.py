@@ -44,8 +44,15 @@ class ExecTool(Tool):
     def name(self) -> str:
         return "exec"
 
-    _MAX_TIMEOUT = 600
-    _MAX_OUTPUT = 10_000
+    @property
+    def _MAX_TIMEOUT(self) -> int:
+        from nanobot.groupchat.history import history_settings as hs
+        return hs.exec_max_timeout()
+
+    @property
+    def _MAX_OUTPUT(self) -> int:
+        from nanobot.groupchat.history import history_settings as hs
+        return hs.exec_max_output()
 
     @property
     def description(self) -> str:
@@ -73,10 +80,10 @@ class ExecTool(Tool):
                     "type": "integer",
                     "description": (
                         "Timeout in seconds. Increase for long-running commands "
-                        "like compilation or installation (default 60, max 600)."
+                        "like compilation or installation (default 60)."
                     ),
                     "minimum": 1,
-                    "maximum": 600,
+                    "maximum": self._MAX_TIMEOUT,
                 },
                 "background": {
                     "type": "boolean",

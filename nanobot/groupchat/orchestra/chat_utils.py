@@ -39,19 +39,25 @@ def build_tool_log(tool_calls_detail: list[dict[str, Any]]) -> str:
     if not tool_calls_detail:
         return ""
 
-    _PREVIEW_LIMITS = {
-        "web_search": 1500,
-        "web_fetch": 1500,
-        "read_file": 800,
-        "exec": 500,
-        "list_dir": 300,
-        "chatroom_send": 200,
-        "wait": 200,
-        "write_file": 100,
-        "edit_file": 100,
-    }
-    _DEFAULT_PREVIEW = 500
-    _TOTAL_CAP = 4000
+    try:
+        from nanobot.groupchat.history import history_settings as hs
+        _PREVIEW_LIMITS = hs.tool_log_preview_limits()
+        _DEFAULT_PREVIEW = hs.tool_log_default_preview()
+        _TOTAL_CAP = hs.tool_log_total_cap()
+    except Exception:
+        _PREVIEW_LIMITS = {
+            "web_search": 1500,
+            "web_fetch": 1500,
+            "read_file": 1500,
+            "exec": 500,
+            "list_dir": 300,
+            "chatroom_send": 200,
+            "wait": 200,
+            "write_file": 300,
+            "edit_file": 300,
+        }
+        _DEFAULT_PREVIEW = 500
+        _TOTAL_CAP = 4000
 
     lines: list[str] = []
     total_chars = 0
