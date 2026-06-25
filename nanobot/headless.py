@@ -77,6 +77,27 @@ def _is_gateway_cmdline(cmdline: list[str]) -> bool:
     )
 
 
+def _read_cmdline(pid: int) -> list[str] | None:
+    """Read /proc/<pid>/cmdline; return None if unavailable."""
+    try:
+        raw = (Path("/proc") / str(pid) / "cmdline").read_bytes()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    return [part.decode("utf-8", errors="replace") for part in raw.split(b"\0") if part]
+
+
+def is_gateway_pid(pid: int) -> bool:
+    """Return True only if *pid* is a live process running the gateway command."""
+    if not is_alive(pid):
+        return False
+    cmdline = _read_cmdline(pid)
+    if cmdline is None:
+        return False
+    return _is_gateway_cmdline(cmdline)
+
+
 def discover_gateway_pid() -> int | None:
     """Best-effort recovery for foreground gateway processes missing a pid file."""
     proc_dir = Path("/proc")
@@ -89,20 +110,20 @@ def discover_gateway_pid() -> int | None:
         pid = int(entry.name)
         if pid == own_pid:
             continue
-        try:
-            raw = (entry / "cmdline").read_bytes()
-        except OSError:
+        if not is_gateway_pid(pid):
             continue
-        if not raw:
-            continue
-        cmdline = [part.decode("utf-8", errors="replace") for part in raw.split(b"\0") if part]
-        if _is_gateway_cmdline(cmdline) and is_alive(pid):
-            return pid
+        return pid
     return None
 
 
 def status() -> DaemonStatus:
     pid = read_pid()
+    # Validate that the recorded PID actually points at a live gateway process.
+    # A stale/corrupt PID file may reference an unrelated surviving process
+    # (e.g. a kernel worker thread), which would falsely block spawn()/stop().
+    if pid is not None and not is_gateway_pid(pid):
+        clear_pid()
+        pid = None
     if pid is None:
         pid = discover_gateway_pid()
         if pid is not None:
@@ -180,6 +201,14 @@ def stop(*, timeout_s: float = STOP_TIMEOUT_S) -> bool:
     pid = read_pid()
     if not pid:
         return False
+
+    # Guard against a stale PID file pointing at an unrelated process;
+    # fall back to discovery so a real foreground gateway can still be found.
+    if not is_gateway_pid(pid):
+        clear_pid()
+        pid = discover_gateway_pid()
+        if pid is None:
+            return False
 
     if not is_alive(pid):
         clear_pid()

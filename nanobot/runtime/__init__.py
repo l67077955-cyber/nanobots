@@ -1,1 +1,1 @@
-"""Gateway runtime services (dashboard HTTP API, chat hub)."""
+"""Gateway runtime services (inbound dispatch, inbox poller)."""

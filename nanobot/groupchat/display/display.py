@@ -238,7 +238,7 @@ def chat_chain_summary(
     Output:
         ┄ 对话链 (8 msgs) ┄
         👑 Nanobot
-        ├→ Lucas: 请搜索酒馆战棋…
+        ├→ Lucas: 请搜索科技新闻…
         │  └← Lucas: 搜索到3条结果…
         ├→ Ares: 请分析以下数据…
         │  └← Ares: 分析完成…
@@ -326,7 +326,7 @@ def tool_activity_msg(
 ) -> str:
     """Format a tool call for broadcast display.
 
-    Leader:     👑▸ Nanobot · search "酒馆战棋"  → expert+
+    Leader:     👑▸ Nanobot · search "科技新闻"  → expert+
     Non-leader: ▸ Lucas · search "Trump latest news"  → basic+
     """
     from nanobot.groupchat.display.visibility import tool_call_label
@@ -475,7 +475,7 @@ def chatroom_send_msg(
 
     Leader command:
         👑 Nanobot → Lucas ━━
-        请搜索酒馆战棋最新...
+        请搜索科技新闻最新...
 
     Regular message:
         ┄ Lucas → Nanobot ┄

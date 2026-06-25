@@ -113,22 +113,12 @@ class HeartbeatConfig(Base):
     interval_s: int = 30 * 60  # 30 minutes
 
 
-class WatchConfig(Base):
-    """Code-watch dashboard (served by gateway HTTP, same port)."""
-
-    enabled: bool = True
-    password: str = ""
-    refresh_s: int = 5
-    repo: str | None = None
-
-
 class GatewayConfig(Base):
     """Gateway/server configuration."""
 
     host: str = "0.0.0.0"
     port: int = 18790
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
-    watch: WatchConfig = Field(default_factory=WatchConfig)
 
 
 class WebSearchConfig(Base):

@@ -414,66 +414,6 @@ def gateway(
             tg_channel.set_groupchat_engine(gc_engine)
             logger.info("Group chat engine wired to Telegram channel and inbound bus")
 
-    from nanobot.channels.web import WebChannel, WebConfig
-    from nanobot.runtime.chat_events import OutboundMirrorSink
-    from nanobot.runtime.chat_hub import ChatHub
-    from nanobot.runtime.dashboard import DashboardServer, resolve_repo
-
-    watch_cfg = config.gateway.watch
-    chat_hub: ChatHub | None = ChatHub() if watch_cfg.enabled else None
-    dashboard_server: DashboardServer | None = None
-
-    web_channel = channels.get_channel("web")
-    if watch_cfg.enabled and not web_channel:
-        web_cfg_raw = getattr(config.channels, "web", None)
-        if isinstance(web_cfg_raw, dict):
-            wc = WebConfig.model_validate({**web_cfg_raw, "enabled": True, "serveWs": False})
-        else:
-            wc = WebConfig(enabled=True, serve_ws=False)
-        web_channel = WebChannel(wc, bus)
-        channels.register_channel(web_channel)
-
-    if web_channel and isinstance(web_channel, WebChannel):
-        web_channel.set_groupchat_engine(gc_engine)
-        if chat_hub:
-            web_channel.set_chat_hub(chat_hub)
-        if tg_channel:
-            tg_cfg = getattr(config.channels, "telegram", None)
-            allow_from = (
-                tg_cfg.get("allowFrom") or tg_cfg.get("allow_from") or []
-                if isinstance(tg_cfg, dict)
-                else getattr(tg_cfg, "allow_from", [])
-            )
-            mirror_chat_id = next((str(v).strip() for v in allow_from if str(v).strip() and str(v).strip() != "*"), "")
-            if mirror_chat_id:
-                web_channel.add_chat_sink(OutboundMirrorSink(
-                    bus, channel="telegram", chat_id=mirror_chat_id,
-                ))
-                logger.info("Web dashboard chat mirrored to telegram:{}", mirror_chat_id)
-        if web_channel.config.serve_ws:
-            logger.info(
-                "Web channel WS ws://{}:{}",
-                web_channel.config.host,
-                web_channel.config.port,
-            )
-
-    if watch_cfg.enabled and chat_hub:
-        import os
-        from pathlib import Path as _Path
-
-        repo = resolve_repo(_Path(watch_cfg.repo) if watch_cfg.repo else None)
-        password = watch_cfg.password or os.environ.get("CODE_WATCH_PASSWORD") or ""
-        dashboard_server = DashboardServer(
-            host=config.gateway.host,
-            port=port,
-            repo=repo,
-            chat_hub=chat_hub,
-            password=password or None,
-            refresh_s=watch_cfg.refresh_s,
-        )
-        dash_url = dashboard_server.start()
-        console.print(f"[green]✓[/green] Dashboard: {dash_url}")
-
     def _pick_heartbeat_target() -> tuple[str, str]:
         """Pick a routable channel/chat target for heartbeat-triggered messages."""
         enabled = set(channels.enabled_channels)
@@ -532,8 +472,6 @@ def gateway(
 
     async def run():
         loop = asyncio.get_running_loop()
-        if chat_hub and web_channel and isinstance(web_channel, WebChannel):
-            chat_hub.attach(loop, web_channel._dispatch_inbound)
         inbox_task, inbox_stop = start_inbox_poller(gc_engine)
         try:
             await cron.start()
@@ -553,10 +491,6 @@ def gateway(
             inbox_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await inbox_task
-            if chat_hub:
-                chat_hub.detach()
-            if dashboard_server:
-                dashboard_server.stop()
             heartbeat.stop()
             cron.stop()
             await channels.stop_all()
@@ -739,31 +673,6 @@ def plugins_list():
         )
 
     console.print(table)
-
-
-# ============================================================================
-# Dev: code-watch dashboard
-# ============================================================================
-
-
-@app.command("watch")
-def code_watch(
-    foreground: bool = typer.Option(True, "--foreground/--background", "-f/-b", help="Run gateway attached"),
-    port: int | None = typer.Option(None, "--port", "-p", help="Gateway/dashboard HTTP port"),
-    password: str | None = typer.Option(None, "--password", help="Dashboard login password"),
-):
-    """Open the code-watch dashboard (served by `nanobot gateway`, same process)."""
-    console.print("[dim]Dashboard is integrated into the gateway — one headless backend.[/dim]")
-    if password:
-        console.print("[yellow]Set gateway.watch.password in config or CODE_WATCH_PASSWORD env.[/yellow]")
-    gateway(
-        port=port,
-        foreground=foreground,
-        stop=False,
-        verbose=False,
-        workspace=None,
-        config=None,
-    )
 
 
 # ============================================================================
