@@ -94,30 +94,26 @@ class HistoryContext:
         )
 
     def add_message(self, sender: str, content: str) -> None:
-        """Append a message and enforce message-count / char-budget / token-budget limits.
+        """Append a message and enforce message-count and token-budget limits.
 
         Head-protection guarantees that the very first message and the first
         user message are never evicted during trimming.
 
-        Token trimming (when the estimator is available) uses the real
-        tiktoken-based estimate from helpers so that long tool outputs or
-        verbose messages trigger trimming based on actual LLM token cost
-        rather than just raw characters.
+        Token trimming uses tiktoken-based estimation so that trimming
+        decisions reflect actual LLM token cost rather than raw character count.
+        A separate char-based trim still runs in history_to_messages as a safety net.
         """
         self.messages.append({"sender": sender, "content": content})
 
         try:
             from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
                 max_messages,
-                max_context_chars,
                 keep_user_messages,
             )
             limit = max_messages()
-            char_budget = max_context_chars()
             _keep_users = keep_user_messages()
         except Exception:
             limit = 150
-            char_budget = 0
             _keep_users = False
 
         # ── Pre-identify protected head before any trimming ──
@@ -131,22 +127,14 @@ class HistoryContext:
             extra_head = [m for m in head_msgs if id(m) not in tail_ids]
             self.messages = extra_head + tail
 
-        # Step 2: char-budget trimming — tiered (用户 > agent > tools > 群聊工具)
-        if char_budget > 0:
-            head_indices = self._find_head_indices(self.messages, keep_all_users=_keep_users)
-            self.messages = trim_sender_history(
-                self.messages,
-                char_budget,
-                protected_indices=head_indices,
-            )
-
-        # ── Step 2b: token-budget trimming (new, more accurate) ──
-        # Uses the project's tiktoken estimator (estimate_message_tokens) so
-        # trimming decisions reflect actual context cost to the LLM.
-        # We take a conservative slice of the context_window (e.g. 65%) as the
-        # budget for this history buffer (leaving headroom for system prompt,
-        # tools, etc.). Falls back silently if estimator or settings unavailable.
-        # Head is still always protected.
+        # ── Step 2: token-budget trimming ──
+        # Uses tiktoken-based estimation (estimate_message_tokens) so
+        # trimming decisions reflect actual LLM token cost.
+        # Budget = 65% of context_window, leaving headroom for system prompt,
+        # tools, etc. Falls back to char/4 if estimator unavailable.
+        # Head (index 0 + user messages) is always protected.
+        # Note: max_context_chars is still enforced separately in
+        # history_to_messages -> trim_llm_messages as a second safety net.
         try:
             from nanobot.groupchat.history.history_settings import get_context_window_tokens
             from nanobot.utils.helpers import estimate_message_tokens as _est_tok

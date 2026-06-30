@@ -227,18 +227,13 @@ class ReadFileTool(_FsTool):
 
             start = offset - 1
             end = min(start + (limit or self._DEFAULT_LIMIT), total)
-            numbered = [f"{start + i + 1}| {line}" for i, line in enumerate(all_lines[start:end])]
-            result = "\n".join(numbered)
+            result = "\n".join(f"{start + i + 1}| {line}" for i, line in enumerate(all_lines[start:end]))
 
             if len(result) > self._MAX_CHARS:
-                trimmed, chars = [], 0
-                for line in numbered:
-                    chars += len(line) + 1
-                    if chars > self._MAX_CHARS:
-                        break
-                    trimmed.append(line)
-                end = start + len(trimmed)
-                result = "\n".join(trimmed)
+                # Byte-level truncation: cut at last newline within budget (no second pass)
+                cut = result.rfind("\n", 0, self._MAX_CHARS)
+                end = start + result[:cut].count("\n") + 1 if cut > 0 else start + 1
+                result = result[:cut] if cut > 0 else result[:self._MAX_CHARS]
 
             if end < total:
                 result += f"\n\n(Showing lines {offset}-{end} of {total}. Use offset={end + 1} to continue.)"
@@ -293,7 +288,7 @@ class WriteFileTool(_FsTool):
             fp = self._resolve(path)
             fp.parent.mkdir(parents=True, exist_ok=True)
             fp.write_text(content, encoding="utf-8")
-            _invalidate_read_cache(fp)  # only for the dedup feature: next read will see fresh content
+            _invalidate_read_cache(fp)
             return f"Successfully wrote {len(content)} bytes to {fp}"
         except PermissionError as e:
             return f"Error: {e}"
@@ -400,6 +395,11 @@ class EditFileTool(_FsTool):
             fp = self._resolve(path)
             if not fp.exists():
                 return f"Error: File not found: {path}"
+
+            # Stale guard: require prior read_file with matching mtime (no extra hashing)
+            st = _file_read_states.get(str(fp.resolve()))
+            if st is None or os.path.getmtime(fp) != st["mtime"]:
+                return f"Error: Read {path} first (stale or unread)."
 
             raw = fp.read_bytes()
             uses_crlf = b"\r\n" in raw
