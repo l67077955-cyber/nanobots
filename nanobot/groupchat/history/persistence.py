@@ -146,7 +146,7 @@ class GroupChatState:
                 json.dumps(payload, ensure_ascii=False, indent=2),
             )
         except Exception as e:
-            logger.debug("save_current_session failed: {}", e)
+            logger.warning("save_current_session failed: {}", e)
 
     def load_current_session(self) -> dict[str, Any] | None:
         if not self._current_session_file.exists():
@@ -156,7 +156,7 @@ class GroupChatState:
             if data.get("session_dir") or data.get("session_id"):
                 return data
         except Exception as e:
-            logger.debug("load_current_session failed: {}", e)
+            logger.warning("load_current_session failed: {}", e)
         return None
 
     def create_session(self) -> Path:
@@ -180,7 +180,7 @@ class GroupChatState:
         """Append a structured event to session.jsonl.
 
         Event types: session_start, round_start, round_end, message,
-                     tool_call, tool_result, agent_comm, system.
+                     tool_call, tool_result, tool_call_error, agent_comm, system.
         """
         if not self._session_dir:
             return
@@ -198,7 +198,7 @@ class GroupChatState:
             with open(self._session_dir / "session.jsonl", "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
         except Exception as e:
-            logger.debug("save_event failed: {}", e)
+            logger.warning("save_event failed: {}", e)
 
     def save_round_summary(
         self,
@@ -221,6 +221,48 @@ class GroupChatState:
             with open(self._session_dir / "chat_log.txt", "a") as f:
                 f.write(f"[{sender}]: {content}\n---\n")
         self.save_event("message", agent=sender, content=content)
+
+    def close_session(self, *, topic: str = "", agent_summaries: list[dict] | None = None) -> None:
+        """Finalize the session: write session_end event + generate session_summary.json."""
+        if not self._session_dir:
+            return
+        from pathlib import Path
+        # Count events by type from session.jsonl
+        counts: dict[str, int] = {}
+        session_file = self._session_dir / "session.jsonl"
+        if session_file.exists():
+            try:
+                for line in session_file.read_text().strip().split("\n"):
+                    if not line.strip():
+                        continue
+                    try:
+                        evt = json.loads(line)
+                        t = evt.get("type", "unknown")
+                        counts[t] = counts.get(t, 0) + 1
+                    except json.JSONDecodeError:
+                        pass
+            except Exception as e:
+                logger.warning("close_session: failed to read session.jsonl: {}", e)
+
+        # Write session_end event
+        self.save_event("session_end", extra={
+            "event_counts": counts,
+        })
+
+        # Generate session_summary.json
+        summary = {
+            "session_id": self._session_dir.name,
+            "session_dir": str(self._session_dir),
+            "topic": topic,
+            "events": counts,
+            "agent_summaries": agent_summaries or [],
+        }
+        try:
+            (self._session_dir / "session_summary.json").write_text(
+                json.dumps(summary, ensure_ascii=False, indent=2),
+            )
+        except Exception as e:
+            logger.warning("close_session: failed to write session_summary.json: {}", e)
 
     # ── Chat history snapshot (survives gateway restart) ───────
 
@@ -252,7 +294,7 @@ class GroupChatState:
                 json.dumps(payload, ensure_ascii=False, indent=2),
             )
         except Exception as e:
-            logger.debug("save_history_snapshot failed: {}", e)
+            logger.warning("save_history_snapshot failed: {}", e)
 
     def load_history_snapshot(self) -> dict[str, Any] | None:
         """Load the last persisted chat state, if any."""
@@ -263,7 +305,7 @@ class GroupChatState:
             if isinstance(data.get("history"), list) and data["history"]:
                 return data
         except Exception as e:
-            logger.debug("load_history_snapshot failed: {}", e)
+            logger.warning("load_history_snapshot failed: {}", e)
         return None
 
     def clear_history_snapshot(self) -> None:

@@ -1061,6 +1061,10 @@ class GroupChatEngine:
                 task.cancel()
                 logger.info("Groupchat: stop cancelled broadcast task for {}", name)
         self._broadcast_tasks.clear()
+        # Finalize session: write session_end + session_summary.json
+        if self._session_dir:
+            self._state.close_session(topic=self._topic)
+            self._session_dir = None
 
     def _ensure_session_dir(self, mode: str, *, agent_name: str | None = None) -> None:
         """Create collab session directory and log session_start (idempotent)."""
