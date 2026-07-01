@@ -39,30 +39,33 @@ class TestStage1_ToolTruncation:
             mock_persist.return_value = None
             yield
 
-    def test_exec_head_tail_truncation(self):
+    @pytest.mark.asyncio
+    async def test_exec_head_tail_truncation(self):
         """exec uses head_tail strategy: keeps head + tail when over limit."""
         from nanobot.groupchat.history.result_processor import process_tool_result
         output = "line 0: hello world\n" * 500 + "middle\n" * 250 + "tail: end\n" * 500
         assert len(output) > 10_000
-        result = process_tool_result(output, "exec", "call_exec_1")
+        result = await process_tool_result(output, "exec", "call_exec_1")
         assert isinstance(result, str)
         assert len(result) < len(output)
-        assert "line 0" in result
-        assert "tail" in result
+        # AI summarize triggers for >8000c input; result is a summary, not head/tail
+        assert "nano:exec" in result  # AI compression marker
 
-    def test_small_result_passthrough(self):
+    @pytest.mark.asyncio
+    async def test_small_result_passthrough(self):
         """Small results under the per-tool limit pass through unchanged."""
         from nanobot.groupchat.history.result_processor import process_tool_result
         small = "hello world"
         # Small enough, no truncation needed
-        result = process_tool_result(small, "exec", "call_exec_2")
+        result = await process_tool_result(small, "exec", "call_exec_2")
         assert result == small
 
-    def test_multimodal_list_passthrough(self):
+    @pytest.mark.asyncio
+    async def test_multimodal_list_passthrough(self):
         """Multimodal lists (with image_url) are returned unchanged (not strings)."""
         from nanobot.groupchat.history.result_processor import process_tool_result
         ml = [{"type": "image_url", "image_url": {"url": "data:..."}}]
-        result = process_tool_result(ml, "exec", "call_exec_3")
+        result = await process_tool_result(ml, "exec", "call_exec_3")
         assert result is ml  # same object, unchanged
 
 
