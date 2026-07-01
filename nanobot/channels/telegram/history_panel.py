@@ -7,7 +7,7 @@ from typing import Any
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 # SmartSearchTool hardcodes this; not read from history_settings yet.
-_SMART_SEARCH_SUMMARIZE_THRESHOLD = 3000
+_SMART_SEARCH_SUMMARIZE_THRESHOLD_FALLBACK = 3000
 
 
 def _settings() -> dict[str, Any]:
@@ -119,20 +119,12 @@ def collect_config_warnings(settings: dict[str, Any] | None = None) -> list[str]
         int(tr.get("web_search_max_chars", 0)),
     )
     threshold = int(tr.get("summarize_threshold", 0))
-    if threshold > per_tool_max:
+    if threshold < per_tool_max:
         warnings.append(
-            f"summarize_threshold({threshold:,}) > 最小工具上限({per_tool_max:,})"
-            " — 配置阈值对 exec/search/fetch 无效"
+            f"summarize_threshold({threshold:,}) < per-tool max({per_tool_max:,})"
+            " — AI压缩在截断前触发，阈值应 >= 工具上限"
         )
 
-    warnings.append(
-        "tool_results.summarize_* 未接入通用管线"
-        f" — 实际仅 SmartSearch 硬编码 {_SMART_SEARCH_SUMMARIZE_THRESHOLD:,} 字符"
-    )
-    warnings.append(
-        "broadcast/direct_result_max_chars 未接入 tool_loop 注入路径"
-        " — 目前只影响 dedup 缓存"
-    )
     if int(settings.get("tool_result_max_chars", 0)) < per_tool_max:
         warnings.append(
             f"tool_result_max_chars({settings['tool_result_max_chars']:,})"
@@ -212,8 +204,8 @@ def _pipeline_summary(metrics: dict[str, Any]) -> str:
         f" | web_fetch/web_search=head_only@{tr['web_fetch_max_chars']:,}/{tr['web_search_max_chars']:,}\n"
         "S2 工具AI压缩\n"
         f"   配置 summarize_*={'✅' if tr['summarize_enabled'] else '❌'}"
-        f" 阈值{tr['summarize_threshold']:,} — ⚠未接入通用管线\n"
-        f"   实际 SmartSearch 硬编码 {_SMART_SEARCH_SUMMARIZE_THRESHOLD:,} 字符\n"
+        f" 阈值{tr['summarize_threshold']:,} — ✅已接入 process_tool_result\n"
+        f"   SmartSearch 读取此阈值 (fallback {_SMART_SEARCH_SUMMARIZE_THRESHOLD_FALLBACK:,} 字符\n"
         "S3 maybe_compress (HistoryContext)\n"
         f"   触发 max(msg%,tok%)≥{hist.get('compress_ratio', 0.8)}"
         f" 或 tok≥55% | 模型 {tr['summarize_model']}\n"
@@ -256,8 +248,8 @@ def _pipeline_demo_expanded(metrics: dict[str, Any]) -> str:
         "🤖 Agent → web_search(...)\n"
         f"📡 返回 12,000 字符 → process_tool_result\n"
         f" └─ head_only @ web_search_max={tr['web_search_max_chars']:,}\n"
-        f" └─ ⚠ summarize_threshold={tr['summarize_threshold']:,} 未接线"
-        f" | SmartSearch 实际 @{_SMART_SEARCH_SUMMARIZE_THRESHOLD:,}\n"
+        f" └─ ✅ summarize_threshold={tr['summarize_threshold']:,} 已接入"
+        f" | process_tool_result + SmartSearch 共用 (fallback {_SMART_SEARCH_SUMMARIZE_THRESHOLD_FALLBACK:,}\n"
         "\n"
         "── 轮次 2 ──\n"
         "🤖 Agent → exec(...)\n"
@@ -274,7 +266,7 @@ def _pipeline_demo_expanded(metrics: dict[str, Any]) -> str:
         "\n"
         f"── 超限丢弃 ──\n"
         f" >{hist['max_messages']}条 或 >{hist['max_context_chars']:,}字 → 从最早丢弃\n"
-        f"\n(S2 配置开关 summarize_enabled={'✅' if ai_on else '❌'} — 见管线摘要中的未接线说明)\n"
+        f"\n(S2 配置开关 summarize_enabled={'✅' if ai_on else '❌'} — 见管线摘要中的已接入说明)\n"
     )
 
 
@@ -321,7 +313,7 @@ def build_main_panel_buttons(
         ],
         [
             InlineKeyboardButton(
-                f"🧠 S2工具AI: {'✅' if ai_on else '❌'}⚠未接线",
+                f"🧠 S2工具AI: {'✅' if ai_on else '❌'}⚠已接入",
                 callback_data="hs_stage2",
             )
         ],

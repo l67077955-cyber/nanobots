@@ -300,10 +300,20 @@ class SmartSearchTool(Tool):
     def parameters(self):
         return self._original.parameters
 
+    def _get_summarize_threshold(self) -> int:
+        """Read threshold from history_settings instead of hardcode."""
+        try:
+            from nanobot.groupchat.history.history_settings import get_all
+            tr = get_all().get("tool_results", {})
+            return int(tr.get("summarize_threshold", 8000))
+        except Exception:
+            return 3000
+
     async def execute(self, **kwargs) -> str:
         result = await self._original.execute(**kwargs)
 
-        if len(result) <= self.SUMMARIZE_THRESHOLD:
+        threshold = self._get_summarize_threshold()
+        if len(result) <= threshold:
             return result
 
         # Build query context for targeted summarization

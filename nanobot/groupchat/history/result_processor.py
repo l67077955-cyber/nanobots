@@ -7,6 +7,7 @@ Pipeline: normalize → truncate → persist → inject_meta
 """
 
 from __future__ import annotations
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -90,7 +91,78 @@ def _persist_to_disk(content: str, tool_name: str, tool_call_id: str) -> Path | 
         return None
 
 
-def process_tool_result(
+
+async def _maybe_ai_summarize(text: str, tool_name: str) -> str:
+    """If AI summarization is enabled and text exceeds threshold, summarize via cheap LLM."""
+    try:
+        from nanobot.groupchat.history import history_settings as hs
+        settings = hs.get_all()
+        tr = settings.get("tool_results", {})
+        if not tr.get("summarize_enabled", True):
+            return text
+        threshold = int(tr.get("summarize_threshold", 8000))
+        if len(text) <= threshold:
+            return text
+        model = tr.get("summarize_model", "openai/gpt-4.1-nano")
+        max_input = int(tr.get("summarize_max_input_chars", 8000))
+        max_output = int(tr.get("summarize_max_output_chars", 4000))
+
+        from nanobot.providers.litellm_provider import LiteLLMProvider
+        import json as _json
+
+        api_key, api_base, provider_name = "", "", "openrouter"
+        try:
+            cfg_path = Path.home() / ".nanobot" / "config.json"
+            if cfg_path.exists():
+                cfg = _json.loads(cfg_path.read_text())
+                pcfg = (cfg.get("providers") or {}).get(provider_name, {}) or {}
+                api_key = pcfg.get("apiKey", "")
+                api_base = pcfg.get("apiBase", "")
+        except Exception:
+            pass
+
+        llm = LiteLLMProvider(
+            default_model=model,
+            api_key=api_key or None,
+            api_base=api_base or None,
+            provider_name=provider_name,
+        )
+
+        prompt = (
+            "You are a tool result summarizer. Extract the most relevant info, "
+            "preserve numbers, dates, URLs. Output in the same language as the source. "
+            "Only extract existing info, never fabricate.\n\n"
+            f"--- Tool result ({len(text)} chars, tool={tool_name}) ---\n"
+            f"{text[:max_input]}\n--- End ---"
+        )
+
+        logger.info("result_processor: AI summarizing {}c via {} (tool={})",
+                     len(text), model, tool_name)
+        response = await asyncio.wait_for(
+            llm.chat(
+                [{"role": "user", "content": prompt}],
+                max_tokens=max_output,
+                temperature=0.1,
+            ),
+            timeout=30.0,
+        )
+        summary = response.content.strip() if response.content else None
+        if summary and len(summary) < len(text):
+            usage = response.usage or {}
+            tok_info = f" | nano in:{usage.get('prompt_tokens',0)} out:{usage.get('completion_tokens',0)}"
+            logger.info("result_processor: {}c -> {}c -{}% (tool={}{})",
+                         len(text), len(summary),
+                         round((len(text)-len(summary))/len(text)*100),
+                         tool_name, tok_info)
+            return f"{summary}\n\n`[nano:{tool_name}] {len(text)}->{len(summary)}c`"
+        return text
+    except Exception as e:
+        logger.warning("result_processor: AI summarize failed for {}: {}", tool_name, e)
+        return text
+
+
+
+async def process_tool_result(
     content: Any,
     tool_name: str,
     tool_call_id: str,
@@ -112,6 +184,9 @@ def process_tool_result(
         return processed  # multimodal lists pass through unchanged
 
     text: str = processed
+
+    # Step 1.5: AI summarize (if enabled and over threshold)
+    text = await _maybe_ai_summarize(text, tool_name)
 
     # Step 2: Get config and truncate
     config_key, strategy = _TOOL_CONFIGS.get(tool_name, _FALLBACK_CONFIG)
@@ -142,11 +217,11 @@ def process_tool_result(
 
 
 # ── Backward compatibility ──
-def maybe_persist_tool_result(
+async def maybe_persist_tool_result(
     content: str,
     tool_name: str,
     tool_call_id: str,
     max_chars: int = 20_000,
 ) -> str:
     """Legacy API — delegates to process_tool_result."""
-    return process_tool_result(content, tool_name, tool_call_id)
+    return await process_tool_result(content, tool_name, tool_call_id)

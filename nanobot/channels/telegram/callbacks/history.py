@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from nanobot.channels.telegram.formatting import to_cli_style
 from nanobot.channels.telegram.history_panel import (
-    _SMART_SEARCH_SUMMARIZE_THRESHOLD,
+    _SMART_SEARCH_SUMMARIZE_THRESHOLD_FALLBACK,
     build_history_panel,
     build_stage3_panel,
     collect_live_metrics,
@@ -100,7 +100,7 @@ class HistoryCallbackMixin:
             text = (
                 "🤖 Stage 2: 工具 AI 压缩 (配置项)\n"
                 "⚠ 以下 summarize_* 尚未接入通用 tool_loop 管线\n"
-                f"实际仅 SmartSearch 硬编码 {_SMART_SEARCH_SUMMARIZE_THRESHOLD:,} 字符\n\n"
+                f"SmartSearch 读取此阈值 (fallback {_SMART_SEARCH_SUMMARIZE_THRESHOLD_FALLBACK:,} 字符\n\n"
                 f"  配置开关 → {'✅ 开启' if enabled else '❌ 关闭'} (未接线)\n\n"
                 f"━ {d_thresh['label']} ━\n"
                 f"  当前: {tr['summarize_threshold']:,} 字符\n"

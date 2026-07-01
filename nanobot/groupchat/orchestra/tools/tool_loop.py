@@ -774,7 +774,7 @@ async def tool_loop(
                         )
                         await on_tool_result(tc.name, tc.id, _callback_result)
 
-                    tool_content = process_tool_result(
+                    tool_content = await process_tool_result(
                         content=tool_result,
                         tool_name=tc.name,
                         tool_call_id=tc.id,
