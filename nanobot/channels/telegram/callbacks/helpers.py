@@ -1,13 +1,85 @@
 """Telegram callback helper utilities."""
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
 
+from loguru import logger
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+from nanobot.config.validate import SAMPLING_KEYS
 
 
 class CallbackHelpersMixin:
     """Shared keyboard builders for callback handlers."""
+
+    @staticmethod
+    def _sanitize_sampling_params(raw: dict | None) -> tuple[dict, list[str]]:
+        """Keep only supported sampling keys so UI/runtime cannot drift."""
+        if not isinstance(raw, dict):
+            return {}, []
+        clean = {k: v for k, v in raw.items() if k in SAMPLING_KEYS}
+        ignored = sorted(set(raw) - set(clean))
+        return clean, ignored
+
+    def _sync_global_hyperparams_from_disk(self) -> dict:
+        """Reload global hyperparams into the live provider and return them."""
+        provider = getattr(self._groupchat_engine, "provider", None) if self._groupchat_engine else None
+        params = getattr(provider, "sampling_params", None) if provider else None
+        hp_path = Path.home() / ".nanobot" / "hyperparams.json"
+        if hp_path.exists():
+            try:
+                saved = json.loads(hp_path.read_text())
+                clean, ignored = self._sanitize_sampling_params(saved if isinstance(saved, dict) else {})
+                if ignored:
+                    logger.warning("hyperparams: ignored invalid keys from disk: {}", ignored)
+                if params is not None:
+                    # Merge defaults first, then overlay saved values,
+                    # so partial files don't silently wipe other defaults.
+                    from nanobot.providers.base import RECOMMENDED_AGENT_SAMPLING
+                    params.clear()
+                    params.update({**RECOMMENDED_AGENT_SAMPLING, **clean})
+                return clean
+            except Exception as e:
+                logger.warning("Failed to sync hyperparams from disk: {}", e)
+        return dict(params or {})
+
+    def _sync_agent_settings_from_disk(self, agent_name: str) -> dict:
+        """Refresh live registry fields that settings UI edits from config.json."""
+        engine = self._groupchat_engine
+        if not engine or agent_name not in engine.registry:
+            return {}
+        agent = engine.registry[agent_name]
+        cfg_path = Path.home() / ".nanobot" / "agents" / agent_name.lower() / "config.json"
+        if not cfg_path.exists():
+            return agent
+        try:
+            cfg = json.loads(cfg_path.read_text())
+        except Exception as e:
+            logger.warning("Failed to sync agent config from {}: {}", cfg_path, e)
+            return agent
+        if not isinstance(cfg, dict):
+            return agent
+
+        for key in ("model", "rank", "tools", "tools_enabled", "reasoning_effort"):
+            if key in cfg:
+                agent[key] = cfg[key]
+        if "hyperparams" in cfg:
+            clean, ignored = self._sanitize_sampling_params(cfg.get("hyperparams"))
+            effort = clean.pop("reasoning_effort", None)
+            if effort is not None and "reasoning_effort" not in cfg:
+                agent["reasoning_effort"] = effort
+            if ignored:
+                logger.warning("{} hyperparams: ignored invalid keys from disk: {}", agent_name, ignored)
+            if clean:
+                agent["hyperparams"] = clean
+            else:
+                agent.pop("hyperparams", None)
+        return agent
+
+    def _is_valid_sampling_key(self, key: str) -> bool:
+        return key in SAMPLING_KEYS
 
     @staticmethod
     def _sort_models_newest_first(model_ids: list[str]) -> list[str]:
@@ -47,7 +119,7 @@ class CallbackHelpersMixin:
         return buttons
 
 
-    async def _send_agent_hyperparams_keyboard(self, chat_id: str, agent_name: str, agent_hp) -> None:
+    async def _send_agent_hyperparams_keyboard(self, chat_id: str, agent_name: str, agent_hp, query=None) -> None:
         if not isinstance(agent_hp, dict):
             agent_hp = {}
         """Send per-agent hyperparams keyboard."""
@@ -73,8 +145,11 @@ class CallbackHelpersMixin:
             text += f"\n\n当前覆盖值：\n" + "\n".join(f"  {k} = {v}" for k, v in agent_hp.items())
         else:
             text += "\n\n（当前无覆盖，使用全局/默认）"
-        await self._app.bot.send_message(
-            chat_id=int(chat_id), text=text[:4096],
-            reply_markup=InlineKeyboardMarkup(buttons),
-        )
-
+        markup = InlineKeyboardMarkup(buttons)
+        if query is not None:
+            await query.edit_message_text(text[:4096], reply_markup=markup)
+        else:
+            await self._app.bot.send_message(
+                chat_id=int(chat_id), text=text[:4096],
+                reply_markup=markup,
+            )

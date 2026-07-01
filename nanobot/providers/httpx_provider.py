@@ -64,9 +64,7 @@ class HttpxProvider(LLMProvider):
 
         # Sampling parameters — modifiable at runtime via /hyperparams
         from nanobot.providers.base import RECOMMENDED_AGENT_SAMPLING
-        defaults = {k: v for k, v in RECOMMENDED_AGENT_SAMPLING.items()
-                    if k in ("temperature", "top_p", "frequency_penalty",
-                             "presence_penalty", "repetition_penalty")}
+        defaults = dict(RECOMMENDED_AGENT_SAMPLING)
         from nanobot.config.validate import SAMPLING_KEYS
         hp_path = Path.home() / ".nanobot" / "hyperparams.json"
         if hp_path.exists():
@@ -331,6 +329,8 @@ class HttpxProvider(LLMProvider):
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int = 4096,
         stream: bool = False,
+        sampling_params: dict[str, Any] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build the JSON request body for /chat/completions."""
         # Original model for cache_control check
@@ -375,7 +375,7 @@ class HttpxProvider(LLMProvider):
 
         # Add sampling params (skip unsupported ones for this provider)
         drop_keys = self._compat_drop_params.get(provider_name or "", set())
-        for k, v in self.sampling_params.items():
+        for k, v in (sampling_params or self.sampling_params).items():
             if k not in drop_keys:
                 body[k] = v
 
@@ -385,7 +385,7 @@ class HttpxProvider(LLMProvider):
         # Tools
         if tools:
             body["tools"] = tools
-            body["tool_choice"] = "auto"
+            body["tool_choice"] = tool_choice or "auto"
 
         # Stream options for usage reporting
         if stream:
@@ -590,8 +590,10 @@ class HttpxProvider(LLMProvider):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         metadata: dict[str, Any] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
+        sampling_params: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """Send a chat completion request via httpx (raw JSON)."""
         original_model = model or self.default_model
@@ -607,7 +609,10 @@ class HttpxProvider(LLMProvider):
         body = self._build_body(
             messages=messages, model=raw_model, provider_name=prov_name,
             tools=tools, max_tokens=max_tokens, stream=False,
+            sampling_params=sampling_params,
+            tool_choice=tool_choice,
         )
+        log_params = sampling_params or self.sampling_params
 
         url = f"{target_base}/chat/completions"
         headers = {
@@ -627,7 +632,7 @@ class HttpxProvider(LLMProvider):
                 error_exc = _APIError(r.status_code, error_text)
                 self._log_request(
                     model=raw_model, api_base=target_base, max_tokens=max_tokens,
-                    stream=False, params=self.sampling_params, tools_count=len(tools or []),
+                    stream=False, params=log_params, tools_count=len(tools or []),
                     messages=body["messages"], metadata=metadata, error=error_exc, latency=latency,
                     cache_headers=getattr(self, "_last_cache_headers", None),
                 )
@@ -639,15 +644,20 @@ class HttpxProvider(LLMProvider):
                     status_code=r.status_code,
                     error_text=error_text,
                     has_tool_msgs=has_tool_msgs,
-                    kwargs=self.sampling_params,
+                    kwargs=log_params,
                 )
 
                 if needs_flatten or needs_param:
-                    body = self._build_body(messages=messages, model=raw_model, provider_name=prov_name, tools=tools, max_tokens=max_tokens, stream=False)
+                    body = self._build_body(
+                        messages=messages, model=raw_model, provider_name=prov_name,
+                        tools=tools, max_tokens=max_tokens, stream=False,
+                        sampling_params=sampling_params,
+                        tool_choice=tool_choice,
+                    )
                     r2 = await client.post(url, json=body, headers=headers)
                     if r2.status_code == 200:
                         data = r2.json()
-                        self._log_request(model=raw_model, api_base=target_base, max_tokens=max_tokens, stream=False, params=self.sampling_params, tools_count=len(tools or []), messages=body["messages"], metadata=metadata, response_data=data, latency=_time.time() - t0)
+                        self._log_request(model=raw_model, api_base=target_base, max_tokens=max_tokens, stream=False, params=log_params, tools_count=len(tools or []), messages=body["messages"], metadata=metadata, response_data=data, latency=_time.time() - t0)
                         return self._parse_response(data)
 
                 return LLMResponse(
@@ -659,7 +669,7 @@ class HttpxProvider(LLMProvider):
             data = r.json()
             self._log_request(
                 model=raw_model, api_base=target_base, max_tokens=max_tokens,
-                stream=False, params=self.sampling_params, tools_count=len(tools or []),
+                stream=False, params=log_params, tools_count=len(tools or []),
                 messages=body["messages"], metadata=metadata, response_data=data, latency=latency,
                 cache_headers=getattr(self, "_last_cache_headers", None),
             )
@@ -669,7 +679,7 @@ class HttpxProvider(LLMProvider):
             latency = _time.time() - t0
             self._log_request(
                 model=raw_model, api_base=target_base, max_tokens=max_tokens,
-                stream=False, params=self.sampling_params, tools_count=len(tools or []),
+                stream=False, params=log_params, tools_count=len(tools or []),
                 messages=body.get("messages", messages), metadata=metadata,
                 error=e, latency=latency,
                 cache_headers=getattr(self, "_last_cache_headers", None),
@@ -703,6 +713,7 @@ class HttpxProvider(LLMProvider):
         metadata: dict[str, Any] | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
+        sampling_params: dict[str, Any] | None = None,
     ):
         """Stream a chat completion using the OpenAI SDK for fast SSE.
 
@@ -721,7 +732,9 @@ class HttpxProvider(LLMProvider):
         body = self._build_body(
             messages=messages, model=raw_model, provider_name=prov_name,
             tools=tools, max_tokens=max_tokens, stream=True,
+            sampling_params=sampling_params,
         )
+        log_params = sampling_params or self.sampling_params
         # Remove keys the SDK handles itself
         body.pop("stream", None)
         body.pop("stream_options", None)
@@ -787,7 +800,7 @@ class HttpxProvider(LLMProvider):
         except Exception as e:
             self._log_request(
                 model=raw_model, api_base=target_base, max_tokens=max_tokens,
-                stream=True, params=self.sampling_params, tools_count=len(tools or []),
+                stream=True, params=log_params, tools_count=len(tools or []),
                 messages=body.get("messages", messages), metadata=metadata,
                 error=e, latency=_time.time() - t0,
             )
@@ -834,7 +847,7 @@ class HttpxProvider(LLMProvider):
         # Log the completed stream
         self._log_request(
             model=raw_model, api_base=target_base, max_tokens=max_tokens,
-            stream=True, params=self.sampling_params, tools_count=len(tools or []),
+            stream=True, params=log_params, tools_count=len(tools or []),
             messages=body["messages"], metadata=metadata,
             response_data={
                 "choices": [{"message": {"content": full_content, "tool_calls": tool_calls_raw or None}, "finish_reason": finish_reason}],

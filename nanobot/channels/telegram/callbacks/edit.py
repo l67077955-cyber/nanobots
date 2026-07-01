@@ -8,6 +8,28 @@ from typing import Any
 from loguru import logger
 
 
+_SAMPLING_RANGES = {
+    "temperature": (0.0, 2.0),
+    "top_p": (0.0, 1.0),
+    "top_k": (0, 200),
+    "min_p": (0.0, 1.0),
+    "top_a": (0.0, 1.0),
+    "repetition_penalty": (1.0, 2.0),
+    "frequency_penalty": (-2.0, 2.0),
+    "presence_penalty": (-2.0, 2.0),
+}
+
+
+def _validate_sampling_value(hp_key, value):
+    """Return (ok, error_msg). value already parsed as float."""
+    if hp_key not in _SAMPLING_RANGES:
+        return True, None
+    lo, hi = _SAMPLING_RANGES[hp_key]
+    if value < lo or value > hi:
+        return False, f"⚠️ {hp_key} 范围 [{lo}, {hi}]，当前 {value} 超出"
+    return True, None
+
+
 class EditCallbackMixin:
     """Mixin for multi-step agent/provider edit flows."""
 
@@ -150,6 +172,10 @@ class EditCallbackMixin:
                 except ValueError:
                     await self._gc_send(chat_id, "⚠️ 值必须是数字")
                     return
+                _ok, _err = _validate_sampling_value(hp_key, value)
+                if not _ok:
+                    await self._gc_send(chat_id, _err)
+                    return
             provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
             params = getattr(provider, 'sampling_params', None) if provider else None
             if params is not None:
@@ -198,6 +224,10 @@ class EditCallbackMixin:
                     value = float(raw_val)
                 except ValueError:
                     await self._gc_send(chat_id, "⚠️ 值必须是数字")
+                    return
+                _ok, _err = _validate_sampling_value(hp_key, value)
+                if not _ok:
+                    await self._gc_send(chat_id, _err)
                     return
             if self._groupchat_engine and a_name in self._groupchat_engine.registry:
                 agent = self._groupchat_engine.registry[a_name]

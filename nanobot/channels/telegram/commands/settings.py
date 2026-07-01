@@ -38,10 +38,15 @@ class SettingsCommandsMixin:
             return False
         try:
             saved = json.loads(hp_path.read_text())
-            if isinstance(saved, dict) and saved:
+            if isinstance(saved, dict):
+                from nanobot.config.validate import SAMPLING_KEYS
+                clean = {k: v for k, v in saved.items() if k in SAMPLING_KEYS}
+                ignored = sorted(set(saved) - set(clean))
+                if ignored:
+                    logger.warning("hyperparams: ignored invalid keys from disk: {}", ignored)
                 params.clear()
-                params.update(saved)
-                logger.info("Synced hyperparams from disk: {}", list(saved.keys()))
+                params.update(clean)
+                logger.info("Synced hyperparams from disk: {}", list(clean.keys()))
                 return True
         except Exception as e:
             logger.warning("Failed to sync hyperparams from disk: {}", e)
@@ -62,14 +67,13 @@ class SettingsCommandsMixin:
             return
 
         # Sync from disk so external file edits are reflected
-        self._sync_hyperparams_from_disk(provider)
+        params = self._sync_global_hyperparams_from_disk()
 
         await self._send_hyperparams_keyboard(str(update.message.chat_id), params)
 
     async def _send_hyperparams_keyboard(self, chat_id: str, params: dict) -> None:
         """Send hyperparams display with edit/delete buttons."""
         lines = [
-            "⚙️ 默认超参数设置（全局）\n",
             "💡 新 agent 默认继承这些值。除非清楚每个参数的作用，否则建议保持精简或留空。\n",
             "简单控制思考/创意？推荐用 /editagent 里的「思考深度」+「等级」。\n"
         ]
@@ -492,3 +496,20 @@ class SettingsCommandsMixin:
         )])
         return "\n".join(lines), buttons
 
+    async def _on_think(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Display the agent thinking-depth panel."""
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        engine = self._groupchat_engine
+        if not engine:
+            await update.message.reply_text("⚠️ 群聊引擎未初始化")
+            return
+        text, buttons = self._build_think_status_panel(engine)
+        text = to_cli_style(text, title="🧠 Agent 思考模式")
+        await update.message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(buttons),
+            parse_mode="Markdown",
+        )

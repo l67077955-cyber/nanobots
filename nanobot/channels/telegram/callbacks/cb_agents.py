@@ -11,6 +11,27 @@ from loguru import logger
 
 class AgentCallbackMixin:
     async def _dispatch_agents(self, query, data: str, chat_id: str) -> bool:
+        if data == "al":
+            # Show agent list as inline keyboard
+            if not self._groupchat_engine:
+                await query.edit_message_text("⚠️ 无 agent")
+                return True
+            registry = self._groupchat_engine.registry
+            active = self._groupchat_engine.active_agents
+            buttons = []
+            for name in registry:
+                status = "🟢" if name in active else "⚪"
+                buttons.append([InlineKeyboardButton(
+                    f"{status} {name}",
+                    callback_data=f"edit:{name}"
+                )])
+            buttons.append([InlineKeyboardButton("❌ 关闭", callback_data="noop")])
+            await query.edit_message_text(
+                "📋 Agent 列表 — 点击名称编辑:",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
+            return True
+
         if data.startswith("add:"):
             name = data[4:]
             self._ensure_gc_send(chat_id)
@@ -24,6 +45,7 @@ class AgentCallbackMixin:
 
         elif data.startswith("edit:"):
             name = data[5:]
+            self._sync_agent_settings_from_disk(name)
             agent = self._groupchat_engine.registry.get(name)
             if not agent:
                 await query.edit_message_text(f"❌ Agent '{name}' 不存在")
@@ -80,8 +102,8 @@ class AgentCallbackMixin:
             name, field = parts[1], parts[2]
             if field == "cancel":
                 self._edit_state.pop(chat_id, None)
-                await query.edit_message_text("❌ 已取消")
-                return True
+                # Redirect to agent list instead of dead-end text
+                return await self._dispatch_agents(query, "al", chat_id)
             if field == "tools":
                 # Show per-tool toggle buttons
                 from nanobot.groupchat.orchestra.engine import GroupChatEngine
@@ -149,13 +171,13 @@ class AgentCallbackMixin:
                 return True
             elif field == "hyperparams":
                 # Per-agent hyperparams (same UX as /hyperparams but per-agent)
-                agent = self._groupchat_engine.registry.get(name, {})
+                agent = self._sync_agent_settings_from_disk(name)
                 agent_hp = agent.get("hyperparams") or {}
-                await self._send_agent_hyperparams_keyboard(chat_id, name, agent_hp)
+                await self._send_agent_hyperparams_keyboard(chat_id, name, agent_hp, query=query)
                 return True
             elif field == "reasoning_effort":
                 # Show effort level selection — friendly "思考深度"
-                agent = self._groupchat_engine.registry.get(name, {})
+                agent = self._sync_agent_settings_from_disk(name)
                 current = agent.get("reasoning_effort") or "off"
                 levels = [("off", "默认(自动)"), ("low", "低"), ("medium", "中"), ("high", "高")]
                 buttons = []
@@ -269,19 +291,27 @@ class AgentCallbackMixin:
             agent = self._groupchat_engine.registry.get(name, {}) if self._groupchat_engine else {}
             cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
 
+            async def _refresh_edit_menu(status: str) -> None:
+                await query.edit_message_text(
+                    f"{status}\n\n{self._edit_menu_text(name)}",
+                    reply_markup=self._edit_menu_buttons(name),
+                )
+
             def _apply_and_persist(changes: dict, msg: str):
                 # Apply to runtime
-                hp = agent.setdefault("hyperparams", {})
-                hp.update(changes)
-                # reasoning_effort goes top-level too for loader compatibility
+                hp_changes = {k: v for k, v in changes.items() if k != "reasoning_effort"}
+                if hp_changes:
+                    hp = agent.setdefault("hyperparams", {})
+                    hp.update(hp_changes)
                 if "reasoning_effort" in changes:
                     agent["reasoning_effort"] = changes["reasoning_effort"]
                 # Persist
                 try:
                     if cfg_path.exists():
                         c = json.loads(cfg_path.read_text())
-                        c.setdefault("hyperparams", {})
-                        c["hyperparams"].update(changes)
+                        if hp_changes:
+                            c.setdefault("hyperparams", {})
+                            c["hyperparams"].update(hp_changes)
                         if "reasoning_effort" in changes:
                             c["reasoning_effort"] = changes["reasoning_effort"]
                         cfg_path.write_text(json.dumps(c, indent=2, ensure_ascii=False))
@@ -292,7 +322,7 @@ class AgentCallbackMixin:
             if preset == "balanced":
                 # Clear heavy overrides, set medium
                 for k in list(agent.get("hyperparams", {}).keys()):
-                    if k in ("temperature", "top_p"):
+                    if k in ("temperature", "top_p", "reasoning_effort"):
                         agent["hyperparams"].pop(k, None)
                 if "hyperparams" in agent and not agent["hyperparams"]:
                     agent.pop("hyperparams", None)
@@ -305,37 +335,33 @@ class AgentCallbackMixin:
                         cfg_path.write_text(json.dumps(c, indent=2, ensure_ascii=False))
                     except Exception:
                         pass
-                await query.edit_message_text(f"✅ {name} 已设为「平衡」预设（中等思考深度，默认采样）。")
-                await self._show_edit_menu(query, name)
+                await _refresh_edit_menu(f"✅ {name} 已设为「平衡」预设（中等思考深度，默认采样）。")
                 return True
 
             elif preset == "creative":
-                res = _apply_and_persist(
+                _apply_and_persist(
                     {"temperature": 0.9, "top_p": 0.95, "reasoning_effort": "medium"},
                     "更有创意"
                 )
-                await query.edit_message_text(f"✅ {name} 已应用「{preset}」预设：更高随机性 + 中等思考深度。")
-                await self._show_edit_menu(query, name)
+                await _refresh_edit_menu(f"✅ {name} 已应用「更有创意」预设：更高随机性 + 中等思考深度。")
                 return True
 
             elif preset == "precise":
-                res = _apply_and_persist(
+                _apply_and_persist(
                     {"temperature": 0.2, "top_p": 0.9, "reasoning_effort": "medium"},
                     "更严谨"
                 )
-                await query.edit_message_text(f"✅ {name} 已应用「{preset}」预设：低温度严谨采样 + 中等思考。")
-                await self._show_edit_menu(query, name)
+                await _refresh_edit_menu(f"✅ {name} 已应用「更严谨分析」预设：低温度严谨采样 + 中等思考。")
                 return True
 
             elif preset == "deep":
-                res = _apply_and_persist(
+                _apply_and_persist(
                     {"temperature": 0.5, "top_p": 0.9, "reasoning_effort": "high"},
                     "深度思考"
                 )
-                await query.edit_message_text(
+                await _refresh_edit_menu(
                     f"✅ {name} 已应用「深度思考」预设：高思考强度（适合支持推理的模型）+ 适中采样。"
                 )
-                await self._show_edit_menu(query, name)
                 return True
 
             elif preset == "reset":
@@ -349,8 +375,7 @@ class AgentCallbackMixin:
                         cfg_path.write_text(json.dumps(c, indent=2, ensure_ascii=False))
                     except Exception:
                         pass
-                await query.edit_message_text(f"✅ {name} 已恢复默认（清除超参数与思考深度覆盖）。")
-                await self._show_edit_menu(query, name)
+                await _refresh_edit_menu(f"✅ {name} 已恢复默认（清除超参数与思考深度覆盖）。")
                 return True
 
         elif data.startswith("tf:"):
@@ -502,6 +527,7 @@ class AgentCallbackMixin:
         elif data.startswith("hp:"):
             key = data[3:]
             provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
+            self._sync_global_hyperparams_from_disk()
             params = getattr(provider, 'sampling_params', None) if provider else None
             if params and key in params:
                 self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key}
@@ -516,6 +542,7 @@ class AgentCallbackMixin:
         elif data.startswith("hp_del:"):
             key = data[7:]
             provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
+            self._sync_global_hyperparams_from_disk()
             params = getattr(provider, 'sampling_params', None) if provider else None
             if params and key in params:
                 del params[key]
@@ -533,7 +560,7 @@ class AgentCallbackMixin:
         elif data == "hp_add":
             # Show common params to add
             provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
-            params = getattr(provider, 'sampling_params', None) if provider else {}
+            params = self._sync_global_hyperparams_from_disk()
             common = ["temperature", "top_p", "top_k", "min_p", "top_a",
                       "frequency_penalty", "presence_penalty", "repetition_penalty"]
             available = [p for p in common if p not in params]
@@ -563,7 +590,7 @@ class AgentCallbackMixin:
 
         elif data == "hp_back":
             provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
-            params = getattr(provider, 'sampling_params', None) if provider else {}
+            params = self._sync_global_hyperparams_from_disk()
             await query.edit_message_text("⚙️ 返回...")
             await self._send_hyperparams_keyboard(chat_id, params)
 
@@ -574,7 +601,7 @@ class AgentCallbackMixin:
             if len(parts) < 3:
                 return
             a_name, key = parts[1], parts[2]
-            agent = self._groupchat_engine.registry.get(a_name, {}) if self._groupchat_engine else {}
+            agent = self._sync_agent_settings_from_disk(a_name) if self._groupchat_engine else {}
             agent_hp = agent.get("hyperparams") or {}
             if key in agent_hp:
                 self._edit_state[chat_id] = {"field": "ahp_value", "agent": a_name, "hp_key": key}
@@ -593,7 +620,7 @@ class AgentCallbackMixin:
                 return
             a_name, key = parts[1], parts[2]
             if self._groupchat_engine and a_name in self._groupchat_engine.registry:
-                agent = self._groupchat_engine.registry[a_name]
+                agent = self._sync_agent_settings_from_disk(a_name)
                 agent_hp = agent.get("hyperparams") or {}
                 if key in agent_hp:
                     del agent_hp[key]
@@ -609,27 +636,21 @@ class AgentCallbackMixin:
                         except Exception as e:
                             logger.error("Failed to persist agent hyperparams: {}", e)
                     await query.edit_message_text(f"🗑 已删除 {a_name} 的 {key}")
-                    await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
+                    await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp, query=query)
 
         elif data.startswith("ahp_sync:"):
             # ahp_sync:AgentName
             a_name = data[9:]
             if self._groupchat_engine and a_name in self._groupchat_engine.registry:
                 global_hp = {}
-                hp_path = Path.home() / ".nanobot" / "hyperparams.json"
-                if hp_path.exists():
-                    try:
-                        saved = json.loads(hp_path.read_text())
-                        if isinstance(saved, dict):
-                            global_hp = saved
-                    except Exception:
-                        pass
+                global_hp = self._sync_global_hyperparams_from_disk()
                 if not global_hp:
                     provider = getattr(self._groupchat_engine, 'provider', None)
                     if provider and hasattr(provider, 'sampling_params'):
                         global_hp = dict(provider.sampling_params)
 
                 if global_hp:
+                    global_hp = {k: v for k, v in global_hp.items() if k != "reasoning_effort"}
                     agent = self._groupchat_engine.registry[a_name]
                     agent_hp = agent.get("hyperparams") or {}
                     agent_hp.update(global_hp)
@@ -646,14 +667,14 @@ class AgentCallbackMixin:
                         except Exception as e:
                             logger.error("Failed to persist agent hyperparams: {}", e)
                     await query.answer("✅ 已复制全局超参数")
-                    await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
+                    await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp, query=query)
                 else:
                     await query.answer("⚠️ 全局超参数为空", show_alert=True)
 
         elif data.startswith("ahp_add:"):
             # ahp_add:AgentName
             a_name = data[8:]
-            agent = self._groupchat_engine.registry.get(a_name, {}) if self._groupchat_engine else {}
+            agent = self._sync_agent_settings_from_disk(a_name) if self._groupchat_engine else {}
             agent_hp = agent.get("hyperparams") or {}
             common = ["temperature", "top_p", "top_k", "min_p", "top_a",
                       "frequency_penalty", "presence_penalty", "repetition_penalty"]
@@ -690,10 +711,10 @@ class AgentCallbackMixin:
         elif data.startswith("ahp_back:"):
             # ahp_back:AgentName
             a_name = data[9:]
-            agent = self._groupchat_engine.registry.get(a_name, {}) if self._groupchat_engine else {}
+            agent = self._sync_agent_settings_from_disk(a_name) if self._groupchat_engine else {}
             agent_hp = agent.get("hyperparams") or {}
             await query.edit_message_text("⚙️ 返回...")
-            await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
+            await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp, query=query)
 
         elif data.startswith("gc:"):
             key = data[3:]
@@ -704,7 +725,7 @@ class AgentCallbackMixin:
             await query.edit_message_text(
                 f"✏️ 修改 {label}\n"
                 f"当前值: {val}\n\n"
-                f"请输入新值 (整数):"
+                f"请输入新值 (数字):"
             )
 
         elif data.startswith("ord:"):

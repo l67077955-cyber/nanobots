@@ -195,9 +195,10 @@ def _scan_agents_dir(
         tools_enabled = bool(acfg.get("tools_enabled", False))
         workspace_scope = acfg.get("workspace", "workspace")
         hyperparams = acfg.get("hyperparams") or (dict(global_hyperparams) if global_hyperparams else None)
-        if acfg.get("reasoning_effort"):
-            hyperparams = hyperparams or {}
-            hyperparams.setdefault("reasoning_effort", acfg["reasoning_effort"])
+        if not isinstance(hyperparams, dict):
+            hyperparams = {}
+        # Sanitize: keep only valid SAMPLING_KEYS (no reasoning_effort)
+        hyperparams = {k: v for k, v in hyperparams.items() if k in SAMPLING_KEYS}
 
         max_tool_iterations = None
         for key in ("max_tool_iterations", "maxToolIterations"):
