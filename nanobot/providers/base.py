@@ -14,12 +14,12 @@ from loguru import logger
 # Global overrides in ~/.nanobot/hyperparams.json.
 RECOMMENDED_AGENT_SAMPLING: dict[str, float] = {
     "temperature": 1.0,
-    "top_p": 0.9,
-    "frequency_penalty": 0.05,
+    "top_p": 0.92,
+    "frequency_penalty": 0.10,
     "presence_penalty": 0.05,
-    "repetition_penalty": 1.0,
-    "top_k": 0,
-    "min_p": 0,
+    "repetition_penalty": 1.15,
+    "top_k": 40,
+    "min_p": 0.07,
     "top_a": 0,
 }
 
@@ -197,6 +197,7 @@ class LLMProvider(ABC):
         reasoning_effort: str | None = None,
         metadata: dict[str, Any] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        sampling_params: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request.
@@ -372,6 +373,7 @@ class LLMProvider(ABC):
         reasoning_effort: object = _SENTINEL,
         metadata: dict[str, Any] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        sampling_params: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """Call chat() with retry on transient provider failures.
 
@@ -401,6 +403,7 @@ class LLMProvider(ABC):
                     reasoning_effort=reasoning_effort,
                     metadata=metadata,
                     tool_choice=tool_choice,
+                    sampling_params=sampling_params,
                 )
             except asyncio.CancelledError:
                 raise
@@ -427,6 +430,7 @@ class LLMProvider(ABC):
                             max_tokens=max_tokens, temperature=temperature,
                             reasoning_effort=reasoning_effort, metadata=metadata,
                             tool_choice=tool_choice,
+                            sampling_params=sampling_params,
                         )
                         resp.retry_log = retry_log
                         return resp
@@ -463,6 +467,7 @@ class LLMProvider(ABC):
                 reasoning_effort=reasoning_effort,
                 metadata=metadata,
                 tool_choice=tool_choice,
+                sampling_params=sampling_params,
             )
             resp.retry_log = retry_log
             return resp

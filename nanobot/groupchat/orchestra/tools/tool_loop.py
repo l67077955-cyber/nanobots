@@ -111,16 +111,19 @@ def _has_contiguous_repeat(text: str, min_repeat: int = 3) -> bool:
     """Detect if the same sentence/segment appears consecutively ≥ *min_repeat* times.
 
     Splits on sentence-ending punctuation or newlines, then checks for runs
-    of identical (whitespace-normalised) segments.  O(n) — suitable for
-    calling on every iteration without measurable overhead.
+    of identical (whitespace-normalised) segments.  Also detects multi-segment
+    repeating patterns (e.g. "A:B:A:B:A:B" where A and B alternate).
+    O(n) — suitable for calling on every iteration without measurable overhead.
     """
     if not text:
         return False
-    segments = re.split(r'[\n。！？.!?\u3002]', text)
+    segments = re.split(r'[\n。！？！?\u3002：:]', text)
     # Normalise and filter empty
     segs = [s.strip() for s in segments if s.strip()]
     if len(segs) < min_repeat:
         return False
+
+    # Check 1: contiguous identical segments (original logic)
     count = 1
     for i in range(1, len(segs)):
         if segs[i] == segs[i - 1]:
@@ -129,6 +132,24 @@ def _has_contiguous_repeat(text: str, min_repeat: int = 3) -> bool:
                 return True
         else:
             count = 1
+
+    # Check 2: multi-segment repeating patterns (e.g. 2-pair alternating)
+    # Try pattern sizes from 1 to min(5, len(segs)//min_repeat)
+    max_pattern = min(5, len(segs) // min_repeat)
+    for pattern_size in range(2, max_pattern + 1):  # size 1 already caught above
+        pattern = segs[-pattern_size:]
+        matches = 1
+        pos = len(segs) - pattern_size
+        while pos >= pattern_size:
+            candidate = segs[pos - pattern_size:pos]
+            if candidate == pattern:
+                matches += 1
+                pos -= pattern_size
+            else:
+                break
+        if matches >= min_repeat:
+            return True
+
     return False
 
 
@@ -140,7 +161,7 @@ def _truncate_repeated_tail(text: str, min_repeat: int = 3) -> str:
     """
     if not text:
         return text
-    segments = re.split(r'([\n。！？.!?\u3002])', text)
+    segments = re.split(r'([\n。！？！?\u3002：:])', text)
     # segments alternates: [content, delimiter, content, delimiter, ...]
     # Rebuild into (content, delimiter) pairs
     pairs: list[tuple[str, str]] = []
@@ -156,20 +177,49 @@ def _truncate_repeated_tail(text: str, min_repeat: int = 3) -> str:
     if len(pairs) < min_repeat:
         return text
 
-    # Find the longest trailing run of identical (content, delim) pairs
+    # Normalise trailing empty delimiter: when text doesn't end with a delimiter,
+    # the last pair's delimiter is "" but all prior repeating pairs have e.g. "：",
+    # breaking equality comparison.  Copy the preceding delimiter for the last pair.
+    if len(pairs) >= 2 and pairs[-1][1] == "" and pairs[-2][1]:
+        pairs[-1] = (pairs[-1][0], pairs[-2][1])
+
+    # Strategy 1: single-pair contiguous run (original logic)
     last_unique_idx = len(pairs) - 1
     for i in range(len(pairs) - 2, -1, -1):
         if pairs[i] == pairs[i + 1]:
             last_unique_idx = i
         else:
             break
-
-    # Check if the run is long enough
     run_len = len(pairs) - last_unique_idx
     if run_len >= min_repeat:
-        # Keep up to and including the first occurrence of the repeated segment
         keep_until = last_unique_idx + 1
-        return "".join(c + d for c, d in pairs[:keep_until])
+        result = "".join(c + d for c, d in pairs[:keep_until])
+        last_delim = pairs[keep_until - 1][1]
+        if last_delim and result.endswith(last_delim):
+            result = result[:-len(last_delim)]
+        return result
+
+    # Strategy 2: multi-pair repeating pattern (e.g. 2-pair alternating "A:B:A:B:A:B")
+    max_pattern = min(5, len(pairs) // min_repeat)
+    for pattern_size in range(2, max_pattern + 1):
+        pattern = pairs[-pattern_size:]
+        matches = 1
+        pos = len(pairs) - pattern_size
+        while pos >= pattern_size:
+            candidate = pairs[pos - pattern_size:pos]
+            if candidate == pattern:
+                matches += 1
+                pos -= pattern_size
+            else:
+                break
+        if matches >= min_repeat:
+            keep_until = len(pairs) - pattern_size * (matches - 1)
+            if keep_until > 0:
+                result = "".join(c + d for c, d in pairs[:keep_until])
+                last_delim = pairs[keep_until - 1][1]
+                if last_delim and result.endswith(last_delim):
+                    result = result[:-len(last_delim)]
+                return result
 
     return text
 
@@ -216,6 +266,7 @@ async def tool_loop(
     tool_defs: list[dict[str, Any]] | None = None,
     metadata: dict[str, Any] | None = None,
     reasoning_effort: str | None = None,
+    sampling_params: dict[str, Any] | None = None,
     # ── Callbacks ──
     on_tool_start: Callable[..., Awaitable[None]] | None = None,
     on_tool_result: Callable[[str, str, str], Awaitable[None]] | None = None,
@@ -379,6 +430,7 @@ async def tool_loop(
                 _coro = _stream_call(
                     provider, llm_messages, iter_tool_defs, model, max_tokens, metadata,
                     on_content_delta, reasoning_effort=reasoning_effort,
+                    sampling_params=sampling_params,
                 )
             else:
                 _coro = provider.chat_with_retry(
@@ -388,6 +440,7 @@ async def tool_loop(
                     max_tokens=max_tokens,
                     metadata=metadata,
                     reasoning_effort=reasoning_effort,
+                    sampling_params=sampling_params,
                 )
                 
             if interrupt_event is not None:
@@ -813,10 +866,14 @@ async def tool_loop(
                 # When the agent calls end_discussion, break immediately so the
                 # LLM doesn't generate another round of text.  The broadcast
                 # layer will use the last substantive content as synthesis.
+                # IMPORTANT: preserve raw_content from this iteration's LLM response
+                # so broadcast doesn't see empty content and skip synthesis.
                 if "end_discussion" in result.tools_used:
                     logger.info(
                         "tool_loop: end_discussion detected after tool batch (iter {}), breaking", iteration
                     )
+                    if not result.content and raw_content:
+                        result.content = raw_content
                     result.finish_reason = "end_discussion"
                     break
 
@@ -862,6 +919,7 @@ async def tool_loop(
                         max_tokens=max_tokens,
                         metadata=metadata,
                         reasoning_effort=reasoning_effort,
+                        sampling_params=sampling_params,
                     )
                     if retried.finish_reason != "error":
                         response = retried
@@ -922,6 +980,7 @@ async def _stream_call(
     on_content_delta: Callable[[str], Awaitable[None]],
     *,
     reasoning_effort: str | None = None,
+    sampling_params: dict[str, Any] | None = None,
 ) -> LLMResponse:
     """Call provider.chat_stream(), forwarding content deltas to the callback.
 
@@ -937,7 +996,9 @@ async def _stream_call(
             tools=tool_defs,
             model=model,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
             metadata=metadata,
+            sampling_params=sampling_params,
         ):
             if isinstance(item, str):
                 await on_content_delta(item)
@@ -985,6 +1046,7 @@ async def _stream_call(
             max_tokens=max_tokens,
             metadata=metadata,
             reasoning_effort=reasoning_effort,
+            sampling_params=sampling_params,
         )
 
     return response
