@@ -11,6 +11,8 @@ import asyncio
 import re
 import threading
 from pathlib import Path
+
+from loguru import logger
 from typing import Any
 
 from nanobot.tools.base import Tool
@@ -731,6 +733,22 @@ class ChatroomSendTool(Tool):
         if delivered > 0 and self._search_pool:
             self._search_pool.on_output(self._agent_name)
 
+        # Trigger real-time interrupt for delivered targets so a busy
+        # recipient (mid tool_loop / LLM call) wakes up immediately
+        # instead of burning the sender's wait() deadline on extensions.
+        # _try_interrupt respects rank: high-rank sender interrupts
+        # low-rank busy recipient; equal rank queues silently.
+        if delivered > 0:
+            _interrupted = 0
+            for _tgt in actual_recipients:
+                if self._mailbox._try_interrupt(_tgt, self._agent_name):
+                    _interrupted += 1
+            if _interrupted > 0:
+                logger.info(
+                    "chatroom_send: {} -> {} interrupted {} busy agent(s)",
+                    self._agent_name, ", ".join(targets), _interrupted,
+                )
+
         avail_hint = ""
         if self._pool:
             avail_hint = f" [{self._pool.used}/{self._pool.capacity} threads]"
@@ -967,6 +985,14 @@ class ManageAgentTool(Tool):
             "required": ["action", "agent"],
         }
 
+    def _discussion_ended(self) -> bool:
+        return bool(getattr(self._mailbox, "is_discussion_ended", lambda: False)())
+
+    def _notify_if_running(self, sender: str, targets: list[str], content: str) -> int:
+        if self._discussion_ended():
+            return 0
+        return self._mailbox.send(sender, targets, content)
+
     async def execute(
         self,
         action: str = "",
@@ -1003,7 +1029,7 @@ class ManageAgentTool(Tool):
             # Notify remaining active agents
             active = [a for a in self._exec_agents if a not in self._disabled]
             if active:
-                self._mailbox.send("系统", active,
+                self._notify_if_running("系统", active,
                     f"[系统通知] {agent} 已被 Leader 移除本轮讨论")
             await self._engine._send(f"⛔ Leader 已移除 {agent}", progress=True)
             return f"✅ {agent} 已被 disable，其 task 已取消"
@@ -1022,7 +1048,7 @@ class ManageAgentTool(Tool):
             idx = self._exec_agents.index(agent) if agent in self._exec_agents else 0
             # Notify agent it's being restarted
             notify_msg = f"[系统通知] Leader 已将你（{agent}）拉回讨论，请重新开始参与。"
-            self._mailbox.send("系统", [agent], notify_msg)
+            self._notify_if_running("系统", [agent], notify_msg)
             # Spawn new task
             new_task = self._spawn_fn(agent, idx)
             self._agent_tasks[new_task] = agent
@@ -1030,7 +1056,7 @@ class ManageAgentTool(Tool):
             active = [a for a in self._exec_agents if a not in self._disabled]
             others = [a for a in active if a != agent]
             if others:
-                self._mailbox.send("系统", others,
+                self._notify_if_running("系统", others,
                     f"[系统通知] {agent} 已被 Leader 拉回，重新加入讨论")
             await self._engine._send(f"🔄 Leader 已重启 {agent}", progress=True)
             return f"✅ {agent} 已重新启动，新 task 已创建"
@@ -1042,7 +1068,7 @@ class ManageAgentTool(Tool):
             # Notify
             active = [a for a in self._exec_agents if a not in self._disabled]
             if active:
-                self._mailbox.send("系统", active,
+                self._notify_if_running("系统", active,
                     f"[系统通知] {agent} 已被 Leader 标记为激活")
             await self._engine._send(f"✅ Leader 已激活 {agent}（标记，未重启任务）", progress=True)
             return f"✅ {agent} 已标记为 enable。如需重新参与讨论请用 restart。"
@@ -1062,7 +1088,7 @@ class ManageAgentTool(Tool):
             active = [a for a in self._exec_agents if a not in self._disabled]
             changes = ", ".join(f"{k}={'开' if v else '关'}" for k, v in tools.items())
             if active:
-                self._mailbox.send("系统", active,
+                self._notify_if_running("系统", active,
                     f"[系统通知] Leader 已修改 {agent} 的工具权限: {changes}")
             await self._engine._send(f"🔧 Leader 修改 {agent} 权限: {changes}", progress=True)
             return f"✅ {agent} 工具权限已更新: {changes}"
@@ -1072,7 +1098,7 @@ class ManageAgentTool(Tool):
                 return "Error: set_status 需要 status 参数"
             self._status_overrides[agent] = status
             # Send status message directly to the agent's mailbox so it sees it on next wait()
-            self._mailbox.send("系统", [agent],
+            self._notify_if_running("系统", [agent],
                 f"[Leader 状态更新] {status}")
             await self._engine._send(f"📋 Leader 已更新 {agent} 状态: {status[:80]}", progress=True)
             return f"✅ {agent} 状态已更新，消息已注入其收件箱"
