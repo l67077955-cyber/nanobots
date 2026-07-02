@@ -22,6 +22,7 @@ from nanobot.groupchat.history.component_manager import (
     synthesis_quality_check,
     _MIN_SYNTHESIS_LEN,
 )
+from nanobot.config.validate import SAMPLING_KEYS
 
 
 # ── Tool-name → status state mapping ─────────────────────────
@@ -37,6 +38,18 @@ _TOOL_STATE_MAP: dict[str, str] = {
     "wait": "waiting",
     "interrupted": "interrupted",
 }
+
+
+def _valid_agent_sampling(agent_cfg: dict[str, Any]) -> dict[str, Any]:
+    """Return provider-safe per-agent sampling params from an agent config."""
+    raw = agent_cfg.get("hyperparams")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        key: value
+        for key, value in raw.items()
+        if key in SAMPLING_KEYS or key.startswith("reasoning")
+    }
 
 
 class AgentStatusTracker:
@@ -496,7 +509,23 @@ async def broadcast_round(
         "mode": "broadcast",
         "leader": leader_name,
     })
-    await engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout), leader=leader_name, ranks=ranks_map))
+    _base_sampling = getattr(engine.provider, "sampling_params", {}) or {}
+    _start_sampling: dict[str, dict[str, Any]] = {}
+    for _agent in agents:
+        _cfg = engine.registry.get(_agent, {})
+        _effective = dict(_base_sampling) if isinstance(_base_sampling, dict) else {}
+        _effective.update(_valid_agent_sampling(_cfg))
+        _reasoning_effort = _effective.get("reasoning_effort") or _cfg.get("reasoning_effort")
+        if _reasoning_effort:
+            _effective["reasoning_effort"] = _reasoning_effort
+        _start_sampling[_agent] = _effective
+    await engine._send(_d.broadcast_start_msg(
+        list(agents),
+        int(global_timeout),
+        leader=leader_name,
+        ranks=ranks_map,
+        sampling=_start_sampling,
+    ))
 
     orch = BroadcastOrchestrator(agents, engine, mailbox)
 
@@ -719,8 +748,42 @@ async def broadcast_round(
         async def _on_tool_result(tool_name: str, tool_call_id: str, result: str) -> None:
             await view.on_tool_result(name, tool_name, tool_call_id, result)
 
+        # ── Streaming: send a placeholder message, edit it as tokens arrive ──
+        _stream_msg_id: int | None = None
+        _stream_buf: list[str] = []
+        _stream_closed = False
 
-        # No streaming callbacks — broadcast uses non-streaming mode
+        async def _on_content_delta(delta: str) -> None:
+            nonlocal _stream_msg_id
+            if not delta:
+                return
+            _stream_buf.append(delta)
+            # First chunk: send a new message and capture its ID for editing.
+            if _stream_msg_id is None:
+                header = f"◍ {name}{badge}: "
+                preview = (header + delta)[:4000]
+                if engine._send_and_get_id_fn:
+                    _stream_msg_id = await engine._send_and_get_id_fn(preview)
+                else:
+                    await engine._send(preview)
+                return
+            # Subsequent chunks: throttle edits to avoid Telegram rate limits.
+            # Edit at most every ~0.5s (handled by buf accumulation).
+            full = f"◍ {name}{badge}: " + "".join(_stream_buf)
+            if len(full) > 4000:
+                full = full[:4000]
+            try:
+                if engine._edit_fn:
+                    await engine._edit_fn(_stream_msg_id, full)
+            except Exception:
+                pass
+
+        async def _on_content_reset() -> None:
+            nonlocal _stream_msg_id, _stream_buf, _stream_closed
+            _stream_closed = True
+            _stream_msg_id = None
+            _stream_buf.clear()
+
         # ── Run tool-loop + auto-wait cycle ──
         # After tool_loop finishes, agent automatically enters wait().
         # If a teammate message arrives, inject it and re-run tool_loop.
@@ -886,6 +949,20 @@ async def broadcast_round(
                             name, dropped, len(messages) + dropped, len(messages),
                         )
 
+                # Per-agent hyperparams: pass per-call sampling so concurrent
+                # broadcast agents do not mutate shared provider state.
+                _agent_sampling = _valid_agent_sampling(_live_cfg)
+                _base_sampling = getattr(engine.provider, "sampling_params", {}) or {}
+                _effective_sampling = dict(_base_sampling) if isinstance(_base_sampling, dict) else {}
+                if _agent_sampling:
+                    _effective_sampling.update(_agent_sampling)
+
+                _reasoning_effort = (
+                    (_effective_sampling or {}).get("reasoning_effort")
+                    or _live_cfg.get("reasoning_effort")
+                    or None
+                )
+
                 # Mark agent busy so incoming messages can trigger interrupt
                 mailbox.mark_busy(name)
                 try:
@@ -897,7 +974,8 @@ async def broadcast_round(
                         max_tokens=engine.config.max_tokens,
                         max_iterations=agent_max_iters,
                         tool_defs=tool_defs if tool_defs else None,
-                        reasoning_effort=_live_cfg.get("reasoning_effort") or None,
+                        reasoning_effort=_reasoning_effort,
+                        sampling_params=_effective_sampling,
                         metadata={
                             "trace_name": f"broadcast_{name}_c{cycle}",
                             "trace_user_id": "groupchat",
@@ -910,8 +988,8 @@ async def broadcast_round(
                         on_tool_start=_on_tool_start,
                         on_tool_result=_on_tool_result,
                         on_iteration_usage=_on_iter_usage,
-                        on_content_delta=None,
-                        on_content_reset=None,
+                        on_content_delta=_on_content_delta,
+                        on_content_reset=_on_content_reset,
                         clean_response=lambda c: engine._clean_response(c, name),
                         result_max_chars=_broadcast_result_max,
                         call_timeout=float(gc_settings.get("leader_call_timeout" if is_leader else "call_timeout", 90)) or None,
@@ -941,7 +1019,13 @@ async def broadcast_round(
                 if is_leader and "manage_agent" in (result.tools_used or []):
                     for tc in (result.tool_calls_detail or []):
                         if tc.get("name") == "manage_agent":
-                            _action = (tc.get("arguments") or {}).get("action", "")
+                            _tc_args = tc.get("arguments") or {}
+                            if not _tc_args and tc.get("args"):
+                                try:
+                                    _tc_args = _json.loads(tc.get("args") or "{}")
+                                except Exception:
+                                    _tc_args = {}
+                            _action = (_tc_args or {}).get("action", "")
                             if _action in ("disable", "restart"):
                                 _leader_disabled_agent = True
                                 break
@@ -1852,4 +1936,3 @@ async def broadcast_round(
         logger.info("Broadcast: cleared session tool overrides")
 
     return [(name, content) for name, content, _ in results]
-
