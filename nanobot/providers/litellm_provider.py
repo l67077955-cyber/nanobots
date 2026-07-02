@@ -617,6 +617,8 @@ class LiteLLMProvider(LLMProvider):
         metadata: dict[str, Any] | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
+        sampling_params: dict[str, Any] | None = None,
+        temperature: float | None = None,
     ) -> dict[str, Any]:
         """Build the kwargs dict for acompletion (shared by chat and chat_stream)."""
         original_model = model or self.default_model
@@ -664,8 +666,16 @@ class LiteLLMProvider(LLMProvider):
             "model": model,
             "messages": self._sanitize_messages(self._sanitize_empty_content(messages), extra_keys=extra_msg_keys),
             "max_tokens": max_tokens,
-            **self.sampling_params,
+            **(sampling_params or self.sampling_params),
         }
+
+        # Explicit temperature override takes precedence over sampling_params.
+        # chat() default is 0.7 but callers that pass a non-default value
+        # (e.g. temperature=0.0 for deterministic summarization) expect it
+        # to actually take effect, not be silently overridden by sampling_params.
+        _DEFAULT_CHAT_TEMP = 0.7
+        if temperature is not _DEFAULT_CHAT_TEMP and temperature is not None:
+            kwargs["temperature"] = temperature
 
         self._apply_model_overrides(model, kwargs)
 
@@ -719,8 +729,9 @@ class LiteLLMProvider(LLMProvider):
         if self.extra_headers:
             kwargs["extra_headers"] = self.extra_headers
 
-        if reasoning_effort:
-            kwargs["reasoning_effort"] = reasoning_effort
+        _effective_re = reasoning_effort or (sampling_params or {}).get("reasoning_effort") or self.sampling_params.get("reasoning_effort")
+        if _effective_re:
+            kwargs["reasoning_effort"] = _effective_re
             kwargs["drop_params"] = True
 
         if tools:
@@ -783,11 +794,13 @@ class LiteLLMProvider(LLMProvider):
         tool_choice: str | dict[str, Any] | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
+        sampling_params: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """Send a chat completion request via LiteLLM."""
         import time as _time
         kwargs = self._build_kwargs(
             messages, tools, model, max_tokens, reasoning_effort, metadata, api_base, api_key,
+            sampling_params, temperature=temperature,
         )
         # Override tool_choice if explicitly passed
         if tool_choice and tools:
@@ -827,6 +840,7 @@ class LiteLLMProvider(LLMProvider):
                     max_tokens=max_tokens, temperature=temperature,
                     reasoning_effort=reasoning_effort,
                     metadata=metadata, api_base=api_base, api_key=api_key,
+                    sampling_params=sampling_params,
                 )
 
             return LLMResponse(
@@ -844,6 +858,7 @@ class LiteLLMProvider(LLMProvider):
         metadata: dict[str, Any] | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
+        sampling_params: dict[str, Any] | None = None,
     ):
         """Stream a chat completion, yielding text deltas.
 
@@ -859,6 +874,7 @@ class LiteLLMProvider(LLMProvider):
         import time as _time
         kwargs = self._build_kwargs(
             messages, tools, model, max_tokens, reasoning_effort, metadata, api_base, api_key,
+            sampling_params,
         )
         kwargs["stream"] = True
         kwargs["stream_options"] = {"include_usage": True}
@@ -893,6 +909,7 @@ class LiteLLMProvider(LLMProvider):
                     messages=messages, tools=tools, model=model,
                     max_tokens=max_tokens, reasoning_effort=reasoning_effort,
                     metadata=metadata, api_base=api_base, api_key=api_key,
+                    sampling_params=sampling_params,
                 ):
                     yield item
                 return

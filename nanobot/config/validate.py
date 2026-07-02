@@ -75,6 +75,19 @@ def validate_config_files() -> list[str]:
             f"groupchat_settings.json 混入采样参数 {sorted(gc_sampling_overlap)}"
         )
 
+    # Detect temperature conflict between config.json and hyperparams.json.
+    # config.json agents.defaults.temperature is the Pydantic default (used at
+    # provider init), but hyperparams.json overrides it at runtime. If they
+    # disagree, the user may be confused why editing config.json has no effect.
+    main_cfg = _read_json(_NANOBOT / "config.json")
+    cfg_temp = (main_cfg.get("agents", {}).get("defaults", {}) or {}).get("temperature")
+    hp_temp = hp.get("temperature")
+    if cfg_temp is not None and hp_temp is not None and abs(float(cfg_temp) - float(hp_temp)) > 0.01:
+        warnings.append(
+            f"temperature 冲突: config.json={cfg_temp} vs hyperparams.json={hp_temp}"
+            " — hyperparams.json 优先 (在 /hyperparams 面板修改，不要改 config.json)"
+        )
+
     return warnings
 
 
