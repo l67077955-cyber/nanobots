@@ -372,11 +372,31 @@ class LiteLLMProvider(LLMProvider):
                             for tc in msg.tool_calls
                         ]
                 if hasattr(response, "usage") and response.usage:
+                    u = response.usage
                     record["usage"] = {
-                        "prompt": response.usage.prompt_tokens,
-                        "completion": response.usage.completion_tokens,
-                        "total": response.usage.total_tokens,
+                        "prompt": u.prompt_tokens,
+                        "completion": u.completion_tokens,
+                        "total": u.total_tokens,
                     }
+                    # Cache hit tokens (multiple provider conventions)
+                    ptd = getattr(u, "prompt_tokens_details", None)
+                    if ptd:
+                        cached = getattr(ptd, "cached_tokens", 0) or 0
+                        if cached:
+                            record["usage"]["cached_tokens"] = cached
+                    # DeepSeek native field
+                    ds_cache = getattr(u, "prompt_cache_hit_tokens", None)
+                    if ds_cache:
+                        record["usage"]["prompt_cache_hit_tokens"] = ds_cache
+                    # Capture all extra usage attrs for discovery
+                    _ukeys = {k for k in dir(u) if not k.startswith("_") and k not in (
+                        "prompt_tokens", "completion_tokens", "total_tokens",
+                        "prompt_tokens_details", "completion_tokens_details"
+                    )}
+                    for k in _ukeys:
+                        v = getattr(u, k, None)
+                        if v is not None and not callable(v):
+                            record["usage"][f"_{k}"] = v
                 # ── Extract OpenRouter / provider IDs from hidden params ──
                 try:
                     _hidden = getattr(response, "_hidden_params", None) or {}
@@ -386,10 +406,15 @@ class LiteLLMProvider(LLMProvider):
                         ("x-request-id", "request_id"),
                         ("x-openrouter-provider", "or_provider"),
                         ("x-openrouter-caching", "or_caching"),
+                        ("x-openrouter-latency", "or_latency_ms"),
+                        ("x-openrouter-tokens-per-second", "or_tps"),
                     ]:
                         val = _ah.get(hdr)
                         if val:
                             record[field_name] = val
+                    # Log all hidden_params keys for discovery
+                    if _hidden:
+                        record["_hidden_keys"] = list(_hidden.keys())
                 except Exception:
                     pass
             else:
