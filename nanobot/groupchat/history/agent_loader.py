@@ -15,6 +15,7 @@ from loguru import logger
 
 from nanobot.groupchat.config import GroupChatConfig
 from nanobot.groupchat.config_normalize import normalize_agent_config
+from nanobot.config.validate import SAMPLING_KEYS
 
 
 def _read_agent_config(path: Path) -> dict[str, Any]:
