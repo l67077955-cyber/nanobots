@@ -1,4 +1,11 @@
-"""Shared builder for the /history Telegram settings panel."""
+"""Shared builder for the /history Telegram settings panel.
+
+Game-style grouped layout inspired by AAA game settings panels:
+  记忆范围 / 压缩策略 / 工具限制 / 跨轮可见性 / 全局
+
+Each group is organised by user-facing experience, not by internal
+function name.  Advanced parameters are collapsible per-group.
+"""
 
 from __future__ import annotations
 
@@ -9,10 +16,180 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 # SmartSearchTool hardcodes this; not read from history_settings yet.
 _SMART_SEARCH_SUMMARIZE_THRESHOLD_FALLBACK = 3000
 
+# ── Group definitions ────────────────────────────────────────────────────
+# Each group maps a user-facing category to its parameters.
+# "params"   = always-visible parameters (high frequency)
+# "toggles"  = boolean toggle parameters
+# "advanced" = collapsible low-frequency parameters
+
+GROUPS: dict[str, dict[str, Any]] = {
+    "memory": {
+        "icon": "🧠",
+        "title": "记忆范围",
+        "subtitle": "对话能聊多久不丢东西",
+        "params": [
+            ("history", "max_messages"),
+            ("context_pruning", "keep_recent"),
+            ("history", "compress_ratio"),
+            ("history", "compression_keep_recent"),
+        ],
+        "toggles": [
+            ("history", "keep_user_messages"),
+            ("history", "history_summarize_enabled"),
+        ],
+        "advanced": [
+            ("history", "compress_max_summary_tokens"),
+            ("history", "max_context_chars"),
+            ("context_pruning", "soft_ratio"),
+        ],
+    },
+    "compress": {
+        "icon": "📦",
+        "title": "压缩策略",
+        "subtitle": "长内容怎么处理 (截断 / AI压缩)",
+        "params": [
+            ("tool_results", "exec_max_chars"),
+            ("tool_results", "web_search_max_chars"),
+            ("tool_results", "web_fetch_max_chars"),
+            ("tool_results", "summarize_threshold"),
+            ("tool_results", "summarize_model"),
+        ],
+        "toggles": [
+            ("tool_results", "summarize_enabled"),
+        ],
+        "advanced": [
+            ("tool_results", "summarize_max_input_chars"),
+            ("tool_results", "summarize_max_output_chars"),
+            ("tool_results", "broadcast_result_max_chars"),
+            ("tool_results", "direct_result_max_chars"),
+            ("__top__", "tool_result_max_chars"),
+            ("context_pruning", "soft_max_chars"),
+        ],
+    },
+    "tools": {
+        "icon": "🔧",
+        "title": "工具限制",
+        "subtitle": "工具本身的行为上限",
+        "params": [
+            ("tool_limits", "read_file_max_chars"),
+            ("tool_limits", "read_file_default_lines"),
+            ("tool_limits", "exec_max_output"),
+            ("tool_limits", "exec_max_timeout"),
+            ("tool_limits", "list_dir_default_max"),
+        ],
+        "toggles": [],
+        "advanced": [],
+    },
+    "vis": {
+        "icon": "👁️",
+        "title": "跨轮可见性",
+        "subtitle": "模型下一轮能看到多少之前的操作",
+        "params": [
+            ("tool_log_preview", "read_file"),
+            ("tool_log_preview", "web_search"),
+            ("tool_log_preview", "web_fetch"),
+            ("tool_log_preview", "exec"),
+            ("tool_log_preview", "_total_cap"),
+        ],
+        "toggles": [],
+        "advanced": [
+            ("tool_log_preview", "list_dir"),
+            ("tool_log_preview", "write_file"),
+            ("tool_log_preview", "edit_file"),
+            ("tool_log_preview", "chatroom_send"),
+            ("tool_log_preview", "wait"),
+            ("tool_log_preview", "_default"),
+        ],
+    },
+    "global": {
+        "icon": "🌐",
+        "title": "全局",
+        "subtitle": "顶层锚点参数",
+        "params": [
+            ("__top__", "context_window_tokens"),
+        ],
+        "toggles": [],
+        "advanced": [],
+    },
+}
+
+GROUP_ORDER = ["memory", "compress", "tools", "vis", "global"]
+
+# ── Compact labels for button / display text ─────────────────────────────
+
+_PARAM_LABELS: dict[tuple[str, str], str] = {
+    ("__top__", "context_window_tokens"): "上下文窗口",
+    ("__top__", "tool_result_max_chars"): "工具结果fallback",
+    ("tool_results", "exec_max_chars"): "exec截断",
+    ("tool_results", "web_fetch_max_chars"): "fetch截断",
+    ("tool_results", "web_search_max_chars"): "search截断",
+    ("tool_results", "summarize_enabled"): "AI压缩",
+    ("tool_results", "summarize_threshold"): "压缩阈值",
+    ("tool_results", "summarize_model"): "压缩模型",
+    ("tool_results", "summarize_max_input_chars"): "最大输入",
+    ("tool_results", "summarize_max_output_chars"): "最大输出",
+    ("tool_results", "broadcast_result_max_chars"): "广播模式",
+    ("tool_results", "direct_result_max_chars"): "直接模式",
+    ("history", "max_messages"): "最大消息数",
+    ("history", "max_context_chars"): "字符上限",
+    ("history", "compress_ratio"): "压缩触发比",
+    ("history", "compress_max_summary_tokens"): "摘要tokens",
+    ("history", "compression_keep_recent"): "尾保条数",
+    ("history", "keep_user_messages"): "保护用户消息",
+    ("history", "history_summarize_enabled"): "历史AI压缩",
+    ("context_pruning", "soft_ratio"): "软裁剪比例",
+    ("context_pruning", "keep_recent"): "保留最近",
+    ("context_pruning", "soft_max_chars"): "软裁剪阈值",
+    ("tool_limits", "read_file_max_chars"): "文件读取上限",
+    ("tool_limits", "read_file_default_lines"): "文件默认行数",
+    ("tool_limits", "list_dir_default_max"): "目录条目上限",
+    ("tool_limits", "exec_max_timeout"): "命令超时",
+    ("tool_limits", "exec_max_output"): "命令输出上限",
+    ("tool_log_preview", "read_file"): "read预览",
+    ("tool_log_preview", "web_search"): "search预览",
+    ("tool_log_preview", "web_fetch"): "fetch预览",
+    ("tool_log_preview", "exec"): "exec预览",
+    ("tool_log_preview", "list_dir"): "list_dir预览",
+    ("tool_log_preview", "write_file"): "write预览",
+    ("tool_log_preview", "edit_file"): "edit预览",
+    ("tool_log_preview", "chatroom_send"): "chatroom预览",
+    ("tool_log_preview", "wait"): "wait预览",
+    ("tool_log_preview", "_default"): "默认预览",
+    ("tool_log_preview", "_total_cap"): "总上限",
+}
+
+
+def _param_label(section: str, key: str) -> str:
+    return _PARAM_LABELS.get((section, key), f"{section}.{key}")
+
+
+def _get_val(settings: dict[str, Any], section: str, key: str) -> Any:
+    if section == "__top__":
+        return settings.get(key)
+    return settings.get(section, {}).get(key)
+
+
+def _format_val(val: Any) -> str:
+    if isinstance(val, bool):
+        return "✅" if val else "❌"
+    if isinstance(val, int):
+        return f"{val:,}"
+    return str(val)
+
+
+def find_group_for_param(section: str, key: str) -> str:
+    """Reverse-lookup which group owns a (section, key) pair."""
+    for group_id, g in GROUPS.items():
+        for s, k in g["params"] + g["toggles"] + g["advanced"]:
+            if s == section and k == key:
+                return group_id
+    return "memory"
+
+
+# ── Settings / engine helpers (unchanged) ────────────────────────────────
 
 def _settings() -> dict[str, Any]:
     from nanobot.groupchat.history import history_settings as hs
-
     return hs.get_all()
 
 
@@ -54,6 +231,8 @@ def _compiled_context_info(engine: Any | None) -> str:
             parts.append(f"{agent}:?")
     return " | ".join(parts) if parts else "(无活跃agent)"
 
+
+# ── Live metrics (unchanged) ─────────────────────────────────────────────
 
 def collect_live_metrics(engine: Any | None) -> dict[str, Any]:
     """Gather runtime numbers used by the /history dashboard."""
@@ -119,10 +298,10 @@ def collect_config_warnings(settings: dict[str, Any] | None = None) -> list[str]
         int(tr.get("web_search_max_chars", 0)),
     )
     threshold = int(tr.get("summarize_threshold", 0))
-    if threshold < per_tool_max:
+    if threshold > per_tool_max:
         warnings.append(
-            f"summarize_threshold({threshold:,}) < per-tool max({per_tool_max:,})"
-            " — AI压缩在截断前触发，阈值应 >= 工具上限"
+            f"压缩阈值({threshold:,}) > 工具截断上限({per_tool_max:,})"
+            " — 截断先于AI压缩触发，大部分输出会被截断而AI压缩永远不生效"
         )
 
     if int(settings.get("tool_result_max_chars", 0)) < per_tool_max:
@@ -149,133 +328,117 @@ def collect_config_warnings(settings: dict[str, Any] | None = None) -> list[str]
     return warnings
 
 
-def _dashboard_block(metrics: dict[str, Any]) -> str:
-    hist = metrics["history"]
-    cp = metrics["context_pruning"]
-    keep_recent = int(hist.get("compression_keep_recent", 6))
-    keep_users = bool(hist.get("keep_user_messages", False))
-    hist_sum = bool(hist.get("history_summarize_enabled", True))
+# ── Dashboard block (simplified: status, not parameters) ────────────────
 
+def _dashboard_block(metrics: dict[str, Any]) -> str:
     if metrics["compress_warned"]:
         compress_state = "⚠️ 已预警，下轮将压缩"
     elif metrics["compress_ready"]:
         compress_state = "🔴 已达触发线"
     else:
-        compress_state = "🟢 未触发"
+        compress_state = "🟢 安全"
 
-    head_desc = "全部用户消息" if keep_users else "首条用户消息"
     warnings = collect_config_warnings(metrics["settings"])
-    warn_lines = "\n".join(f"  • {w}" for w in warnings[:4])
-    if len(warnings) > 4:
-        warn_lines += f"\n  • …另有 {len(warnings) - 4} 条"
+    warn_lines = ""
+    if warnings:
+        warn_lines = "\n⚠ 配置告警\n" + "\n".join(f"  • {w}" for w in warnings[:3])
+        if len(warnings) > 3:
+            warn_lines += f"\n  • …另有 {len(warnings) - 3} 条"
+
+    bar_filled = min(20, metrics["tok_pct"] * 20 // 100)
+    bar = "█" * bar_filled + "░" * (20 - bar_filled)
+
+    remaining_tok = max(0, metrics["ctx_window"] - metrics["current_tok"])
+    remaining_rounds = remaining_tok // 700 if remaining_tok > 0 else 0
+    round_hint = f"  预计还可聊 ~{remaining_rounds} 轮" if remaining_rounds > 0 and "安全" in compress_state else ""
 
     return (
         "━━━ 实时状态 ━━━\n"
-        f"历史缓冲  {metrics['current_msgs']}/{metrics['max_msgs']}条"
-        f"  {metrics['current_chars']:,}/{metrics['max_chars']:,}字"
-        f"  ~{metrics['current_tok']:,}/{metrics['ctx_window']:,}tok ({metrics['tok_pct']}%)\n"
-        f"压缩      msg{metrics['msg_pct']}% tok{metrics['tok_pct']}%"
-        f" → 触发≥{int(metrics['compress_ratio'] * 100)}% 或 tok≥55%"
-        f"  [{compress_state}]\n"
-        f"编译上下文  {metrics['compiled_info']}\n"
-        f"裁剪(配置)  触发 tok/窗口 ≥ {int(metrics['soft_ratio'] * 100)}%"
-        f"  |  历史tok比 {metrics['tok_pct']}% (tool_loop 内消息另计)\n"
-        f"历史压缩    尾保 {keep_recent}条"
-        f" | 头保 {head_desc}"
-        f" | history_summarize={'✅' if hist_sum else '❌'}\n"
-        f"\n⚠ 配置健康\n{warn_lines}\n"
+        f"容量  {bar} {metrics['tok_pct']}%\n"
+        f"消息  {metrics['current_msgs']}/{metrics['max_msgs']}条"
+        f"  ~{metrics['current_tok']:,}/{metrics['ctx_window']:,}tok\n"
+        f"状态  {compress_state}{round_hint}\n"
+        f"编译  {metrics['compiled_info']}"
+        + warn_lines
     )
 
 
-def _pipeline_summary(metrics: dict[str, Any]) -> str:
+# ── Grouped overview (replaces _pipeline_summary) ────────────────────────
+
+def _grouped_overview(metrics: dict[str, Any]) -> str:
+    settings = metrics["settings"]
+    hist = metrics["history"]
+    cp = metrics["context_pruning"]
+    tr = metrics["tool_results"]
+    tl = settings.get("tool_limits", {})
+    pv = settings.get("tool_log_preview", {})
+
+    keep_users = "全部用户" if hist.get("keep_user_messages") else "首条用户"
+    ai_on = "✅" if tr.get("summarize_enabled") else "❌"
+    hist_ai = "✅" if hist.get("history_summarize_enabled", True) else "❌"
+
+    return (
+        "━━━ 分组概览 ━━━\n"
+        f"🧠 记忆范围   {hist['max_messages']}条/保{cp.get('keep_recent', 4)}轮"
+        f"/尾保{hist.get('compression_keep_recent', 6)}条/{keep_users}\n"
+        f"📦 压缩策略   exec={tr['exec_max_chars']:,}"
+        f" AI{ai_on} 阈值{tr['summarize_threshold']:,}"
+        f" 历史AI{hist_ai}\n"
+        f"🔧 工具限制   read={tl.get('read_file_max_chars', 64000):,}"
+        f" exec={tl.get('exec_max_output', 10000):,}/{tl.get('exec_max_timeout', 600)}s\n"
+        f"👁️ 跨轮可见性 cap={pv.get('_total_cap', 4000):,}"
+        f" read={pv.get('read_file', 1500):,}\n"
+        f"🌐 全局       ctx={settings['context_window_tokens']:,}tok"
+    )
+
+
+# ── Flow demo (replaces _pipeline_demo_expanded, no S1-S6 numbering) ─────
+
+def _flow_demo(metrics: dict[str, Any]) -> str:
     settings = metrics["settings"]
     tr = metrics["tool_results"]
     hist = metrics["history"]
     cp = metrics["context_pruning"]
     tl = settings.get("tool_limits", {})
     pv = settings.get("tool_log_preview", {})
-    keep_recent = int(cp.get("keep_recent", 4))
-    tail_keep = int(hist.get("compression_keep_recent", 6))
 
     return (
-        "━━━ 管线摘要 (与算法一致) ━━━\n"
-        "S1 process_tool_result\n"
-        f"   exec=head_tail@{tr['exec_max_chars']:,}"
-        f" | web_fetch/web_search=head_only@{tr['web_fetch_max_chars']:,}/{tr['web_search_max_chars']:,}\n"
-        "S2 工具AI压缩\n"
-        f"   配置 summarize_*={'✅' if tr['summarize_enabled'] else '❌'}"
-        f" 阈值{tr['summarize_threshold']:,} — ✅已接入 process_tool_result\n"
-        f"   SmartSearch 读取此阈值 (fallback {_SMART_SEARCH_SUMMARIZE_THRESHOLD_FALLBACK:,} 字符\n"
-        "S3 maybe_compress (HistoryContext)\n"
-        f"   触发 max(msg%,tok%)≥{hist.get('compress_ratio', 0.8)}"
-        f" 或 tok≥55% | 模型 {tr['summarize_model']}\n"
-        f"   尾保 {tail_keep}条 | history_summarize={'✅' if hist.get('history_summarize_enabled', True) else '❌'}\n"
-        "S4 prune_messages (tool_loop iter≥2)\n"
-        f"   tok/窗口≥{cp.get('soft_ratio', 0.55)} → 旧 tool 一行摘要"
-        f" | 保最近 {keep_recent} 个 assistant 轮\n"
-        "S5 工具硬限制\n"
-        f"   read_file={tl.get('read_file_max_chars', 64000):,}字/{tl.get('read_file_default_lines', 300)}行"
-        f" | exec_out={tl.get('exec_max_output', 10000):,}"
-        f" | exec_timeout={tl.get('exec_max_timeout', 600)}s\n"
-        "S6 工具日志预览\n"
-        f"   read_file={pv.get('read_file', 1500):,} write/edit={pv.get('write_file', 300):,}/{pv.get('edit_file', 300):,}"
-        f" | 总cap={pv.get('_total_cap', 4000):,}\n"
-        "丢弃      add_message 超 max_messages / max_context_chars 时从最早丢弃\n"
-        f"全局      context_window={settings['context_window_tokens']:,}tok"
-        f" | tool_result_max={settings['tool_result_max_chars']:,}"
-        " (未知工具 fallback)\n"
+        "━━━ 管线流程 ━━━\n"
+        "工具执行 → 结果处理 → 存入历史 → LLM调用前裁剪 → 下一轮预览\n\n"
+        "① 工具内截断 (工具自身)\n"
+        f"   exec → head_tail @{tl.get('exec_max_output', 10000):,}\n"
+        f"   read_file → @{tl.get('read_file_max_chars', 64000):,}\n\n"
+        "② 结果后处理 (process_tool_result)\n"
+        f"   AI压缩({'✅' if tr['summarize_enabled'] else '❌'} 阈值{tr['summarize_threshold']:,})"
+        f" → 截断(exec head_tail@{tr['exec_max_chars']:,}"
+        f" / web head_only@{tr['web_search_max_chars']:,})"
+        f" → 落盘 + meta\n\n"
+        "③ 存入历史 (add_message)\n"
+        f"   超 {hist['max_messages']}条 或 token > {metrics['ctx_window']:,}×65% → 丢弃最旧\n"
+        f"   头保护: {'全部用户' if hist.get('keep_user_messages') else '首条用户'}\n\n"
+        "④ 历史压缩 (maybe_compress)\n"
+        f"   触发: msg≥{int(hist.get('compress_ratio', 0.8) * 100)}% 或 tok≥55%\n"
+        f"   中间段 → {tr['summarize_model']}"
+        f" (尾保{hist.get('compression_keep_recent', 6)}条)\n"
+        f"   AI压缩({'✅' if hist.get('history_summarize_enabled', True) else '❌'})\n\n"
+        "⑤ 迭代裁剪 (prune_messages, tool_loop iter≥2)\n"
+        f"   tok/窗口≥{cp.get('soft_ratio', 0.55)}"
+        f" → 旧tool一行摘要 (保{cp.get('keep_recent', 4)}轮)\n\n"
+        "⑥ 下一轮预览 (build_tool_log)\n"
+        f"   read={pv.get('read_file', 1500):,}"
+        f" exec={pv.get('exec', 500):,}"
+        f" 总cap={pv.get('_total_cap', 4000):,}\n"
     )
 
 
-def _pipeline_demo_expanded(metrics: dict[str, Any]) -> str:
-    settings = metrics["settings"]
-    tr = metrics["tool_results"]
-    hist = metrics["history"]
-    cp = metrics["context_pruning"]
-    compress_trigger = metrics["compress_trigger"]
-    keep_recent = int(cp.get("keep_recent", 4))
-    tail_keep = int(hist.get("compression_keep_recent", 6))
-    keep_users = bool(hist.get("keep_user_messages", False))
-    head_desc = "全部用户消息" if keep_users else "首条+首条用户消息"
-    ai_on = bool(tr["summarize_enabled"])
-
-    return (
-        "━━━ 管线详解 ━━━\n"
-        "👤 用户: 帮我搜索特朗普的图片并下载\n"
-        f" └─ 🛡 头部保护: {head_desc}\n"
-        "\n"
-        "── 轮次 1 ──\n"
-        "🤖 Agent → web_search(...)\n"
-        f"📡 返回 12,000 字符 → process_tool_result\n"
-        f" └─ head_only @ web_search_max={tr['web_search_max_chars']:,}\n"
-        f" └─ ✅ summarize_threshold={tr['summarize_threshold']:,} 已接入"
-        f" | process_tool_result + SmartSearch 共用 (fallback {_SMART_SEARCH_SUMMARIZE_THRESHOLD_FALLBACK:,}\n"
-        "\n"
-        "── 轮次 2 ──\n"
-        "🤖 Agent → exec(...)\n"
-        f"💻 返回 3,000 字符 → head_tail @ exec_max={tr['exec_max_chars']:,} (未截断)\n"
-        "\n"
-        f"── Stage4 迭代裁剪 (iter≥2) ──\n"
-        f" tok/窗口 ≥ {cp.get('soft_ratio', 0.55)} 且 tool result > {cp.get('soft_max_chars', 8000):,}字\n"
-        f" → 替换为一行摘要 | 保最近 {keep_recent} 个 assistant 轮\n"
-        "\n"
-        f"── Stage3 历史压缩 ──\n"
-        f" 触发: 条数≥{compress_trigger} 或 tok比≥55% 或 msg/tok ≥ compress_ratio\n"
-        f" 中间段 → {tr['summarize_model']} (max {hist.get('compress_max_summary_tokens', 600)} tok)\n"
-        f" 尾保 {tail_keep}条 | history_summarize={'✅' if hist.get('history_summarize_enabled', True) else '❌'}\n"
-        "\n"
-        f"── 超限丢弃 ──\n"
-        f" >{hist['max_messages']}条 或 >{hist['max_context_chars']:,}字 → 从最早丢弃\n"
-        f"\n(S2 配置开关 summarize_enabled={'✅' if ai_on else '❌'} — 见管线摘要中的已接入说明)\n"
-    )
-
+# ── Main panel ───────────────────────────────────────────────────────────
 
 def build_main_panel_text(engine: Any | None, *, expanded: bool = False) -> str:
     metrics = collect_live_metrics(engine)
-    parts = [_dashboard_block(metrics), _pipeline_summary(metrics)]
+    parts = [_dashboard_block(metrics), _grouped_overview(metrics)]
     if expanded:
-        parts.append(_pipeline_demo_expanded(metrics))
-    return "\n".join(parts)
+        parts.append(_flow_demo(metrics))
+    return "\n\n".join(parts)
 
 
 def build_main_panel_buttons(
@@ -284,68 +447,176 @@ def build_main_panel_buttons(
     expanded: bool = False,
 ) -> InlineKeyboardMarkup:
     metrics = collect_live_metrics(engine)
-    settings = metrics["settings"]
-    tr = metrics["tool_results"]
-    hist = metrics["history"]
-    cp = metrics["context_pruning"]
-    tl = settings.get("tool_limits", {})
-    pv = settings.get("tool_log_preview", {})
-    compress_trigger = metrics["compress_trigger"]
-    ai_on = bool(tr["summarize_enabled"])
-    hist_sum = bool(hist.get("history_summarize_enabled", True))
 
-    demo_label = "📋 收起详解" if expanded else "📖 管线详解"
+    buttons: list[list[InlineKeyboardButton]] = []
+    for group_id in GROUP_ORDER:
+        g = GROUPS[group_id]
+        summary = _group_summary_line(group_id, metrics)
+        label = f"{g['icon']} {g['title']}  {summary}"
+        buttons.append([InlineKeyboardButton(label, callback_data=f"hs_grp:{group_id}")])
+
+    demo_label = "📋 收起流程" if expanded else "📖 管线流程"
     demo_cb = "hs_demo:0" if expanded else "hs_demo:1"
+    buttons.append([InlineKeyboardButton(demo_label, callback_data=demo_cb)])
+    buttons.append([InlineKeyboardButton("🔄 重载配置", callback_data="hs_reload")])
+    buttons.append([InlineKeyboardButton("↩️ 恢复全部默认", callback_data="hs_rst")])
 
-    buttons = [
-        [InlineKeyboardButton(demo_label, callback_data=demo_cb)],
-        [
-            InlineKeyboardButton(
-                f"🌐 全局: ctx={settings['context_window_tokens']:,}tok",
-                callback_data="hs_global",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                f"✂️ S1截断: exec={tr['exec_max_chars']:,} search={tr['web_search_max_chars']:,}",
-                callback_data="hs_stage1",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                f"🧠 S2工具AI: {'✅' if ai_on else '❌'}⚠已接入",
-                callback_data="hs_stage2",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                f"📚 S3历史: {metrics['current_msgs']}/{hist['max_messages']}条"
-                f" tok{metrics['tok_pct']}% @{compress_trigger} {'✅' if hist_sum else '❌'}",
-                callback_data="hs_stage3",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                f"🔪 S4裁剪: soft@{cp.get('soft_ratio', 0.55)} 保{cp.get('keep_recent', 4)}轮",
-                callback_data="hs_stage4",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                f"🔧 S5工具限制: read={tl.get('read_file_max_chars', 64000):,} exec_out={tl.get('exec_max_output', 10000):,}",
-                callback_data="hs_stage5",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                f"📋 S6日志预览: read={pv.get('read_file', 1500):,} cap={pv.get('_total_cap', 4000):,}",
-                callback_data="hs_stage6",
-            )
-        ],
-        [InlineKeyboardButton("🔄 重载配置", callback_data="hs_reload")],
-    ]
     return InlineKeyboardMarkup(buttons)
 
+
+def _group_summary_line(group: str, metrics: dict[str, Any]) -> str:
+    settings = metrics["settings"]
+    if group == "memory":
+        hist = metrics["history"]
+        cp = metrics["context_pruning"]
+        keep_users = "全部用户" if hist.get("keep_user_messages") else "首条用户"
+        return (f"{hist['max_messages']}条/保{cp.get('keep_recent', 4)}轮"
+                f"/尾保{hist.get('compression_keep_recent', 6)}条/{keep_users}")
+    elif group == "compress":
+        tr = metrics["tool_results"]
+        ai = "AI✅" if tr.get("summarize_enabled") else "AI❌"
+        return f"exec={tr['exec_max_chars']:,} {ai} 阈值{tr['summarize_threshold']:,}"
+    elif group == "tools":
+        tl = settings.get("tool_limits", {})
+        return (f"read={tl.get('read_file_max_chars', 64000):,}"
+                f" exec={tl.get('exec_max_output', 10000):,}")
+    elif group == "vis":
+        pv = settings.get("tool_log_preview", {})
+        return f"cap={pv.get('_total_cap', 4000):,} read={pv.get('read_file', 1500):,}"
+    elif group == "global":
+        return f"ctx={settings['context_window_tokens']:,}tok"
+    return ""
+
+
+# ── Group sub-panel builder ──────────────────────────────────────────────
+
+def build_group_panel(
+    engine: Any | None,
+    group: str,
+    *,
+    advanced: bool = False,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Build a sub-panel for a specific parameter group."""
+    if group not in GROUPS:
+        group = "memory"
+
+    g = GROUPS[group]
+    settings = _settings()
+
+    # ── Text ──
+    lines: list[str] = [f"{g['icon']} {g['title']}", g["subtitle"], ""]
+
+    # Live metrics for memory group
+    if group == "memory":
+        metrics = collect_live_metrics(engine)
+        if metrics["compress_warned"]:
+            state = "⚠️ 已预警，下轮将压缩"
+        elif metrics["compress_ready"]:
+            state = "🔴 已达触发线"
+        else:
+            state = "🟢 安全"
+        lines.append("━━ 实时 ━━")
+        lines.append(f"  {metrics['current_msgs']}/{metrics['max_msgs']}条"
+                     f"  ~{metrics['current_tok']:,}tok ({metrics['tok_pct']}%)")
+        lines.append(f"  状态  {state}")
+        lines.append("")
+
+    lines.append("━━ 参数 ━━")
+    for section, key in g["params"]:
+        val = _get_val(settings, section, key)
+        label = _param_label(section, key)
+        lines.append(f"  {label:<14}  {_format_val(val)}")
+
+    for section, key in g["toggles"]:
+        val = _get_val(settings, section, key)
+        label = _param_label(section, key)
+        lines.append(f"  {label:<14}  {'✅' if val else '❌'}")
+
+    if advanced and g["advanced"]:
+        lines.append("\n━━ 高级 ━━")
+        for section, key in g["advanced"]:
+            val = _get_val(settings, section, key)
+            label = _param_label(section, key)
+            lines.append(f"  {label:<14}  {_format_val(val)}")
+
+    text = "\n".join(lines)
+
+    # ── Buttons ──
+    buttons: list[list[InlineKeyboardButton]] = []
+
+    for section, key in g["params"]:
+        val = _get_val(settings, section, key)
+        label = _param_label(section, key)
+        buttons.append([InlineKeyboardButton(
+            f"✏️ {label}: {_format_val(val)}",
+            callback_data=f"hs_edit:{section}:{key}",
+        )])
+
+    for section, key in g["toggles"]:
+        val = _get_val(settings, section, key)
+        label = _param_label(section, key)
+        if val:
+            buttons.append([InlineKeyboardButton(
+                f"❌ 关闭 {label}",
+                callback_data=f"hs_set:{section}:{key}:false",
+            )])
+        else:
+            buttons.append([InlineKeyboardButton(
+                f"✅ 开启 {label}",
+                callback_data=f"hs_set:{section}:{key}:true",
+            )])
+
+    if g["advanced"]:
+        adv_label = "▽ 收起高级" if advanced else "▸ 高级设置"
+        adv_cb = f"hs_adv:{group}:0" if advanced else f"hs_adv:{group}:1"
+        buttons.append([InlineKeyboardButton(adv_label, callback_data=adv_cb)])
+
+    if advanced:
+        for section, key in g["advanced"]:
+            val = _get_val(settings, section, key)
+            label = _param_label(section, key)
+            buttons.append([InlineKeyboardButton(
+                f"✏️ {label}: {_format_val(val)}",
+                callback_data=f"hs_edit:{section}:{key}",
+            )])
+
+    buttons.append([InlineKeyboardButton(f"↩️ 恢复此组默认", callback_data=f"hs_rst:{group}")])
+    buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="hs_back")])
+
+    return text, InlineKeyboardMarkup(buttons)
+
+
+# ── Restore defaults ─────────────────────────────────────────────────────
+
+def restore_defaults(group: str | None = None) -> str:
+    """Restore defaults for all groups or a specific group.
+
+    Returns a confirmation message.
+    """
+    from nanobot.groupchat.history import history_settings as hs
+    import json
+
+    defaults = json.loads(json.dumps(hs._DEFAULTS))
+
+    if group is None or group == "all":
+        hs.save(defaults)
+        return "✅ 已恢复全部默认设置"
+    elif group in GROUPS:
+        settings = hs.get_all()
+        g = GROUPS[group]
+        for section, key in g["params"] + g["toggles"] + g["advanced"]:
+            if section == "__top__":
+                if key in defaults:
+                    settings[key] = defaults[key]
+            else:
+                if section in defaults and key in defaults[section]:
+                    settings.setdefault(section, {})[key] = defaults[section][key]
+        hs.save(settings)
+        return f"✅ 已恢复 {GROUPS[group]['title']} 默认设置"
+    return "❌ 未知的分组"
+
+
+# ── Public API ───────────────────────────────────────────────────────────
 
 def build_history_panel(
     engine: Any | None,
@@ -359,41 +630,5 @@ def build_history_panel(
 
 
 def build_stage3_panel(engine: Any | None) -> tuple[str, InlineKeyboardMarkup]:
-    """Stage 3 sub-panel: history storage + compression."""
-    metrics = collect_live_metrics(engine)
-    hist = metrics["history"]
-    tr = metrics["tool_results"]
-    keep_users = bool(hist.get("keep_user_messages", False))
-    hist_sum = bool(hist.get("history_summarize_enabled", True))
-    tail_keep = int(hist.get("compression_keep_recent", 6))
-
-    toggle_users = "❌ 仅首条用户" if keep_users else "✅ 保护全部用户"
-    users_val = "false" if keep_users else "true"
-    toggle_sum = "❌ 关闭" if hist_sum else "✅ 开启"
-    sum_val = "false" if hist_sum else "true"
-
-    text = (
-        "📚 Stage 3: 历史存储 & 压缩\n"
-        "add_message 超限时丢弃 | maybe_compress 达线时压缩中间段\n\n"
-        f"实时  {metrics['current_msgs']}/{hist['max_messages']}条"
-        f"  {metrics['current_chars']:,}/{hist['max_context_chars']:,}字"
-        f"  ~{metrics['current_tok']:,}tok ({metrics['tok_pct']}%)\n"
-        f"压缩  触发≥{int(metrics['compress_ratio'] * 100)}% 或 tok≥55%"
-        f"  → @{metrics['compress_trigger']}条"
-        f"  [{'已预警' if metrics['compress_warned'] else '正常'}]\n\n"
-        f"头保护  {'全部用户消息' if keep_users else '首条用户消息'}\n"
-        f"尾保护  最近 {tail_keep} 条\n"
-        f"压缩模型  {tr['summarize_model']}\n"
-        f"摘要上限  {hist.get('compress_max_summary_tokens', 600)} tokens"
-    )
-    buttons = [
-        [InlineKeyboardButton(f"消息数: {hist['max_messages']}", callback_data="hs_edit:history:max_messages")],
-        [InlineKeyboardButton(f"上下文字符: {hist['max_context_chars']:,}", callback_data="hs_edit:history:max_context_chars")],
-        [InlineKeyboardButton(f"压缩比例: {hist.get('compress_ratio', 0.8)}", callback_data="hs_edit:history:compress_ratio")],
-        [InlineKeyboardButton(f"摘要tokens: {hist.get('compress_max_summary_tokens', 600)}", callback_data="hs_edit:history:compress_max_summary_tokens")],
-        [InlineKeyboardButton(f"尾保条数: {tail_keep}", callback_data="hs_edit:history:compression_keep_recent")],
-        [InlineKeyboardButton(toggle_users, callback_data=f"hs_set:history:keep_user_messages:{users_val}")],
-        [InlineKeyboardButton(f"{toggle_sum} 历史AI压缩", callback_data=f"hs_set:history:history_summarize_enabled:{sum_val}")],
-        [InlineKeyboardButton("⬅️ 返回", callback_data="hs_back")],
-    ]
-    return text, InlineKeyboardMarkup(buttons)
+    """Backward-compat wrapper — delegates to memory group panel."""
+    return build_group_panel(engine, "memory")

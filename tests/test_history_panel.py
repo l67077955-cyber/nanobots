@@ -23,7 +23,8 @@ def sample_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             "summarize_model": "openai/gpt-4.1-nano",
             "broadcast_result_max_chars": 25000,
             "direct_result_max_chars": 12000,
-            "read_file_max_chars": 5000,
+            "summarize_max_input_chars": 8000,
+            "summarize_max_output_chars": 4000,
         },
         "history": {
             "max_messages": 30,
@@ -39,6 +40,26 @@ def sample_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             "keep_recent": 10,
             "soft_max_chars": 3000,
         },
+        "tool_limits": {
+            "read_file_max_chars": 5000,
+            "read_file_default_lines": 300,
+            "list_dir_default_max": 200,
+            "exec_max_timeout": 600,
+            "exec_max_output": 10000,
+        },
+        "tool_log_preview": {
+            "web_search": 1500,
+            "web_fetch": 1500,
+            "read_file": 1500,
+            "exec": 500,
+            "list_dir": 300,
+            "chatroom_send": 200,
+            "wait": 200,
+            "write_file": 300,
+            "edit_file": 300,
+            "_default": 500,
+            "_total_cap": 4000,
+        },
     }
     path = tmp_path / "history_settings.json"
     path.write_text(json.dumps(cfg), encoding="utf-8")
@@ -49,7 +70,8 @@ def sample_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from nanobot.groupchat.history import history_settings as hs
 
     hs.reload()
-    return cfg
+    yield cfg
+    hs._cache = None  # Force reload from real file on next access
 
 
 def test_config_warnings_detect_threshold_mismatch(sample_settings):
@@ -57,31 +79,90 @@ def test_config_warnings_detect_threshold_mismatch(sample_settings):
 
     warnings = collect_config_warnings()
     joined = "\n".join(warnings)
-    assert "summarize_threshold" in joined
-    assert "未接入" in joined
-    assert "read_file_max_chars" in joined
+    assert "压缩阈值" in joined
+    assert "工具截断上限" in joined
 
 
-def test_main_panel_mentions_algorithm_aligned_terms(sample_settings):
+def test_main_panel_shows_grouped_layout(sample_settings):
     from nanobot.channels.telegram.history_panel import build_main_panel_text
 
     text = build_main_panel_text(engine=None)
-    assert "head_only" in text
-    assert "maybe_compress" in text
-    assert "prune_messages" in text
-    assert "compression_keep_recent" not in text  # uses rendered value "尾保 8条"
-    assert "尾保 8条" in text
-    assert "全部用户消息" in text
+    # New grouped layout terms
+    assert "记忆范围" in text
+    assert "压缩策略" in text
+    assert "工具限制" in text
+    assert "跨轮可见性" in text
+    assert "全局" in text
+    # User-facing values
+    assert "尾保8条" in text
+    assert "全部用户" in text
+    # No raw S1-S6 numbering
+    assert "S1" not in text
+    assert "S2" not in text
 
 
-def test_expanded_panel_includes_demo(sample_settings):
+def test_main_panel_shows_status_dashboard(sample_settings):
+    from nanobot.channels.telegram.history_panel import build_main_panel_text
+
+    text = build_main_panel_text(engine=None)
+    assert "实时状态" in text
+    assert "容量" in text
+    assert "安全" in text
+
+
+def test_expanded_panel_includes_flow_demo(sample_settings):
     from nanobot.channels.telegram.history_panel import build_main_panel_text
 
     compact = build_main_panel_text(engine=None, expanded=False)
     expanded = build_main_panel_text(engine=None, expanded=True)
-    assert "管线详解" not in compact
-    assert "管线详解" in expanded
+    assert "管线流程" not in compact
+    assert "管线流程" in expanded
+    assert "head_only" in expanded
+    assert "maybe_compress" in expanded
+    assert "prune_messages" in expanded
     assert len(expanded) > len(compact)
+
+
+def test_group_panel_memory(sample_settings):
+    from nanobot.channels.telegram.history_panel import build_group_panel
+
+    text, markup = build_group_panel(None, "memory")
+    assert "记忆范围" in text
+    assert "最大消息数" in text
+    assert "保留最近" in text
+    assert "保护用户消息" in text
+    # Has edit buttons
+    assert any("hs_edit" in str(b.callback_data) for row in markup.inline_keyboard for b in row)
+
+
+def test_group_panel_compress_advanced(sample_settings):
+    from nanobot.channels.telegram.history_panel import build_group_panel
+
+    text_basic, markup_basic = build_group_panel(None, "compress", advanced=False)
+    text_adv, markup_adv = build_group_panel(None, "compress", advanced=True)
+    assert "高级" not in text_basic
+    assert "高级" in text_adv
+    assert "广播模式" in text_adv
+    assert "广播模式" not in text_basic
+
+
+def test_group_panel_vis(sample_settings):
+    from nanobot.channels.telegram.history_panel import build_group_panel
+
+    text, markup = build_group_panel(None, "vis")
+    assert "跨轮可见性" in text
+    assert "read预览" in text
+    assert "总上限" in text
+
+
+def test_find_group_for_param(sample_settings):
+    from nanobot.channels.telegram.history_panel import find_group_for_param
+
+    assert find_group_for_param("history", "max_messages") == "memory"
+    assert find_group_for_param("tool_results", "exec_max_chars") == "compress"
+    assert find_group_for_param("tool_limits", "exec_max_output") == "tools"
+    assert find_group_for_param("tool_log_preview", "read_file") == "vis"
+    assert find_group_for_param("__top__", "context_window_tokens") == "global"
 
 
 def test_live_metrics_with_mock_engine(sample_settings):
@@ -102,3 +183,17 @@ def test_live_metrics_with_mock_engine(sample_settings):
     assert metrics["current_msgs"] == 2
     assert metrics["compress_warned"] is True
     assert metrics["tok_pct"] >= 0
+
+
+def test_restore_defaults_all(sample_settings):
+    from nanobot.channels.telegram.history_panel import restore_defaults
+
+    msg = restore_defaults(None)
+    assert "全部" in msg
+
+
+def test_restore_defaults_group(sample_settings):
+    from nanobot.channels.telegram.history_panel import restore_defaults
+
+    msg = restore_defaults("compress")
+    assert "压缩策略" in msg

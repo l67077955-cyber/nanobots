@@ -63,27 +63,27 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
             ),
         },
         "tool_results:summarize_threshold": {
-            "label": "AI 总结触发阈值 (字符)",
-            "location": "Stage 2 → 总结器入口判断",
+            "label": "AI 压缩阈值 (字符)",
+            "location": "压缩策略 → process_tool_result",
             "doc": (
                 "工具输出超过此字符数时，调用小模型提取关键信息。\n\n"
-                "流程: 原始输出 → LLM 提取要点 → 压缩结果注入上下文\n"
-                "失败兜底: head+tail 截断 (summarizer.py)\n"
-                "模型: 使用 summarize_model 指定的轻量模型\n\n"
-                "关键约束: 必须 < exec/web_fetch/web_search_max_chars\n"
-                "  否则输出在 Stage 1 已被截断到阈值以下，"
-                "总结器永远不触发\n\n"
-                "建议: 设为各工具截断值的 60-80%"
+                "流程: 原始输出 → AI 提取要点 → 截断 → 注入上下文\n"
+                "注意: AI 压缩在截断之前执行 (先压缩后截断)\n"
+                "失败兜底: 直接 head+tail 截断\n\n"
+                "关键约束: 应 >= 各工具截断上限\n"
+                "  否则输出在截断后已低于阈值，AI 压缩永远不触发\n\n"
+                "建议: 设为各工具截断值的 1.0-1.5 倍"
             ),
         },
         "tool_results:summarize_enabled": {
-            "label": "AI 总结开关",
-            "location": "Stage 2 → 配置项 (未接线)",
+            "label": "AI 压缩开关",
+            "location": "压缩策略 → process_tool_result",
             "doc": (
-                "⚠ 当前未接入通用 tool_loop 管线。\n\n"
-                "实际仅 SmartSearchTool 在 3000 字符处硬编码总结。\n"
-                "历史压缩使用的是 history.history_summarize_enabled。\n\n"
-                "保留此开关以便后续接线。"
+                "控制工具输出是否经 AI 压缩。\n\n"
+                "已接入 process_tool_result: 工具输出超过 summarize_threshold 时"
+                "调用 summarize_model 提取要点。\n"
+                "历史压缩另由 history.history_summarize_enabled 控制。\n\n"
+                "建议: 长对话保持开启以节省上下文"
             ),
         },
         "tool_results:summarize_model": {
@@ -117,21 +117,21 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
         },
         "tool_results:broadcast_result_max_chars": {
             "label": "广播模式 result_max_chars",
-            "location": "Stage 2 → broadcast tool_loop (未接线)",
+            "location": "压缩策略 → broadcast tool_loop (仅 dedup)",
             "doc": (
                 "传入 broadcast tool_loop 的 result_max_chars 参数。\n\n"
-                "⚠ 当前仅用于 dedup 缓存截断，不截断注入 messages 的内容。\n"
-                "实际截断由 process_tool_result (Stage 1) 完成。\n\n"
-                "建议: 15,000-30,000 (待接线后生效)"
+                "当前仅用于 dedup 缓存截断，不截断注入 messages 的内容。\n"
+                "实际截断由 process_tool_result 完成。\n\n"
+                "建议: 15,000-30,000"
             ),
         },
         "tool_results:direct_result_max_chars": {
             "label": "直接模式 result_max_chars",
-            "location": "Stage 2 → direct tool_loop (未接线)",
+            "location": "压缩策略 → direct tool_loop (仅 dedup)",
             "doc": (
                 "传入 direct/serial tool_loop 的 result_max_chars。\n\n"
-                "⚠ 当前仅用于 dedup 缓存截断，不截断注入 messages 的内容。\n\n"
-                "建议: 6,000-12,000 (待接线后生效)"
+                "当前仅用于 dedup 缓存截断，不截断注入 messages 的内容。\n\n"
+                "建议: 6,000-12,000"
             ),
         },
         "history:max_messages": {
