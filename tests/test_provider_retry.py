@@ -125,6 +125,21 @@ async def test_chat_with_retry_explicit_override_beats_defaults() -> None:
     assert provider.last_kwargs["reasoning_effort"] == "low"
 
 
+@pytest.mark.asyncio
+async def test_chat_with_retry_forwards_per_call_sampling_params() -> None:
+    provider = ScriptedProvider([LLMResponse(content="ok")])
+
+    await provider.chat_with_retry(
+        messages=[{"role": "user", "content": "hello"}],
+        sampling_params={"temperature": 0.2, "top_p": 0.9},
+    )
+
+    assert provider.last_kwargs["sampling_params"] == {
+        "temperature": 0.2,
+        "top_p": 0.9,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Image fallback tests
 # ---------------------------------------------------------------------------

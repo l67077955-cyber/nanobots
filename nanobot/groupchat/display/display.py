@@ -163,7 +163,13 @@ def tool_in_progress_msg(header: str) -> str:
 
 # ── Broadcast-specific ───────────────────────────────────────
 
-def broadcast_start_msg(agents: list[str], timeout: int, leader: str | None = None, ranks: dict[str, str] | None = None) -> str:
+def broadcast_start_msg(
+    agents: list[str],
+    timeout: int,
+    leader: str | None = None,
+    ranks: dict[str, str] | None = None,
+    sampling: dict[str, dict] | None = None,
+) -> str:
     """Render broadcast start banner with role indicators and rank badges."""
     from nanobot.groupchat.display.visibility import RANK_DISPLAY, resolve_rank
 
@@ -191,6 +197,29 @@ def broadcast_start_msg(agents: list[str], timeout: int, leader: str | None = No
             lines.append("  ".join(f"🔹 {m} ({_short_label(m)})" for m in members))
     else:
         lines.append("  ".join(f"🔹 {a} ({_short_label(a)})" for a in agents))
+
+    if sampling:
+        preferred = [
+            "temperature",
+            "top_p",
+            "repetition_penalty",
+            "frequency_penalty",
+            "presence_penalty",
+        ]
+
+        def _fmt_params(params: dict) -> str:
+            visible_params = {k: v for k, v in params.items() if k != "reasoning_effort"}
+            effort = params.get("reasoning_effort") or "off"
+            prefix = f"思考深度={effort}"
+            if not visible_params:
+                return prefix
+            keys = [k for k in preferred if k in params]
+            keys.extend(sorted(k for k in visible_params if k not in preferred))
+            return prefix + " | " + ", ".join(f"{k}={visible_params[k]}" for k in keys)
+
+        lines.append("⚙ hyperparams")
+        for agent in agents:
+            lines.append(f"  {agent}: {_fmt_params(sampling.get(agent, {}))}")
     return "\n".join(lines)
 
 

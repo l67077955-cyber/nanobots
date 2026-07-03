@@ -27,6 +27,8 @@ class CallbackCoreMixin(
         data = query.data
         chat_id = str(query.message.chat_id)
         try:
+            if data == "noop":
+                return
             for fn in (self._dispatch_agents, self._dispatch_logs, self._dispatch_prompts, self._dispatch_providers):
                 if await fn(query, data, chat_id):
                     return

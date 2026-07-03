@@ -37,7 +37,8 @@ class CustomProvider(LLMProvider):
     async def chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None,
                    model: str | None = None, max_tokens: int = 4096, temperature: float = 0.7,
                    reasoning_effort: str | None = None,
-                   tool_choice: str | dict[str, Any] | None = None) -> LLMResponse:
+                   tool_choice: str | dict[str, Any] | None = None,
+                   sampling_params: dict[str, Any] | None = None) -> LLMResponse:
         kwargs: dict[str, Any] = {
             "model": model or self.default_model,
             "messages": self._sanitize_empty_content(messages),
@@ -81,4 +82,3 @@ class CustomProvider(LLMProvider):
 
     def get_default_model(self) -> str:
         return self.default_model
-

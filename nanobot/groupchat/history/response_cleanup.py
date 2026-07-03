@@ -48,11 +48,12 @@ def clean_response(content: str, agent_name: str, all_agent_names: list[str]) ->
         "", content, flags=re.IGNORECASE,
     )
 
-    # 4. Strip ALL agent name prefixes (handles repeated "Benjamin: ..." throughout)
+    # 4. Strip agent name prefixes only at line starts. A global replace can
+    # corrupt normal content that mentions an agent label mid-sentence.
     for name in all_agent_names:
         for sep in (": ", "：", ":\n"):
             prefix = f"{name}{sep}"
-            content = content.replace(prefix, "")
+            content = re.sub(rf"^{re.escape(prefix)}", "", content, flags=re.MULTILINE)
         # Also strip markdown headers like "# Benjamin" or "## Benjamin"
         content = re.sub(rf"^#+\s*{re.escape(name)}\s*$", "", content, flags=re.MULTILINE)
 

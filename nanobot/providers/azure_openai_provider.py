@@ -120,6 +120,7 @@ class AzureOpenAIProvider(LLMProvider):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        sampling_params: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request to Azure OpenAI.

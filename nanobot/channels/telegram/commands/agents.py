@@ -267,11 +267,16 @@ class AgentCommandsMixin:
             rank_str = f"无效: {raw_rank}"
         else:
             rank_str = RANK_DISPLAY["basic"]
+        effort = agent.get("reasoning_effort") or "off"
+        hp = agent.get("hyperparams") if isinstance(agent.get("hyperparams"), dict) else {}
+        hp_str = f"{len(hp)} 项覆盖" if hp else "无覆盖"
         return (
             f"✏️ 编辑 {agent_name}\n\n"
             f"🎖️ 等级: {rank_str}\n"
             f"模型: {agent['model']}\n"
             f"工具: {tools_str}\n"
+            f"思考深度: {effort}\n"
+            f"高级超参数: {hp_str}\n"
             f"人设: {agent['prompt'][:100]}...\n\n"
             f"💡 提示：多数情况下只需调整「等级」和「思考深度」即可。\n"
             f"超参数为高级选项，默认即可获得良好效果。"
@@ -280,7 +285,7 @@ class AgentCommandsMixin:
     def _edit_menu_buttons(self, agent_name: str) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("✏️ 修改名字", callback_data=f"ef:{agent_name}:name")],
-            [InlineKeyboardButton("🎖️ 更改等级", callback_data=f"srr:{agent_name}")],
+            [InlineKeyboardButton("🎖️ 更改等级", callback_data=f"ef:{agent_name}:rank")],
             [InlineKeyboardButton("📝 修改提示词", callback_data=f"ef:{agent_name}:persona")],
             [InlineKeyboardButton("🤖 更换模型/提供商", callback_data=f"ef:{agent_name}:model")],
             [InlineKeyboardButton("🔧 工具权限设置", callback_data=f"ef:{agent_name}:tools")],
@@ -301,4 +306,3 @@ class AgentCommandsMixin:
             )
         else:
             return
-

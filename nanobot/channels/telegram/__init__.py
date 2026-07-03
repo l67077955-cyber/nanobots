@@ -77,6 +77,7 @@ class TelegramChannel(
         return {"enabled": False, **TelegramConfig().model_dump(by_alias=True)}
 
     BOT_COMMANDS = [
+        BotCommand("start", "Show welcome message"),
         BotCommand("new", "Start a new conversation"),
         BotCommand("clear", "Clear conversation history"),
         BotCommand("stop", "Stop the current task"),
@@ -87,8 +88,10 @@ class TelegramChannel(
         BotCommand("newagent", "Create new agent"),
         BotCommand("editagent", "Edit agent config"),
         BotCommand("hyperparams", "View/edit sampling params"),
+        BotCommand("think", "Set agent thinking depth"),
         BotCommand("restart", "Hard reset system"),
         BotCommand("log", "View session log"),
+        BotCommand("summary", "Generate conversation summary"),
         BotCommand("savegroup", "Save current members as group"),
         BotCommand("loadgroup", "Load saved group"),
         BotCommand("delgroup", "Delete saved group"),
@@ -213,6 +216,7 @@ class TelegramChannel(
             ("newagent", self._on_newagent),
             ("editagent", self._on_editagent),
             ("hyperparams", self._on_hyperparams),
+            ("think", self._on_think),
             ("restart", self._on_restart),
             ("log", self._on_log),
             ("summary", self._on_summary),
