@@ -681,6 +681,89 @@ async def tool_loop(
                         "content": tool_content,
                     })
 
+                # ── Phase 3b: Handle forget tool — delete matched tool call+result pairs ──
+                _forget_ids: set[str] = set()
+                _forget_names: list[str] = []
+                for (tc, args_str, dedup_key), raw in zip(pending, exec_results):
+                    if isinstance(raw, BaseException):
+                        continue
+                    tool_result, _, _ = raw
+                    if isinstance(tool_result, str) and tool_result.startswith("__FORGET__:"):
+                        try:
+                            import json as _json
+                            info = _json.loads(tool_result[len("__FORGET__:"):])
+                            _forget_ids.update(info.get("tool_call_ids", []))
+                            _forget_names.extend(info.get("names", []))
+                        except Exception:
+                            pass
+
+                if _forget_ids:
+                    # Collect forget tool's own IDs separately for residue cleanup.
+                    _forget_self_ids: set[str] = set()
+                    # Also build a map: tool_call_id → name for descriptive replacement
+                    _id_to_name: dict[str, str] = {}
+                    for (tc, args_str, dedup_key), raw in zip(pending, exec_results):
+                        if isinstance(raw, BaseException):
+                            continue
+                        tool_result, _, _ = raw
+                        if isinstance(tool_result, str) and tool_result.startswith("__FORGET__:"):
+                            _forget_self_ids.add(tc.id)
+                            try:
+                                import json as _json
+                                info = _json.loads(tool_result[len("__FORGET__:"):])
+                                for tid, nm in zip(info.get("tool_call_ids", []),
+                                                    info.get("names", [])):
+                                    _id_to_name[tid] = nm
+                            except Exception:
+                                pass
+
+                    # ── Actually excise target tool results and clean assistant tool_calls ──
+                    # This ensures forgotten items are truly removed from the shared history
+                    # used by compression (maybe_compress) and context building (history_to_messages).
+                    # The "know" trace is kept only in the forget tool's own result summary.
+                    # Previously this was replace+mark, which left entries in the list and
+                    # could still affect positional middle selection or prompt reconstruction.
+                    messages[:] = [m for m in messages if not (m.get("role") == "tool" and m.get("tool_call_id") in _forget_ids and m.get("tool_call_id") not in _forget_self_ids)]
+
+                    for m in messages:
+                        if m.get("role") == "assistant" and m.get("tool_calls"):
+                            m["tool_calls"] = [tc for tc in m["tool_calls"] if tc.get("id") not in _forget_ids]
+
+                    # ── Replace forget tool's own result with clear summary ──
+                    # (keep entry so agent knows forget was already called)
+                    forget_msg = ", ".join(f"{n}×{c}" for n, c in Counter(_forget_names).items())
+                    for m in messages:
+                        if m.get("role") == "tool" and m.get("tool_call_id") in _forget_self_ids:
+                            m["content"] = f"✓ forgot: {forget_msg}"
+
+                    logger.info(
+                        "tool_loop: forget excised {} tool call(s): {} from history",
+                        len(_forget_ids), ", ".join(_forget_names),
+                    )
+
+                    result.forgotten_tool_call_ids.extend(
+                        sorted(tid for tid in _forget_ids if tid)
+                    )
+
+                    if forget_tool is not None and hasattr(forget_tool, "_ctx"):
+                        forget_tool._ctx.setdefault("_forgot_ids", set()).update(_forget_ids)
+
+                # ── Checkpoint 2.5: end_discussion early exit (BEFORE interrupt check) ──
+                # Must be checked before the interrupt checkpoint below, because
+                # mark_discussion_ended() sets ALL interrupt events (including the
+                # caller's own) to wake mid-turn agents.  If the interrupt check
+                # runs first, the agent that called end_discussion would see its
+                # own phantom interrupt and re-enter the loop instead of exiting
+                # cleanly with finish_reason="end_discussion".
+                if "end_discussion" in result.tools_used:
+                    logger.info(
+                        "tool_loop: end_discussion detected after tool batch (iter {}), breaking", iteration
+                    )
+                    if not result.content and raw_content:
+                        result.content = raw_content
+                    result.finish_reason = "end_discussion"
+                    break
+
                 # ── Checkpoint 2: cooperative interrupt check (after tool batch) ──
                 # Checked after all tools in this iteration have finished so
                 # we don't interrupt mid-batch (keeps tool/message ledger clean).

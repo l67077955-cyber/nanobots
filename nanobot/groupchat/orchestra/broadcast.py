@@ -1025,13 +1025,20 @@ async def broadcast_round(
                             _implicit_targets = [leader_name]
                             
                         mailbox.send(name, _implicit_targets, content)
-                        await _trigger_realtime_interrupts(
-                            sender=name,
-                            targets=_implicit_targets,
-                            mailbox=mailbox,
-                            engine=engine,
-                            leader_name=leader_name,
-                        )
+                        # Only trigger realtime interrupts for substantive content.
+                        # Short meta-messages from the Leader (e.g. "结束", "确认一致")
+                        # don't warrant interrupting busy teammates mid-generation —
+                        # the message is delivered to their queue, but they can finish
+                        # their current output first and see it on the next cycle.
+                        _is_substantive = len(content.strip()) >= _MIN_SYNTHESIS_LEN or not is_leader
+                        if _is_substantive:
+                            await _trigger_realtime_interrupts(
+                                sender=name,
+                                targets=_implicit_targets,
+                                mailbox=mailbox,
+                                engine=engine,
+                                leader_name=leader_name,
+                            )
 
                 # ── Handle forced interrupt ──
                 if is_interrupted:
@@ -1685,6 +1692,51 @@ async def broadcast_round(
                         logger.info("Broadcast: leader ended discussion")
                         _reason_suffix = f"（{_end_reason}）" if _end_reason else ""
                         await engine._send(f"━━ Leader 结束讨论{_reason_suffix} — entering synthesis ━━")
+
+                    # Graceful shutdown: give agents time to finish their current
+                    # LLM generation cycle before force-cancelling. This prevents
+                    # losing content that's already been generated but not yet returned.
+                    GRACE_PERIOD = 15  # seconds
+
+                    # Step 1: notify all non-leader agents to wrap up
+                    for task_obj, task_name in tasks.items():
+                        if not task_obj.done() and task_name != leader_name:
+                            await tracker.set_state(task_name, "finishing", reason="leader ended")
+                            mailbox.send("系统", [task_name],
+                                "[系统通知] Leader 已结束讨论，请尽快完成当前输出并进入等待状态。")
+
+                    # Step 2: wait for agents to naturally complete (up to grace period)
+                    deadline = asyncio.get_event_loop().time() + GRACE_PERIOD
+                    while asyncio.get_event_loop().time() < deadline:
+                        still_running = [
+                            t for t in tasks
+                            if not t.done() and tasks[t] != leader_name
+                        ]
+                        if not still_running:
+                            break
+                        done_now, _ = await asyncio.wait(
+                            still_running,
+                            timeout=min(2.0, deadline - asyncio.get_event_loop().time()),
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        for dt in done_now:
+                            if dt in tasks:
+                                try:
+                                    name, content, tools_used_list, *_ = dt.result()
+                                    completed += 1
+                                    results.append((name, content, tools_used_list or []))
+                                    logger.info(
+                                        "Broadcast: {} finished during grace period ({} chars) — counted {}/{}",
+                                        name, len(content) if content else 0,
+                                        completed, total,
+                                    )
+                                except Exception:
+                                    logger.warning(
+                                        "Broadcast: agent task error during grace period: {}",
+                                        dt,
+                                    )
+
+                    # Step 3: force-cancel any stragglers
                     for task_obj, task_name in tasks.items():
                         if not task_obj.done() and task_name != leader_name:
                             await tracker.set_state(task_name, "cancelled", reason="leader ended")
