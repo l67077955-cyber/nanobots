@@ -388,7 +388,7 @@ class LiteLLMProvider(LLMProvider):
                     ds_cache = getattr(u, "prompt_cache_hit_tokens", None)
                     if ds_cache:
                         record["usage"]["prompt_cache_hit_tokens"] = ds_cache
-                    # Capture all extra usage attrs for discovery
+                    # Log all extra usage attrs for discovery
                     _ukeys = {k for k in dir(u) if not k.startswith("_") and k not in (
                         "prompt_tokens", "completion_tokens", "total_tokens",
                         "prompt_tokens_details", "completion_tokens_details"
@@ -397,10 +397,23 @@ class LiteLLMProvider(LLMProvider):
                         v = getattr(u, k, None)
                         if v is not None and not callable(v):
                             record["usage"][f"_{k}"] = v
+                    # Log prompt_tokens_details full content
+                    ptd = getattr(u, "prompt_tokens_details", None)
+                    if ptd:
+                        _ptd_dict = {}
+                        for pk in dir(ptd):
+                            if not pk.startswith("_") and not callable(getattr(ptd, pk, None)):
+                                _ptd_dict[pk] = getattr(ptd, pk)
+                        if _ptd_dict:
+                            record["usage"]["_ptd_full"] = _ptd_dict
                 # ── Extract OpenRouter / provider IDs from hidden params ──
                 try:
                     _hidden = getattr(response, "_hidden_params", None) or {}
                     _ah = _hidden.get("additional_headers", {}) or {}
+                    # Log full additional_headers keys for discovery
+                    if _ah:
+                        record["_ah_keys"] = list(_ah.keys())
+                        record["_ah_full"] = dict(_ah)
                     for hdr, field_name in [
                         ("x-openrouter-generation-id", "generation_id"),
                         ("x-request-id", "request_id"),
@@ -1003,20 +1016,35 @@ class LiteLLMProvider(LLMProvider):
                         _stream_cache = getattr(ptd, "cached_tokens", 0) or 0
                         if _stream_cache:
                             _stream_cache_tokens = _stream_cache
+                        # Log full ptd for discovery
+                        _ptd_dict = {}
+                        for pk in dir(ptd):
+                            if not pk.startswith("_") and not callable(getattr(ptd, pk, None)):
+                                _ptd_dict[pk] = getattr(ptd, pk)
+                        if _ptd_dict:
+                            usage["_ptd_full"] = _ptd_dict
+                    # DeepSeek native cache field
+                    _ds_cache = getattr(chunk.usage, "prompt_cache_hit_tokens", None)
+                    if _ds_cache:
+                        usage["prompt_cache_hit_tokens"] = _ds_cache
 
                 # Cost from hidden params (available on last chunk)
                 _chunk_hidden = getattr(chunk, "_hidden_params", None) or {}
                 if _chunk_hidden.get("response_cost") is not None:
                     _stream_cost = _chunk_hidden["response_cost"]
                 # Also check additional_headers for OpenRouter
-                if not _chunk_hidden.get("response_cost"):
-                    _ah = _chunk_hidden.get("additional_headers", {}) or {}
-                    for hdr, mk in [
-                        ("x-openrouter-provider", "_or_provider"),
-                        ("x-openrouter-generation-id", "_or_gen_id"),
-                    ]:
-                        if _ah.get(hdr) and not _stream_meta.get(mk):
-                            _stream_meta[mk] = _ah[hdr]
+                _ah = _chunk_hidden.get("additional_headers", {}) or {}
+                # Log full headers for first chunk that has them
+                if _ah and not _stream_meta.get("_ah_full"):
+                    _stream_meta["_ah_full"] = dict(_ah)
+                    _stream_meta["_ah_keys"] = list(_ah.keys())
+                for hdr, mk in [
+                    ("x-openrouter-provider", "_or_provider"),
+                    ("x-openrouter-generation-id", "_or_gen_id"),
+                    ("llm_provider-x-generation-id", "_or_gen_id"),
+                ]:
+                    if _ah.get(hdr) and not _stream_meta.get(mk):
+                        _stream_meta[mk] = _ah[hdr]
         except Exception as e:
             yield LLMResponse(content=f"Error during streaming: {str(e)}", finish_reason="error")
             return
@@ -1077,6 +1105,13 @@ class LiteLLMProvider(LLMProvider):
         # If we successfully inferred names, set finish reason to tool_calls
         if parsed_tool_calls and all(tc.name != "_unknown_" for tc in parsed_tool_calls):
             finish_reason = "tool_calls"
+
+        # Merge cache tokens and stream meta into usage for logging
+        if usage:
+            if _stream_cache_tokens:
+                usage["cached_tokens"] = _stream_cache_tokens
+            if _stream_meta:
+                usage["_stream_meta"] = _stream_meta
 
         # Log the completed stream request
         self._log_stream_request(kwargs, full_content, parsed_tool_calls, finish_reason, usage,
