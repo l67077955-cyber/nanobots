@@ -1192,13 +1192,20 @@ async def broadcast_round(
                             _implicit_targets = [leader_name]
 
                         mailbox.send(name, _implicit_targets, content)
-                        await _trigger_realtime_interrupts(
-                            sender=name,
-                            targets=_implicit_targets,
-                            mailbox=mailbox,
-                            engine=engine,
-                            leader_name=leader_name,
-                        )
+                        # Only trigger realtime interrupts for substantive content.
+                        # Short meta-messages from the Leader (e.g. "结束", "确认一致")
+                        # don't warrant interrupting busy teammates mid-generation —
+                        # the message is delivered to their queue, but they can finish
+                        # their current output first and see it on the next cycle.
+                        _is_substantive = len(content.strip()) >= _MIN_SYNTHESIS_LEN or not is_leader
+                        if _is_substantive:
+                            await _trigger_realtime_interrupts(
+                                sender=name,
+                                targets=_implicit_targets,
+                                mailbox=mailbox,
+                                engine=engine,
+                                leader_name=leader_name,
+                            )
 
                 # ── Handle forced interrupt ──
                 if is_interrupted:
@@ -1821,13 +1828,19 @@ async def broadcast_round(
                         for dt in done_now:
                             if dt in tasks:
                                 try:
-                                    name, content, _, _ = dt.result()
+                                    name, content, tools_used_list, *_ = dt.result()
+                                    completed += 1
+                                    results.append((name, content, tools_used_list or []))
                                     logger.info(
-                                        "Broadcast: {} finished during grace period ({} chars)",
+                                        "Broadcast: {} finished during grace period ({} chars) — counted {}/{}",
                                         name, len(content) if content else 0,
+                                        completed, total,
                                     )
                                 except Exception:
-                                    pass
+                                    logger.warning(
+                                        "Broadcast: agent task error during grace period: {}",
+                                        dt,
+                                    )
 
                     # Step 3: force-cancel any stragglers
                     for task_obj, task_name in tasks.items():

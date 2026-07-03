@@ -852,6 +852,22 @@ async def tool_loop(
                     if forget_tool is not None and hasattr(forget_tool, "_ctx"):
                         forget_tool._ctx.setdefault("_forgot_ids", set()).update(_forget_ids)
 
+                # ── Checkpoint 2.5: end_discussion early exit (BEFORE interrupt check) ──
+                # Must be checked before the interrupt checkpoint below, because
+                # mark_discussion_ended() sets ALL interrupt events (including the
+                # caller's own) to wake mid-turn agents.  If the interrupt check
+                # runs first, the agent that called end_discussion would see its
+                # own phantom interrupt and re-enter the loop instead of exiting
+                # cleanly with finish_reason="end_discussion".
+                if "end_discussion" in result.tools_used:
+                    logger.info(
+                        "tool_loop: end_discussion detected after tool batch (iter {}), breaking", iteration
+                    )
+                    if not result.content and raw_content:
+                        result.content = raw_content
+                    result.finish_reason = "end_discussion"
+                    break
+
                 # ── Checkpoint 2: cooperative interrupt check (after tool batch) ──
                 # Checked after all tools in this iteration have finished so
                 # we don't interrupt mid-batch (keeps tool/message ledger clean).
@@ -860,21 +876,6 @@ async def tool_loop(
                         "tool_loop: ⚡ interrupt detected after tool batch (iter {})", iteration
                     )
                     result.finish_reason = "interrupted"
-                    break
-
-                # ── Checkpoint 2.5: end_discussion early exit ──
-                # When the agent calls end_discussion, break immediately so the
-                # LLM doesn't generate another round of text.  The broadcast
-                # layer will use the last substantive content as synthesis.
-                # IMPORTANT: preserve raw_content from this iteration's LLM response
-                # so broadcast doesn't see empty content and skip synthesis.
-                if "end_discussion" in result.tools_used:
-                    logger.info(
-                        "tool_loop: end_discussion detected after tool batch (iter {}), breaking", iteration
-                    )
-                    if not result.content and raw_content:
-                        result.content = raw_content
-                    result.finish_reason = "end_discussion"
                     break
 
         else:
