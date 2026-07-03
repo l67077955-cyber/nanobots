@@ -925,11 +925,11 @@ async def broadcast_round(
                 messages[volatile_msg_idx]["content"] = orig_volatile + status_summary
 
                 _cycle_t0 = _t.time()
-                _cycle_usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                _cycle_usage: dict[str, int] = {"prompt": 0, "completion": 0, "total": 0}
 
                 async def _on_iter_usage(usage: dict) -> None:
-                    for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
-                        _cycle_usage[k] += usage.get(k, 0)
+                    for k in ("prompt", "completion", "total"):
+                        _cycle_usage[k] += usage.get(k, usage.get(f"{k}_tokens", 0))
 
                 # ── Pre-tool_loop pruning: cover all cycle paths (not just wait) ──
                 _conv_keep_turns = gc_settings.get("conv_keep_turns", 3)

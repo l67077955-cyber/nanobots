@@ -508,9 +508,9 @@ async def tool_loop(
 
         # Token accounting
         usage = response.usage or {}
-        result.token_usage["prompt"] += usage.get("prompt_tokens", 0)
-        result.token_usage["completion"] += usage.get("completion_tokens", 0)
-        result.token_usage["total"] += usage.get("total_tokens", 0)
+        result.token_usage["prompt"] += usage.get("prompt", usage.get("prompt_tokens", 0))
+        result.token_usage["completion"] += usage.get("completion", usage.get("completion_tokens", 0))
+        result.token_usage["total"] += usage.get("total", usage.get("total_tokens", 0))
         if response.cost:
             result.cost += response.cost
         result.cache_tokens += response.cache_tokens
@@ -904,7 +904,7 @@ async def tool_loop(
                     "tool_loop: model returned empty content with stop "
                     "(raw={!r}, completion_tokens={})",
                     (raw_content or "")[:200],
-                    usage.get("completion_tokens", "?"),
+                    usage.get("completion", usage.get("completion_tokens", "?")),
                 )
 
             # Handle error responses — retry once via non-streaming fallback

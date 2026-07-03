@@ -72,11 +72,11 @@ class BroadcastView:
             to_str = ", ".join(to_list)
 
             elapsed = _t.time() - cycle_t0
-            tok_t = cycle_usage.get("total_tokens", 0)
+            tok_t = cycle_usage.get("total", cycle_usage.get("total_tokens", 0))
             stats_suffix = ""
             if tok_t > 0:
-                p = cycle_usage.get("prompt_tokens", 0)
-                c = cycle_usage.get("completion_tokens", 0)
+                p = cycle_usage.get("prompt", cycle_usage.get("prompt_tokens", 0))
+                c = cycle_usage.get("completion", cycle_usage.get("completion_tokens", 0))
                 stats_suffix = "\n" + _d.format_token_stats(p, c, elapsed=elapsed)
 
             await self.engine._send(

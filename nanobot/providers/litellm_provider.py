@@ -1006,9 +1006,9 @@ class LiteLLMProvider(LLMProvider):
                 # Usage (some providers send it in the last chunk)
                 if hasattr(chunk, "usage") and chunk.usage:
                     usage = {
-                        "prompt_tokens": getattr(chunk.usage, "prompt_tokens", 0) or 0,
-                        "completion_tokens": getattr(chunk.usage, "completion_tokens", 0) or 0,
-                        "total_tokens": getattr(chunk.usage, "total_tokens", 0) or 0,
+                        "prompt": getattr(chunk.usage, "prompt_tokens", 0) or 0,
+                        "completion": getattr(chunk.usage, "completion_tokens", 0) or 0,
+                        "total": getattr(chunk.usage, "total_tokens", 0) or 0,
                     }
                     # Also extract cache tokens from prompt_tokens_details
                     ptd = getattr(chunk.usage, "prompt_tokens_details", None)
@@ -1190,9 +1190,9 @@ class LiteLLMProvider(LLMProvider):
         usage = {}
         if hasattr(response, "usage") and response.usage:
             usage = {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
+                "prompt": response.usage.prompt_tokens,
+                "completion": response.usage.completion_tokens,
+                "total": response.usage.total_tokens,
             }
 
         # Extract cost from litellm hidden params
@@ -1229,6 +1229,7 @@ class LiteLLMProvider(LLMProvider):
                 ("x-openrouter-generation-id", "generation_id"),
                 ("x-openrouter-latency", "latency_ms"),
                 ("x-openrouter-tokens-per-second", "tps"),
+                ("llm_provider-x-generation-id", "generation_id"),
             ]:
                 val = headers.get(hdr_key)
                 if val:

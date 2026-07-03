@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable
 from loguru import logger
 
 from nanobot.groupchat.display import display as _d
+from nanobot.config.validate import SAMPLING_KEYS
 
 
 def snapshot_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -38,6 +39,17 @@ def snapshot_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             entry["tool_call_id"] = m["tool_call_id"]
         snap.append(entry)
     return snap
+
+
+def valid_agent_sampling(agent_sampling: dict[str, Any] | None) -> dict[str, Any]:
+    """Filter per-agent sampling params to keys providers know how to send."""
+    if not isinstance(agent_sampling, dict):
+        return {}
+    return {
+        key: value
+        for key, value in agent_sampling.items()
+        if key in SAMPLING_KEYS or key.startswith("reasoning")
+    }
 
 
 def resolve_max_tool_iterations(engine: Any, agent_name: str, *, is_direct: bool = False) -> int:
@@ -181,9 +193,9 @@ def make_tool_callbacks(
         token_suffix = ""
         if iter_usage_ref:
             u = iter_usage_ref
-            p = u.get("prompt_tokens", 0)
-            c = u.get("completion_tokens", 0)
-            total = u.get("total_tokens", 0) or (p + c)
+            p = u.get("prompt", u.get("prompt_tokens", 0))
+            c = u.get("completion", u.get("completion_tokens", 0))
+            total = u.get("total", u.get("total_tokens", 0)) or (p + c)
             cost = u.get("cost")
             cache_t = u.get("cache_tokens", 0) or u.get("cache_read_input_tokens", 0)
             if total:
@@ -284,12 +296,18 @@ async def chat_with_tools(
     base = getattr(provider, "sampling_params", {}) or {}
     sampling = dict(base)
     if agent_sampling:
-        sampling.update(agent_sampling)
-        logger.info("chat_with_tools: agent={} merged hyperparams: {}", agent_name, list(agent_sampling.keys()))
-
-    _orig_sampling = getattr(provider, "sampling_params", None)
-    if _orig_sampling is not None:
-        provider.sampling_params = sampling
+        clean_agent_sampling = valid_agent_sampling(agent_sampling)
+        sampling.update(clean_agent_sampling)
+        ignored_keys = sorted(set(agent_sampling) - set(clean_agent_sampling))
+        if ignored_keys:
+            logger.warning(
+                "chat_with_tools: agent={} ignored invalid hyperparams: {}",
+                agent_name, ignored_keys,
+            )
+        logger.info(
+            "chat_with_tools: agent={} merged hyperparams: {}",
+            agent_name, list(clean_agent_sampling.keys()),
+        )
 
     tool_names = [d.get("function", {}).get("name", "?") for d in (tool_defs or [])]
 
@@ -297,30 +315,25 @@ async def chat_with_tools(
         _iter_usage_ref.clear()
         _iter_usage_ref.update(usage)
 
-    try:
-        result = await tool_loop(
-            provider=provider,
-            messages=messages,
-            tool_registry=tool_registry,
-            model=model,
-            max_tokens=max_tokens,
-            max_iterations=max_iterations,
-            tool_defs=effective_defs,
-            metadata=trace_metadata,
-            reasoning_effort=sampling.get("reasoning_effort") if sampling else None,
-            on_tool_start=on_tool_start_override or default_start,
-            on_tool_result=on_tool_result_override or default_result,
-            on_iteration_usage=_on_iter_usage,
-            on_content_delta=on_content_delta,
-            on_content_reset=on_content_reset,
-            clean_response=clean_response,
-            result_max_chars=_direct_result_max,
-        )
-    finally:
-        if _orig_sampling is not None:
-            provider.sampling_params = (
-                dict(_orig_sampling) if isinstance(_orig_sampling, dict) else _orig_sampling
-            )
+    result = await tool_loop(
+        provider=provider,
+        messages=messages,
+        tool_registry=tool_registry,
+        model=model,
+        max_tokens=max_tokens,
+        max_iterations=max_iterations,
+        tool_defs=effective_defs,
+        metadata=trace_metadata,
+        reasoning_effort=sampling.get("reasoning_effort") if sampling else None,
+        sampling_params=sampling,
+        on_tool_start=on_tool_start_override or default_start,
+        on_tool_result=on_tool_result_override or default_result,
+        on_iteration_usage=_on_iter_usage,
+        on_content_delta=on_content_delta,
+        on_content_reset=on_content_reset,
+        clean_response=clean_response,
+        result_max_chars=_direct_result_max,
+    )
 
     content = result.content or ""
     stats = build_stats(result, effective_defs, tool_names, messages_snap, sampling, max_tokens)
