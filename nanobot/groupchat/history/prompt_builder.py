@@ -64,8 +64,6 @@ _FALLBACK_PHASES: dict[str, str] = {
     "tool_instructions": "static",
     "persona": "static",
     "broadcast_hint": "static",
-    "user_context": "static",
-    "output_efficiency": "static",
     "skills": "static",
     "leader_prompt": "static",
     "instructions": "static",
@@ -76,8 +74,6 @@ _FALLBACK_PHASES: dict[str, str] = {
     "group_context": "dynamic",
     "examples": "dynamic",
     "group_nudge": "dynamic",
-    "coding_principle": "dynamic",
-    "记忆补充": "dynamic",
 }
 
 # Module-level dicts/sets — populated from manifest at import time.
@@ -90,6 +86,11 @@ COMPONENT_PHASES: dict[str, str] = dict(_FALLBACK_PHASES)
 GLOBAL_EDITABLE: set[str] = set(_FALLBACK_GLOBAL_EDITABLE)
 AGENT_EDITABLE: set[str] = set(_FALLBACK_AGENT_EDITABLE)
 EDITABLE_COMPONENTS: set[str] = GLOBAL_EDITABLE | AGENT_EDITABLE
+
+# Prompt processing / slimming features. Can be overridden in prompt_manifest.json
+PROMPT_SLIMMING: dict[str, bool] = {
+    "collapse_consecutive_systems": False,
+}
 
 
 def _load_manifest() -> dict | None:
@@ -397,6 +398,11 @@ class PromptBuilder:
         # should receive this system message.  All other components default to 'all'.
         default = "leader" if key == "leader_prompt" else "all"
         return self._visibility.get(key, default)
+
+    @staticmethod
+    def should_collapse_consecutive_systems() -> bool:
+        """Whether to merge consecutive system messages (reduces token count)."""
+        return PROMPT_SLIMMING.get("collapse_consecutive_systems", False)
 
     def set_component_visibility(self, key: str, mode: str) -> str:
         """Set visibility mode for a component. mode: 'all' or 'leader'."""
@@ -746,6 +752,23 @@ class PromptBuilder:
             if key == "examples":
                 content = f"[Example Chat]\n{content}"
             messages.append({"role": "system", "content": content})
+
+        # ── Prompt slimming (Priority 1): collapse consecutive system messages ──
+        # Many components (main_prompt, memory, tool_instructions, output_efficiency,
+        # coding_principle, broadcast_hint/leader etc.) are separate "system" entries.
+        # Merging adjacent systems into fewer messages reduces message count (and
+        # often token overhead from repeated role markers) while preserving content.
+        # This directly attacks the 10k+ char per-agent contexts seen in groupchat logs.
+        if PROMPT_SLIMMING.get("collapse_consecutive_systems", False):
+            collapsed: list[dict[str, Any]] = []
+            for m in messages:
+                if m.get("role") == "system" and collapsed and collapsed[-1].get("role") == "system":
+                    # Merge into previous system block (use blank line separator for readability)
+                    prev = collapsed[-1]
+                    prev["content"] = (prev["content"] or "") + "\n\n" + (m.get("content") or "")
+                else:
+                    collapsed.append(m)
+            messages = collapsed
 
         volatile_content = (
             f"[Current date and time: {volatile_tpl_vars['{{datetime}}']}]"

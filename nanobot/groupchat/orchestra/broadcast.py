@@ -1025,20 +1025,13 @@ async def broadcast_round(
                             _implicit_targets = [leader_name]
                             
                         mailbox.send(name, _implicit_targets, content)
-                        # Only trigger realtime interrupts for substantive content.
-                        # Short meta-messages from the Leader (e.g. "结束", "确认一致")
-                        # don't warrant interrupting busy teammates mid-generation —
-                        # the message is delivered to their queue, but they can finish
-                        # their current output first and see it on the next cycle.
-                        _is_substantive = len(content.strip()) >= _MIN_SYNTHESIS_LEN or not is_leader
-                        if _is_substantive:
-                            await _trigger_realtime_interrupts(
-                                sender=name,
-                                targets=_implicit_targets,
-                                mailbox=mailbox,
-                                engine=engine,
-                                leader_name=leader_name,
-                            )
+                        await _trigger_realtime_interrupts(
+                            sender=name,
+                            targets=_implicit_targets,
+                            mailbox=mailbox,
+                            engine=engine,
+                            leader_name=leader_name,
+                        )
 
                 # ── Handle forced interrupt ──
                 if is_interrupted:
