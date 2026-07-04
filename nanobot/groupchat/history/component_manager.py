@@ -55,7 +55,7 @@ def get_system_warning(kind: str, **kwargs) -> str:
 
 # ── Synthesis Quality Check ───────────────────────────────────
 
-_MIN_SYNTHESIS_LEN = 50
+_MIN_SYNTHESIS_LEN = 400
 
 _META_PATTERNS = [
     "问题已解答", "无需补充", "已交付", "已完成",

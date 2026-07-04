@@ -31,11 +31,10 @@ MANIFEST_PATH = Path.home() / ".nanobot" / "prompt_manifest.json"
 
 # Hardcoded fallback defaults — used ONLY when manifest is missing/corrupt.
 _FALLBACK_ORDER = [
-    "main_prompt", "persona", "hard_rules", "tool_instructions", "forget_guidance", "skills",
-    "user_context", "broadcast_hint", "group_context", "memory",
-    "output_efficiency", "instructions", "leader_prompt",
+    "main_prompt", "persona", "hard_rules", "tool_instructions", "skills",
+    "broadcast_hint", "group_context", "memory",
+    "instructions", "leader_prompt",
     "history", "skills_overview", "examples", "group_nudge",
-    "coding_principle", "记忆补充",
 ]
 _FALLBACK_LABELS: dict[str, str] = {
     "main_prompt": "主提示 (main_prompt)",
@@ -43,7 +42,6 @@ _FALLBACK_LABELS: dict[str, str] = {
     "persona": "人设/SOUL (persona)",
     "memory": "长期记忆 (memory)",
     "tool_instructions": "工具指令 (tool_instructions)",
-    "forget_guidance": "主动压缩 (forget_guidance)",
     "skills": "技能列表 (skills)",
     "broadcast_hint": "广播协调 (broadcast_hint)",
     "examples": "示例对话 (examples)",
@@ -64,11 +62,8 @@ _FALLBACK_PHASES: dict[str, str] = {
     "main_prompt": "static",
     "hard_rules": "static",
     "tool_instructions": "static",
-    "forget_guidance": "static",
     "persona": "static",
     "broadcast_hint": "static",
-    "user_context": "static",
-    "output_efficiency": "static",
     "skills": "static",
     "leader_prompt": "static",
     "instructions": "static",
@@ -79,8 +74,6 @@ _FALLBACK_PHASES: dict[str, str] = {
     "group_context": "dynamic",
     "examples": "dynamic",
     "group_nudge": "dynamic",
-    "coding_principle": "dynamic",
-    "记忆补充": "dynamic",
 }
 
 # Module-level dicts/sets — populated from manifest at import time.
@@ -96,7 +89,7 @@ EDITABLE_COMPONENTS: set[str] = GLOBAL_EDITABLE | AGENT_EDITABLE
 
 # Prompt processing / slimming features. Can be overridden in prompt_manifest.json
 PROMPT_SLIMMING: dict[str, bool] = {
-    "collapse_consecutive_systems": True,
+    "collapse_consecutive_systems": False,
 }
 
 
@@ -265,29 +258,6 @@ TEMPLATES: dict[str, str] = {
     ),
     "persona": "[从 SOUL.md 加载 — 在 /editagent 中编辑]",
     "tool_instructions": "",  # Loaded from ~/.nanobot/prompts/tool_instructions.md
-    "forget_guidance": (
-        "### ⚡ 主动压缩 (forget) — 强制规则\n"
-        "上下文空间有限。系统会在接近容量时自动压缩（摘要替换中间消息），但自动压缩不区分重要与否，可能吞掉关键信息。\n"
-        "你必须主动用 forget 工具清理低价值输出，保护重要内容不被自动压缩丢失。\n\n"
-        "#### 🔴 必须立即 forget 的场景\n"
-        "- 搜索结果已提取完关键信息 → forget(indices=[0,1,2])\n"
-        "- 长文件已读完并记了笔记 → forget(keywords=\"read_file\")\n"
-        "- exec 输出冗长但只需结论 → forget(indices=0)\n"
-        "- 同一工具连续调用多次，早期结果已过时 → forget(keywords=\"web_search\")\n"
-        "- 任何超过500字的工具输出，提取完信息后立即 forget\n"
-        "- 工具返回错误/异常/空结果 → forget(indices=0)，不要让失败结果占空间\n"
-        "- 工具结果与预期不符（格式错、内容无关、部分截断）→ 提取可用部分后 forget 原始输出\n"
-        "- 重试后得到正确结果 → forget 之前的失败结果，只保留最终正确的\n\n"
-        "#### 🟢 不要 forget\n"
-        "- 结果还需要在后续步骤中引用（文件路径、URL、关键数据）\n"
-        "- 压缩摘要可能丢失细节时，保留原文更安全\n\n"
-        "#### 执行纪律\n"
-        "1. **每轮工具调用后自检**：这批结果还需要吗？不需要→立即 forget\n"
-        "2. **结果有问题就 forget**：错误、空结果、无关内容、截断输出→提取可用部分后立即 forget 原始结果\n"
-        "3. **forget 优先于自动压缩**：你主动清理的，自动压缩就不需要碰\n"
-        "4. **大输出不过夜**：超过500字的工具结果，用完即 forget，不要留在上下文里占空间\n"
-        "5. **重试后清理**：得到正确结果后，forget 之前所有失败尝试的输出"
-    ),
     "broadcast_hint": (
         "[广播模式]\n"
         "你是 {{agent_idx}}/{{total}} 号成员，代号 {{agent}} | 队友: {{teammates}}\n"
@@ -498,7 +468,7 @@ class PromptBuilder:
     @staticmethod
     def should_collapse_consecutive_systems() -> bool:
         """Whether to merge consecutive system messages (reduces token count)."""
-        return PROMPT_SLIMMING.get("collapse_consecutive_systems", True)
+        return PROMPT_SLIMMING.get("collapse_consecutive_systems", False)
 
     def set_component_visibility(self, key: str, mode: str) -> str:
         """Set visibility mode for a component. mode: 'all' or 'leader'."""
@@ -650,11 +620,6 @@ class PromptBuilder:
             return self.get_component_template("memory")
         elif key == "tool_instructions":
             return self.get_component_template("tool_instructions")
-        elif key == "forget_guidance":
-            from nanobot.groupchat.tool_policy import forget_tool_enabled
-            if not forget_tool_enabled(agent):
-                return ""
-            return self.get_component_template("forget_guidance")
         elif key == "skills":
             return self._build_skills_content()
         elif key == "skills_overview":
@@ -862,7 +827,7 @@ class PromptBuilder:
         # Merging adjacent systems into fewer messages reduces message count (and
         # often token overhead from repeated role markers) while preserving content.
         # This directly attacks the 10k+ char per-agent contexts seen in groupchat logs.
-        if PROMPT_SLIMMING.get("collapse_consecutive_systems", True):
+        if PROMPT_SLIMMING.get("collapse_consecutive_systems", False):
             collapsed: list[dict[str, Any]] = []
             for m in messages:
                 if m.get("role") == "system" and collapsed and collapsed[-1].get("role") == "system":

@@ -216,34 +216,8 @@ class HistoryContext:
             effective_ratio = max(msg_count_ratio, token_ratio)
 
             if effective_ratio < ratio and token_ratio < 0.55:
-                # Under threshold — reset the warning flag
-                self._compress_warned = False
                 return
 
-            # ── 0. Forget opportunity: warn once, then compress ──
-            # On first breach, inject a system message telling agents to
-            # proactively forget.  Skip actual compression this round so
-            # agents get one turn to act.  Next round, compress for real.
-            if not getattr(self, "_compress_warned", False):
-                self._compress_warned = True
-                usage_pct = int(len(self.messages) / limit * 100)
-                tok_pct = int(token_ratio * 100) if token_ratio > 0 else usage_pct
-                report_pct = max(usage_pct, tok_pct)
-                warn_msg = {
-                    "sender": "系统",
-                    "content": (
-                        f"⚠️ 上下文已达 ~{report_pct}% 容量（{len(self.messages)} msgs, ~{current_tok} tokens），即将自动压缩历史。\n"
-                        "请立即用 forget 工具清理不再需要的工具输出（搜索结果、长文件内容、exec输出等），"
-                        "保护重要信息不被自动压缩丢失。这是你唯一的机会。"
-                    ),
-                }
-                self.messages.append(warn_msg)
-                self._state.save_message("系统", warn_msg["content"], self.messages)
-                logger.info(
-                    "HistoryContext: compression warning injected ({} msgs, ~{}% count, {} tokens ~{}% of window)",
-                    len(self.messages), usage_pct, current_tok, tok_pct,
-                )
-                return  # Give agents one turn to forget
 
             total_len = len(self.messages)
 
