@@ -268,7 +268,14 @@ class CronService:
                             self._store = None  # force reload
                             self._load_store()
                             self._recompute_next_runs()
-                            self._save_store()
+                            # Sync _last_mtime to the file we just read so the
+                            # next poll does NOT detect a phantom change.
+                            # Only _save_store() if _recompute_next_runs actually
+                            # changed a next_run_at_ms value (i.e. jobs exist).
+                            if self._store and self._store.jobs:
+                                self._save_store()
+                            elif self.store_path.exists():
+                                self._last_mtime = self.store_path.stat().st_mtime
                             self._arm_timer()
                 except Exception as e:
                     logger.warning("Cron poll error: {}", e)
