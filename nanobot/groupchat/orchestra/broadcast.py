@@ -1292,6 +1292,11 @@ async def broadcast_round(
                     logger.info("Broadcast: leader {} called end_discussion, exiting cycle loop", name)
                     break
 
+                # Single agent: no teammates to wait for, exit immediately
+                if total == 1:
+                    logger.info("Broadcast: {} single agent mode, exiting cycle loop", name)
+                    break
+
                 # Now wait for teammate messages
                 await tracker.set_state(name, "waiting")
                 logger.info("Broadcast: {} entering auto-wait (cycle {})", name, cycle)
@@ -1480,6 +1485,22 @@ async def broadcast_round(
                     # round ends) instead of silently dropping it.
                     engine._summary_requested = True
                     continue
+
+                # Round winding down (end_discussion / all agents exiting):
+                # agents will never read the mailbox — requeue the message so
+                # run_loop processes it as a fresh round instead of silently
+                # swallowing it (the "stuck until next user message" bug).
+                if (
+                    not engine._running
+                    or mailbox.is_discussion_ended()
+                    or all(t.done() for t in tasks)
+                ):
+                    engine._input_queue.put_nowait(msg)
+                    logger.info(
+                        "Broadcast: round ending — user message requeued for next round: {}",
+                        msg[:60],
+                    )
+                    return
 
                 all_agent_names = list(mailbox.agent_names)
                 await pool.allocate_user(all_agent_names)
