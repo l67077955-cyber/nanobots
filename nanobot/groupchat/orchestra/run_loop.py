@@ -144,6 +144,18 @@ async def run_loop(engine: Any) -> None:
                 global_timeout=_global_timeout,
             )
 
+            # end_discussion flips engine._running off mid-round.  If user
+            # messages arrived during teardown (requeued by _user_listener),
+            # revive the loop so they start a fresh round instead of being
+            # dropped.  Safe wrt /stop: stop cancels this task, so normal
+            # returns here only happen for end_discussion / natural completion.
+            if not engine._running and not engine._input_queue.empty():
+                logger.info(
+                    "run_loop: {} pending user message(s) after round end — reviving loop",
+                    engine._input_queue.qsize(),
+                )
+                engine._running = True
+
             # Compress history if approaching the message limit
             await engine._maybe_compress_history()
 
