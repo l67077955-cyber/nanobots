@@ -58,6 +58,22 @@ _DEFAULTS: dict[str, Any] = {
         "max_context_chars": 100_000,
         # History compression: triggered at compress_ratio * max_messages
         "compress_ratio": 0.8,
+        # Token-pressure trigger ratio: when token usage crosses this fraction
+        # of context_window_tokens, compression fires even if message-count
+        # ratio is still under compress_ratio. Distinct from
+        # context_pruning.soft_ratio (which governs tool_loop tool-result
+        # replacement) — kept separate so the two mechanisms can be tuned
+        # independently. Default matches the legacy hardcoded 0.55.
+        "token_trigger_ratio": 0.55,
+        # Fraction of context_window_tokens to keep as the in-memory history
+        # token budget in add_message trimming (headroom for system prompt,
+        # tools, etc.). Replaces the previously hardcoded 0.65 literal.
+        "context_budget_ratio": 0.65,
+        # Char budget for the mechanical (no-LLM) fallback compress block
+        # built by build_compress_message when AI summarisation is disabled
+        # or fails. Distinct from compress_max_summary_tokens (AI budget)
+        # and tool_log_preview._total_cap (per-message tool preview cap).
+        "compress_fallback_chars": 2000,
         "compress_max_summary_tokens": 600,
         # Number of recent messages to keep in tail during compression
         "compression_keep_recent": 6,
@@ -65,6 +81,13 @@ _DEFAULTS: dict[str, Any] = {
         "keep_user_messages": True,
         # AI summarization toggle for history compression (separate from tool_results)
         "history_summarize_enabled": True,
+        # Cross-turn repetition guard (observational): when an agent's new
+        # message is ≥ this similar to its own previous message, log a
+        # WARNING so the repeat is observable in gateway.log. Does NOT
+        # mutate content (stubbing risks re-explanation → more repetition).
+        # See nanobot/groupchat/history/repetition.py.
+        "cross_turn_repeat_guard": True,
+        "cross_turn_repeat_ratio": 0.85,
     },
 
     # ── Stage 4: iterative context pruning (tool_loop iteration 2+) ──
@@ -215,6 +238,18 @@ def compress_ratio() -> float:
     return float(_load()["history"]["compress_ratio"])
 
 
+def token_trigger_ratio() -> float:
+    return float(_load()["history"]["token_trigger_ratio"])
+
+
+def context_budget_ratio() -> float:
+    return float(_load()["history"]["context_budget_ratio"])
+
+
+def compress_fallback_chars() -> int:
+    return int(_load()["history"]["compress_fallback_chars"])
+
+
 def compress_max_summary_tokens() -> int:
     return int(_load()["history"]["compress_max_summary_tokens"])
 
@@ -229,6 +264,14 @@ def keep_user_messages() -> bool:
 
 def history_summarize_enabled() -> bool:
     return bool(_load()["history"]["history_summarize_enabled"])
+
+
+def cross_turn_repeat_guard() -> bool:
+    return bool(_load()["history"]["cross_turn_repeat_guard"])
+
+
+def cross_turn_repeat_ratio() -> float:
+    return float(_load()["history"]["cross_turn_repeat_ratio"])
 
 
 # ── context_pruning getters ──────────────────────────────────────────────

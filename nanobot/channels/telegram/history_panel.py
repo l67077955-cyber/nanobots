@@ -36,9 +36,14 @@ GROUPS: dict[str, dict[str, Any]] = {
         "toggles": [
             ("history", "keep_user_messages"),
             ("history", "history_summarize_enabled"),
+            ("history", "cross_turn_repeat_guard"),
         ],
         "advanced": [
             ("history", "compress_max_summary_tokens"),
+            ("history", "token_trigger_ratio"),
+            ("history", "context_budget_ratio"),
+            ("history", "compress_fallback_chars"),
+            ("history", "cross_turn_repeat_ratio"),
             ("history", "max_context_chars"),
             ("context_pruning", "soft_ratio"),
         ],
@@ -134,6 +139,11 @@ _PARAM_LABELS: dict[tuple[str, str], str] = {
     ("history", "max_context_chars"): "字符上限",
     ("history", "compress_ratio"): "压缩触发比",
     ("history", "compress_max_summary_tokens"): "摘要tokens",
+    ("history", "token_trigger_ratio"): "token触发比",
+    ("history", "context_budget_ratio"): "预算占比",
+    ("history", "compress_fallback_chars"): "回退压缩字数",
+    ("history", "cross_turn_repeat_guard"): "跨轮重复守卫",
+    ("history", "cross_turn_repeat_ratio"): "跨轮重复阈值",
     ("history", "compression_keep_recent"): "尾保条数",
     ("history", "keep_user_messages"): "保护用户消息",
     ("history", "history_summarize_enabled"): "历史AI压缩",
@@ -249,6 +259,7 @@ def collect_live_metrics(engine: Any | None) -> dict[str, Any]:
     ctx_window = int(settings["context_window_tokens"])
     compress_ratio = float(hist.get("compress_ratio", 0.8))
     soft_ratio = float(cp.get("soft_ratio", 0.55))
+    token_trigger_ratio = float(hist.get("token_trigger_ratio", 0.55))
 
     current_tok = _estimate_history_tokens(messages)
     msg_pct = int(current_msgs / max(1, max_msgs) * 100)
@@ -256,7 +267,14 @@ def collect_live_metrics(engine: Any | None) -> dict[str, Any]:
     tok_pct = int(current_tok / max(1, ctx_window) * 100) if ctx_window else 0
     compress_trigger = int(max_msgs * compress_ratio)
     compress_msg_pct = int(current_msgs / max(1, max_msgs) * 100)
-    compress_ready = max(compress_msg_pct, tok_pct) >= int(compress_ratio * 100) or tok_pct >= 55
+    # Mirror maybe_compress's actual trigger: effective_ratio >= compress_ratio
+    # OR token_ratio >= token_trigger_ratio. Previously the token leg was a
+    # hardcoded `tok_pct >= 55` — a fourth copy of the 0.55 magic number that
+    # drifted from the real (now configurable) threshold.
+    compress_ready = (
+        max(compress_msg_pct, tok_pct) >= int(compress_ratio * 100)
+        or tok_pct >= int(token_trigger_ratio * 100)
+    )
 
     compress_warned = False
     if engine is not None and getattr(engine, "history", None) is not None:
@@ -414,10 +432,10 @@ def _flow_demo(metrics: dict[str, Any]) -> str:
         f" / web head_only@{tr['web_search_max_chars']:,})"
         f" → 落盘 + meta\n\n"
         "③ 存入历史 (add_message)\n"
-        f"   超 {hist['max_messages']}条 或 token > {metrics['ctx_window']:,}×65% → 丢弃最旧\n"
+        f"   超 {hist['max_messages']}条 或 token > {metrics['ctx_window']:,}×{int(hist.get('context_budget_ratio', 0.65) * 100)}% → 丢弃最旧\n"
         f"   头保护: {'全部用户' if hist.get('keep_user_messages') else '首条用户'}\n\n"
         "④ 历史压缩 (maybe_compress)\n"
-        f"   触发: msg≥{int(hist.get('compress_ratio', 0.8) * 100)}% 或 tok≥55%\n"
+        f"   触发: msg≥{int(hist.get('compress_ratio', 0.8) * 100)}% 或 tok≥{int(hist.get('token_trigger_ratio', 0.55) * 100)}%\n"
         f"   中间段 → {tr['summarize_model']}"
         f" (尾保{hist.get('compression_keep_recent', 6)}条)\n"
         f"   AI压缩({'✅' if hist.get('history_summarize_enabled', True) else '❌'})\n\n"

@@ -91,49 +91,128 @@ def _persist_to_disk(content: str, tool_name: str, tool_call_id: str) -> Path | 
         return None
 
 
+# ── Summarizer config/provider caching ─────────────────────────────────────
+# _maybe_ai_summarize used to re-read ~/.nanobot/config.json and construct a
+# fresh LiteLLMProvider on *every* large tool result. These caches build the
+# provider once per (model, config-mtime) pair so disk IO + object construction
+# happen only when the config actually changes.
+_SUMMARIZER_CACHE: dict[str, Any] = {}
 
-async def _maybe_ai_summarize(text: str, tool_name: str) -> str:
-    """If AI summarization is enabled and text exceeds threshold, summarize via cheap LLM."""
+
+def _head_tail_sample(text: str, max_chars: int) -> str:
+    """Return a head+tail slice of *text* fitting in *max_chars*.
+
+    For short texts this is just the text. For long texts, ~62.5% of the
+    budget goes to the head (where context/setup lives) and ~37.5% to the
+    tail (where errors/exit codes/stack traces live), joined by an ellipsis
+    marker showing how much was elided.
+    """
+    if len(text) <= max_chars:
+        return text
+    head_budget = int(max_chars * 0.625)
+    tail_budget = max_chars - head_budget
+    omitted = len(text) - head_budget - tail_budget
+    return (
+        text[:head_budget]
+        + f"\n\n... [{omitted:,} chars elided] ...\n\n"
+        + text[-tail_budget:]
+    )
+
+
+def _get_summarizer_config() -> tuple[int | None, str, int, int]:
+    """Return (threshold, model, max_input, max_output), all normalized.
+
+    Returns ``(None, "", 0, 0)`` when AI summarization is disabled or the
+    settings module is unavailable/malformed.
+    """
     try:
         from nanobot.groupchat.history import history_settings as hs
-        settings = hs.get_all()
-        tr = settings.get("tool_results", {})
+        tr = hs.get_all().get("tool_results", {})
         if not tr.get("summarize_enabled", True):
-            return text
-        threshold = int(tr.get("summarize_threshold", 8000))
-        if len(text) <= threshold:
-            return text
-        model = tr.get("summarize_model", "openai/gpt-4.1-nano")
-        max_input = int(tr.get("summarize_max_input_chars", 8000))
-        max_output = int(tr.get("summarize_max_output_chars", 4000))
+            return None, "", 0, 0
+        return (
+            int(tr.get("summarize_threshold", 8000)),
+            str(tr.get("summarize_model", "openai/gpt-4.1-nano")),
+            int(tr.get("summarize_max_input_chars", 8000)),
+            int(tr.get("summarize_max_output_chars", 4000)),
+        )
+    except Exception:
+        return None, "", 0, 0
 
-        from nanobot.providers.litellm_provider import LiteLLMProvider
-        import json as _json
 
-        api_key, api_base, provider_name = "", "", "openrouter"
-        try:
-            cfg_path = Path.home() / ".nanobot" / "config.json"
-            if cfg_path.exists():
-                cfg = _json.loads(cfg_path.read_text())
-                pcfg = (cfg.get("providers") or {}).get(provider_name, {}) or {}
-                api_key = pcfg.get("apiKey", "")
-                api_base = pcfg.get("apiBase", "")
-        except Exception:
-            pass
+def _get_summarizer_provider(model: str) -> Any:
+    """Build (and cache) a LiteLLMProvider for the summarizer model.
 
+    Cache key is ``(model, config_mtime)`` so edits to ~/.nanobot/config.json
+    invalidate the cache automatically. Returns ``None`` on failure.
+    """
+    from nanobot.providers.litellm_provider import LiteLLMProvider
+    import json as _json
+
+    cfg_path = Path.home() / ".nanobot" / "config.json"
+    try:
+        cfg_mtime = cfg_path.stat().st_mtime if cfg_path.exists() else 0.0
+    except Exception:
+        cfg_mtime = 0.0
+
+    cache_key = f"{model}|{cfg_mtime}"
+    cached = _SUMMARIZER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    api_key, api_base, provider_name = "", "", "openrouter"
+    try:
+        if cfg_path.exists():
+            cfg = _json.loads(cfg_path.read_text())
+            pcfg = (cfg.get("providers") or {}).get(provider_name, {}) or {}
+            api_key = pcfg.get("apiKey", "")
+            api_base = pcfg.get("apiBase", "")
+    except Exception:
+        pass
+
+    try:
         llm = LiteLLMProvider(
             default_model=model,
             api_key=api_key or None,
             api_base=api_base or None,
             provider_name=provider_name,
         )
+    except Exception as e:
+        logger.warning("result_processor: failed to build summarizer provider: {}", e)
+        return None
+
+    # Drop stale entries from a previous config mtime to bound cache size.
+    _SUMMARIZER_CACHE.clear()
+    _SUMMARIZER_CACHE[cache_key] = llm
+    return llm
+
+
+async def _maybe_ai_summarize(text: str, tool_name: str) -> str:
+    """If AI summarization is enabled and text exceeds threshold, summarize via cheap LLM.
+
+    Never raises — any failure falls back to returning *text* unchanged so
+    process_tool_result keeps working (truncation still applies downstream).
+    """
+    try:
+        threshold, model, max_input, max_output = _get_summarizer_config()
+        if threshold is None or len(text) <= threshold:
+            return text
+
+        llm = _get_summarizer_provider(model)
+        if llm is None:
+            return text
+
+        # Head+tail sampling: a single head slice loses the tail, where error
+        # messages / exit codes / stack traces typically live. Split the input
+        # budget so the model sees both ends.
+        sample = _head_tail_sample(text, max_input)
 
         prompt = (
             "You are a tool result summarizer. Extract the most relevant info, "
             "preserve numbers, dates, URLs. Output in the same language as the source. "
             "Only extract existing info, never fabricate.\n\n"
-            f"--- Tool result ({len(text)} chars, tool={tool_name}) ---\n"
-            f"{text[:max_input]}\n--- End ---"
+            f"--- Tool result ({len(text)} chars, tool={tool_name}; sampled head+tail to {len(sample)}) ---\n"
+            f"{sample}\n--- End ---"
         )
 
         logger.info("result_processor: AI summarizing {}c via {} (tool={})",

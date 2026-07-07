@@ -89,3 +89,51 @@ def test_clear_history_removes_snapshot(history_file: Path, monkeypatch: pytest.
     engine.clear_history()
     assert not history_file.exists()
     assert engine._history == []
+
+
+def test_engine_restore_preserves_compact_boundary_flag(
+    history_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The is_compact_summary flag must survive a gateway restart.
+
+    Regression for the restore filter at GroupChatEngine._restore_chat_state,
+    which previously rebuilt each message as {sender, content} only and
+    silently dropped the structured compact-boundary flag — forcing the
+    legacy string-prefix fallback to do all the work.
+    """
+    import nanobot.groupchat.history.persistence as persistence_mod
+
+    monkeypatch.setattr(persistence_mod, "_NANOBOT_DIR", history_file.parent)
+    history_file.write_text(
+        json.dumps(
+            {
+                "history": [
+                    {"sender": "用户", "content": "before compaction"},
+                    {
+                        "sender": "系统",
+                        "content": "[早期对话摘要（压缩了 3 条中间消息）]\n摘要正文",
+                        "is_compact_summary": True,
+                    },
+                    {"sender": "AgentA", "content": "after compaction"},
+                ],
+                "topic": "",
+                "round": 0,
+                "session_dir": "",
+                "updated_at": "2026-07-07T10:00:00+08:00",
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    provider = MagicMock()
+    engine = GroupChatEngine(GroupChatConfig(), provider, Path("/tmp"))
+
+    restored = engine._history
+    assert len(restored) == 3
+    summary_msg = next(m for m in restored if m["sender"] == "系统")
+    assert summary_msg.get("is_compact_summary") is True, (
+        "is_compact_summary flag was stripped on restore"
+    )
+    # Non-flag messages stay clean (no spurious keys)
+    assert "is_compact_summary" not in restored[0]
+    assert "is_compact_summary" not in restored[2]

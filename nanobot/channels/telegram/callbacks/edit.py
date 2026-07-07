@@ -45,7 +45,13 @@ class EditCallbackMixin:
             key = state["key"]
             raw = content.strip()
             # Detect type: float keys (ratios), string keys (model), else int
-            _float_keys = {"soft_ratio", "compress_ratio"}
+            _float_keys = {
+                "soft_ratio",
+                "compress_ratio",
+                "token_trigger_ratio",
+                "context_budget_ratio",
+                "cross_turn_repeat_ratio",
+            }
             _string_keys = {"summarize_model"}
             if key in _string_keys:
                 value: Any = raw

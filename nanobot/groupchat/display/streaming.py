@@ -43,6 +43,11 @@ class StreamingDisplay:
         # When tools interrupt streaming, we abandon the old message so
         # the final content appears *below* the tool-call messages.
         self._pre_tool_msg_id: int | None = None
+        # Partial text already streamed to the pre-tool message. Preserved so
+        # on_reset / finalize can keep it visible (with a tool marker) rather
+        # than overwriting the in-progress reply with a bare "🔧 ..." icon —
+        # which made the user's streamed text appear to vanish mid-stream.
+        self._pre_tool_partial: str = ""
 
     @property
     def enabled(self) -> bool:
@@ -72,20 +77,33 @@ class StreamingDisplay:
             self._last_edit = now
 
     async def on_reset(self) -> None:
-        """Reset callback — clear buffer when tool calls interrupt mid-stream.
+        """Reset callback — tool calls interrupt mid-stream.
 
-        Abandons the current streaming message so the next content delta
-        creates a NEW message below the tool-call messages, preserving
-        chronological display order.
+        Preserves the partial text already streamed in the current message
+        (appending a tool-in-progress marker) instead of overwriting it with
+        a bare "🔧 ..." placeholder — so the user does not see their
+        in-progress reply vanish when the agent calls a tool. The buffer is
+        cleared so post-tool content creates a NEW message below the
+        tool-call messages, preserving chronological display order.
+
+        (``result.content`` returned by tool_loop holds only the final
+        post-tool text response, not the pre-tool prelude; keeping the
+        prelude visible here is what prevents it being lost from display.)
         """
+        partial = self.buffer_text
         self._buffer.clear()
         if self.msg_id and self._edit:
+            if partial.strip():
+                text = f"{self.header}{partial}\n\n🔧 ⏳"[:4096]
+            else:
+                text = self._tool_in_progress_text
             try:
-                await self._edit(self.msg_id, self._tool_in_progress_text)
+                await self._edit(self.msg_id, text)
             except Exception:
                 pass
-            # Abandon old message — next delta creates new one below tools
+            # Abandon old message — next delta creates a new one below tools.
             self._pre_tool_msg_id = self.msg_id
+            self._pre_tool_partial = partial
             self.msg_id = None
 
     async def abort(self, *, reason: str = "⏹ 已中断") -> None:
@@ -93,10 +111,16 @@ class StreamingDisplay:
         partial = self.buffer_text.strip()
         if self._pre_tool_msg_id and self._edit:
             try:
-                await self._edit(self._pre_tool_msg_id, f"{self.header}↓")
+                marker = (
+                    f"{self.header}{self._pre_tool_partial}\n\n↓"[:4096]
+                    if self._pre_tool_partial.strip()
+                    else f"{self.header}↓"
+                )
+                await self._edit(self._pre_tool_msg_id, marker)
             except Exception:
                 pass
             self._pre_tool_msg_id = None
+            self._pre_tool_partial = ""
 
         if self.msg_id and self._edit:
             if partial:
@@ -122,13 +146,22 @@ class StreamingDisplay:
         If content is empty, shows "(空回复)".
         Falls back to ``fallback_send`` if editing fails.
         """
-        # Clean up stale pre-tool message if it exists
+        # Clean up stale pre-tool message if it exists. Keep the prelude text
+        # visible (with a "continued below" marker) rather than collapsing it
+        # to a bare "↓" — the prelude is not part of result.content, so
+        # hiding it here would lose it from display.
         if self._pre_tool_msg_id and self._edit:
             try:
-                await self._edit(self._pre_tool_msg_id, f"{self.header}↓")
+                marker = (
+                    f"{self.header}{self._pre_tool_partial}\n\n↓"[:4096]
+                    if self._pre_tool_partial.strip()
+                    else f"{self.header}↓"
+                )
+                await self._edit(self._pre_tool_msg_id, marker)
             except Exception:
                 pass
             self._pre_tool_msg_id = None
+            self._pre_tool_partial = ""
 
         if content:
             final_text = f"{self.header}{content}"[:max_len]

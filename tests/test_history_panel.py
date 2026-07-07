@@ -197,3 +197,64 @@ def test_restore_defaults_group(sample_settings):
 
     msg = restore_defaults("compress")
     assert "压缩策略" in msg
+
+
+def test_memory_advanced_shows_new_compaction_fields(sample_settings):
+    """Phase-1 knobs are exposed in the memory group's advanced panel."""
+    from nanobot.channels.telegram.history_panel import build_group_panel
+
+    text, markup = build_group_panel(None, "memory", advanced=True)
+    assert "高级" in text
+    # The three newly added, previously-hardcoded knobs are now visible
+    assert "token触发比" in text
+    assert "预算占比" in text
+    assert "回退压缩字数" in text
+    # ...and editable (edit buttons carry their section:key)
+    cb_data = [str(b.callback_data) for row in markup.inline_keyboard for b in row]
+    assert any("hs_edit:history:token_trigger_ratio" in cb for cb in cb_data), (
+        "token_trigger_ratio missing an edit button"
+    )
+    assert any("hs_edit:history:context_budget_ratio" in cb for cb in cb_data)
+    assert any("hs_edit:history:compress_fallback_chars" in cb for cb in cb_data)
+
+
+def test_compress_ready_uses_token_trigger_ratio_not_hardcoded(monkeypatch):
+    """compress_ready must honour the configurable token_trigger_ratio,
+    not the old hardcoded 0.55. With tok_pct=50% and compress_ratio=0.99:
+      token_trigger_ratio=0.6 -> 50 < 60 -> not ready
+      token_trigger_ratio=0.4 -> 50 >= 40 -> ready
+    """
+    from nanobot.channels.telegram import history_panel as hp
+
+    def fake_settings(tok_trigger: float):
+        return {
+            "context_window_tokens": 1000,
+            "tool_result_max_chars": 5000,
+            "tool_results": {
+                "summarize_enabled": True, "summarize_threshold": 8000,
+                "exec_max_chars": 10000, "web_fetch_max_chars": 8000,
+                "web_search_max_chars": 5000, "summarize_model": "x",
+            },
+            "history": {
+                "max_messages": 100, "max_context_chars": 100_000,
+                "compress_ratio": 0.99, "compress_max_summary_tokens": 600,
+                "compression_keep_recent": 6, "keep_user_messages": True,
+                "history_summarize_enabled": True,
+                "token_trigger_ratio": tok_trigger, "context_budget_ratio": 0.65,
+                "compress_fallback_chars": 2000,
+            },
+            "context_pruning": {"soft_ratio": 0.55, "keep_recent": 4, "soft_max_chars": 8000},
+            "tool_limits": {}, "tool_log_preview": {},
+        }
+
+    # 500 tokens of a 1000-token window -> tok_pct = 50; engine=None -> 0 msgs.
+    monkeypatch.setattr(hp, "_estimate_history_tokens", lambda msgs: 500)
+
+    monkeypatch.setattr(hp, "_settings", lambda: fake_settings(0.6))
+    m_high = hp.collect_live_metrics(None)
+    assert m_high["compress_ready"] is False, "50% should be under a 60% trigger"
+
+    monkeypatch.setattr(hp, "_settings", lambda: fake_settings(0.4))
+    m_low = hp.collect_live_metrics(None)
+    assert m_low["compress_ready"] is True, "50% should breach a 40% trigger"
+

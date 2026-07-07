@@ -1158,11 +1158,18 @@ class GroupChatEngine:
         snapshot = self._state.load_history_snapshot()
         if not snapshot:
             return
-        restored = [
-            {"sender": m.get("sender", "?"), "content": m.get("content", "")}
-            for m in snapshot.get("history", [])
-            if isinstance(m, dict) and m.get("content")
-        ]
+        restored = []
+        for m in snapshot.get("history", []):
+            if not (isinstance(m, dict) and m.get("content")):
+                continue
+            item = {"sender": m.get("sender", "?"), "content": m.get("content", "")}
+            # Preserve the structured compact-boundary flag across restart so
+            # is_compact_summary() recognises prior summary blocks without
+            # relying on the legacy string-prefix fallback. Other extra keys
+            # are intentionally dropped to keep the restored shape clean.
+            if m.get("is_compact_summary"):
+                item["is_compact_summary"] = True
+            restored.append(item)
         if not restored:
             return
         self.history.messages[:] = restored
@@ -1235,6 +1242,10 @@ class GroupChatEngine:
 
     async def _maybe_compress_history(self) -> None:
         """Compress history if needed — delegates to HistoryContext."""
+        # Microcompact pre-pass (no LLM): age old tool-log blocks before the
+        # threshold check / AI summary, keeping history lean so maybe_compress
+        # fires later and summarises a smaller middle region.
+        self.history.microcompact()
         await self.history.maybe_compress()
         self._history = self.history.messages  # keep shim in sync
         self._persist_chat_state()

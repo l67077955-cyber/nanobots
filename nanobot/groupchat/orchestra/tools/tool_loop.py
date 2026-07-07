@@ -548,7 +548,7 @@ async def tool_loop(
             _check_text = response.reasoning_content
         if _has_contiguous_repeat(_check_text):
             logger.warning(
-                "tool_loop iter %d: degenerate repetition detected, breaking loop",
+                "tool_loop iter {}: degenerate repetition detected, breaking loop",
                 iteration,
             )
             # Keep whatever non-repeated content we have so far

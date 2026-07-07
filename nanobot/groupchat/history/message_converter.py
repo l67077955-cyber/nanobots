@@ -216,8 +216,8 @@ def build_compress_message(
         body = body[: available - 1] + "…"
     content = header + body
     if sender_format:
-        return {"sender": "系统", "content": content}
-    return {"role": "system", "content": content}
+        return {"sender": "系统", "content": content, "is_compact_summary": True}
+    return {"role": "system", "content": content, "is_compact_summary": True}
 
 
 def _merge_chronological_with_compress(

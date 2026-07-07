@@ -174,6 +174,44 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
                 "建议: 0.7-0.9"
             ),
         },
+        "history:token_trigger_ratio": {
+            "label": "token 触发比例",
+            "location": "Stage 3 → maybe_compress 触发条件",
+            "doc": (
+                "当 token 用量 / context_window_tokens ≥ 此比例时，\n"
+                "即使消息数尚未达 compress_ratio 也会触发历史压缩\n"
+                "(应对单条长消息/工具输出撑爆上下文)。\n\n"
+                "此前为硬编码 0.55、不可配且静默凌驾 compress_ratio；\n"
+                "现独立可调。与 context_pruning.soft_ratio (tool_loop\n"
+                "工具结果裁剪) 是不同机制，可分别调。\n\n"
+                "值域: 0.0-1.0，默认 0.55"
+            ),
+        },
+        "history:context_budget_ratio": {
+            "label": "历史 token 预算占比",
+            "location": "Stage 3 → add_message 裁剪",
+            "doc": (
+                "add_message 的 in-memory token 预算 =\n"
+                "context_window_tokens × 此比例 (为 system prompt/\n"
+                "工具等留余量)。超出则按 head 保护丢弃最旧。\n\n"
+                "此前为硬编码 0.65；现可调。\n"
+                "max_context_chars 仍作为字符安全网在\n"
+                "history_to_messages → trim_llm_messages 二次执行。\n\n"
+                "值域: 0.0-1.0，默认 0.65"
+            ),
+        },
+        "history:compress_fallback_chars": {
+            "label": "回退压缩字数预算",
+            "location": "Stage 3 → maybe_compress 机械回退",
+            "doc": (
+                "AI 摘要不可用或失败时，build_compress_message 将中间段\n"
+                "机械压成单个压缩块，此值为其字符预算 (每条留首行预览)。\n\n"
+                "与 compress_max_summary_tokens (AI 摘要 token 预算)、\n"
+                "tool_log_preview._total_cap (单条工具预览上限) 是三个\n"
+                "不同预算，互不影响。此前为硬编码 2000。\n\n"
+                "默认 2000"
+            ),
+        },
         "history:compress_max_summary_tokens": {
             "label": "历史压缩摘要长度 (tokens)",
             "location": "Stage 3 → maybe_compress",
@@ -209,9 +247,35 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
             "location": "Stage 3 → maybe_compress",
             "doc": (
                 "控制历史中间段是否用 summarize_model 做 AI 摘要。\n\n"
-                "关闭: 中间段直接丢弃 (head + tail 保留)。\n"
+                "关闭或 AI 失败: 中间段经 build_compress_message 机械压缩\n"
+                "(每条留首行预览，受 compress_fallback_chars 字符预算约束)，\n"
+                "不会静默丢弃 (head + tail 始终保留)。\n"
                 "与 tool_results.summarize_enabled 无关。\n\n"
                 "建议: 长对话保持开启"
+            ),
+        },
+        "history:cross_turn_repeat_guard": {
+            "label": "跨轮重复守卫",
+            "location": "Stage 3 → add_message",
+            "doc": (
+                "开关: 检测某 agent 新消息与它自己上一轮消息高度相似时\n"
+                "记 WARNING 到 gateway.log (可观测)，使跨轮重复自动可见\n"
+                "(否则需 leader 手动发现\"X 重复了，没有新信息\")。\n\n"
+                "仅记日志，不改写内容——折叠历史会令 agent 误以为上一轮\n"
+                "未记全而下轮再解释，反而加重重复。收敛仍交 leader。\n\n"
+                "与 tool_loop 的单响应内退化守卫 (_has_contiguous_repeat)\n"
+                "互补: 那个管响应内，这个管跨轮。"
+            ),
+        },
+        "history:cross_turn_repeat_ratio": {
+            "label": "跨轮重复阈值",
+            "location": "Stage 3 → add_message",
+            "doc": (
+                "agent 新消息与上一轮消息的相似度 ≥ 此值即判为跨轮重复。\n"
+                "基于 difflib.SequenceMatcher (whitespace 归一化后)。\n\n"
+                "过短消息 (<40字) 不检测，避免\"ok\"/\"done\"误报。\n"
+                "值域: 0.0-1.0，默认 0.85\n"
+                "建议: 0.80-0.90 (过低误报，过高漏报)"
             ),
         },
         "context_pruning:soft_ratio": {
