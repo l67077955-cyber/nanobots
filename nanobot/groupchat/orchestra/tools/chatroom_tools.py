@@ -743,21 +743,11 @@ class ChatroomSendTool(Tool):
         if delivered > 0 and self._search_pool:
             self._search_pool.on_output(self._agent_name)
 
-        # Trigger real-time interrupt for delivered targets so a busy
-        # recipient (mid tool_loop / LLM call) wakes up immediately
-        # instead of burning the sender's wait() deadline on extensions.
-        # _try_interrupt respects rank: high-rank sender interrupts
-        # low-rank busy recipient; equal rank queues silently.
-        if delivered > 0:
-            _interrupted = 0
-            for _tgt in actual_recipients:
-                if self._mailbox._try_interrupt(_tgt, self._agent_name):
-                    _interrupted += 1
-            if _interrupted > 0:
-                logger.info(
-                    "chatroom_send: {} -> {} interrupted {} busy agent(s)",
-                    self._agent_name, ", ".join(targets), _interrupted,
-                )
+        # NOTE: real-time interrupt is handled centrally by BroadcastView's
+        # on_tool_result → trigger_realtime_interrupts. Calling _try_interrupt
+        # here as well double-fires the interrupt check (the second hit is a
+        # no-op once the event is set, but it wastes cycles and races the
+        # BroadcastView path). Keep this path interrupt-free.
 
         avail_hint = ""
         if self._pool:
@@ -936,12 +926,14 @@ class ManageAgentTool(Tool):
         engine: Any,
         mailbox: Any,
         spawn_fn: Any = None,  # Callable[[str, int], asyncio.Task] | None
+        tracker: Any = None,  # AgentStatusTracker — for safe-state checks
     ) -> None:
         self._exec_agents = exec_agents
         self._agent_tasks = agent_tasks  # {Task: name}
         self._engine = engine
         self._mailbox = mailbox
         self._spawn_fn = spawn_fn  # injected by broadcast_round
+        self._tracker = tracker  # may be None in CLI/no-dashboard paths
         self._disabled: set[str] = set()
         # {agent_name: status_message} — injected into agent's next cycle
         self._status_overrides: dict[str, str] = {}
@@ -1021,7 +1013,7 @@ class ManageAgentTool(Tool):
             if agent in self._disabled:
                 return f"{agent} 已经被 disable 了"
             # Guard: refuse to disable an agent that is still producing content
-            tracker = getattr(self._engine, '_tracker', None)
+            tracker = self._tracker
             if tracker is not None:
                 agent_state = tracker._states.get(agent, "unknown")
                 safe_states = {"waiting", "done", "error", "cancelled"}

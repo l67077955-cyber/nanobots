@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-Test: broadcast.py synthesis display + retry prompt fix.
+Test: broadcast.py synthesis display + end-of-discussion handling.
 
-Covers three bugs introduced in 5/13-5/14:
-1. _used_chatroom_send blocks synthesis display
-2. retry prompt lacks tool data → LLM can't produce content
-3. retry exhaustion silently releases empty content
-
-This is a unit test at the logic level — simulates the exact
-broadcast_round conditions that triggered the failures.
+Covers the stable-aligned behavior restored from v0.1.4.post7-stable:
+1. Leader end_discussion with no text → exactly ONE forced synthesis cycle
+   (no _MIN_SYNTHESIS_LEN / synthesis_quality_check retry loop).
+2. Synthesis display uses `进展 [N]` label (leader) and is shown even when
+   chatroom_send was used (teammate-targeted sends must not swallow the
+   user-facing synthesis).
+3. Non-leader wait timeout keeps waiting (no MAX_CONSECUTIVE_WAITS force-exit)
+   to avoid cascading stalls.
 """
 
 import ast
@@ -17,8 +18,8 @@ import unittest
 from pathlib import Path
 
 BROADCAST = Path("/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py")
-AGENT = Path("/root/nanobot-src/nanobot/groupchat/orchestra/broadcast_agent.py")
 HISTORY = Path("/root/nanobot-src/nanobot/groupchat/history/component_manager.py")
+
 
 # ── Test 1: Syntax Integrity ──────────────────────────────
 
@@ -30,106 +31,106 @@ class TestSyntax(unittest.TestCase):
             ast.parse(f.read())
         self.assertTrue(True, "broadcast.py syntax OK")
 
-    def test_broadcast_agent_syntax(self):
-        with open(AGENT) as f:
-            ast.parse(f.read())
-        self.assertTrue(True, "broadcast_agent.py syntax OK")
-
     def test_component_manager_syntax(self):
         with open(HISTORY) as f:
             ast.parse(f.read())
         self.assertTrue(True, "component_manager.py syntax OK")
 
 
-# ── Test 2: _used_chatroom_send guard removal ─────────────
+# ── Test 2: Synthesis display via streaming finalize ─────────
 
-class TestUsedChatroomSendGuard(unittest.TestCase):
-    """The old guard: `if content and not _used_chatroom_send`
-    dropped leader synthesis when leader used chatroom_send.
-    New code: `if content:` — removes the condition entirely.
-    """
+class TestSynthesisDisplay(unittest.TestCase):
+    """Leader synthesis is finalized in place on the streaming message (no
+    duplicate send, no _used_chatroom_send guard). The display layer's
+    StreamingDisplay owns the ▍ header via agent_header(mode='broadcast')."""
 
-    def test_guard_removed_from_synthesis_display(self):
-        """Verify line ~1249 has `if content:` not `if content and not _used_chatroom_send`"""
-        with open(AGENT) as f:
-            lines = f.readlines()
-        # Find the synthesis display block — the line that has
-        # "if content:" near a comment about chatroom_send
-        marker = "chatroom_send targets teammates"
-        idx = None
-        for i, line in enumerate(lines):
-            if marker in line:
-                idx = i
-                break
-        self.assertIsNotNone(idx, "Synthesis display comment about chatroom_send found")
-        block = lines[idx:idx + 6]
-        has_display_guard = any(
-            l.strip().startswith("if content:") and "_used_chatroom_send" not in l
-            for l in block
-        )
-        self.assertTrue(has_display_guard, "Synthesis display uses `if content:` without _used_chatroom_send guard")
-
-    def test_no_used_chatroom_send_in_display_block(self):
-        """Verify the synthesis display block (~L1249-1260) does NOT reference _used_chatroom_send"""
-        with open(AGENT) as f:
+    def test_synthesis_uses_stream_finalize(self):
+        with open(BROADCAST) as f:
             content = f.read()
-        # Find the post-validation display section
-        marker = "Synthesis passed validation"
-        idx = content.find(marker)
-        self.assertGreater(idx, 0, "Synthesis passed validation marker found")
-        block = content[idx:idx+2000]
+        idx = content.find("displayed {} synthesis output")
+        self.assertGreater(idx, 0, "synthesis display log marker found")
+        block = content[max(0, idx - 400):idx]
+        self.assertIn("_stream.finalize", block,
+            "Synthesis display finalizes the streaming message in place (no duplicate send)")
+
+    def test_no_used_chatroom_send_guard_on_synthesis(self):
+        """The synthesis display must not be gated by _used_chatroom_send."""
+        with open(BROADCAST) as f:
+            content = f.read()
+        idx = content.find("displayed {} synthesis output")
+        self.assertGreater(idx, 0, "synthesis display marker found")
+        block = content[max(0, idx - 800):idx + 200]
         self.assertNotIn("_used_chatroom_send", block,
             "Synthesis display block must not reference _used_chatroom_send")
 
-    def test_single_agent_exits_before_auto_wait(self):
-        """Single-agent broadcast must not wait 600s for nonexistent teammates."""
-        with open(AGENT) as f:
+
+# ── Test 3: Retry loop removed (stable-aligned) ────────────
+
+class TestRetryLoopRemoved(unittest.TestCase):
+    """The _MIN_SYNTHESIS_LEN + synthesis_quality_check retry loop was removed
+    to eliminate end-of-discussion stalls. The max_cycles cap is the only
+    backstop."""
+
+    def test_no_min_synthesis_len_retry(self):
+        with open(BROADCAST) as f:
             content = f.read()
-        exit_idx = content.find("exiting after single-agent cycle")
-        wait_idx = content.find("entering auto-wait")
-        self.assertGreater(exit_idx, 0, "Single-agent exit branch exists")
-        self.assertGreater(wait_idx, 0, "Auto-wait branch exists")
-        self.assertLess(exit_idx, wait_idx, "Single-agent exit happens before auto-wait")
+        self.assertNotIn("_MIN_SYNTHESIS_LEN", content,
+            "_MIN_SYNTHESIS_LEN hard retry was removed (stable behavior)")
 
-
-# ── Test 3: Retry prompt includes tool data ────────────────
-
-class TestRetryPromptToolData(unittest.TestCase):
-    """Before fix: retry prompt = `get_system_warning(...)` only.
-    After fix: retry prompt = warning + `[本轮工具调用结果]` + build_tool_log().
-    """
-
-    def test_length_retry_has_tool_injection(self):
-        with open(AGENT) as f:
+    def test_no_synthesis_quality_check(self):
+        with open(BROADCAST) as f:
             content = f.read()
-        # Marker for the length-based retry
-        marker = "synthesis too short"
-        idx = content.find(marker)
-        self.assertGreater(idx, 0, "Length retry marker found")
-        block = content[idx:idx+2500]
-        # After the fix, there should be a reference to build_tool_log
-        # AND the tool data injection string
-        self.assertIn("build_tool_log", block, "Length retry uses build_tool_log")
-        self.assertIn("本轮工具调用结果", block, "Length retry injects tool data header")
+        self.assertNotIn("synthesis_quality_check", content,
+            "synthesis_quality_check retry loop was removed (stable behavior)")
 
-    def test_quality_retry_has_tool_injection(self):
-        with open(AGENT) as f:
+    def test_no_inject_retry_helper(self):
+        with open(BROADCAST) as f:
             content = f.read()
-        marker = "质量检查失败"
-        idx = content.find(marker)
-        self.assertGreater(idx, 0, "Quality retry marker found")
-        block = content[idx-500:idx+1500]
-        self.assertIn("build_tool_log", block, "Quality retry uses build_tool_log")
-        self.assertIn("本轮工具调用结果", block, "Quality retry injects tool data header")
+        self.assertNotIn("_inject_retry", content,
+            "_inject_retry helper was removed")
+
+    def test_single_forced_synthesis_on_empty(self):
+        """When leader ends with no text, exactly one forced cycle fires."""
+        with open(BROADCAST) as f:
+            content = f.read()
+        idx = content.find("called end_discussion without text")
+        self.assertGreater(idx, 0, "empty-synthesis force marker found")
+        block = content[idx:idx + 400]
+        self.assertIn("leader_end_without_text", block,
+            "Forced synthesis uses the leader_end_without_text warning")
+        self.assertIn("continue", block,
+            "Forced synthesis re-enters tool_loop (single retry)")
 
 
-# ── Test 4: build_tool_log function exists and works ──────
+# ── Test 4: Non-leader wait keeps waiting (no force-exit) ──
+
+class TestWaitNoForceExit(unittest.TestCase):
+    """MAX_CONSECUTIVE_WAITS force-exit was removed: non-leaders keep waiting
+    on timeout (mailbox nudge + leader end_discussion are the exit paths)."""
+
+    def test_no_max_consecutive_waits(self):
+        with open(BROADCAST) as f:
+            content = f.read()
+        self.assertNotIn("MAX_CONSECUTIVE_WAITS", content,
+            "MAX_CONSECUTIVE_WAITS force-exit was removed")
+        self.assertNotIn("_consecutive_waits", content,
+            "_consecutive_waits counter was removed")
+
+    def test_non_leader_keeps_waiting(self):
+        with open(BROADCAST) as f:
+            content = f.read()
+        idx = content.find("Non-leader: keep waiting")
+        self.assertGreater(idx, 0, "non-leader keep-waiting branch found")
+        block = content[idx:idx + 500]
+        self.assertIn("continue", block, "non-leader retries wait on timeout")
+
+
+# ── Test 5: build_tool_log still works ─────────────────────
 
 class TestBuildToolLog(unittest.TestCase):
-    """Verify the tool used to inject data actually produces output."""
+    """Verify the tool log helper still produces output."""
 
     def test_build_tool_log_imports(self):
-        """Verify build_tool_log can be imported and called"""
         from nanobot.groupchat.orchestra.engine import build_tool_log
         result = build_tool_log([
             {"name": "web_search", "args": {"query": "AI news"}, "content": "result: Google I/O 2026 confirmed"}
@@ -137,67 +138,17 @@ class TestBuildToolLog(unittest.TestCase):
         self.assertTrue(len(result) > 0, "build_tool_log produces non-empty output")
         self.assertIn("web_search", result, "Tool name appears in log")
 
-
-# ── Test 5: End-to-end integration simulation ─────────────
-
-class TestSynthesisSimulation(unittest.TestCase):
-    """Simulate the exact scenario that broke:
-    - Leader produces short text + calls chatroom_send + end_discussion
-    - The synthesis should STILL be displayed (Bug 1 fix)
-    If retry fires, it should have tool data (Bug 2 fix)
-    """
-
-    def test_build_tool_log_with_typical_content(self):
-        """Simulate a leader that searched news and posted summary"""
-        from nanobot.groupchat.orchestra.engine import build_tool_log
-        
-        calls = [
-            {"name": "web_search", "args": {"query": "AI news today 2026"},
-             "result_preview": "Google I/O 2026: Gemini 4.0 announced\nOpenAI GPT-5 leaks\nMeta Llama 4 release date",
-             "result_len": 120},
-            {"name": "web_fetch", "args": {"url": "https://example.com/ai-news"},
-             "result_preview": "Key announcements from Google I/O...\nGemini 4.0 features multimodal...\n200+ tokens context window...",
-             "result_len": 200},
-            {"name": "chatroom_send", "args": {"to": "Harper", "message": "搜索完毕"},
-             "result_len": 0},
-        ]
-        
-        tool_log = build_tool_log(calls)
-        
-        # Should include search and fetch results (substantive tools)
-        self.assertIn("Google I/O", tool_log, "Tool log contains search result")
-        self.assertIn("Gemini 4.0", tool_log, "Tool log contains fetch result")
-        self.assertGreater(len(tool_log), 100, 
-            "Tool log is substantive (>100 chars), sufficient for LLM to synthesize")
-        
-        # If the retry prompt includes this, LLM can produce a real summary
-        retry_prompt = (
-            "[⚠️ 你调用了 end_discussion，但还没有给出最终答案！]\n"
-            "请立即整合所有队友的发现\n\n"
-            "[本轮工具调用结果 — 请基于以下数据输出总结]\n"
-            + tool_log
-        )
-        self.assertGreater(len(retry_prompt), 400,
-            "Retry prompt with tool data exceeds _MIN_SYNTHESIS_LEN threshold")
-
-
-# ── Test 6: Edge case — no tool data to inject ────────────
-
-class TestEdgeCases(unittest.TestCase):
-    """What happens when there's no tool data at all?"""
-
     def test_build_tool_log_empty(self):
         from nanobot.groupchat.orchestra.engine import build_tool_log
         result = build_tool_log([])
         self.assertEqual(result, "", "Empty calls → empty string")
-        
+
     def test_build_tool_log_no_substantive(self):
         from nanobot.groupchat.orchestra.engine import build_tool_log
         result = build_tool_log([
             {"name": "chatroom_send", "args": {"to": "All"}, "content": "hello"},
             {"name": "wait", "args": {}, "content": ""},
         ])
-        # May still produce something (tool names) but that's OK
         self.assertIsInstance(result, str, "Always returns str")
 
 

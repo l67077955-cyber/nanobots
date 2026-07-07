@@ -19,8 +19,6 @@ from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool
 from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
 from nanobot.groupchat.history.component_manager import (
     get_system_warning,
-    synthesis_quality_check,
-    _MIN_SYNTHESIS_LEN,
 )
 from nanobot.config.validate import SAMPLING_KEYS
 
@@ -410,6 +408,7 @@ class BroadcastOrchestrator:
                 engine=self.engine,
                 mailbox=self.mailbox,
                 spawn_fn=spawn_fn,
+                tracker=self.tracker,
             )
             end_tool = EndDiscussionTool(end_event=self.leader_end_event, engine=self.engine, mailbox=self.mailbox)
             transfer_tool = TransferCreditsTool(search_pool=self.search_pool, engine=self.engine)
@@ -618,7 +617,6 @@ async def broadcast_round(
         is_leader = (name == leader_name)
         _leader_ended_discussion = False
         _leader_disabled_agent = False  # track if leader disabled/kicked an agent this cycle
-        _synthesis_retries = 0  # guard against infinite synthesis retry loops
         # Load from override system (editable via /prompt), fallback to default
         # Removed stale prompt_overrides.json lookup; .md files are the source of truth.
 
@@ -734,8 +732,13 @@ async def broadcast_round(
         # Shared state between _on_tool_start and _on_tool_result for chatroom_send args
         _last_chatroom_send_to: list[str] = []
 
-        badge = f" [{agent_idx + 1}/{total}]"
-        _header = f"◍ {name}{badge}: "
+        # Stream header — sourced from the display layer (single source of truth)
+        # so the symbol stays consistent with display.agent_header (▍), matching
+        # the stable broadcast UI. Previously hardcoded here as `◍`, which
+        # diverged from display.agent_header's `▍`.
+        _stream_header = _d.agent_header(
+            name, leader=leader_name, idx=agent_idx + 1, total=total, mode="broadcast",
+        )
 
         # Send initial status
         await engine._send(_d.thinking_msg(name, model_short, leader=leader_name, idx=agent_idx + 1, total=total))
@@ -748,41 +751,16 @@ async def broadcast_round(
         async def _on_tool_result(tool_name: str, tool_call_id: str, result: str) -> None:
             await view.on_tool_result(name, tool_name, tool_call_id, result)
 
-        # ── Streaming: send a placeholder message, edit it as tokens arrive ──
-        _stream_msg_id: int | None = None
-        _stream_buf: list[str] = []
-        _stream_closed = False
-
-        async def _on_content_delta(delta: str) -> None:
-            nonlocal _stream_msg_id
-            if not delta:
-                return
-            _stream_buf.append(delta)
-            # First chunk: send a new message and capture its ID for editing.
-            if _stream_msg_id is None:
-                header = f"◍ {name}{badge}: "
-                preview = (header + delta)[:4000]
-                if engine._send_and_get_id_fn:
-                    _stream_msg_id = await engine._send_and_get_id_fn(preview)
-                else:
-                    await engine._send(preview)
-                return
-            # Subsequent chunks: throttle edits to avoid Telegram rate limits.
-            # Edit at most every ~0.5s (handled by buf accumulation).
-            full = f"◍ {name}{badge}: " + "".join(_stream_buf)
-            if len(full) > 4000:
-                full = full[:4000]
-            try:
-                if engine._edit_fn:
-                    await engine._edit_fn(_stream_msg_id, full)
-            except Exception:
-                pass
-
-        async def _on_content_reset() -> None:
-            nonlocal _stream_msg_id, _stream_buf, _stream_closed
-            _stream_closed = True
-            _stream_msg_id = None
-            _stream_buf.clear()
+        # ── Streaming display ───────────────────────────────────────────
+        # Reuse the display layer's StreamingDisplay (same as direct_chat):
+        # it throttles edits to EDIT_INTERVAL=0.8s (avoiding Telegram rate
+        # limits that caused the previous per-token edit stalls), handles
+        # tool-call resets (abandon mid-stream message → new one below tools),
+        # and finalizes by editing the same message (no duplicate send).
+        # The previous hand-rolled _on_content_delta edited on every delta
+        # with no throttle + re-sent the content at cycle end → lag + dupes.
+        from nanobot.groupchat.display.streaming import StreamingDisplay
+        _stream: StreamingDisplay | None = None  # created fresh each cycle below
 
         # ── Run tool-loop + auto-wait cycle ──
         # After tool_loop finishes, agent automatically enters wait().
@@ -823,12 +801,6 @@ async def broadcast_round(
         # so we can prune conversation turns without touching the system prompt.
         _sys_msg_count = len(messages)
 
-        # ── Consecutive wait-timeout tracker ──
-        # Prevents agents from looping wait→timeout→wait forever when no one
-        # is going to reply.  After MAX_CONSECUTIVE_WAITS empty waits, exit.
-        _consecutive_waits = 0
-        MAX_CONSECUTIVE_WAITS = 3
-
         # ── Forced interrupt: get this agent's interrupt event from mailbox ──
         _interrupt_event = mailbox.get_interrupt_event(name)
         # Tracks how many timeout-recovery attempts this agent has made.
@@ -838,18 +810,6 @@ async def broadcast_round(
         # After MAX_CONSECUTIVE_ERRORS, the agent exits instead of continuing.
         _consecutive_error_count = 0
         MAX_CONSECUTIVE_ERRORS = 3
-
-        # ── Synthesis retry helper ────────────────────────────────────────
-        async def _inject_retry(prompt: str) -> bool:
-            """Inject retry prompt; return True if caller should continue, False if exhausted and should break."""
-            messages.append({"role": "system", "content": prompt})
-            nonlocal _synthesis_retries
-            _synthesis_retries += 1
-            if _synthesis_retries >= 3:
-                logger.warning("Broadcast: leader {} synthesis retry exhausted ({} attempts), forcing exit", name, _synthesis_retries)
-                return False
-            engine._running = True
-            return True
 
         try:
             while True:
@@ -888,6 +848,16 @@ async def broadcast_round(
                 # Re-read model from registry each cycle so mid-round changes take effect
                 _live_cfg = engine.registry.get(name, agent_cfg)
                 model = _live_cfg.get("model", model)
+
+                # Fresh StreamingDisplay per cycle (mirrors direct_chat): a new
+                # LLM call starts a new streaming message. Reusing the same
+                # instance across cycles would edit the previous cycle's message.
+                _stream = StreamingDisplay(_stream_header, engine._send_and_get_id_fn, engine._edit_fn)
+                _stream_on = getattr(engine, "stream_replies", True) and _stream.enabled
+                if _stream_on:
+                    engine.register_active_stream(_stream)
+                _on_content_delta = _stream.on_delta if _stream_on else None
+                _on_content_reset = _stream.on_reset if _stream_on else None
 
                 # ── Determine tool definitions for this cycle ──
                 # Rebuild each cycle so mid-round set_tools changes take effect
@@ -1164,8 +1134,6 @@ async def broadcast_round(
 
                 # Reset consecutive error counter on successful cycle
                 _consecutive_error_count = 0
-                # Reset consecutive wait counter — agent produced output
-                _consecutive_waits = 0
 
                 # Record final text or tool calls in history
                 if content or result.tool_calls_detail:
@@ -1374,8 +1342,12 @@ async def broadcast_round(
                                 reasoning_tokens=reasoning_t,
                             )
 
-                        target_label = f"Output [{cycle}]"
-                        await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
+                        # Finalize the streaming message: edit the same message
+                        # in place (drop the ▍ cursor) instead of sending a new
+                        # one — eliminates the duplicate-message display and
+                        # keeps the full content visible (no 4000-char truncation
+                        # of later deltas; finalize caps at 4096 once, cleanly).
+                        await _stream.finalize(content + tok_suffix, fallback_send=engine._send)
                         logger.info("Broadcast: displayed {} cycle {} output ({} chars) [Local Only]", name, cycle, len(content))
                     # else: chatroom_send already displayed the message — no duplicate needed
 
@@ -1386,84 +1358,44 @@ async def broadcast_round(
                 # clean-exit path was likely used to bypass the waiting guard.  Force a
                 # synthesis retry so the user still gets a proper summary.
                 if is_leader and _leader_ended_discussion:
-                    if result.finish_reason == "end_discussion" and not content and not _leader_disabled_agent:
-                        # Agent called end_discussion and tool_loop exited immediately.
-                        # The agent's last substantive output was already displayed in a
-                        # previous cycle — no synthesis retry needed.
-                        logger.info(
-                            "Broadcast: leader {} end_discussion with no post-tool content, exiting cleanly",
-                            name,
-                        )
-                        break
-                    stripped = content.strip() if content else ""
-                    if len(stripped) < _MIN_SYNTHESIS_LEN:
+                    # Stable behavior: if end_discussion produced no text, force ONE
+                    # synthesis cycle; otherwise display whatever was produced and exit.
+                    # The previous length-gated + quality-gated retry loop (up to 3 full
+                    # tool_loop calls) caused severe end-of-discussion stalls; the
+                    # max_cycles cap is the only backstop needed.
+                    if not content:
                         logger.warning(
-                        "Broadcast: leader {} synthesis too short ({} chars < {}), forcing retry",
-                        name, len(stripped), _MIN_SYNTHESIS_LEN,
+                            "Broadcast: leader {} called end_discussion without text (cycle {}), forcing synthesis",
+                            name, cycle,
                         )
-                        _tool_data = build_tool_log(result.tool_calls_detail)
-                        _retry_prompt = get_system_warning("leader_end_without_text", name=name)
-                        if _tool_data:
-                            _retry_prompt += (
-                                "\n\n[本轮工具调用结果 — 请基于以下数据输出总结]\n"
-                                + _tool_data
-                            )
-                        if not await _inject_retry(_retry_prompt):
-                            break
-                        continue
-                    # Step 2 — content quality guard (catches fluff like "问题已解答，无需补充")
-                    quality_ok, quality_reason = synthesis_quality_check(stripped, tools_used=result.tools_used)
-                    if not quality_ok:
-                        logger.warning(
-                        "Broadcast: leader {} synthesis quality check failed ({})",
-                        name, quality_reason,
+                        messages.append({
+                            "role": "system",
+                            "content": get_system_warning("leader_end_without_text", name=name),
+                        })
+                        continue  # re-enter tool_loop to produce synthesis text
+                    # Synthesis produced — display it (always, even if chatroom_send
+                    # was used: chatroom_send targets teammates, this is the user's
+                    # only delivery channel and must never be silently dropped).
+                    tok = result.token_usage
+                    total_tok = tok.get("total", 0)
+                    tok_suffix = ""
+                    if total_tok > 0:
+                        elapsed = _t.time() - _cycle_t0
+                        cost = result.cost or 0
+                        cache_t = result.cache_tokens or 0
+                        reasoning_t = sum(
+                            (m.get("reasoning_tokens") or 0)
+                            for m in (result.provider_meta or [])
+                            if isinstance(m, dict)
                         )
-                        # Pick the most specific warning template
-                        if "记忆" in quality_reason or "memory" in quality_reason:
-                            _warn = get_system_warning("delivery_gate_memory", name=name)
-                        elif "数据采集" in quality_reason or "工具" in quality_reason:
-                            _warn = get_system_warning("delivery_gate_tools", name=name)
-                        else:
-                            _warn = get_system_warning("leader_end_without_text", name=name)
-                        _tool_data = build_tool_log(result.tool_calls_detail)
-                        _retry_content = (
-                            _warn
-                            + f"\n\n[质量检查失败] {quality_reason}"
-                            "\n请输出包含 ## 结论、## 关键发现 的结构化总结，附带具体数据和来源。"
+                        tok_suffix = "\n" + _d.format_token_stats(
+                            tok.get("prompt", 0), tok.get("completion", 0),
+                            elapsed=elapsed, cost=cost, cache_tokens=cache_t,
+                            reasoning_tokens=reasoning_t,
                         )
-                        if _tool_data:
-                            _retry_content += (
-                                "\n\n[本轮工具调用结果 — 请基于以下数据输出总结]\n"
-                                + _tool_data
-                            )
-                        if not await _inject_retry(_retry_content):
-                            break
-                        continue
-                    # Synthesis passed validation — now display it
-                    # NOTE: Always display leader synthesis even if chatroom_send was used.
-                    # chatroom_send targets teammates, NOT the user. The final synthesis
-                    # is the user's only delivery channel and must never be silently dropped.
-                    if content:
-                        tok = result.token_usage
-                        total_tok = tok.get("total", 0)
-                        tok_suffix = ""
-                        if total_tok > 0:
-                            elapsed = _t.time() - _cycle_t0
-                            cost = result.cost or 0
-                            cache_t = result.cache_tokens or 0
-                            reasoning_t = sum(
-                                (m.get("reasoning_tokens") or 0)
-                                for m in (result.provider_meta or [])
-                                if isinstance(m, dict)
-                            )
-                            tok_suffix = "\n" + _d.format_token_stats(
-                                tok.get("prompt", 0), tok.get("completion", 0),
-                                elapsed=elapsed, cost=cost, cache_tokens=cache_t,
-                                reasoning_tokens=reasoning_t,
-                            )
-                        target_label = f"Output [{cycle}]"
-                        await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
-                        logger.info("Broadcast: displayed {} synthesis output ({} chars) [post-validation]", name, len(content))
+                    # Finalize streaming message in place (no duplicate send).
+                    await _stream.finalize(content + tok_suffix, fallback_send=engine._send)
+                    logger.info("Broadcast: displayed {} synthesis output ({} chars)", name, len(content))
                     logger.info("Broadcast: leader {} called end_discussion, exiting cycle loop", name)
                     break
 
@@ -1500,20 +1432,12 @@ async def broadcast_round(
                             "role": "system",
                             "content": get_system_warning("leader_wait_timeout", name=name)
                         })
-                        _consecutive_waits = 0
                         continue  # re-enter tool_loop for synthesis
-                    # Consecutive wait-timeout guard: if this agent keeps timing
-                    # out with no incoming messages, it's stuck in a wait loop.
-                    # After MAX_CONSECUTIVE_WAITS, exit to avoid blocking the round.
-                    _consecutive_waits += 1
-                    if _consecutive_waits >= MAX_CONSECUTIVE_WAITS:
-                        logger.warning(
-                            "Broadcast: {} hit {} consecutive wait timeouts, exiting (no one replying)",
-                            name, _consecutive_waits,
-                        )
-                        await tracker.set_state(name, "done", reason=f"wait timeout x{_consecutive_waits}")
-                        break
-                    logger.info("Broadcast: {} wait timeout ({}/{}), retrying wait", name, _consecutive_waits, MAX_CONSECUTIVE_WAITS)
+                    # Non-leader: keep waiting (stable behavior). The mailbox's
+                    # all-waiting nudge + leader end_discussion are the only exit
+                    # paths. A force-exit here causes cascading stalls when other
+                    # agents are still expecting this agent to reply.
+                    logger.info("Broadcast: {} wait timeout, retrying wait", name)
                     continue
 
                 # Got a message! Inject it and re-run tool_loop
@@ -1521,7 +1445,6 @@ async def broadcast_round(
                 if not engine._running or leader_end_event.is_set():
                     logger.info("Broadcast: {} exiting after wait — engine stopped", name)
                     break
-                _consecutive_waits = 0  # reset — we got a real message
                 logger.info("Broadcast: {} reactivated by {}: {}", name, msg.sender, msg.content[:60])
                 await tracker.set_state(name, "thinking")
                 await engine._send(_d.chatroom_wait_msg(name, str(msg), leader=leader_name))

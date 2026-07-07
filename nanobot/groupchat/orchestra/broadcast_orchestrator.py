@@ -19,7 +19,7 @@ _GC_SETTINGS_DEFAULTS = {
     "allocate_timeout": 15,
     "call_timeout": 90,
     "leader_call_timeout": 120,
-    "global_timeout": 600,
+    "global_timeout": 3600,
     "conv_keep_turns": 3,
 }
 
@@ -184,6 +184,7 @@ class BroadcastOrchestrator:
                 engine=self.engine,
                 mailbox=self.mailbox,
                 spawn_fn=spawn_fn,
+                tracker=self.tracker,
             )
             end_tool = EndDiscussionTool(end_event=self.leader_end_event, engine=self.engine, mailbox=self.mailbox)
             transfer_tool = TransferCreditsTool(search_pool=self.search_pool, engine=self.engine)

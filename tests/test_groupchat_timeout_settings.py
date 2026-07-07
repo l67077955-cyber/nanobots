@@ -15,7 +15,7 @@ def test_load_groupchat_settings_defaults(tmp_path: Path, monkeypatch) -> None:
     settings = load_groupchat_settings()
     assert settings["call_timeout"] == 90
     assert settings["leader_call_timeout"] == 120
-    assert settings["global_timeout"] == 600
+    assert settings["global_timeout"] == 3600
 
 
 def test_load_groupchat_settings_from_file(tmp_path: Path, monkeypatch) -> None:
