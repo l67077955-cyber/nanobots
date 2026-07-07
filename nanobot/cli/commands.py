@@ -305,6 +305,7 @@ def gateway(
         return
 
     if not foreground:
+        from nanobot.headless import stdout_log_file_path
         try:
             pid = spawn_gateway(
                 port=port,
@@ -316,7 +317,8 @@ def gateway(
             console.print(f"[red]Error: {exc}[/red]")
             raise typer.Exit(1) from exc
         console.print(f"{__logo__} Gateway started in background (pid {pid})")
-        console.print(f"[dim]Logs: {log_file_path()}[/dim]")
+        console.print(f"[dim]Log: {log_file_path()}[/dim]")
+        console.print(f"[dim]Stdout: {stdout_log_file_path()}[/dim]")
         return
 
     from nanobot.bus.queue import MessageBus
@@ -334,7 +336,36 @@ def gateway(
 
     config = _load_runtime_config(config, workspace)
 
-    # Ensure loguru writes to a file sink (independent of shell redirection)
+    # ── Graceful SIGTERM handling ────────────────────────────────────
+    # Background mode (headless.stop) sends SIGTERM. Python's default SIGTERM
+    # disposition terminates the process without running `finally` blocks, so
+    # channels/cron/heartbeat/session cleanup would be skipped (state loss).
+    # Convert SIGTERM → KeyboardInterrupt so the existing `except
+    # KeyboardInterrupt` + `finally` cleanup path (same as Ctrl+C / SIGINT)
+    # runs. This matches the stable foreground shutdown semantics.
+    import os as _os
+    import signal as _signal
+
+    def _sigterm_to_keyboard_interrupt(signum, frame):
+        raise KeyboardInterrupt
+
+    try:
+        _signal.signal(_signal.SIGTERM, _sigterm_to_keyboard_interrupt)
+    except (ValueError, OSError):
+        # Not the main thread or signals unsupported — rely on default behavior.
+        pass
+
+    # ── Loguru sink setup ────────────────────────────────────────────
+    # In detached (background) mode the child's stderr is redirected to
+    # gateway.stdout.log by headless.spawn. The loguru default stderr sink
+    # would then mirror every log line into that stdout file *and* the
+    # explicit gateway.log sink below → double writes + the stdout file
+    # handle isn't rotation-aware. When detached, drop the default stderr
+    # sink so gateway.log (rotation-managed) is the single structured log,
+    # and gateway.stdout.log holds only raw stdout/console output.
+    _detached = _os.environ.get("NANOBOT_DETACHED") == "1"
+    if _detached:
+        logger.remove()
     _logs_dir = get_logs_dir()
     logger.add(
         _logs_dir / "gateway.log",
@@ -702,6 +733,7 @@ def status():
     else:
         console.print("Gateway: [dim]not running[/dim]")
     console.print(f"[dim]Log: {gw.log_file}[/dim]")
+    console.print(f"[dim]Stdout: {gw.stdout_log_file}[/dim]")
 
     if config_path.exists():
         from nanobot.providers.registry import PROVIDERS

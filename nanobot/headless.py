@@ -16,7 +16,7 @@ from loguru import logger
 from nanobot.config.paths import get_logs_dir
 
 PID_FILE = "gateway.pid"
-STOP_TIMEOUT_S = 10.0
+STOP_TIMEOUT_S = 15.0
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,7 @@ class DaemonStatus:
     pid: int | None
     pid_file: Path
     log_file: Path
+    stdout_log_file: Path
 
 
 def pid_file_path() -> Path:
@@ -32,7 +33,18 @@ def pid_file_path() -> Path:
 
 
 def log_file_path() -> Path:
+    """Structured loguru sink (rotation-managed, owned by the gateway process)."""
     return get_logs_dir() / "gateway.log"
+
+
+def stdout_log_file_path() -> Path:
+    """Raw stdout/stderr stream for the detached child (console.print + OS-level output).
+
+    Kept separate from gateway.log so loguru's rotation of gateway.log does not
+    collide with this file handle (rotation renames the file; a stdout handle
+    opened at spawn time would keep writing the renamed inode, splitting logs).
+    """
+    return get_logs_dir() / "gateway.stdout.log"
 
 
 def read_pid() -> int | None:
@@ -137,6 +149,7 @@ def status() -> DaemonStatus:
         pid=pid,
         pid_file=pid_file_path(),
         log_file=log_file_path(),
+        stdout_log_file=stdout_log_file_path(),
     )
 
 
@@ -179,17 +192,32 @@ def spawn(
         verbose=verbose,
     )
     log_path = log_file_path()
+    stdout_log_path = stdout_log_file_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    logger.info("Spawning background gateway: {} (log={})", cmd, log_path)
-    with open(log_path, "a", buffering=1, encoding="utf-8", errors="replace") as logf:
+    # Mark the child as detached so its foreground branch drops loguru's
+    # default stderr sink (avoiding double-writes to gateway.log + letting
+    # loguru own gateway.log with proper rotation). The child still runs
+    # `gateway --foreground`; the env var is the only signal it's detached.
+    child_env = {**os.environ, "NANOBOT_DETACHED": "1"}
+
+    logger.info(
+        "Spawning background gateway: {} (log={}, stdout={})",
+        cmd, log_path, stdout_log_path,
+    )
+    # Raw stdout/stderr → gateway.stdout.log (separate from gateway.log so
+    # loguru's rotation of gateway.log doesn't clash with this handle).
+    with open(
+        stdout_log_path, "a", buffering=1, encoding="utf-8", errors="replace",
+    ) as stdout_logf:
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,
-            stdout=logf,
+            stdout=stdout_logf,
             stderr=subprocess.STDOUT,
             start_new_session=True,
             close_fds=True,
+            env=child_env,
         )
 
     write_pid(proc.pid)

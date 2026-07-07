@@ -96,5 +96,56 @@ def test_spawn_and_stop_lifecycle(tmp_path, monkeypatch):
         return _pid == 4242
 
     monkeypatch.setattr(headless, "is_alive", stop_fast)
+    # Bypass the /proc cmdline validation (4242 is a fake pid with no
+    # /proc entry); trust the recorded PID so stop() sends SIGTERM to it.
+    monkeypatch.setattr(headless, "is_gateway_pid", lambda _pid: True)
     assert headless.stop(timeout_s=0.5) is True
     assert killed[0] == (4242, signal.SIGTERM)
+
+
+def test_stop_timeout_bumped_for_graceful_shutdown():
+    """stop() must allow enough time for the gateway's SIGTERM graceful cleanup
+    (channels/cron/heartbeat/session teardown) before SIGKILL."""
+    assert headless.STOP_TIMEOUT_S >= 15.0
+
+
+def test_stdout_log_separate_from_gateway_log():
+    """stdout/stderr stream must be a separate file from the loguru-owned
+    gateway.log so rotation doesn't clash with the spawn-time stdout handle."""
+    assert headless.stdout_log_file_path() != headless.log_file_path()
+    assert headless.stdout_log_file_path().name == "gateway.stdout.log"
+    assert headless.log_file_path().name == "gateway.log"
+
+
+def test_gateway_registers_sigterm_handler():
+    """The gateway foreground branch must convert SIGTERM → KeyboardInterrupt so
+    the `finally` cleanup (channels/cron/heartbeat/session) runs on `nanobot
+    gateway --stop` instead of being hard-killed by Python's default SIGTERM
+    disposition."""
+    commands_path = Path(__file__).resolve().parent.parent / "nanobot" / "cli" / "commands.py"
+    src = commands_path.read_text()
+    assert "SIGTERM" in src, "gateway registers a SIGTERM handler"
+    assert "_sigterm_to_keyboard_interrupt" in src, "SIGTERM handler raises KeyboardInterrupt"
+    # The detached env var drives the loguru default-sink removal in background mode
+    assert "NANOBOT_DETACHED" in src, "gateway checks NANOBOT_DETACHED to drop stderr sink"
+
+
+def test_spawn_marks_child_detached(monkeypatch, tmp_path):
+    """spawn() must set NANOBOT_DETACHED=1 in the child env so the child's
+    foreground branch drops loguru's default stderr sink (avoids double writes
+    to gateway.log + lets loguru own it with proper rotation)."""
+    monkeypatch.setattr(headless, "get_logs_dir", lambda: tmp_path)
+    monkeypatch.setattr(headless, "discover_gateway_pid", lambda: None)
+    captured_env = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured_env.update(kwargs.get("env") or {})
+
+        class _Proc:
+            pid = 5555
+
+        return _Proc()
+
+    with patch("nanobot.headless.subprocess.Popen", side_effect=fake_popen):
+        headless.spawn()
+    assert captured_env.get("NANOBOT_DETACHED") == "1", "child env marks detached"
