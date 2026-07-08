@@ -135,6 +135,7 @@ class CallbackHelpersMixin:
             InlineKeyboardButton("📥 复制全局设置", callback_data=f"ahp_sync:{agent_name}")
         ])
         buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{agent_name}")])
+        buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
         text = (
             f"⚙️ {agent_name} 高级超参数（可选）\n\n"
             "这些是底层采样参数（temperature、top_p 等）。\n"

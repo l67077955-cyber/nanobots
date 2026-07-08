@@ -46,6 +46,7 @@ class ProviderCommandsMixin:
             await update.message.reply_text("⚠️ 还没有提供商，请先 /newprovider")
             return
         buttons = [[InlineKeyboardButton(f"🏢 {p}", callback_data=f"pm_newm:{p}")] for p in provs]
+        buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
         await update.message.reply_text("🆕 添加模型\n\n选择提供商:", reply_markup=InlineKeyboardMarkup(buttons))
 
     async def _on_deleteprovider(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -58,6 +59,7 @@ class ProviderCommandsMixin:
             return
         buttons = [[InlineKeyboardButton(f"🗑 {p}", callback_data=f"pm_delp:{p}")] for p in provs]
         buttons.append([InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")])
+        buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
         await update.message.reply_text("🗑 删除提供商\n\n选择要删除的:", reply_markup=InlineKeyboardMarkup(buttons))
 
     async def _on_deletemodel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -70,6 +72,7 @@ class ProviderCommandsMixin:
             return
         buttons = [[InlineKeyboardButton(f"🏢 {p} ({len(pm['models'].get(p, []))} models)", callback_data=f"pm_delm_p:{p}")] for p in provs]
         buttons.append([InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")])
+        buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
         await update.message.reply_text("🗑 删除模型\n\n先选择提供商:", reply_markup=InlineKeyboardMarkup(buttons))
 
     async def _on_editprovider(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -88,6 +91,7 @@ class ProviderCommandsMixin:
             key_preview = info.get("apiKey", "")[:8] + "..." if info.get("apiKey") else "(none)"
             buttons.append([InlineKeyboardButton(f"✏️ {p} ({url})", callback_data=f"ep_pick:{p}")])
         buttons.append([InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")])
+        buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
         await update.message.reply_text("✏️ 编辑提供商\n\n选择要编辑的:", reply_markup=InlineKeyboardMarkup(buttons))
 
     async def _on_providers(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -132,6 +136,7 @@ class ProviderCommandsMixin:
                 f"🤖 测试活跃Agent ({active_count}个)",
                 callback_data="st_agent"
             )])
+        buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
         await update.message.reply_text(
             "⚡ 测速模式选择:",
             reply_markup=InlineKeyboardMarkup(buttons)

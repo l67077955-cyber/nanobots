@@ -85,6 +85,7 @@ class SettingsCommandsMixin:
                 InlineKeyboardButton("🗑", callback_data=f"hp_del:{k}"),
             ])
         buttons.append([InlineKeyboardButton("➕ 添加参数", callback_data="hp_add")])
+        buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
         text = "\n".join(lines)
         hp_text = to_cli_style(text, title="⚙️ 默认超参数设置（全局）")
         await self._app.bot.send_message(
@@ -163,6 +164,7 @@ class SettingsCommandsMixin:
                 f"✏️ {label} = {val}",
                 callback_data=f"gc:{key}",
             )])
+        buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
 
         # Show pool capacity preview
         active = len(self._groupchat_engine.active_agents) if self._groupchat_engine else 0
@@ -445,6 +447,7 @@ class SettingsCommandsMixin:
         if engine.prompt_builder.get_available_components():
             bottom_row.append(InlineKeyboardButton("➕ 添加", callback_data="pradd"))
         buttons.append(bottom_row)
+        buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
         return "\n".join(lines), InlineKeyboardMarkup(buttons)
 
     async def _prompt_show_components(self, query, manage_mode: bool = False) -> None:
@@ -494,6 +497,7 @@ class SettingsCommandsMixin:
         buttons.append([InlineKeyboardButton(
             "🌐 全部 Agent", callback_data="think_agent:__all__"
         )])
+        buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
         return "\n".join(lines), buttons
 
     async def _on_think(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

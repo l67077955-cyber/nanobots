@@ -37,6 +37,7 @@ class ThinkCallbackMixin:
                 for lbl, lvl in effort_options
             ]
             buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="think_back")])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await query.edit_message_text(
                 f"🧠 设置思考强度 — {label}",
                 reply_markup=InlineKeyboardMarkup(buttons),

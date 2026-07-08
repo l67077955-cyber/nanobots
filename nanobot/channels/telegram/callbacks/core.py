@@ -29,6 +29,20 @@ class CallbackCoreMixin(
         try:
             if data == "noop":
                 return
+            if data == "close":
+                # Unified close: delete the panel message and clear any
+                # pending input state for this chat. Falls back to a
+                # collapsed "已关闭" text if the message can't be deleted
+                # (e.g. older than 48h or missing delete permission).
+                self._edit_state.pop(chat_id, None)
+                try:
+                    await query.delete_message()
+                except Exception:
+                    try:
+                        await query.edit_message_text("✅ 已关闭")
+                    except Exception:
+                        pass
+                return
             for fn in (self._dispatch_agents, self._dispatch_logs, self._dispatch_prompts, self._dispatch_providers):
                 if await fn(query, data, chat_id):
                     return

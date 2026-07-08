@@ -478,6 +478,7 @@ def build_main_panel_buttons(
     buttons.append([InlineKeyboardButton(demo_label, callback_data=demo_cb)])
     buttons.append([InlineKeyboardButton("🔄 重载配置", callback_data="hs_reload")])
     buttons.append([InlineKeyboardButton("↩️ 恢复全部默认", callback_data="hs_rst")])
+    buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
 
     return InlineKeyboardMarkup(buttons)
 
@@ -600,6 +601,7 @@ def build_group_panel(
 
     buttons.append([InlineKeyboardButton(f"↩️ 恢复此组默认", callback_data=f"hs_rst:{group}")])
     buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="hs_back")])
+    buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
 
     return text, InlineKeyboardMarkup(buttons)
 

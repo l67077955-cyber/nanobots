@@ -63,6 +63,7 @@ class ProvidersCallbackMixin:
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🗑 确认删除", callback_data=f"pm_delp_yes:{prov}")],
                     [InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")],
+                    [InlineKeyboardButton("✖️ 关闭", callback_data="close")],
                 ])
             )
 
@@ -87,6 +88,7 @@ class ProvidersCallbackMixin:
                 return
             buttons = [[InlineKeyboardButton(f"🗑 {m}", callback_data=f"pm_delm:{prov}:{m}")] for m in models]
             buttons.append([InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await query.edit_message_text(f"🗑 删除 {prov} 的模型:", reply_markup=InlineKeyboardMarkup(buttons))
 
             return True
@@ -107,6 +109,7 @@ class ProvidersCallbackMixin:
             if remaining:
                 buttons = [[InlineKeyboardButton(f"🗑 {m}", callback_data=f"pm_delm:{prov}:{m}")] for m in remaining]
                 buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="pm_cancel")])
+                buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
                 await query.edit_message_text(f"🗑 删除 {prov} 的模型 ({len(remaining)}):", reply_markup=InlineKeyboardMarkup(buttons))
             else:
                 await query.edit_message_text(f"✅ {prov} 的模型已全部删除")
@@ -134,6 +137,7 @@ class ProvidersCallbackMixin:
             for i, m in enumerate(models):
                 buttons.append([InlineKeyboardButton(f"🤖 {m}", callback_data=f"em_mi:{agent_name}:{prov}:{i}")])
             buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=f"em_manual:{agent_name}")])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await query.edit_message_text(f"🏢 {prov} — 选择模型:", reply_markup=InlineKeyboardMarkup(buttons))
 
             return True
@@ -199,6 +203,7 @@ class ProvidersCallbackMixin:
                 [InlineKeyboardButton(f"🔄 重试策略: {retry_str}", callback_data=f"ep_retry:{prov}")],
                 [InlineKeyboardButton("📋 拉取模型列表", callback_data=f"ep_models:{prov}")],
                 [InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")],
+                [InlineKeyboardButton("✖️ 关闭", callback_data="close")],
             ]
             await query.edit_message_text(
                 f"✏️ 编辑提供商: {prov}\n\n"
@@ -238,6 +243,7 @@ class ProvidersCallbackMixin:
                     callback_data=f"ep_retry_set:{prov}:{key}",
                 )])
             buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await query.edit_message_text(
                 f"🔄 {prov} 重试策略\n\n"
                 f"当前: {current_str}\n\n"
@@ -334,6 +340,7 @@ class ProvidersCallbackMixin:
                 buttons.append([InlineKeyboardButton(f"📂 {pfx} ({cnt})", callback_data=f"ml_pfx:{prov}:{pfx}")])
             buttons.append([InlineKeyboardButton("🔍 搜索模型", callback_data=f"ml_srch:{prov}")])
             buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await query.edit_message_text(
                 "\n".join(lines)[:4000],
                 reply_markup=InlineKeyboardMarkup(buttons),
@@ -379,6 +386,7 @@ class ProvidersCallbackMixin:
             if nav:
                 buttons.append(nav)
             buttons.append([InlineKeyboardButton("⬅️ 返回厂商列表", callback_data=f"ep_models:{prov}")])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await query.edit_message_text(
                 "\n".join(lines)[:4000],
                 reply_markup=InlineKeyboardMarkup(buttons),
@@ -432,6 +440,7 @@ class ProvidersCallbackMixin:
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("📋 刷新列表", callback_data=f"ep_models:{prov}")],
                         [InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")],
+                        [InlineKeyboardButton("✖️ 关闭", callback_data="close")],
                     ])
                 )
                 return
@@ -450,6 +459,7 @@ class ProvidersCallbackMixin:
             if len(filtered) > 30:
                 lines.append(f"  ... 和 {len(filtered) - 30} 个更多")
             buttons.append([InlineKeyboardButton("⬅️ 返回厂商列表", callback_data=f"ep_models:{prov}")])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await query.edit_message_text(
                 "\n".join(lines)[:4000],
                 reply_markup=InlineKeyboardMarkup(buttons),

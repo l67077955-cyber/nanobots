@@ -58,6 +58,7 @@ class GroupCommandsMixin:
                     f"{gname} ({', '.join(members)})",
                     callback_data=f"lg:{gname}"
                 )])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await update.message.reply_text("📂 选择要载入的分组:", reply_markup=InlineKeyboardMarkup(buttons))
             return
         name = " ".join(args)
@@ -84,6 +85,7 @@ class GroupCommandsMixin:
                     f"🗑 {gname} ({', '.join(members)})",
                     callback_data=f"dg:{gname}"
                 )])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await update.message.reply_text("🗑 选择要删除的分组:", reply_markup=InlineKeyboardMarkup(buttons))
             return
         name = " ".join(args)
@@ -128,6 +130,7 @@ class GroupCommandsMixin:
             if i > 0:  # Can't move first one up
                 buttons.append([InlineKeyboardButton(f"⬆ {name}", callback_data=f"ord:{i}")])
         buttons.append([InlineKeyboardButton("✅ 完成", callback_data="ord:done")])
+        buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
         await self._app.bot.send_message(
             chat_id=int(chat_id), text=text,
             reply_markup=InlineKeyboardMarkup(buttons),

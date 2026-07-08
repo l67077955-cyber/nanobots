@@ -81,6 +81,7 @@ class HistoryCallbackMixin:
             buttons = [
                 [InlineKeyboardButton("✅ 确认恢复", callback_data="hs_rst:all:go")],
                 [InlineKeyboardButton("⬅️ 取消", callback_data="hs_back")],
+                [InlineKeyboardButton("✖️ 关闭", callback_data="close")],
             ]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
             return
@@ -148,5 +149,10 @@ class HistoryCallbackMixin:
                         f"当前值: {current_display}\n\n"
                         f"请输入新值:"
                     )
-                await query.edit_message_text(text)
+                await query.edit_message_text(
+                    text,
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✖️ 关闭", callback_data="close")],
+                    ]),
+                )
             return

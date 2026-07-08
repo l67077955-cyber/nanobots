@@ -139,6 +139,7 @@ class AgentCommandsMixin:
                         f"👑 {name}",
                         callback_data=f"sl:{name}"
                     )])
+                buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
                 await update.message.reply_text(
                     "👑 选择 Leader:",
                     reply_markup=InlineKeyboardMarkup(buttons)
@@ -169,6 +170,7 @@ class AgentCommandsMixin:
             await update.message.reply_text("所有 agent 都已在对话中")
             return
         buttons = [[InlineKeyboardButton(f"{n} ({i.get('model','?')})", callback_data=f"add:{n}")] for n, i in available]
+        buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
         await update.message.reply_text("➕ 选择要加入的 Agent:", reply_markup=InlineKeyboardMarkup(buttons))
 
     async def _on_removeagent(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -193,6 +195,7 @@ class AgentCommandsMixin:
         for n in active:
             model = self._groupchat_engine.registry.get(n, {}).get("model", "?")
             buttons.append([InlineKeyboardButton(f"{n} ({model})", callback_data=f"rm:{n}")])
+        buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
         await update.message.reply_text("➖ 选择要移除的 Agent:", reply_markup=InlineKeyboardMarkup(buttons))
 
     async def _on_newagent(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -240,6 +243,7 @@ class AgentCommandsMixin:
             for n in agents:
                 model = self._groupchat_engine.registry[n].get("model", "?")
                 buttons.append([InlineKeyboardButton(f"{n} ({model})", callback_data=f"edit:{n}")])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await update.message.reply_text("✏️ 选择要编辑的 Agent:", reply_markup=InlineKeyboardMarkup(buttons))
             return
         matched = self._groupchat_engine.resolve_agent_name(name)
@@ -294,6 +298,7 @@ class AgentCommandsMixin:
             [InlineKeyboardButton("⚙️ 高级超参数 (可选)", callback_data=f"ef:{agent_name}:hyperparams")],
             [InlineKeyboardButton("🗑️ 删除 Agent", callback_data=f"da:{agent_name}")],
             [InlineKeyboardButton("❌ 取消", callback_data=f"ef:{agent_name}:cancel")],
+            [InlineKeyboardButton("✖️ 关闭", callback_data="close")],
         ])
 
     async def _show_edit_menu(self, update_or_query, agent_name: str) -> None:

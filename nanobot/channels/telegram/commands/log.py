@@ -187,6 +187,7 @@ class LogCommandsMixin:
             nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"{cb_prefix}:{page+1}"))
         if nav:
             buttons.append(nav)
+        buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
 
         text = "\n".join(lines)
         if len(text) > 4000:

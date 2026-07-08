@@ -62,7 +62,8 @@ class PromptsCallbackMixin:
                     f"💡 可用变量: {vars_hint}\n"
                     f"请回复新内容 (完整替换):",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("❌ 取消", callback_data="prcan")]
+                        [InlineKeyboardButton("❌ 取消", callback_data="prcan")],
+                        [InlineKeyboardButton("✖️ 关闭", callback_data="close")],
                     ]),
                 )
 
@@ -130,6 +131,7 @@ class PromptsCallbackMixin:
                 "✏️ 自定义组件名", callback_data="pradd_custom"
             )])
             buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="pr:refresh")])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await query.edit_message_text(
                 "➕ 选择要添加的组件:\n\n💡 点击 \"✏️ 自定义组件名\" 创建全新组件",
                 reply_markup=InlineKeyboardMarkup(buttons),
@@ -158,7 +160,8 @@ class PromptsCallbackMixin:
                 "请输入组件名称（如: 角色背景、安全规则、写作风格 等）:\n\n"
                 "💡 名称会显示在组件列表中，创建后可选 Phase 类型",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("❌ 取消", callback_data="prcan")]
+                    [InlineKeyboardButton("❌ 取消", callback_data="prcan")],
+                    [InlineKeyboardButton("✖️ 关闭", callback_data="close")],
                 ]),
             )
 
@@ -201,7 +204,8 @@ class PromptsCallbackMixin:
             await query.edit_message_text(
                 rules_text,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("⬅️ 返回组件列表", callback_data="pr:refresh")]
+                    [InlineKeyboardButton("⬅️ 返回组件列表", callback_data="pr:refresh")],
+                    [InlineKeyboardButton("✖️ 关闭", callback_data="close")],
                 ]),
             )
 
@@ -271,6 +275,7 @@ class PromptsCallbackMixin:
             if nav:
                 buttons.append(nav)
             buttons.append([InlineKeyboardButton("⬅️ 返回组件列表", callback_data="pr:refresh")])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await query.edit_message_text(
                 page_text[:4096],
                 reply_markup=InlineKeyboardMarkup(buttons),

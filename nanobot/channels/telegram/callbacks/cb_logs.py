@@ -268,6 +268,7 @@ class LogsCallbackMixin:
                 [InlineKeyboardButton("🔍 上下文 Token 明细", callback_data=f"rlogctx:{idx}:0")],
                 [InlineKeyboardButton("📥 下载完整日志", callback_data=f"rlog_dl:{idx}")],
                 [InlineKeyboardButton("⬅️ 返回列表", callback_data=f"rlog_pg:{page}")],
+                [InlineKeyboardButton("✖️ 关闭", callback_data="close")],
             ]
             await query.edit_message_text(text[:4096], reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -383,6 +384,7 @@ class LogsCallbackMixin:
             if nav:
                 buttons.append(nav)
             buttons.append([InlineKeyboardButton("⬅️ 返回详情", callback_data=f"rlog:{idx}")])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await query.edit_message_text(text[:4096], reply_markup=InlineKeyboardMarkup(buttons))
 
             return True
@@ -496,6 +498,7 @@ class LogsCallbackMixin:
             if msgs_snap:
                 buttons.append([InlineKeyboardButton("📝 完整 Prompt", callback_data=f"logp:{idx}:0")])
             buttons.append([InlineKeyboardButton("⬅️ 返回列表", callback_data=f"log_pg:{page}")])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await query.edit_message_text(
                 text[:4096],
                 reply_markup=InlineKeyboardMarkup(buttons)
@@ -550,6 +553,7 @@ class LogsCallbackMixin:
             if nav:
                 buttons.append(nav)
             buttons.append([InlineKeyboardButton("⬅️ 返回详情", callback_data=f"logd:{idx}")])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await query.edit_message_text(
                 text[:4096],
                 reply_markup=InlineKeyboardMarkup(buttons)

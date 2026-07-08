@@ -25,7 +25,7 @@ class AgentCallbackMixin:
                     f"{status} {name}",
                     callback_data=f"edit:{name}"
                 )])
-            buttons.append([InlineKeyboardButton("❌ 关闭", callback_data="noop")])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await query.edit_message_text(
                 "📋 Agent 列表 — 点击名称编辑:",
                 reply_markup=InlineKeyboardMarkup(buttons)
@@ -70,6 +70,7 @@ class AgentCallbackMixin:
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("✅ 确认删除", callback_data=f"dac:{name}:yes")],
                     [InlineKeyboardButton("❌ 取消", callback_data=f"edit:{name}")],
+                    [InlineKeyboardButton("✖️ 关闭", callback_data="close")],
                 ]),
             )
 
@@ -137,6 +138,7 @@ class AgentCallbackMixin:
                 buttons.append([InlineKeyboardButton("✅ 全开", callback_data=f"tf:{name}:__all_on"),
                                 InlineKeyboardButton("❌ 全关", callback_data=f"tf:{name}:__all_off")])
                 buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
+                buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
                 await query.edit_message_text(
                     f"🔧 {name} 工具权限设置:",
                     reply_markup=InlineKeyboardMarkup(buttons)
@@ -163,6 +165,7 @@ class AgentCallbackMixin:
                         f"{icon}{RANK_DISPLAY[r]}", callback_data=f"srr:{name}:{r}"
                     )])
                 buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
+                buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
                 await query.edit_message_text(
                     f"🎖️ {name} 等级设置 (当前: {current_label})\n\n"
                     f"更改 rank 会立即更新中断权限；对话池/搜索额度在本轮内不变，新轮次生效。",
@@ -210,6 +213,7 @@ class AgentCallbackMixin:
                     [InlineKeyboardButton("🧠 深度思考", callback_data=f"preset:{name}:deep")],
                     [InlineKeyboardButton("↩️ 恢复默认", callback_data=f"preset:{name}:reset")],
                     [InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")],
+                    [InlineKeyboardButton("✖️ 关闭", callback_data="close")],
                 ]
                 await query.edit_message_text(
                     f"🎯 {name} 快速预设\n\n"
@@ -234,6 +238,7 @@ class AgentCallbackMixin:
                 if provs:
                     buttons = [[InlineKeyboardButton(f"🏢 {p}", callback_data=f"em_prov:{name}:{p}")] for p in provs]
                     buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=f"em_manual:{name}")])
+                    buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
                     await query.edit_message_text("🤖 选择提供商:", reply_markup=InlineKeyboardMarkup(buttons))
                 else:
                     await query.edit_message_text("请输入新模型名 (如 anthropic/claude-sonnet-4-5):")
@@ -277,6 +282,7 @@ class AgentCallbackMixin:
                     callback_data=f"ef_re:{name}:{l_lvl}"
                 )])
             buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await query.edit_message_text(
                 f"🧠 {name} 思考深度 (当前: {current})\n\n已更新。支持的模型会据此进行不同深度的推理。",
                 reply_markup=InlineKeyboardMarkup(buttons)
@@ -445,6 +451,7 @@ class AgentCallbackMixin:
             buttons.append([InlineKeyboardButton("✅ 全开", callback_data=f"tf:{name}:__all_on"),
                             InlineKeyboardButton("❌ 全关", callback_data=f"tf:{name}:__all_off")])
             buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{name}")])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await query.edit_message_text(
                 f"🔧 {name} 工具权限设置:",
                 reply_markup=InlineKeyboardMarkup(buttons)
@@ -569,6 +576,7 @@ class AgentCallbackMixin:
                 buttons.append([InlineKeyboardButton(f"➕ {p}", callback_data=f"hp_new:{p}")])
             buttons.append([InlineKeyboardButton("✏️ 自定义参数名", callback_data="hp_custom")])
             buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="hp_back")])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await query.edit_message_text(
                 "➕ 选择要添加的参数（全局）：\n仅推荐给清楚这些参数含义的用户。temperature / top_p 是最常用，其余属于进阶。",
                 reply_markup=InlineKeyboardMarkup(buttons)
@@ -684,6 +692,7 @@ class AgentCallbackMixin:
                 buttons.append([InlineKeyboardButton(f"➕ {p}", callback_data=f"ahp_new:{a_name}:{p}")])
             buttons.append([InlineKeyboardButton("✏️ 自定义参数名", callback_data=f"ahp_custom:{a_name}")])
             buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ahp_back:{a_name}")])
+            buttons.append([InlineKeyboardButton("✖️ 关闭", callback_data="close")])
             await query.edit_message_text(
                 f"➕ 为 {a_name} 添加参数：\n这些是高级采样参数。新手强烈建议先只用「思考深度」和工具开关来调整，效果更直观可预测。",
                 reply_markup=InlineKeyboardMarkup(buttons)

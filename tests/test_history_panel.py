@@ -133,6 +133,18 @@ def test_group_panel_memory(sample_settings):
     assert "保护用户消息" in text
     # Has edit buttons
     assert any("hs_edit" in str(b.callback_data) for row in markup.inline_keyboard for b in row)
+    # Has the unified close button + a back button
+    cb_data = [str(b.callback_data) for row in markup.inline_keyboard for b in row]
+    assert "close" in cb_data
+    assert "hs_back" in cb_data
+
+
+def test_main_panel_has_close_button(sample_settings):
+    from nanobot.channels.telegram.history_panel import build_history_panel
+
+    _, markup = build_history_panel(None)
+    cb_data = [str(b.callback_data) for row in markup.inline_keyboard for b in row]
+    assert "close" in cb_data
 
 
 def test_group_panel_compress_advanced(sample_settings):
