@@ -23,6 +23,7 @@ from nanobot.groupchat.history.agent_loader import load_agents
 from nanobot.groupchat.config import GroupChatConfig
 from nanobot.groupchat.orchestra.agent_runner import AgentRunner
 from nanobot.groupchat.orchestra.conversation_context import ConversationContext
+from nanobot.groupchat.orchestra.turn_stack import TurnStack
 from nanobot.groupchat.orchestra.mailbox import MailboxHub
 from nanobot.groupchat.history.persistence import GroupChatState
 from nanobot.groupchat.history.context import HistoryContext
@@ -299,6 +300,9 @@ class GroupChatEngine:
         # round. Populated by broadcast _run_one; the canonical handle new code
         # should use instead of mailbox._busy_agents / _interrupt_events.
         self._runners: dict[str, AgentRunner] = {}
+        # TurnStack for the current round (turn-level ops: interject / cancel_all).
+        # Set by broadcast_round before launch, cleared on stop / round end.
+        self._turn_stack: TurnStack | None = None
         self._input_queue: asyncio.Queue[str] = asyncio.Queue()
         # Agents added via add_agent() while a broadcast round is running are
         # queued here so broadcast_round can pick them up and spawn tasks for them.
@@ -1074,14 +1078,19 @@ class GroupChatEngine:
         self._task = None
         # Cancel any in-flight broadcast agent tasks so they don't keep running
         # after /stop. Without this, agents continue tool calls and send messages
-        # even though the run loop has been cancelled.
-        for name, task in list(self._broadcast_tasks.items()):
-            if not task.done():
-                task.cancel()
-                logger.info("Groupchat: stop cancelled broadcast task for {}", name)
+        # even though the run loop has been cancelled. Routed through TurnStack
+        # (the turn-level seam) when a round is active; inline fallback otherwise.
+        if self._turn_stack is not None:
+            self._turn_stack.cancel_all()
+        else:
+            for name, task in list(self._broadcast_tasks.items()):
+                if not task.done():
+                    task.cancel()
+                    logger.info("Groupchat: stop cancelled broadcast task for {}", name)
         self._broadcast_tasks.clear()
-        # Drop runner facades too — their tasks are gone.
+        # Drop runner facades + turn stack too — their tasks are gone.
         self._runners.clear()
+        self._turn_stack = None
         # Finalize session: write session_end + session_summary.json
         if self._session_dir:
             self._state.close_session(topic=self._topic)
@@ -1100,6 +1109,11 @@ class GroupChatEngine:
     def runners(self) -> dict[str, AgentRunner]:
         """All runners for the currently-running round."""
         return self._runners
+
+    @property
+    def turn_stack(self) -> TurnStack | None:
+        """The TurnStack for the current round (turn-level ops seam), or None."""
+        return self._turn_stack
 
     def _ensure_session_dir(self, mode: str, *, agent_name: str | None = None) -> None:
         """Create collab session directory and log session_start (idempotent)."""

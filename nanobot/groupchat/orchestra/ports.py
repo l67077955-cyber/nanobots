@@ -74,17 +74,22 @@ class ConversationContext(Protocol):
 
 @runtime_checkable
 class TurnStack(Protocol):
-    """Ordered queue of turn-frames (Step 2 target).
+    """Turn-level operations seam for a broadcast round (Step 2).
 
-    Replaces ``speak_order`` + the per-agent ``while True`` cycle loop and its
-    ~7 ``continue`` re-entry branches with a single ordered structure.
+    The engine runs agents **concurrently** as asyncio tasks, not a sequential
+    queue; this owns the turn-level ops that cut across all agents mid-round:
+    user interjection, round cancellation, active-turn tracking. The per-agent
+    cycle-loop decision extraction is a later, higher-risk step.
     """
 
-    def push_turn(self, agent: str, trigger: Any) -> None:
+    @property
+    def active_agents(self) -> list[str]:
         ...
 
-    def interject(self, user_msg: str) -> None:
+    async def interject(self, user_msg: str) -> bool:
+        """Inject a user message into the live round. False if round winding down."""
         ...
 
-    async def next_frame(self) -> Any:
+    def cancel_all(self) -> int:
+        """Cancel every in-flight agent task this round. Returns count cancelled."""
         ...

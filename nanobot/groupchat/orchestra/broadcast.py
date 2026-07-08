@@ -17,6 +17,7 @@ from loguru import logger
 from nanobot.groupchat.display import display as _d
 from nanobot.groupchat.orchestra.agent_runner import AgentRunner
 from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool
+from nanobot.groupchat.orchestra.turn_stack import TurnStack
 from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
 from nanobot.groupchat.history.component_manager import (
     get_system_warning,
@@ -1546,6 +1547,12 @@ async def broadcast_round(
         mailbox.create(name)
     mailbox.start_round(active_agents=list(exec_agents))
 
+    # TurnStack: the turn-level seam for this round (interject / cancel_all).
+    # Registered on the engine so _stop_group_loop and future turn-level code
+    # reach through the port instead of mailbox/pool internals.
+    turn_stack = TurnStack(engine, mailbox, pool, exec_agents)
+    engine._turn_stack = turn_stack
+
     # populate tasks dict previously initialized
     for idx, name in enumerate(exec_agents):
         task = asyncio.create_task(_run_one(name, idx))
@@ -1586,37 +1593,13 @@ async def broadcast_round(
                 if msg == "__SUMMARY__":
                     continue
 
-                # Round winding down (end_discussion / all agents exiting):
-                # agents will never read the mailbox — requeue the message so
-                # run_loop processes it as a fresh round instead of silently
-                # swallowing it (the "stuck until next user message" bug).
-                if (
-                    not engine._running
-                    or mailbox.is_discussion_ended()
-                    or all(t.done() for t in tasks)
-                ):
-                    engine._input_queue.put_nowait(msg)
-                    logger.info(
-                        "Broadcast: round ending — user message requeued for next round: {}",
-                        msg[:60],
-                    )
+                # Delegate to the TurnStack seam: it force-allocates pool slots,
+                # broadcasts to all agents, interrupts busy ones, records +
+                # displays the message. Returns False (after requeuing) when the
+                # round is winding down — then we exit so run_loop picks it up
+                # as a fresh round (the "stuck until next user message" guard).
+                if not await turn_stack.interject(msg):
                     return
-
-                all_agent_names = list(mailbox.agent_names)
-                await pool.allocate_user(all_agent_names)
-
-                mailbox.create("用户")
-                mailbox.send("用户", ["All"], msg)
-                # Interrupt any agents currently inside tool_loop so they pick
-                # up the user message at the next safe checkpoint rather than
-                # waiting for their current tool batch to finish.
-                _interrupted = mailbox.interrupt_busy_agents("用户")
-                engine._add_message("用户", msg)
-                await engine._send(
-                    f"── User ──\n{msg}\n"
-                    f"  {pool.status()}"
-                )
-                logger.info("Broadcast: user interjected: {} ({} agent(s) interrupted)", msg[:60], _interrupted)
 
 
         user_task = asyncio.create_task(_user_listener())
@@ -1843,6 +1826,8 @@ async def broadcast_round(
         # orphaned tasks that steal messages from future sessions.
         _user_listener_running = False
         _join_listener_running = False
+        # Drop the round's TurnStack reference (its tasks are being cancelled).
+        engine._turn_stack = None
         _aux_to_cancel = []
         for aux_task in (user_task, join_task, leader_end_sentinel):
             if aux_task is not None and not aux_task.done():
