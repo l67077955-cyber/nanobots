@@ -32,7 +32,7 @@ class CoreCommandsMixin:
             "/new — 新对话\n"
             "/clear — 清空上下文\n"
             "/stop — 停止当前任务\n"
-            "/cancel — 取消交互操作\n\n"
+            "/cancel — 取消编辑 / 停止当前任务（万能中止）\n\n"
             "🎭 Agent 管理:\n"
             "/agents — 查看所有 agent\n"
             "/addagent <name> — 加入 agent\n"
@@ -137,8 +137,18 @@ class CoreCommandsMixin:
         if not self.is_allowed(sender):
             return
         chat_id = str(update.message.chat_id)
+        # /cancel is the universal "abort whatever is happening":
+        # 1) exit an inline edit flow if one is pending;
         if chat_id in self._edit_state:
             del self._edit_state[chat_id]
-            await update.message.reply_text("❌ 已取消")
-        else:
-            await update.message.reply_text("ℹ️ 当前没有进行中的交互操作。")
+            await update.message.reply_text("❌ 已取消编辑")
+            return
+        # 2) otherwise stop a running group-chat task (so /cancel and /stop
+        #    are no longer two subtly-different "stop" commands);
+        engine = getattr(self, "_groupchat_engine", None)
+        if engine and getattr(engine, "_running", False):
+            engine.stop()
+            await update.message.reply_text("✅ 已停止当前任务。")
+            return
+        # 3) nothing to cancel.
+        await update.message.reply_text("ℹ️ 当前没有进行中的交互操作。")

@@ -276,10 +276,6 @@ def collect_live_metrics(engine: Any | None) -> dict[str, Any]:
         or tok_pct >= int(token_trigger_ratio * 100)
     )
 
-    compress_warned = False
-    if engine is not None and getattr(engine, "history", None) is not None:
-        compress_warned = bool(getattr(engine.history, "_compress_warned", False))
-
     return {
         "settings": settings,
         "tool_results": tr,
@@ -297,7 +293,6 @@ def collect_live_metrics(engine: Any | None) -> dict[str, Any]:
         "compress_trigger": compress_trigger,
         "compress_ratio": compress_ratio,
         "compress_ready": compress_ready,
-        "compress_warned": compress_warned,
         "soft_ratio": soft_ratio,
         "compiled_info": _compiled_context_info(engine),
     }
@@ -316,10 +311,16 @@ def collect_config_warnings(settings: dict[str, Any] | None = None) -> list[str]
         int(tr.get("web_search_max_chars", 0)),
     )
     threshold = int(tr.get("summarize_threshold", 0))
-    if threshold > per_tool_max:
+    # The pipeline runs AI summarization (step 1.5) BEFORE truncation (step 2),
+    # so a threshold above the per-tool cap does NOT disable AI compression —
+    # large results still get summarized first. The old "AI压缩永远不生效"
+    # warning was backwards and fired on the recommended default. Only warn
+    # when AI compression is effectively unreachable: threshold so high no
+    # plausible result would reach it while truncation cap is far below.
+    if threshold > 0 and per_tool_max > 0 and threshold > per_tool_max * 4:
         warnings.append(
-            f"压缩阈值({threshold:,}) > 工具截断上限({per_tool_max:,})"
-            " — 截断先于AI压缩触发，大部分输出会被截断而AI压缩永远不生效"
+            f"压缩阈值({threshold:,}) 远超工具截断上限({per_tool_max:,})"
+            " — 介于截断上限与压缩阈值之间的结果会被截断(落盘)而非AI压缩"
         )
 
     if int(settings.get("tool_result_max_chars", 0)) < per_tool_max:
@@ -349,9 +350,7 @@ def collect_config_warnings(settings: dict[str, Any] | None = None) -> list[str]
 # ── Dashboard block (simplified: status, not parameters) ────────────────
 
 def _dashboard_block(metrics: dict[str, Any]) -> str:
-    if metrics["compress_warned"]:
-        compress_state = "⚠️ 已预警，下轮将压缩"
-    elif metrics["compress_ready"]:
+    if metrics["compress_ready"]:
         compress_state = "🔴 已达触发线"
     else:
         compress_state = "🟢 安全"
@@ -528,9 +527,7 @@ def build_group_panel(
     # Live metrics for memory group
     if group == "memory":
         metrics = collect_live_metrics(engine)
-        if metrics["compress_warned"]:
-            state = "⚠️ 已预警，下轮将压缩"
-        elif metrics["compress_ready"]:
+        if metrics["compress_ready"]:
             state = "🔴 已达触发线"
         else:
             state = "🟢 安全"

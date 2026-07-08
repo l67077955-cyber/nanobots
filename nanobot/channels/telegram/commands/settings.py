@@ -117,6 +117,12 @@ class SettingsCommandsMixin:
         "leader_call_timeout":    "Leader LLM 超时 (秒)",
         "global_timeout":         "整轮广播超时 (秒)",
     }
+    # Fields whose value is a float (default: int). tool_earn_per_output is a
+    # ratio like 0.25; parsing it as int + rejecting <1 made it unsettable.
+    GC_FLOAT_KEYS = {"tool_earn_per_output"}
+    # Fields where 0 is a meaningful sentinel (auto/disabled). Other int
+    # fields require >= 1.
+    GC_ALLOW_ZERO_KEYS = {"context_pool_capacity", "context_points_per_agent"}
 
     @staticmethod
     def _gc_settings_path() -> Path:

@@ -26,6 +26,7 @@ class PromptsCallbackMixin:
     async def _dispatch_prompts(self, query, data: str, chat_id: str) -> bool:
         if data == "prmanage":
             # Toggle manage mode for prompt order view
+            self._edit_state.pop(chat_id, None)  # leave any pending template edit
             self._prompt_manage_mode = not getattr(self, '_prompt_manage_mode', False)
             await self._prompt_show_components(query, manage_mode=self._prompt_manage_mode)
 
@@ -33,6 +34,7 @@ class PromptsCallbackMixin:
 
         if data in ("pr:refresh", "pr:"):
             # Refresh global prompt order view (exits manage mode)
+            self._edit_state.pop(chat_id, None)  # leave any pending template edit
             self._prompt_manage_mode = False
             await self._prompt_show_components(query)
 
@@ -118,6 +120,7 @@ class PromptsCallbackMixin:
 
         if data == "pradd":
             # Show available components to add back
+            self._edit_state.pop(chat_id, None)  # leave any pending template edit
             engine = self._groupchat_engine
             available = engine.prompt_builder.get_available_components()
             buttons = []
@@ -169,6 +172,7 @@ class PromptsCallbackMixin:
 
         if data == "prrules":
             # Show prompt assembly rules explanation
+            self._edit_state.pop(chat_id, None)  # leave any pending template edit
             rules_text = (
                 "📖 Prompt 组装规则\n\n"
                 "▸ 组装顺序\n"
@@ -213,6 +217,7 @@ class PromptsCallbackMixin:
 
         if data.startswith("prv:"):
             # Preview full template: prv:<page>
+            self._edit_state.pop(chat_id, None)  # leave any pending template edit
             page = int(data[4:])
             engine = self._groupchat_engine
             order = engine.prompt_builder.get_agent_prompt_order()

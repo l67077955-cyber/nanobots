@@ -278,13 +278,21 @@ class EditCallbackMixin:
                 await self._gc_send(chat_id, "❌ 已取消")
                 return
             gc_key = state.get("gc_key", "")
+            raw = content.strip()
             try:
-                value = int(content.strip())
+                value = float(raw) if gc_key in self.GC_FLOAT_KEYS else int(raw)
             except ValueError:
-                await self._gc_send(chat_id, "⚠️ 值必须是整数")
+                kind = "数字" if gc_key in self.GC_FLOAT_KEYS else "整数"
+                await self._gc_send(chat_id, f"⚠️ 值必须是{kind}")
                 return
-            if value < 1:
-                await self._gc_send(chat_id, "⚠️ 值必须 ≥ 1")
+            if value < 0:
+                await self._gc_send(chat_id, "⚠️ 值不能为负数")
+                return
+            if value == 0 and gc_key not in self.GC_ALLOW_ZERO_KEYS:
+                await self._gc_send(chat_id, "⚠️ 值必须 ≥ 1（0 仅对容量/点数字段有效）")
+                return
+            if value > 0 and value < 1 and gc_key not in self.GC_FLOAT_KEYS:
+                await self._gc_send(chat_id, "⚠️ 整数字段需 ≥ 1")
                 return
             settings = self._load_gc_settings()
             old_val = settings.get(gc_key, self.GC_SETTINGS_DEFAULTS.get(gc_key))
@@ -457,6 +465,17 @@ class EditCallbackMixin:
         if field == "name":
             new_name = content.strip()
             if new_name and new_name != agent_name:
+                # Guard against silent overwrite: if the target name already
+                # exists (case-insensitive), refuse instead of clobbering it.
+                existing = {
+                    n.lower() for n in engine.registry.keys()
+                }
+                if new_name.lower() in existing:
+                    await self._gc_send(
+                        chat_id,
+                        f"⚠️ 名字「{new_name}」已存在，换一个名字（或发 0 取消）:",
+                    )
+                    return
                 data = engine.registry.pop(agent_name)
                 engine.registry[new_name] = data
                 if agent_name in engine._active_agents:

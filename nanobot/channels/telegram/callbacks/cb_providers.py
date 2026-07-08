@@ -23,6 +23,20 @@ from ..formatting import TELEGRAM_MAX_MESSAGE_LEN, to_cli_style
 
 
 class ProvidersCallbackMixin:
+    def _clear_agents_using_models(self, model_ids: set[str]) -> list[str]:
+        """Clear the model field of any registry agent referencing a now-deleted
+        model id, so agents don't keep pointing at a nonexistent provider/model.
+        Returns the affected agent names."""
+        engine = getattr(self, "_groupchat_engine", None)
+        if not engine or not model_ids:
+            return []
+        affected: list[str] = []
+        for name, cfg in getattr(engine, "registry", {}).items():
+            if cfg.get("model") in model_ids:
+                cfg["model"] = None
+                affected.append(name)
+        return affected
+
     async def _dispatch_providers(self, query, data: str, chat_id: str) -> bool:
         if data == "pm_cancel":
             self._edit_state.pop(chat_id, None)
@@ -72,10 +86,17 @@ class ProvidersCallbackMixin:
         if data.startswith("pm_delp_yes:"):
             prov = data[12:]
             pm = self._load_pm()
+            removed_models = set(pm.get("models", {}).pop(prov, []))
             pm.get("providers", {}).pop(prov, None)
-            pm.get("models", {}).pop(prov, None)
             self._save_pm(pm)
-            await query.edit_message_text(f"✅ 提供商 {prov} 及其所有模型已删除")
+            affected = self._clear_agents_using_models(removed_models)
+            msg = f"✅ 提供商 {prov} 及其所有模型已删除"
+            if affected:
+                msg += (
+                    "\n⚠️ 以下 agent 引用了该提供商的模型，已清空其模型字段，"
+                    f"请用 /editagent 重设: {', '.join(affected)}"
+                )
+            await query.edit_message_text(msg)
 
             return True
 
@@ -100,8 +121,12 @@ class ProvidersCallbackMixin:
             if prov in pm.get("models", {}):
                 pm["models"][prov] = [m for m in pm["models"][prov] if m != model]
             self._save_pm(pm)
+            affected = self._clear_agents_using_models({model})
             try:
-                await query.answer(f"🗑 已删除 {model}", show_alert=False)
+                toast = f"🗑 已删除 {model}"
+                if affected:
+                    toast += f"；已清空 agent 模型: {','.join(affected)}"
+                await query.answer(toast, show_alert=bool(affected))
             except Exception:
                 pass
             # Refresh model list

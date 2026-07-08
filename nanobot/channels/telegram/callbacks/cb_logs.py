@@ -23,6 +23,19 @@ from ..formatting import TELEGRAM_MAX_MESSAGE_LEN, to_cli_style
 
 
 class LogsCallbackMixin:
+    def _logs_for_chat(self, chat_id: str) -> list[dict]:
+        """Return request logs for this chat, applying any active search filter.
+
+        Search-result buttons encode an index into the FILTERED list; without
+        re-applying the filter, indexing the full unfiltered list opens the
+        wrong entry.
+        """
+        logs = self._load_request_logs()
+        kw = getattr(self, "_log_search", {}).get(chat_id, "")
+        if kw:
+            logs = self._filter_logs(logs, kw)
+        return logs
+
     async def _dispatch_logs(self, query, data: str, chat_id: str) -> bool:
         if data.startswith("log:"):
             mode = data[4:]
@@ -91,7 +104,7 @@ class LogsCallbackMixin:
             parts = data[6:].split(":")
             idx = int(parts[0])
             msg_page = int(parts[1]) if len(parts) > 1 else 0
-            logs = self._load_request_logs()
+            logs = self._logs_for_chat(chat_id)
             if idx >= len(logs):
                 await query.edit_message_text("⚠️ 记录不存在")
                 return
@@ -128,7 +141,7 @@ class LogsCallbackMixin:
         if data.startswith("rlog_dl:"):
             # Download full log as JSON file — includes live context snapshot
             idx = int(data[8:])
-            logs = self._load_request_logs()
+            logs = self._logs_for_chat(chat_id)
             if idx >= len(logs):
                 await query.answer("⚠️ 记录不存在")
                 return
@@ -213,7 +226,7 @@ class LogsCallbackMixin:
         if data.startswith("rlog:"):
             # Persistent log detail — brief summary + download confirmation
             idx = int(data[5:])
-            logs = self._load_request_logs()
+            logs = self._logs_for_chat(chat_id)
             if idx >= len(logs):
                 await query.edit_message_text("⚠️ 记录不存在")
                 return
@@ -264,10 +277,17 @@ class LogsCallbackMixin:
             )
 
             page = idx // 8
+            # Keep the search context when returning to the list: if a search
+            # filter is active, route back to the filtered pagination prefix.
+            back_cb = (
+                f"rlogs_pg:{page}"
+                if getattr(self, "_log_search", {}).get(chat_id, "")
+                else f"rlog_pg:{page}"
+            )
             buttons = [
                 [InlineKeyboardButton("🔍 上下文 Token 明细", callback_data=f"rlogctx:{idx}:0")],
                 [InlineKeyboardButton("📥 下载完整日志", callback_data=f"rlog_dl:{idx}")],
-                [InlineKeyboardButton("⬅️ 返回列表", callback_data=f"rlog_pg:{page}")],
+                [InlineKeyboardButton("⬅️ 返回列表", callback_data=back_cb)],
                 [InlineKeyboardButton("✖️ 关闭", callback_data="close")],
             ]
             await query.edit_message_text(text[:4096], reply_markup=InlineKeyboardMarkup(buttons))
@@ -279,7 +299,7 @@ class LogsCallbackMixin:
             parts = data[8:].split(":")
             idx = int(parts[0])
             ctx_page = int(parts[1]) if len(parts) > 1 else 0
-            logs = self._load_request_logs()
+            logs = self._logs_for_chat(chat_id)
             if idx >= len(logs):
                 await query.edit_message_text("⚠️ 记录不存在")
                 return

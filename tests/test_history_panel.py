@@ -180,20 +180,17 @@ def test_find_group_for_param(sample_settings):
 def test_live_metrics_with_mock_engine(sample_settings):
     from nanobot.channels.telegram.history_panel import collect_live_metrics
 
-    class _History:
-        _compress_warned = True
-
     class _Engine:
         _history = [
             {"sender": "User", "content": "hello"},
             {"sender": "ponytail", "content": "world" * 100},
         ]
         _active_agents = []
-        history = _History()
 
     metrics = collect_live_metrics(_Engine())
     assert metrics["current_msgs"] == 2
-    assert metrics["compress_warned"] is True
+    assert "compress_warned" not in metrics  # dead metric removed
+    assert metrics["compress_ready"] is False  # 2/30 msgs, low tokens
     assert metrics["tok_pct"] >= 0
 
 

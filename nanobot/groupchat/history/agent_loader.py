@@ -228,6 +228,13 @@ def _scan_agents_dir(
             agent_data["tools"] = tools_cfg
         if hyperparams:
             agent_data["hyperparams"] = hyperparams
+        # reasoning_effort is persisted at the top level of config.json (by
+        # /think), but this auto-discovery branch only reads `hyperparams`
+        # (which is then sanitized to SAMPLING_KEYS, stripping it). Restore it
+        # top-level so the live engine reads it via cfg.get("reasoning_effort")
+        # and the setting survives restart for auto-discovered agents.
+        if acfg.get("reasoning_effort"):
+            agent_data["reasoning_effort"] = acfg["reasoning_effort"]
 
         # Per-agent workspace scope and agent directory
         agent_data["workspace_scope"] = workspace_scope

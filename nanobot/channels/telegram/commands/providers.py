@@ -22,11 +22,42 @@ class ProviderCommandsMixin:
     def _load_pm(self) -> dict:
         p = self._pm_path()
         if p.exists():
-            return json.loads(p.read_text())
+            try:
+                return json.loads(p.read_text())
+            except Exception as e:
+                # Corrupt file (interrupted write / disk error): back it up
+                # and fall back to empty defaults so the provider subsystem
+                # stays usable instead of raising on every subsequent call.
+                logger.warning("providers_models.json corrupt ({}); backing up and resetting: {}", e, p)
+                backup = p.with_suffix(".json.bak")
+                try:
+                    p.rename(backup)
+                except Exception:
+                    pass
+                return {"providers": {}, "models": {}}
         return {"providers": {}, "models": {}}
 
     def _save_pm(self, data: dict) -> None:
-        self._pm_path().write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        # Atomic write: write to a temp file in the same dir then os.replace.
+        # A direct write_text leaves the file truncated if the process dies
+        # mid-write, which would brick every provider/model call until the
+        # user manually repairs the file.
+        import os as _os
+        import tempfile as _tf
+        p = self._pm_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(data, indent=2, ensure_ascii=False)
+        fd, tmp = _tf.mkstemp(dir=str(p.parent), prefix=".pm_", suffix=".tmp")
+        try:
+            with _os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+            _os.replace(tmp, p)
+        except Exception:
+            try:
+                _os.unlink(tmp)
+            except Exception:
+                pass
+            raise
 
     async def _on_newprovider(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Start flow: name → URL → apiKey."""

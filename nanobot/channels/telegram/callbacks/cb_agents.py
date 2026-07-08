@@ -110,11 +110,22 @@ class AgentCallbackMixin:
                 from nanobot.groupchat.orchestra.engine import GroupChatEngine
                 agent = self._groupchat_engine.registry.get(name, {})
                 tools_cfg = agent.get("tools")
-                # Migrate legacy tools_enabled to granular dict
-                if not isinstance(tools_cfg, dict) or "web_search" not in tools_cfg:
+                # Migrate legacy tools_enabled → granular dict only when there
+                # is no dict yet. If a dict exists but is missing some tool
+                # keys, backfill the missing keys with the legacy default
+                # WITHOUT dropping the user's existing per-tool toggles.
+                if not isinstance(tools_cfg, dict):
                     all_on = agent.get("tools_enabled", False)
                     tools_cfg = {t: all_on for t in GroupChatEngine.TOOL_NAMES}
                     agent["tools"] = tools_cfg
+                else:
+                    missing = [
+                        t for t in GroupChatEngine.TOOL_NAMES if t not in tools_cfg
+                    ]
+                    if missing:
+                        all_on = agent.get("tools_enabled", False)
+                        for t in missing:
+                            tools_cfg[t] = all_on
 
                 labels = {
                     "web_search": "🔍 网页搜索",
@@ -411,12 +422,20 @@ class AgentCallbackMixin:
             # Persist to config.json
             agent_entry = self._groupchat_engine.registry.get(name, {})
             if agent_entry.get("_default"):
-                # Default agent (Nanobot): save tool toggles to separate file
-                tools_path = Path.home() / ".nanobot" / "nanobot_tools.json"
+                # Default agent (Nanobot): its config lives under
+                # config.json → agents.defaults (same place its model is
+                # persisted). The old nanobot_tools.json file was never read
+                # back, so toggles were lost on restart.
+                main_cfg_path = Path.home() / ".nanobot" / "config.json"
                 try:
-                    tools_path.write_text(json.dumps(tools_cfg, indent=2, ensure_ascii=False))
-                except Exception:
-                    pass
+                    cfg = (
+                        json.loads(main_cfg_path.read_text())
+                        if main_cfg_path.exists() else {}
+                    )
+                    cfg.setdefault("agents", {}).setdefault("defaults", {})["tools"] = tools_cfg
+                    main_cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+                except Exception as e:
+                    logger.warning("Failed to persist default-agent tools: {}", e)
             else:
                 cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
                 cfg_path.parent.mkdir(parents=True, exist_ok=True)
@@ -741,17 +760,16 @@ class AgentCallbackMixin:
             val = data[4:]
             if val == "done":
                 agents = self._groupchat_engine.active_agents
-                # Persist final order
+                # Persist the active order only. Do NOT silently overwrite the
+                # saved group that happened to be loaded — reordering a loaded
+                # group is a transient active change; the user can /savegroup
+                # explicitly if they want to update the saved roster.
                 self._groupchat_engine.save_active()
-                # Auto-update saved group
-                gname = getattr(self._groupchat_engine, '_current_group_name', None)
-                if gname:
-                    groups = self._groupchat_engine.load_groups()
-                    if gname in groups:
-                        groups[gname] = list(agents)
-                        self._groupchat_engine.save_groups(groups)
                 order_str = " → ".join(agents)
-                await query.edit_message_text(f"📢 发言顺序:\n{order_str}")
+                await query.edit_message_text(
+                    f"📢 发言顺序（当前会话）:\n{order_str}\n\n"
+                    "ℹ️ 仅当前会话生效。如需更新已保存的分组，请用 /savegroup。"
+                )
             else:
                 idx = int(val)
                 agents = self._groupchat_engine.active_agents
