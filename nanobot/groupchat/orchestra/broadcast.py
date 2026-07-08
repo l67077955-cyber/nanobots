@@ -16,6 +16,11 @@ from loguru import logger
 
 from nanobot.groupchat.display import display as _d
 from nanobot.groupchat.orchestra.agent_runner import AgentRunner
+from nanobot.groupchat.orchestra.cycle_controller import (
+    CycleAction,
+    CycleContext,
+    CycleController,
+)
 from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool
 from nanobot.groupchat.orchestra.turn_stack import TurnStack
 from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
@@ -812,6 +817,12 @@ async def broadcast_round(
         _runner = AgentRunner(name, mailbox, lambda: engine._broadcast_tasks.get(name))
         engine._runners[name] = _runner
         _interrupt_event = _runner.interrupt_event
+
+        # ── CycleController: per-agent cycle-loop decision oracle (Step 3b) ──
+        # Pure decision oracle — bodies stay inline, only branch conditions move
+        # here. Shadow mode: oracle runs in parallel with existing logic and
+        # assertions verify consistency before we switch.
+        _cycle_ctrl = CycleController(name)
         # Tracks how many timeout-recovery attempts this agent has made.
         # Hard cap at 1 to prevent recovery loops.
         _timeout_recovery_count = 0
@@ -822,6 +833,44 @@ async def broadcast_round(
 
         try:
             while True:
+                # ── Shadow mode: CycleController verification (Step 3b) ──
+                # Build CycleContext and ask the oracle what it would do.
+                # Log mismatches prominently but don't crash production.
+                _shadow_ctx = CycleContext(
+                    agent_name=name,
+                    is_leader=is_leader,
+                    cycle=cycle,
+                    max_cycles=max_cycles,
+                    total_agents=total,
+                    engine_running=engine._running,
+                    discussion_ended=(mailbox.is_discussion_ended() if mailbox else False),
+                    leader_ended_discussion=_leader_ended_discussion,
+                    leader_end_event_set=leader_end_event.is_set() if leader_end_event else False,
+                    finish_reason="",  # not relevant for cycle_gate
+                    content=content,
+                    tools_used=(),
+                    substantive_tools=_substantive_tools,
+                    timeout_recovery_count=_timeout_recovery_count,
+                    consecutive_error_count=_consecutive_error_count,
+                    max_consecutive_errors=MAX_CONSECUTIVE_ERRORS,
+                )
+                _shadow_gate = _cycle_ctrl.decide_cycle_gate(_shadow_ctx)
+                # Check oracle agrees with existing logic
+                _gate_should_exit_max = cycle >= max_cycles
+                _gate_should_exit_stop = (not engine._running or (mailbox and mailbox.is_discussion_ended())) and not (is_leader and _leader_ended_discussion)
+                _gate_ok = (
+                    (_gate_should_exit_max and _shadow_gate.action is CycleAction.EXIT_MAX_CYCLES_FORCE_SYNTHESIS) or
+                    (_gate_should_exit_stop and _shadow_gate.action is CycleAction.EXIT_STOPPED_OR_ENDED) or
+                    (not _gate_should_exit_max and not _gate_should_exit_stop and _shadow_gate.action is CycleAction.PROCEED_TO_CYCLE)
+                )
+                if not _gate_ok:
+                    logger.error(
+                        "SHADOW MISMATCH @ cycle_gate: cycle={} max={} running={} disc_ended={} is_leader={} leader_ended={} oracle={} existing_max={} existing_stop={}",
+                        cycle, max_cycles, engine._running, mailbox.is_discussion_ended() if mailbox else False,
+                        is_leader, _leader_ended_discussion, _shadow_gate.action, _gate_should_exit_max, _gate_should_exit_stop,
+                    )
+                # ── End shadow verification ──
+
                 # Hard cycle cap — prevent runaway agents from draining resources
                 if cycle >= max_cycles:
                     logger.warning(
@@ -993,6 +1042,47 @@ async def broadcast_round(
                 if is_leader and "end_discussion" in (result.tools_used or []) and not engine._running:
                     _leader_ended_discussion = True
 
+                # ── Shadow: error_recovery decision ──
+                _shadow_err_ctx = CycleContext(
+                    agent_name=name,
+                    is_leader=is_leader,
+                    cycle=cycle,
+                    max_cycles=max_cycles,
+                    total_agents=total,
+                    engine_running=engine._running,
+                    discussion_ended=(mailbox.is_discussion_ended() if mailbox else False),
+                    leader_ended_discussion=_leader_ended_discussion,
+                    leader_end_event_set=leader_end_event.is_set() if leader_end_event else False,
+                    finish_reason=result.finish_reason,
+                    content=content,
+                    tools_used=tuple(result.tools_used or []),
+                    substantive_tools=_substantive_tools,
+                    timeout_recovery_count=_timeout_recovery_count,
+                    consecutive_error_count=_consecutive_error_count,
+                    max_consecutive_errors=MAX_CONSECUTIVE_ERRORS,
+                )
+                _shadow_err = _cycle_ctrl.decide_error_recovery(_shadow_err_ctx)
+                # Check oracle vs existing logic (nested conditions)
+                _err_should_first_timeout = is_timeout and _timeout_recovery_count == 0
+                _err_should_repeat_fallthrough = is_timeout and _timeout_recovery_count != 0
+                _err_should_max_break = is_error and _consecutive_error_count >= MAX_CONSECUTIVE_ERRORS
+                _err_should_placeholder_continue = is_error and _consecutive_error_count < MAX_CONSECUTIVE_ERRORS
+                _err_no_recovery = not (is_error or is_timeout)
+                _err_ok = (
+                    (_err_should_first_timeout and _shadow_err.action is CycleAction.TIMEOUT_FIRST_RETRY) or
+                    (_err_should_repeat_fallthrough and _shadow_err.action is CycleAction.TIMEOUT_REPEATED_FALLTHROUGH) or
+                    (_err_should_max_break and _shadow_err.action is CycleAction.ERROR_MAX_BREAK) or
+                    (_err_should_placeholder_continue and _shadow_err.action is CycleAction.ERROR_PLACEHOLDER_CONTINUE) or
+                    (_err_no_recovery and _shadow_err.action is CycleAction.NO_ERROR_RECOVERY)
+                )
+                if not _err_ok:
+                    logger.error(
+                        "SHADOW MISMATCH @ error_recovery: finish={} timeout_cnt={} err_cnt={} oracle={} is_timeout={} is_error={}",
+                        result.finish_reason, _timeout_recovery_count, _consecutive_error_count,
+                        _shadow_err.action, is_timeout, is_error,
+                    )
+                # ── End shadow: error_recovery ──
+
                 if is_error or is_timeout:
                     if is_timeout:
                         _base_timeout = gc_settings.get(
@@ -1160,6 +1250,46 @@ async def broadcast_round(
                             engine=engine,
                             leader_name=leader_name,
                         )
+
+                # ── Shadow: post_error_guard decision ──
+                _shadow_guard_ctx = CycleContext(
+                    agent_name=name,
+                    is_leader=is_leader,
+                    cycle=cycle,
+                    max_cycles=max_cycles,
+                    total_agents=total,
+                    engine_running=engine._running,
+                    discussion_ended=(mailbox.is_discussion_ended() if mailbox else False),
+                    leader_ended_discussion=_leader_ended_discussion,
+                    leader_end_event_set=leader_end_event.is_set() if leader_end_event else False,
+                    finish_reason=result.finish_reason,
+                    content=content,
+                    tools_used=tuple(result.tools_used or []),
+                    substantive_tools=_substantive_tools,
+                    timeout_recovery_count=_timeout_recovery_count,
+                    consecutive_error_count=_consecutive_error_count,
+                    max_consecutive_errors=MAX_CONSECUTIVE_ERRORS,
+                )
+                _shadow_guard = _cycle_ctrl.decide_post_error_guard(_shadow_guard_ctx)
+                # Check oracle vs existing logic (if/elif chain)
+                _guard_is_interrupted = is_interrupted
+                _guard_is_idle = cycle == 1 and not content and not (set(result.tools_used or []) & _substantive_tools)
+                _guard_no_text_after_tools = not content and (set(result.tools_used or []) & _substantive_tools) and "chatroom_send" not in (result.tools_used or [])
+                _guard_leader_mgmt_only = is_leader and not content and result.tools_used and "chatroom_send" not in (result.tools_used or []) and not (set(result.tools_used or []) & _substantive_tools)
+                _guard_ok = (
+                    (_guard_is_interrupted and _shadow_guard.action is CycleAction.INTERRUPT_CONTINUE) or
+                    (_guard_is_idle and _shadow_guard.action is CycleAction.IDLE_WARNING_CONTINUE) or
+                    (_guard_no_text_after_tools and _shadow_guard.action is CycleAction.NO_TEXT_AFTER_TOOLS_CONTINUE) or
+                    (_guard_leader_mgmt_only and _shadow_guard.action is CycleAction.LEADER_MGMT_NO_TEXT_CONTINUE) or
+                    (not _guard_is_interrupted and not _guard_is_idle and not _guard_no_text_after_tools and not _guard_leader_mgmt_only and _shadow_guard.action is CycleAction.PROCEED_TO_DISPLAY)
+                )
+                if not _guard_ok:
+                    logger.error(
+                        "SHADOW MISMATCH @ post_error_guard: finish={} cycle={} content_len={} tools={} oracle={} is_int={} is_idle={} no_text={} leader_mgmt={}",
+                        result.finish_reason, cycle, len(content), result.tools_used, _shadow_guard.action,
+                        _guard_is_interrupted, _guard_is_idle, _guard_no_text_after_tools, _guard_leader_mgmt_only,
+                    )
+                # ── End shadow: post_error_guard ──
 
                 # ── Handle forced interrupt ──
                 if is_interrupted:
@@ -1349,6 +1479,45 @@ async def broadcast_round(
                 # EXCEPTION: if leader disabled/kicked an agent in the same cycle, the
                 # clean-exit path was likely used to bypass the waiting guard.  Force a
                 # synthesis retry so the user still gets a proper summary.
+
+                # ── Shadow: leader_or_single_exit decision ──
+                _shadow_exit_ctx = CycleContext(
+                    agent_name=name,
+                    is_leader=is_leader,
+                    cycle=cycle,
+                    max_cycles=max_cycles,
+                    total_agents=total,
+                    engine_running=engine._running,
+                    discussion_ended=(mailbox.is_discussion_ended() if mailbox else False),
+                    leader_ended_discussion=_leader_ended_discussion,
+                    leader_end_event_set=leader_end_event.is_set() if leader_end_event else False,
+                    finish_reason=result.finish_reason,
+                    content=content,
+                    tools_used=tuple(result.tools_used or []),
+                    substantive_tools=_substantive_tools,
+                    timeout_recovery_count=_timeout_recovery_count,
+                    consecutive_error_count=_consecutive_error_count,
+                    max_consecutive_errors=MAX_CONSECUTIVE_ERRORS,
+                )
+                _shadow_exit = _cycle_ctrl.decide_leader_or_single_exit(_shadow_exit_ctx)
+                # Check oracle vs existing logic
+                _exit_is_leader_ended = is_leader and _leader_ended_discussion
+                _exit_leader_no_text = _exit_is_leader_ended and not content
+                _exit_leader_has_text = _exit_is_leader_ended and bool(content)
+                _exit_single_agent = total == 1
+                _exit_ok = (
+                    (_exit_leader_no_text and _shadow_exit.action is CycleAction.LEADER_END_NO_TEXT_CONTINUE) or
+                    (_exit_leader_has_text and _shadow_exit.action is CycleAction.LEADER_END_DISPLAY_BREAK) or
+                    (not _exit_is_leader_ended and _exit_single_agent and _shadow_exit.action is CycleAction.SINGLE_AGENT_BREAK) or
+                    (not _exit_is_leader_ended and not _exit_single_agent and _shadow_exit.action is CycleAction.PROCEED_TO_AUTO_WAIT)
+                )
+                if not _exit_ok:
+                    logger.error(
+                        "SHADOW MISMATCH @ leader_or_single_exit: is_leader={} leader_ended={} content_len={} total={} oracle={}",
+                        is_leader, _leader_ended_discussion, len(content), total, _shadow_exit.action,
+                    )
+                # ── End shadow: leader_or_single_exit ──
+
                 if is_leader and _leader_ended_discussion:
                     # Stable behavior: if end_discussion produced no text, force ONE
                     # synthesis cycle; otherwise display whatever was produced and exit.
@@ -1405,6 +1574,51 @@ async def broadcast_round(
                 if pool:
                     pool.release_unread(name)
                 msg = await mailbox.wait(name, timeout=600)
+
+                # ── Shadow: after_wait decision ──
+                _shadow_wait_ctx = CycleContext(
+                    agent_name=name,
+                    is_leader=is_leader,
+                    cycle=cycle,
+                    max_cycles=max_cycles,
+                    total_agents=total,
+                    engine_running=engine._running,
+                    discussion_ended=(mailbox.is_discussion_ended() if mailbox else False),
+                    leader_ended_discussion=_leader_ended_discussion,
+                    leader_end_event_set=leader_end_event.is_set() if leader_end_event else False,
+                    finish_reason=result.finish_reason,
+                    content=content,
+                    tools_used=tuple(result.tools_used or []),
+                    substantive_tools=_substantive_tools,
+                    timeout_recovery_count=_timeout_recovery_count,
+                    consecutive_error_count=_consecutive_error_count,
+                    max_consecutive_errors=MAX_CONSECUTIVE_ERRORS,
+                    wait_msg=msg,
+                )
+                _shadow_wait = _cycle_ctrl.decide_after_wait(_shadow_wait_ctx)
+                # Check oracle vs existing logic
+                _wait_none = msg is None
+                _wait_none_ended = _wait_none and (not engine._running or (leader_end_event and leader_end_event.is_set()) or (mailbox and mailbox.is_discussion_ended()))
+                _wait_none_leader_no_text = _wait_none and not _wait_none_ended and is_leader and not content
+                _wait_none_nonleader = _wait_none and not _wait_none_ended and not _wait_none_leader_no_text
+                _wait_msg_stopped = msg is not None and (not engine._running or (leader_end_event and leader_end_event.is_set()))
+                _wait_msg_inject = msg is not None and not _wait_msg_stopped
+                _wait_ok = (
+                    (_wait_none_ended and _shadow_wait.action is CycleAction.WAIT_NONE_ENDED_BREAK) or
+                    (_wait_none_leader_no_text and _shadow_wait.action is CycleAction.WAIT_NONE_LEADER_SYNTHESIS_CONTINUE) or
+                    (_wait_none_nonleader and _shadow_wait.action is CycleAction.WAIT_NONE_NONLEADER_CONTINUE) or
+                    (_wait_msg_stopped and _shadow_wait.action is CycleAction.WAIT_MSG_STOPPED_BREAK) or
+                    (_wait_msg_inject and _shadow_wait.action is CycleAction.WAIT_MSG_INJECT_CONTINUE)
+                )
+                if not _wait_ok:
+                    logger.error(
+                        "SHADOW MISMATCH @ after_wait: msg_is_none={} running={} leader_end={} disc_ended={} is_leader={} content_len={} oracle={}",
+                        msg is None, engine._running,
+                        leader_end_event.is_set() if leader_end_event else False,
+                        mailbox.is_discussion_ended() if mailbox else False,
+                        is_leader, len(content), _shadow_wait.action,
+                    )
+                # ── End shadow: after_wait ──
 
                 if msg is None:
                     # No message — check if engine stopped or leader ended discussion
