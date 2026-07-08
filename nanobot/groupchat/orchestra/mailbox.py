@@ -716,8 +716,20 @@ class MailboxHub:
 
         _MAX_EXTENSIONS = 12  # max 12 × 5s = 60s extra beyond original timeout
         _extensions = 0
+        # Cooperatively honour the waiter's OWN interrupt event: a user/leader
+        # message that interrupts this agent must also wake it out of wait(),
+        # not just its tool_loop. Without this, wait() polls+extends for the
+        # full 45s + 12×5s ≈ 105s even after the interrupt event is set —
+        # the root cause of the 2026-07-08 2-min hang (Kirk blocked 108s).
+        _wait_evt = self.get_interrupt_event(agent_name)
         try:
             while True:
+                if _wait_evt.is_set():
+                    logger.info(
+                        "MailboxHub.wait: {} interrupted while waiting — returning",
+                        agent_name,
+                    )
+                    return None
                 remaining = deadline - _time.time()
                 if remaining <= 0:
                     # Before giving up: check whether any active agent is still

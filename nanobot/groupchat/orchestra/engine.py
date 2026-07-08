@@ -21,6 +21,7 @@ from loguru import logger
 
 from nanobot.groupchat.history.agent_loader import load_agents
 from nanobot.groupchat.config import GroupChatConfig
+from nanobot.groupchat.orchestra.agent_runner import AgentRunner
 from nanobot.groupchat.orchestra.mailbox import MailboxHub
 from nanobot.groupchat.history.persistence import GroupChatState
 from nanobot.groupchat.history.context import HistoryContext
@@ -293,6 +294,10 @@ class GroupChatEngine:
         # Broadcast round: per-agent tasks registered by broadcast_round()
         # so remove_agent() can cancel an in-flight agent mid-round.
         self._broadcast_tasks: dict[str, asyncio.Task] = {}
+        # Per-agent runtime facades (cancel signal + state) for the current
+        # round. Populated by broadcast _run_one; the canonical handle new code
+        # should use instead of mailbox._busy_agents / _interrupt_events.
+        self._runners: dict[str, AgentRunner] = {}
         self._input_queue: asyncio.Queue[str] = asyncio.Queue()
         # Agents added via add_agent() while a broadcast round is running are
         # queued here so broadcast_round can pick them up and spawn tasks for them.
@@ -1061,10 +1066,26 @@ class GroupChatEngine:
                 task.cancel()
                 logger.info("Groupchat: stop cancelled broadcast task for {}", name)
         self._broadcast_tasks.clear()
+        # Drop runner facades too — their tasks are gone.
+        self._runners.clear()
         # Finalize session: write session_end + session_summary.json
         if self._session_dir:
             self._state.close_session(topic=self._topic)
             self._session_dir = None
+
+    def runner(self, name: str) -> AgentRunner | None:
+        """Runtime facade for an agent active in the current round.
+
+        New code should call this (and the runner's interrupt/cancel API)
+        instead of reaching into mailbox._busy_agents / _interrupt_events.
+        Returns None if the agent has no runner this round.
+        """
+        return self._runners.get(name)
+
+    @property
+    def runners(self) -> dict[str, AgentRunner]:
+        """All runners for the currently-running round."""
+        return self._runners
 
     def _ensure_session_dir(self, mode: str, *, agent_name: str | None = None) -> None:
         """Create collab session directory and log session_start (idempotent)."""

@@ -105,6 +105,12 @@ _DEDUP_TOOLS = frozenset({
     "exec", "list_dir", "read_file",
 })
 
+# Hard cap on how long we wait for an in-flight LLM call to unwind after
+# issuing llm_task.cancel() during a cooperative interrupt. A cancel-resistant
+# stream (litellm retry loop / sync HTTP in a thread executor) can otherwise
+# block the interrupt for the full retry budget (~90s, observed 2026-07-08).
+_CANCEL_UNWIND_TIMEOUT = 5.0
+
 # ── Degenerate repetition detection ────────────────────────────────────────
 
 def _has_contiguous_repeat(text: str, min_repeat: int = 3) -> bool:
@@ -466,9 +472,15 @@ async def tool_loop(
                 if intr_task in done:
                     # Interrupted during LLM call!
                     llm_task.cancel()
+                    # Bounded unwind: a cancel-resistant stream (litellm retry
+                    # loop / sync HTTP in a thread executor) can ignore the
+                    # cancellation for the full retry budget (observed ~96s on
+                    # 2026-07-08). Don't let it block the interrupt — give it a
+                    # short hard timeout, then move on. The task is left to
+                    # finish in the background if it still hasn't honoured cancel.
                     try:
-                        await llm_task
-                    except (asyncio.CancelledError, Exception):
+                        await asyncio.wait_for(llm_task, timeout=_CANCEL_UNWIND_TIMEOUT)
+                    except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
                         pass
                     
                     logger.info(

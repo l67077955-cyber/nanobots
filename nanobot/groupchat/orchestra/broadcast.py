@@ -15,6 +15,7 @@ from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 from loguru import logger
 
 from nanobot.groupchat.display import display as _d
+from nanobot.groupchat.orchestra.agent_runner import AgentRunner
 from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool
 from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
 from nanobot.groupchat.history.component_manager import (
@@ -801,8 +802,16 @@ async def broadcast_round(
         # so we can prune conversation turns without touching the system prompt.
         _sys_msg_count = len(messages)
 
-        # ── Forced interrupt: get this agent's interrupt event from mailbox ──
-        _interrupt_event = mailbox.get_interrupt_event(name)
+        # ── AgentRunner: per-agent runtime facade (cancel signal + state) ──
+        # The runner wraps this agent's interrupt event + task; it is the
+        # canonical handle new code uses to interrupt/cancel/inspect the agent.
+        # State still lives on mailbox/engine (delegating facade, no state moved
+        # yet — see docs/groupchat-coupling-fix.md Step 0.5). Same event object
+        # as the old mailbox.get_interrupt_event(name) call, so zero behaviour
+        # change; tool_loop and wait() race runner.interrupt_event.
+        _runner = AgentRunner(name, mailbox, lambda: engine._broadcast_tasks.get(name))
+        engine._runners[name] = _runner
+        _interrupt_event = _runner.interrupt_event
         # Tracks how many timeout-recovery attempts this agent has made.
         # Hard cap at 1 to prevent recovery loops.
         _timeout_recovery_count = 0
