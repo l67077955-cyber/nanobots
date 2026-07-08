@@ -82,6 +82,33 @@ class AgentRunner:
             return "busy"
         return "idle"
 
+    # ── Cycle state machine (Step 3) ──────────────────────────────────────
+    # Owns the busy/idle transitions + interrupt lifecycle that _run_one used
+    # to drive by reaching into mailbox.mark_busy / mark_idle / _interrupt_event
+    # / _interrupt_counts inline. Now the runner is the single mutator of those,
+    # matching the "agent state via concurrency" port contract. The cycle-loop
+    # *decision* (which ~10 continue branch to take) is NOT extracted here —
+    # that belongs on a separate CycleController and needs full verification.
+
+    def begin_cycle(self) -> None:
+        """Mark the agent busy (entering tool_loop)."""
+        self._mailbox.mark_busy(self.name)
+
+    def end_cycle(self) -> None:
+        """Mark the agent idle (tool_loop exited: interrupt/stop/normal/error)."""
+        self._mailbox.mark_idle(self.name)
+
+    def acknowledge_interrupt(self) -> None:
+        """Clear the interrupt event + reset the per-round interrupt counter.
+
+        Called once the agent has reacted to an interrupt, so newer messages
+        can re-interrupt in subsequent cycles (the freshness guarantee). This
+        closes the interrupt lifecycle: set via ``force_interrupt`` /
+        ``request_interrupt``, cleared here.
+        """
+        self.interrupt_event.clear()
+        self._mailbox._interrupt_counts[self.name] = 0
+
     # ── Interrupt / cancel ────────────────────────────────────────────────
 
     def force_interrupt(

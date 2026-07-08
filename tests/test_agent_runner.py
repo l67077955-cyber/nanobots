@@ -17,6 +17,7 @@ class _StubMailbox:
         self._busy_agents: set[str] = set()
         self._waiting: set[str] = set()
         self._last_interrupt_sender: dict[str, str] = {}
+        self._interrupt_counts: dict[str, int] = {}
         self._try_interrupt_calls: list[tuple[str, str]] = []
         self._try_interrupt_ret = True
 
@@ -24,6 +25,12 @@ class _StubMailbox:
         if name not in self._events:
             self._events[name] = asyncio.Event()
         return self._events[name]
+
+    def mark_busy(self, name: str) -> None:
+        self._busy_agents.add(name)
+
+    def mark_idle(self, name: str) -> None:
+        self._busy_agents.discard(name)
 
     def _try_interrupt(self, target: str, sender: str) -> bool:
         self._try_interrupt_calls.append((target, sender))
@@ -121,3 +128,44 @@ async def test_cancel_sets_event_and_cancels_task():
 
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+# ── Cycle state machine (Step 3) ──────────────────────────────────────────
+
+
+def test_begin_end_cycle_drives_busy_state():
+    mb = _StubMailbox()
+    r = AgentRunner("Kirk", mb, lambda: _FakeTask(done=False))
+    assert not r.is_busy
+    r.begin_cycle()
+    assert r.is_busy
+    assert r.state == "busy"
+    r.end_cycle()
+    assert not r.is_busy
+    assert r.state == "idle"
+
+
+def test_acknowledge_interrupt_clears_event_and_resets_count():
+    mb = _StubMailbox()
+    r = AgentRunner("Kirk", mb, lambda: _FakeTask(done=False))
+    # Simulate two interrupts setting event + counter (as mailbox._try_interrupt would)
+    r.interrupt_event.set()
+    mb._interrupt_counts["Kirk"] = 2
+    assert r.state == "interrupted"
+
+    r.acknowledge_interrupt()
+
+    assert not r.interrupt_event.is_set()
+    assert mb._interrupt_counts["Kirk"] == 0
+    # Event cleared → no longer "interrupted" (back to idle, task still alive)
+    assert r.state == "idle"
+
+
+def test_acknowledge_interrupt_idempotent_on_clean_state():
+    mb = _StubMailbox()
+    r = AgentRunner("Kirk", mb, lambda: _FakeTask(done=False))
+    # Nothing set — acknowledge is a no-op, must not raise.
+    r.acknowledge_interrupt()
+    assert not r.interrupt_event.is_set()
+    assert mb._interrupt_counts["Kirk"] == 0
+

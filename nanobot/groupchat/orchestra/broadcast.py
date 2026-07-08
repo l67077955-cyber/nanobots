@@ -944,7 +944,7 @@ async def broadcast_round(
                 )
 
                 # Mark agent busy so incoming messages can trigger interrupt
-                mailbox.mark_busy(name)
+                _runner.begin_cycle()
                 try:
                     result = await tool_loop(
                         provider=engine.provider,
@@ -977,7 +977,7 @@ async def broadcast_round(
                     )
                 finally:
                     # Always mark idle when tool_loop exits (interrupt, stop, normal, error)
-                    mailbox.mark_idle(name)
+                    _runner.end_cycle()
 
 
                 # Flush any remaining buffered search lines
@@ -1180,11 +1180,10 @@ async def broadcast_round(
 
                 # ── Handle forced interrupt ──
                 if is_interrupted:
-                    # Clear the event so it can be set again by a future message
-                    _interrupt_event.clear()
-                    # Reset interrupt counter so newer messages can re-interrupt
-                    # this agent in subsequent cycles (freshness guarantee).
-                    mailbox._interrupt_counts[name] = 0
+                    # Clear the interrupt event + reset the per-round counter so
+                    # newer messages can re-interrupt in subsequent cycles
+                    # (freshness guarantee). Owned by the runner now.
+                    _runner.acknowledge_interrupt()
                     # (agent is already idle — the try/finally around tool_loop handled it)
 
                     # Drain the entire queue and use the LATEST message so the
@@ -1278,7 +1277,7 @@ async def broadcast_round(
                         })
 
                     await tracker.set_state(name, "thinking")
-                    mailbox.mark_busy(name)
+                    _runner.begin_cycle()
                     content = ""  # reset for the new cycle
                     continue  # re-enter tool_loop with injected message
 
