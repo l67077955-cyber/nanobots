@@ -123,7 +123,8 @@ async def test_direct_chat_aborts_stream_on_cancel():
     engine = GroupChatEngine.__new__(GroupChatEngine)
     engine._active_agents = ["Harper"]
     engine.registry = {"Harper": {"model": "test/model"}}
-    engine._history = []
+    # _history is now a read-only property over engine.history.messages.
+    engine.history = type("H", (), {"messages": []})()
     engine._view_channel = "telegram"
     engine._view_chat_id = "1"
     engine._direct_chat_queue = asyncio.Queue()
@@ -162,7 +163,6 @@ async def test_direct_chat_aborts_stream_on_cancel():
 def test_clear_history_interrupts_active_turn():
     engine = GroupChatEngine.__new__(GroupChatEngine)
     engine.history = type("H", (), {"clear": lambda self: None, "messages": []})()
-    engine._history = []
     engine._request_log = []
     engine._active_stream = None
     engine._direct_chat_task = None

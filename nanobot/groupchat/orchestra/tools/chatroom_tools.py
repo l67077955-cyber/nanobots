@@ -1250,7 +1250,11 @@ class ClearContextTool(Tool):
 
     async def _clear_one(self, agent: str, keep_last: int, reason: str) -> str:
         """Clear messages for a single agent. Returns result string."""
-        history = self._engine._history
+        # Route through the ConversationContext mutation seam (Step 1) so the
+        # operation honours HistoryContext's invariants instead of slicing
+        # engine._history behind its back.
+        ctx = self._engine.context
+        history = ctx.messages  # read-only view
         agent_msgs = [m for m in history if m.get("sender") == agent]
         total = len(agent_msgs)
 
@@ -1261,18 +1265,7 @@ class ClearContextTool(Tool):
         if remove_count == 0:
             return f"⚠️ {agent}: keep_last={keep_last} 已覆盖所有消息"
 
-        removed = 0
-        new_history = []
-        agent_seen = 0
-        for m in history:
-            if m.get("sender") == agent:
-                agent_seen += 1
-                if agent_seen <= remove_count:
-                    removed += 1
-                    continue
-            new_history.append(m)
-
-        self._engine._history[:] = new_history
+        removed = ctx.clear_for_agent(agent, keep_last=keep_last)
 
         # Notify the agent via mailbox
         reason_str = f"（原因: {reason}）" if reason else ""

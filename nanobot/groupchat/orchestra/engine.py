@@ -22,6 +22,7 @@ from loguru import logger
 from nanobot.groupchat.history.agent_loader import load_agents
 from nanobot.groupchat.config import GroupChatConfig
 from nanobot.groupchat.orchestra.agent_runner import AgentRunner
+from nanobot.groupchat.orchestra.conversation_context import ConversationContext
 from nanobot.groupchat.orchestra.mailbox import MailboxHub
 from nanobot.groupchat.history.persistence import GroupChatState
 from nanobot.groupchat.history.context import HistoryContext
@@ -283,10 +284,10 @@ class GroupChatEngine:
             state=self._state,
             provider=self.provider,
         )
-        # Backwards-compat shim: code that still reads engine._history gets
-        # the live messages list.  Writes (append/replace) should go through
-        # self.history.add_message() or self.history.messages directly.
-        self._history = self.history.messages
+        # ConversationContext: the single mutation seam for history. All
+        # add/clear/compress goes through here; ``self._history`` below is a
+        # READ-ONLY view of ``self.history.messages`` (Step 1 coupling refactor).
+        self._context = ConversationContext(self.history, self._state)
 
         # Runtime state (ephemeral, not persisted)
         self._task: asyncio.Task | None = None
@@ -455,11 +456,25 @@ class GroupChatEngine:
         """Persist the current active agents list to disk."""
         self._state.save_active(self._active_agents)
 
+    # ── History access (Step 1 coupling refactor) ─────────────────────────
+    # ``_history`` is now a READ-ONLY view of the live messages list. All
+    # mutation goes through ``self._context`` (ConversationContext) / the
+    # ``self.history`` (HistoryContext) it wraps. The scattered
+    # ``self._history = self.history.messages`` re-syncs are gone — a property
+    # always reflects the current list even after HistoryContext rebuilds it.
+    @property
+    def _history(self) -> list[dict[str, str]]:
+        return self.history.messages
+
+    @property
+    def context(self) -> ConversationContext:
+        """The single mutation seam for conversation history."""
+        return self._context
+
     def clear_history(self) -> None:
         """Clear conversation history and request log, but keep active agents and loop running."""
         self.interrupt_active_turn()
         self.history.clear()
-        self._history = self.history.messages  # keep shim in sync
         self._request_log.clear()
         state = getattr(self, "_state", None)
         if state is not None:
@@ -471,7 +486,6 @@ class GroupChatEngine:
         """Clear history, request log, active agents, and stop the loop."""
         self.stop()
         self.history.clear()
-        self._history = self.history.messages  # keep shim in sync
         self._request_log.clear()
         self._active_agents.clear()
         state = getattr(self, "_state", None)
@@ -1193,8 +1207,7 @@ class GroupChatEngine:
             restored.append(item)
         if not restored:
             return
-        self.history.messages[:] = restored
-        self._history = self.history.messages
+        self._context.replace_all(restored)
         self._topic = str(snapshot.get("topic") or "")
         self._round = int(snapshot.get("round") or 0)
         session_path = str(snapshot.get("session_dir") or "").strip()
@@ -1215,10 +1228,8 @@ class GroupChatEngine:
         )
 
     def _add_message(self, sender: str, content: str) -> None:
-        """Append a message — delegates to HistoryContext."""
-        self.history.add_message(sender, content)
-        # Keep the shim alias in sync after HistoryContext may have rebuilt the list
-        self._history = self.history.messages
+        """Append a message — through the ConversationContext seam."""
+        self._context.add(sender, content)
         self._persist_chat_state()
 
     def _save_event(
@@ -1262,13 +1273,12 @@ class GroupChatEngine:
         })
 
     async def _maybe_compress_history(self) -> None:
-        """Compress history if needed — delegates to HistoryContext."""
+        """Compress history if needed — through the ConversationContext seam."""
         # Microcompact pre-pass (no LLM): age old tool-log blocks before the
         # threshold check / AI summary, keeping history lean so maybe_compress
         # fires later and summarises a smaller middle region.
-        self.history.microcompact()
-        await self.history.maybe_compress()
-        self._history = self.history.messages  # keep shim in sync
+        self._context.microcompact()
+        await self._context.maybe_compress()
         self._persist_chat_state()
 
     def _format_history(self) -> str:
