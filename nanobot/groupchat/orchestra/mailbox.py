@@ -299,8 +299,6 @@ class MailboxHub:
     ) -> None:
         self._queues: dict[str, asyncio.Queue[AgentMessage]] = {}
         self._history: list[AgentMessage] = []
-        self._global_start: float = 0.0
-        self._global_timeout: float = 200.0  # hard global limit
         # Optional callback: called with (sender, targets, content) on every send()
         self._on_message = on_message
         # Track which agents are currently waiting
@@ -379,7 +377,6 @@ class MailboxHub:
         self._all_waiting.clear()
         self._active_agents = set(active_agents) if active_agents else set(self._queues.keys())
         self._expected_replies.clear()
-        self._global_start = _time.time()
         self._next_msg_id = 0
         # Reset interrupt state for the new round
         self._interrupt_counts.clear()

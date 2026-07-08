@@ -58,10 +58,11 @@ a separate action.
 
 ## Dead state deliberately excluded
 
-``_leader_disabled_agent`` (set at ``broadcast.py`` L1010, never read — the
-"clean-exit guard" comment referencing L1234 is stale) is **not** a
-``CycleContext`` field. Its tracking body stays inline untouched; removal is a
-separate cleanup step, out of 3b scope.
+``_leader_disabled_agent`` was set at ``broadcast.py`` (init + a manage_agent
+scan) but never read — the "clean-exit guard" comment was stale. It has been
+**deleted** in the accompanying dead-state cleanup; it was never a
+``CycleContext`` field. ``CycleContext`` also excludes ``tool_calls_detail``
+(only the now-removed scan consumed it).
 
 See ``docs/groupchat-coupling-fix.md`` (Step 3b) and ``ports.py``.
 """
