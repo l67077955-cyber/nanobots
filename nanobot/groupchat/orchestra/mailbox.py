@@ -638,9 +638,12 @@ class MailboxHub:
     ) -> AgentMessage | None:
         """Wait for a message in the agent's mailbox.
 
+        Pure message queue operation — no state management.
+        State (waiting/busy) is managed by AgentRunner via broadcast._run_one.
+
         Args:
             agent_name: The waiting agent's name.
-            timeout: Max seconds to wait (hard cap: 120s per call).
+            timeout: Max seconds to wait.
             from_agent: If set, only return messages from this sender.
 
         Returns:
@@ -651,129 +654,60 @@ class MailboxHub:
             logger.warning("MailboxHub.wait: no mailbox for {}", agent_name)
             return None
 
-        # ── Proactive nudge: if waiting for a specific busy agent, set their
-        # interrupt event so they know someone is waiting for a reply.  This
-        # avoids the "oblivious busy agent" problem where an agent in tool_loop
-        # continues working without realising a teammate's wait() is blocked
-        # on them.  The interrupt causes the busy agent's tool_loop to break
-        # out at the next asyncio checkpoint, giving it a chance to reply.
+        # ── Proactive nudge: if waiting for a specific busy agent, interrupt them
+        # so they break out of tool_loop and can reply.
         if from_agent and from_agent in self._busy_agents:
-            # Rank check: only nudge if caller has higher rank than target
             if self._can_interrupt(agent_name, from_agent):
                 evt = self.get_interrupt_event(from_agent)
                 if not evt.is_set():
                     evt.set()
                     logger.info(
-                        "MailboxHub.wait: {} nudging busy agent {} (interrupt set, "
-                        "from_agent is in tool_loop)",
+                        "MailboxHub.wait: {} nudging busy agent {}",
                         agent_name, from_agent,
                     )
-            else:
-                logger.debug(
-                    "MailboxHub.wait: nudge blocked — {} (rank {}) cannot nudge {} (rank {})",
-                    agent_name, self._ranks.get(agent_name, 0),
-                    from_agent, self._ranks.get(from_agent, 0),
-                )
 
-        # Fast path: if there are already messages queued, return immediately
-        # WITHOUT marking as waiting.  This prevents the all_waiting_event
-        # from firing prematurely when a teammate's message is already in the
-        # queue (e.g. auto-shared output that arrived before we entered wait).
+        # Fast path: queue non-empty → return immediately
         if not q.empty():
             try:
                 msg = q.get_nowait()
                 if not from_agent or msg.sender == from_agent:
-                    logger.info(
-                        "MailboxHub.wait: {} fast-path from {}: {}",
-                        agent_name, msg.sender, msg.content[:80],
+                    logger.debug(
+                        "MailboxHub.wait: {} fast-path from {}",
+                        agent_name, msg.sender,
                     )
                     return msg
-                # Wrong sender — put back and fall through to blocking wait
-                q.put_nowait(msg)
+                q.put_nowait(msg)  # wrong sender, put back
             except asyncio.QueueEmpty:
                 pass
 
-        # Register as waiting (only if no message was immediately available)
-        self._waiting.add(agent_name)
-        if self._waiting >= self._active_agents and len(self._active_agents) > 0:
-            logger.info("MailboxHub: all {} agents waiting — nudging random agent",
-                        len(self._active_agents))
-            self._nudge_random_agent(reason="all-waiting")
-
-        # Use the caller-provided timeout directly (no hard caps)
-        effective_timeout = timeout
-
-        # Poll interval: re-check expected-reply state at this cadence so we
-        # can extend the deadline if a busy teammate is still working.
+        # Blocking wait with interrupt polling
         _POLL_INTERVAL = 5.0
-        deadline = _time.time() + effective_timeout
-
-        _MAX_EXTENSIONS = 12  # max 12 × 5s = 60s extra beyond original timeout
-        _extensions = 0
-        # Cooperatively honour the waiter's OWN interrupt event: a user/leader
-        # message that interrupts this agent must also wake it out of wait(),
-        # not just its tool_loop. Without this, wait() polls+extends for the
-        # full 45s + 12×5s ≈ 105s even after the interrupt event is set —
-        # the root cause of the 2026-07-08 2-min hang (Kirk blocked 108s).
+        deadline = _time.time() + timeout
         _wait_evt = self.get_interrupt_event(agent_name)
-        try:
-            while True:
-                if _wait_evt.is_set():
-                    logger.info(
-                        "MailboxHub.wait: {} interrupted while waiting — returning",
-                        agent_name,
-                    )
-                    return None
-                remaining = deadline - _time.time()
-                if remaining <= 0:
-                    # Before giving up: check whether any active agent is still
-                    # expected to reply to us (i.e. they received our message and
-                    # are busy processing — not yet in _waiting).  If so, extend
-                    # the deadline to avoid premature idle-exit.
-                    busy_repliers = self._get_busy_expected_repliers(agent_name)
-                    if busy_repliers and _extensions < _MAX_EXTENSIONS:
-                        _extensions += 1
-                        extension = _POLL_INTERVAL
-                        deadline = _time.time() + extension
-                        logger.info(
-                            "MailboxHub.wait: {} deadline extended +{}s "
-                            "(busy repliers: {}, extension {}/{})",
-                            agent_name, extension, busy_repliers,
-                            _extensions, _MAX_EXTENSIONS,
-                        )
-                        continue
-                    if busy_repliers:
-                        logger.warning(
-                            "MailboxHub.wait: {} giving up after {} extensions "
-                            "— busy repliers {} never responded",
-                            agent_name, _MAX_EXTENSIONS, busy_repliers,
-                        )
-                    else:
-                        logger.info(
-                            "MailboxHub.wait: timeout for {} ({}s)",
-                            agent_name, effective_timeout,
-                        )
-                    return None
-                try:
-                    poll = min(remaining, _POLL_INTERVAL)
-                    msg = await asyncio.wait_for(q.get(), timeout=poll)
-                    # Filter by sender if requested — put back if wrong sender
-                    # so other agents' messages are not silently discarded.
-                    if from_agent and msg.sender != from_agent:
-                        q.put_nowait(msg)
-                        continue
-                    logger.info(
-                        "MailboxHub.wait: {} received from {}: {}",
-                        agent_name, msg.sender, msg.content[:80],
-                    )
-                    return msg
-                except asyncio.TimeoutError:
-                    # Not a final timeout — loop back to check remaining/deadline
+
+        while True:
+            if _wait_evt.is_set():
+                logger.info("MailboxHub.wait: {} interrupted", agent_name)
+                return None
+
+            remaining = deadline - _time.time()
+            if remaining <= 0:
+                logger.debug("MailboxHub.wait: {} timeout ({}s)", agent_name, timeout)
+                return None
+
+            try:
+                poll = min(remaining, _POLL_INTERVAL)
+                msg = await asyncio.wait_for(q.get(), timeout=poll)
+                if from_agent and msg.sender != from_agent:
+                    q.put_nowait(msg)
                     continue
-        finally:
-            self._waiting.discard(agent_name)
-            # Clean up expected-reply entry for this agent
-            self._expected_replies.pop(agent_name, None)
+                logger.debug(
+                    "MailboxHub.wait: {} received from {}",
+                    agent_name, msg.sender,
+                )
+                return msg
+            except asyncio.TimeoutError:
+                continue
 
     def clear(self) -> None:
         """Clear message queues but preserve history for later reading."""
@@ -806,74 +740,15 @@ class MailboxHub:
         """Names of agents with mailboxes."""
         return list(self._queues.keys())
 
-    def _get_busy_expected_repliers(self, agent_name: str) -> set[str]:
-        """Return the set of agents that are expected to reply to agent_name
-        and are still actively processing (not waiting, not done).
-
-        These are agents that received a message from agent_name (so they may
-        reply back) but have not yet entered the waiting state — meaning they
-        are still running their tool_loop.
-
-        NOTE: Only agents that are *busy* (inside tool_loop, tracked by
-        _busy_agents) qualify.  An agent that is active but idle (between
-        tool_loop runs, e.g. in mailbox.wait itself) is NOT considered a
-        busy replier — they had their chance to reply and chose to wait
-        instead, so extending the caller's deadline won't help.
-        """
-        expected = self._expected_replies.get(agent_name, set())
-        busy = set()
-        for other in expected:
-            if (
-                other in self._active_agents   # still active (not done)
-                and other not in self._waiting  # not currently idle-waiting
-                and other in self._busy_agents   # actively inside tool_loop
-            ):
-                busy.add(other)
-        return busy
-
-    def _nudge_random_agent(self, reason: str = "all-waiting") -> None:
-        """Inject a nudge message to a random waiting agent.
-
-        Called when all active agents are simultaneously waiting, which is
-        a deadlock.  Picks one agent at random and injects a system message
-        so it re-enters tool_loop and can either progress or end_discussion.
-        """
-        candidates = list(self._active_agents)
-        if not candidates:
-            return
-        chosen = random.choice(candidates)
-        nudge = AgentMessage(
-            sender="系统",
-            content=(
-                "[全员空闲提醒] 所有队友都在等待中，没有新消息。\n"
-                "请主动推进任务：总结当前进展、提出下一步行动，"
-                "或（如果你是 Leader）调用 end_discussion 结束群聊。"
-            ),
-            targets=[chosen],
-        )
-        q = self._queues.get(chosen)
-        if q is not None:
-            q.put_nowait(nudge)
-            logger.info(
-                "MailboxHub: nudged {} to break {} deadlock", chosen, reason,
-            )
-
     def mark_agent_done(self, agent_name: str) -> None:
         """Mark an agent as finished (no longer active)."""
         self._active_agents.discard(agent_name)
         self._waiting.discard(agent_name)
-        # Remove this agent from all expected-reply sets so waiters don't
-        # extend their deadline for a finished agent.
-        for repliers in self._expected_replies.values():
-            repliers.discard(agent_name)
         # Cleanup interrupt state
         self._busy_agents.discard(agent_name)
         self._interrupt_counts.pop(agent_name, None)
         if agent_name in self._interrupt_events:
             self._interrupt_events[agent_name].clear()
-        # Re-check: if remaining active agents are all waiting
-        if self._active_agents and self._waiting >= self._active_agents:
-            self._nudge_random_agent(reason="agent-done")
 
     def is_discussion_ended(self) -> bool:
         """Whether end_discussion has been successfully called (idempotency / final lock)."""

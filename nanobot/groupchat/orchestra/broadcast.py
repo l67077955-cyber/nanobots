@@ -1573,7 +1573,24 @@ async def broadcast_round(
                 # freed, causing pool exhaustion and blocking other agents' replies.
                 if pool:
                     pool.release_unread(name)
+
+                # State management: mark as waiting (moved from mailbox.wait)
+                _runner.set_waiting(True)
+
+                # Check for all-waiting deadlock (moved from mailbox)
+                _active = [n for n, r in engine._runners.items() if r.state != "done"]
+                _all_waiting = all(r.is_waiting for r in engine._runners.values() if r.state != "done")
+                if _all_waiting and _active:
+                    logger.warning("Broadcast: all {} agents waiting — deadlock detected", len(_active))
+                    # Nudge a random agent to break deadlock
+                    _target = random.choice(_active)
+                    _nudge_evt = engine._runners[_target].interrupt_event
+                    if not _nudge_evt.is_set():
+                        _nudge_evt.set()
+                        logger.info("Broadcast: nudging {} to break deadlock", _target)
+
                 msg = await mailbox.wait(name, timeout=600)
+                _runner.set_waiting(False)
 
                 # ── Shadow: after_wait decision ──
                 _shadow_wait_ctx = CycleContext(

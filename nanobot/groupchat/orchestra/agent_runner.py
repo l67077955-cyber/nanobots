@@ -78,12 +78,8 @@ class AgentRunner:
 
     @property
     def is_waiting(self) -> bool:
-        """Whether agent is blocked on mailbox.wait (detail of idle, read from mailbox).
-
-        This is a query detail, not a state tier. The mailbox manages this
-        internally for deadlock detection; the runner exposes it for observability.
-        """
-        return self.name in self._mailbox._waiting
+        """Whether agent is blocked on mailbox.wait (owned state, detail of idle)."""
+        return self._waiting
 
     @property
     def state(self) -> str:

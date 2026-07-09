@@ -101,10 +101,10 @@ def test_state_derivation():
 
     # waiting is a detail of idle (no tool_loop in flight)
     r.end_cycle()
-    mb._waiting.add("Kirk")
+    r.set_waiting(True)
     assert r.state == "idle"
     assert r.is_waiting is True
-    mb._waiting.discard("Kirk")
+    r.set_waiting(False)
     assert r.state == "idle"
     assert r.is_waiting is False
 
