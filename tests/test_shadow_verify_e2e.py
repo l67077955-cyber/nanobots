@@ -6,10 +6,9 @@ _shadow_verify_build (comparing ctx.build_for_groupchat vs history_to_messages)
 was NEVER actually triggered in tests — "zero mismatch" was a false signal.
 
 These tests instantiate a REAL GroupChatEngine with a FakeProvider (no network),
-drive the real HistoryContext + ConversationContext + shadow History mirror, and
-call _build_agent_prompt directly to trigger _shadow_verify_build. Any divergence
-between ctx.build_for_groupchat and history_to_messages surfaces as a
-"SHADOW MISMATCH" logger.error — captured by the shadow_mismatch fixture.
+drive the real History (engine.history) and call _build_agent_prompt directly to
+trigger _shadow_verify_build. Any divergence surfaces as a "SHADOW MISMATCH"
+logger.error — captured by the shadow_mismatch fixture.
 
 Coverage:
 - basic: user + multi-agent messages → build

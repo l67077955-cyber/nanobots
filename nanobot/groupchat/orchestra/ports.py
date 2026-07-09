@@ -2,13 +2,15 @@
 
 The seams future feature code may depend on. Protocol only —
 implementations live elsewhere (``agent_runner.AgentRunner``,
-``conversation_context.ConversationContext``, ``turn_stack.TurnStack``,
-``cycle_controller.CycleController``). New code must depend on these
-Protocols, not on ``MailboxHub`` / ``GroupChatEngine`` internals. If a feature
-cannot be expressed through a port, extend the port API rather than reaching
-past it.
+``turn_stack.TurnStack``, ``cycle_controller.CycleController``).
+New code must depend on these Protocols, not on ``MailboxHub`` /
+``GroupChatEngine`` internals. If a feature cannot be expressed through a
+port, extend the port API rather than reaching past it.
 
 See ``docs/groupchat-coupling-fix.md`` for the full plan and migration table.
+
+Note: ConversationContext was removed in the History-as-single-source refactor.
+All conversation state now lives in ``engine.history`` (nanobot.core.history.History).
 """
 
 from __future__ import annotations
@@ -26,7 +28,6 @@ from nanobot.groupchat.orchestra.cycle_controller import (
 
 __all__ = [
     "AgentRunner",
-    "ConversationContext",
     "TurnStack",
     "CycleController",
     "CycleContext",
@@ -67,27 +68,6 @@ class AgentRunner(Protocol):
 
     def cancel(self, reason: str = "⏹ 已停止") -> None:
         """Hard stop: cooperative interrupt + task.cancel() (bounded unwind)."""
-        ...
-
-
-@runtime_checkable
-class ConversationContext(Protocol):
-    """Single owner of all mutable message state (Step 1 target).
-
-    Once wired in, ``tool_loop`` receives a view from ``view_for`` rather than
-    a raw mutable list, and all add/remove/prune/compress goes through here.
-    """
-
-    def add(self, role: str, content: str, **meta: Any) -> None:
-        ...
-
-    def forget(self, tool_call_ids: set[str]) -> None:
-        ...
-
-    def view_for(self, agent: str) -> list[dict[str, Any]]:
-        ...
-
-    async def compress(self) -> None:
         ...
 
 

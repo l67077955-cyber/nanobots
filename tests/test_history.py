@@ -922,7 +922,8 @@ class TestSerialize:
         sd = c.to_sender_dicts()
         senders = [d["sender"] for d in sd]
         assert "harper" in senders
-        assert any(d["is_compact_summary"] for d in sd)
+        # is_compact_summary 仅当 True 时包含
+        assert any(d.get("is_compact_summary") for d in sd)
         c2 = History.from_sender_dicts(sd)
         # 压缩块保留
         comp = c2.find("compressed_middle")
