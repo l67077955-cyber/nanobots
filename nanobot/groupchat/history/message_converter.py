@@ -22,6 +22,7 @@ from nanobot.core.history import (
     trim_llm_messages,
     trim_sender_history,
 )
+from nanobot.core.history import History
 
 __all__ = [
     "CHATROOM_TOOL_NAMES",
@@ -32,8 +33,28 @@ __all__ = [
     "degrade_content",
     "fit_messages_to_tier_budget",
     "has_tool_log",
+    "history_to_messages",
     "strip_chatroom_tool_lines",
     "strip_tool_log",
     "trim_llm_messages",
     "trim_sender_history",
 ]
+
+
+def history_to_messages(
+    history: list[dict],
+    current_agent: str = "",
+    max_chars: int = 0,
+    pin_first_user: bool = True,
+    relevant_agents: list[str] | None = None,
+    agent_ranks: dict[str, int] | None = None,
+) -> list[dict]:
+    """Convert sender-dict history to LLM messages via History.build_for_groupchat."""
+    hist_obj = History.from_sender_dicts(history)
+    rel_set = set(relevant_agents) if relevant_agents is not None else None
+    return hist_obj.build_for_groupchat(
+        current_agent=current_agent,
+        agent_ranks=agent_ranks,
+        relevant_agents=rel_set,
+        max_chars=max_chars,
+    )

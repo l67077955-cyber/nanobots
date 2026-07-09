@@ -1250,9 +1250,7 @@ class ClearContextTool(Tool):
 
     async def _clear_one(self, agent: str, keep_last: int, reason: str) -> str:
         """Clear messages for a single agent. Returns result string."""
-        # Route through the ConversationContext mutation seam (Step 1) so the
-        # operation honours HistoryContext's invariants instead of slicing
-        # engine._history behind its back.
+        # Clear agent messages through the History API.
         ctx = self._engine.context
         history = ctx.messages  # read-only view
         agent_msgs = [m for m in history if m.get("sender") == agent]

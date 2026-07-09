@@ -1194,7 +1194,7 @@ class History:
     ) -> bool:
         """AI/机械摘要中间片段。
 
-        - ``protect_users=True``（默认，对齐 HistoryContext._find_head_indices）：
+        - ``protect_users=True``（默认，保护用户消息）：
           protected head = idx 0 + 所有 ``meta.role=="user"`` + 所有
           ``is_compact_summary`` 片段（多 pass 保护既有摘要块）。
           ``keep_first`` 在此模式下被忽略。
@@ -1204,7 +1204,7 @@ class History:
         - 负值抛 ValueError；``keep_last<=0`` → tail 为空。
         - asyncio.Lock 保护；snapshot 后 await llm，期间并发 append 的片段
           靠末尾重附加保留（``self._fragments[total_len:]``，对齐
-          HistoryContext.maybe_compress 的 race-safety）。
+          compress_middle 的 race-safety）。
         - llm 为 None 或失败时走机械降级 fallback（build_compress_message），
           绝不静默丢弃。中间内容为空时返回 False。
         - 重建：snapshot 内 protected 片段按序保留，摘要块插在首个可压缩槽，
@@ -1396,7 +1396,7 @@ class History:
         return self._semantic_append(sender, content, None, role="assistant", agent=sender)
 
     def format(self) -> str:
-        """可读字符串：``[sender]: content`` 用空行拼接（对齐 HistoryContext.format）。"""
+        """可读字符串：``[sender]: content`` 用空行拼接。"""
         return "\n\n".join(f"[{_sender_of(f)}]: {f.content}" for f in self._fragments)
 
     def to_dicts(self) -> list[dict[str, Any]]:

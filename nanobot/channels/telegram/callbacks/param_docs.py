@@ -216,7 +216,7 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
             "label": "历史压缩摘要长度 (tokens)",
             "location": "Stage 3 → maybe_compress",
             "doc": (
-                "HistoryContext.maybe_compress 调用 summarize_model 时的\n"
+                "History.compress_middle 调用 summarize_model 时的\n"
                 "max_tokens 上限。\n\n"
                 "控制生成摘要的长度。\n"
                 "建议: 400-2000"
@@ -227,7 +227,7 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
             "location": "Stage 3 → maybe_compress 尾部保护",
             "doc": (
                 "历史压缩时，最近 N 条消息完整保留、不进入摘要。\n\n"
-                "对应 HistoryContext.maybe_compress 的 compression_keep_recent。\n"
+                "对应 History.compress_middle 的 keep_last 参数。\n"
                 "与 context_pruning.keep_recent (assistant 轮) 是不同概念。\n\n"
                 "建议: 4-10"
             ),
@@ -238,7 +238,7 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
             "doc": (
                 "开启: 所有用户消息在裁剪和压缩时均受头部保护。\n"
                 "关闭: 仅保护首条用户消息 (及 index 0)。\n\n"
-                "位置: HistoryContext._find_head_indices\n\n"
+                "位置: History.compress_middle 的 protect_users 参数\n\n"
                 "长对话中开启会占用更多上下文预算。"
             ),
         },
