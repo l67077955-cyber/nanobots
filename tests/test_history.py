@@ -271,12 +271,12 @@ class TestDelete:
         assert c.delete_between("a", "b") == 0  # 相邻无中间
         assert len(c) == 5
 
-    def test_delete_by_meta_keep_last(self):
+    def test_delete_by_attr_keep_last(self):
         c = History()
         for i in range(4):
             c.agent("harper", f"h{i}")  # agent() 写入 meta.agent=harper
             c.user(f"u{i}")
-        n = c.delete_by_meta("agent", "harper", keep_last=1)
+        n = c.delete_by_attr("agent", "harper", keep_last=1)
         assert n == 3
         # 仅剩最后一个 harper
         harper = c.find_prefix("harper")
@@ -285,10 +285,10 @@ class TestDelete:
         # user 全留
         assert c.count("user") == 4
 
-    def test_delete_by_meta_no_match(self):
+    def test_delete_by_attr_no_match(self):
         c = History()
         c.append("a", "1")
-        assert c.delete_by_meta("agent", "x") == 0
+        assert c.delete_by_attr("agent", "x") == 0
 
     def test_clear(self):
         c = self._build()

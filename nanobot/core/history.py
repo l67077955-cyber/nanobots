@@ -15,7 +15,7 @@ History 管。本库是纯数据层，不持有 provider/state，持久化由外
 - 就地修改（replace / replace_prefix / replace_all / prepend / append_to /
   update_meta / insert_after/insert_before 的 bool 返回）返回 bool 表示是否命中。
 - delete 系列：delete 返回 bool，delete_all/delete_before/delete_after/
-  delete_between/delete_by_meta 返回 int（受影响数）。
+  delete_between/delete_by_attr 返回 int（受影响数）。
 
 mark 唯一性（must 审视 #4）
 ---------------------------
@@ -773,11 +773,10 @@ class History:
         self._fragments = self._fragments[: si + 1] + self._fragments[ei:]
         return removed
 
-    def delete_by_meta(self, key: str, value: Any, *, keep_last: int = 0) -> int:
-        """按 meta[key]==value 过滤删除，保留该条件匹配的最后 keep_last 条，返回删除数。
+    def delete_by_attr(self, key: str, value: Any, *, keep_last: int = 0) -> int:
+        """按 attr[key]==value 过滤删除，保留该条件匹配的最后 keep_last 条，返回删除数。
 
-        must 集成审视：``clear_for_agent(agent, keep_last)`` 即
-        ``delete_by_meta('agent', agent, keep_last=keep_last)``。走同一 rebuild 路径。
+        示例：``delete_by_attr('agent', agent, keep_last=keep_last)``。
         """
         matching_idx = [i for i, f in enumerate(self._fragments) if f.meta.get(key) == value]
         if not matching_idx:
@@ -1372,9 +1371,43 @@ class History:
         """是否存在 role==system 片段（系统 prompt / 话题 banner / 压缩摘要）。"""
         return any(str(f.meta.get("role")) == "system" for f in self._fragments)
 
-    def count_by_meta(self, key: str, value: Any) -> int:
-        """统计 meta[key]==value 的片段数（ClearContextTool 按 agent 计数用）。"""
+    # ── 属性查询方法 ───────────────────────────────────────────────────
+
+    def count_by_attr(self, key: str, value: Any) -> int:
+        """统计 attr[key]==value 的片段数。"""
         return sum(1 for f in self._fragments if f.meta.get(key) == value)
+
+    def filter_by_attr(self, key: str, value: Any) -> list[Fragment]:
+        """获取 attr[key]==value 的所有片段。"""
+        return [f for f in self._fragments if f.meta.get(key) == value]
+
+    def has_attr(self, key: str, value: Any) -> bool:
+        """是否存在 attr[key]==value 的片段。"""
+        return any(f.meta.get(key) == value for f in self._fragments)
+
+    def first_by_attr(self, key: str, value: Any) -> Fragment | None:
+        """获取首个 attr[key]==value 的片段。"""
+        for f in self._fragments:
+            if f.meta.get(key) == value:
+                return f
+        return None
+
+    def last_by_attr(self, key: str, value: Any) -> Fragment | None:
+        """获取最后 attr[key]==value 的片段。"""
+        for f in reversed(self._fragments):
+            if f.meta.get(key) == value:
+                return f
+        return None
+
+    def unique_attr_values(self, key: str) -> set[Any]:
+        """获取某个属性的所有唯一值。"""
+        return {f.meta.get(key) for f in self._fragments if key in f.meta}
+
+    def attr_values(self, key: str) -> list[Any]:
+        """按顺序返回某个属性的所有值（不去重）。"""
+        return [f.meta.get(key) for f in self._fragments if key in f.meta]
+
+    # ── 内部方法 ────────────────────────────────────────────────────────
 
     def _semantic_add_from_sender(self, sender: str, content: str) -> str:
         """sender→role 分派追加（与 from_sender_dicts 同语义）。
@@ -1382,7 +1415,7 @@ class History:
         - 人类 sender → role=user，mark=user_N，meta.sender=sender
         - 系统 sender → role=system，mark=system_N，meta.sender=sender
         - 其他 → role=assistant，mark=<sender>_N，meta.agent=sender（使
-          ``delete_by_meta('agent', sender)`` 命中，对齐 clear_for_agent）
+          ``delete_by_attr('agent', sender)`` 命中）
 
         engine._add_message 走此方法，sender 字符串原样保留进 meta.sender，
         使 to_sender_dicts 落盘格式与既有 chat_history.json 一致。
