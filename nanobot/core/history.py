@@ -1189,104 +1189,124 @@ class History:
         max_chars: int,
         keep_first: int = 1,
         keep_last: int = 6,
+        *,
+        protect_users: bool = True,
     ) -> bool:
-        """AI 摘要中间片段。
+        """AI/机械摘要中间片段。
 
-        - keep_first/keep_last 是 **fragment 计数**（should 审视 #7）。
-        - 负值抛 ValueError；keep_last<=0 → tail 为空（must 边界审视 #2）。
+        - ``protect_users=True``（默认，对齐 HistoryContext._find_head_indices）：
+          protected head = idx 0 + 所有 ``meta.role=="user"`` + 所有
+          ``is_compact_summary`` 片段（多 pass 保护既有摘要块）。
+          ``keep_first`` 在此模式下被忽略。
+        - ``protect_users=False``：退化为旧语义，head = 前 ``keep_first`` 个片段
+          （连续前缀，便于单元测试）。
+        - ``keep_last``：protected tail = 末 ``keep_last`` 个片段（**fragment 计**）。
+        - 负值抛 ValueError；``keep_last<=0`` → tail 为空。
         - asyncio.Lock 保护；snapshot 后 await llm，期间并发 append 的片段
-          靠重定位保留（must 边界审视 #1：不整体覆盖列表）。
+          靠末尾重附加保留（``self._fragments[total_len:]``，对齐
+          HistoryContext.maybe_compress 的 race-safety）。
         - llm 为 None 或失败时走机械降级 fallback（build_compress_message），
-          绝不静默丢弃（must 边界审视 #5）。
-        - 中间内容为空时返回 False（nice 边界审视 #6）。
+          绝不静默丢弃。中间内容为空时返回 False。
+        - 重建：snapshot 内 protected 片段按序保留，摘要块插在首个可压缩槽，
+          其余 middle 全丢弃；末尾附加 await 期间新 append 的片段。
         """
         if keep_first < 0 or keep_last < 0:
             raise ValueError("keep_first/keep_last must be non-negative")
 
         async with self._lock:
-            total = len(self._fragments)
-            if total <= keep_first + keep_last:
-                return False  # 没有中间可压缩
-
-            head = self._fragments[:keep_first]
-            tail = self._fragments[total - keep_last :] if keep_last > 0 else []
-            middle = (
-                self._fragments[keep_first : total - keep_last]
-                if keep_last > 0
-                else self._fragments[keep_first:]
-            )
-
-            middle_text = "\n\n".join(f.content for f in middle if f.content.strip())
-            if not middle_text.strip():
+            snapshot = list(self._fragments)
+            total_len = len(snapshot)
+            if total_len == 0:
                 return False
 
-            # 记录 head 末片段 / tail 首片段的身份，await 后重定位
-            head_tail_id = id(head[-1]) if head else None
-            tail_head_id = id(tail[0]) if tail else None
-            total_at_snapshot = total
+            # ── protected head ──
+            protected_head: set[int] = set()
+            if protect_users:
+                protected_head.add(0)
+                for i, f in enumerate(snapshot):
+                    if str(f.meta.get("role")) == "user":
+                        protected_head.add(i)
+                    if f.meta.get("is_compact_summary"):
+                        protected_head.add(i)
+            else:
+                protected_head = set(range(min(keep_first, total_len)))
+
+            # ── protected tail ──
+            protected_tail: set[int] = (
+                set(range(max(0, total_len - keep_last), total_len)) if keep_last > 0 else set()
+            )
+            all_protected = protected_head | protected_tail
+
+            middle = [snapshot[i] for i in range(total_len) if i not in all_protected]
+            if not middle:
+                return False  # 没有可压缩中间
+
+            # 中间内容为空 → 不压缩
+            if not any(f.content.strip() for f in middle):
+                return False
+
+            # age 工具日志预览（非变异：建新 Fragment，不动 snapshot 原片，
+            # 与 maybe_compress 一致——AI 失败回退也不 corrupt 原数据）
+            aged_middle: list[Fragment] = []
+            for f in middle:
+                aged = age_tool_log(f.content)
+                if aged != f.content:
+                    aged_middle.append(Fragment(mark=f.mark, content=aged, meta=dict(f.meta)))
+                else:
+                    aged_middle.append(f)
+            middle = aged_middle
+
+            history_text = "\n".join(f"[{_sender_of(f)}]: {f.content}" for f in middle)
 
             self._compress_active = True
             try:
-                summary: str | None = None
+                content: str | None = None
                 if llm is not None:
                     try:
-                        result = await llm(middle_text)  # type: ignore[misc]
+                        result = await llm(history_text)  # type: ignore[misc]
                         if isinstance(result, str) and result.strip():
-                            summary = result.strip()
+                            content = result.strip()
                     except Exception as exc:
                         logger.warning("compress_middle llm failed, mechanical fallback: {}", exc)
-                        summary = None
+                        content = None
 
-                if summary is None:
-                    # 机械降级 fallback：与异常回退一致
+                if content is None:
+                    # 机械降级 fallback（与 maybe_compress 的 build_compress_message 对齐）
                     sources = [
                         {"content": f.content, "name": str(f.meta.get("agent") or f.mark)}
                         for f in middle
                     ]
                     compress = build_compress_message(sources, max_chars)
-                    if compress is None:
-                        # 兜底：截断中间
-                        summary = middle_text[:500] + "…"
+                    if compress is not None:
+                        content = str(compress["content"])
                     else:
-                        summary = str(compress["content"])
+                        # 兜底：截断中间文本，绝不静默丢弃
+                        content = history_text[:500] + "…"
 
-                # await 期间可能有新 append（compress_active 让 trim 跳过，append 仍生效）
-                # 重定位中间区间：head 末片段之后到 tail 首片段之前
+                summary_frag = Fragment(
+                    mark="compressed_middle",
+                    content=content,
+                    meta={"role": "system", "is_compact_summary": True},
+                )
+
+                # 重建：snapshot 内 protected 按序保留，摘要插在首个可压缩槽
+                rebuilt: list[Fragment] = []
+                inserted = False
+                for i, f in enumerate(snapshot):
+                    if i in all_protected:
+                        rebuilt.append(f)
+                    elif not inserted:
+                        rebuilt.append(summary_frag)
+                        inserted = True
+                if not inserted:
+                    rebuilt.append(summary_frag)
+
+                # race-safety：附加 await 期间新 append 的片段（在 snapshot 之外）
                 current = self._fragments
-                # 找 head 末片段当前位置
-                if head_tail_id is not None:
-                    start_idx = -1
-                    for i, f in enumerate(current):
-                        if id(f) == head_tail_id:
-                            start_idx = i
-                            break
-                    start_idx += 1  # middle 起始
-                else:
-                    start_idx = 0
+                if len(current) > total_len:
+                    rebuilt.extend(current[total_len:])
 
-                if tail_head_id is not None:
-                    end_idx = -1
-                    for i, f in enumerate(current):
-                        if id(f) == tail_head_id:
-                            end_idx = i
-                            break
-                    # middle = current[start_idx:end_idx]
-                else:
-                    end_idx = len(current)
-
-                # 如果重定位失败（片段被删了），退回 snapshot 范围
-                if start_idx < 0 or end_idx < 0 or start_idx > end_idx:
-                    start_idx = keep_first
-                    end_idx = total_at_snapshot - (keep_last if keep_last > 0 else 0)
-
-                new_middle = [
-                    Fragment(
-                        mark="compressed_middle",
-                        content=summary,
-                        meta={"role": "system", "is_compact_summary": True},
-                    )
-                ]
-                self._fragments = current[:start_idx] + new_middle + current[end_idx:]
+                self._fragments = rebuilt
                 return True
             finally:
                 self._compress_active = False

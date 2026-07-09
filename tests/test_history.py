@@ -678,7 +678,8 @@ class TestCompressMiddle:
         async def llm(text):
             return "S"
 
-        ok = await c.compress_middle(llm, 1000, keep_first=0, keep_last=1)
+        # protect_users=False → 旧连续前缀语义：keep_first=0 即无 head
+        ok = await c.compress_middle(llm, 1000, keep_first=0, keep_last=1, protect_users=False)
         assert ok is True
         marks = c.marks()
         assert marks[0] == "compressed_middle"
@@ -691,7 +692,8 @@ class TestCompressMiddle:
         async def llm(text):
             return "S"
 
-        ok = await c.compress_middle(llm, 1000, keep_first=0, keep_last=0)
+        # protect_users=False → keep_first=0 无 head，keep_last=0 无 tail → 全压缩
+        ok = await c.compress_middle(llm, 1000, keep_first=0, keep_last=0, protect_users=False)
         assert ok is True
         marks = c.marks()
         assert marks == ["compressed_middle"]
@@ -769,6 +771,61 @@ class TestCompressMiddle:
         )
         # 两次都应完成不崩
         assert len(c.marks()) >= 1
+
+    @pytest.mark.asyncio
+    async def test_compress_protect_users_keeps_all_user_fragments(self):
+        """protect_users=True（默认）对齐 _find_head_indices：保护 idx0 + 所有 user 片段，
+        即便 user 出现在对话中部也不被压缩。"""
+        c = History()
+        c.system("sys", mark="sys")
+        c.agent("harper", "agent reply 1")  # 可压缩
+        c.user("mid-conversation user turn")  # 必须保护
+        c.agent("harper", "agent reply 2")  # 可压缩
+        c.agent("kirk", "tail reply")  # tail
+
+        async def llm(text):
+            return "SUMMARY"
+
+        ok = await c.compress_middle(llm, 1000, keep_last=1)  # protect_users 默认 True
+        assert ok is True
+        marks = c.marks()
+        # sys(idx0) + mid user 被保护；harper reply 1/2 被压缩成一块
+        assert "sys" in marks
+        assert any(m == "user_1" or "user" in m for m in marks)  # user 片段保留
+        assert marks[-1] == "kirk_1" or "kirk" in marks[-1]  # tail 保留
+        assert "compressed_middle" in marks
+        # 被压缩的 agent reply 不应原样存在两个
+        assert marks.count("compressed_middle") == 1
+
+    @pytest.mark.asyncio
+    async def test_compress_protect_users_keeps_prior_summary_block(self):
+        """protect_users=True 多 pass：既有 compressed_middle 块（is_compact_summary）
+        被保护，不重复压缩、不丢 head。"""
+        c = History()
+        c.system("sys", mark="sys")
+        c.agent("harper", "old reply 1")
+        c.agent("harper", "old reply 2")
+
+        async def llm(text):
+            return "FIRST_SUMMARY"
+
+        # 第一遍：压缩 old reply（keep_last=0 让它们全进 middle）
+        await c.compress_middle(llm, 1000, keep_last=0)
+        assert "compressed_middle" in c.marks()
+
+        # 再加新内容，第二遍压缩
+        c.agent("harper", "new reply 1")
+        c.agent("harper", "new reply 2")
+
+        async def llm2(text):
+            return "SECOND_SUMMARY"
+
+        await c.compress_middle(llm2, 1000, keep_last=0)
+        marks = c.marks()
+        # sys + 第一个 summary 块都被保护；不应把第一个 summary 再压进第二个
+        assert marks[0] == "sys"
+        # 至少有一个 compressed_middle；第一个 summary 块仍存在（被保护）
+        assert marks.count("compressed_middle") >= 1
 
 
 class TestAgeTools:
