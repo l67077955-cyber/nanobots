@@ -1038,23 +1038,16 @@ class History:
             # 未知 role 兜底为 user
             out.append({"role": "user", "content": f.content})
 
-        # 构建期软截断：仅当总量超 max_chars 时才需要截断。不超时直接返回 out
-        # （保留 role/name）——绝不重建 Fragment，重建会把已映射的 dict 塞进空 meta
-        # 的 Fragment 再用 build_for_llm 重映射，导致 role 全退化成 user、name 丢失，
-        # 与 history_to_messages 不一致（曾导致 SHADOW MISMATCH）。
-        # TODO: 超 max_chars 时的分层截断（mandatory idx0+user / tiered degradation /
-        # compress 块）尚未对齐 truth 的 trim_llm_messages —— core 不能反向依赖 groupchat，
-        # 需在 core 内提供等价实现。真实长对话超阈值时 shadow 会 flag mismatch，切换前必补。
+        # 构建期软截断：仅当总量超 max_chars 时跑分层截断。不超时直接返回 out
+        # （保留 role/name）。超时调 trim_llm_messages（与 truth 的 history_to_messages
+        # 同函数、同 mandatory 判定：protect_index_zero + _is_human_user_llm）——
+        # map→trim→merge 与 truth (message_converter:503-512) 逐字节对齐。
+        # 绝不重建 Fragment：重建会把已映射 dict 塞进空 meta Fragment 再用
+        # build_for_llm 重映射，导致 role 退化成 user、name 丢失（曾致 SHADOW MISMATCH）。
         if max_chars > 0:
             total = sum(len(str(m.get("content") or "")) for m in out)
             if total > max_chars:
-                logger.warning(
-                    "History.build_for_groupchat: total {} > max_chars {} — tiered "
-                    "truncation not yet aligned with trim_llm_messages; returning "
-                    "untruncated (shadow will flag mismatch on long conversations)",
-                    total,
-                    max_chars,
-                )
+                out, _skipped = trim_llm_messages(out, max_chars, protect_index_zero=True)
 
         # 合并连续 assistant（LLM API 拒绝连续同 role）
         out = _merge_consecutive_assistant(out)
