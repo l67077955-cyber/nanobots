@@ -93,12 +93,14 @@ def test_state_derivation():
     assert r.is_waiting is False
     assert r.interrupt_pending is False
 
-    mb._busy_agents.add("Kirk")
+    # Use runner's method to change state (it owns the state)
+    r.begin_cycle()
     assert r.state == "busy"
     assert r.is_busy is True
+    assert "Kirk" in mb._busy_agents  # mailbox kept in sync
 
     # waiting is a detail of idle (no tool_loop in flight)
-    mb._busy_agents.discard("Kirk")
+    r.end_cycle()
     mb._waiting.add("Kirk")
     assert r.state == "idle"
     assert r.is_waiting is True
@@ -107,10 +109,10 @@ def test_state_derivation():
     assert r.is_waiting is False
 
     # interrupt is a momentary event, not a state tier
-    mb._busy_agents.add("Kirk")
+    r.begin_cycle()
     r.interrupt_event.set()
     assert r.state == "busy"  # still busy (tool_loop racing interrupt)
-    mb._busy_agents.discard("Kirk")
+    r.end_cycle()
     assert r.state == "idle"
     assert r.interrupt_pending is True  # detail of idle
 
@@ -160,7 +162,7 @@ def test_acknowledge_interrupt_clears_event_and_resets_count():
     # Simulate two interrupts setting event + counter (as mailbox._try_interrupt would)
     r.interrupt_event.set()
     mb._interrupt_counts["Kirk"] = 2
-    mb._busy_agents.add("Kirk")
+    r.begin_cycle()
     assert r.state == "busy"
     assert r.interrupt_pending is True
 

@@ -31,7 +31,13 @@ if TYPE_CHECKING:
 
 
 class AgentRunner:
-    """Concrete ``ports.AgentRunner`` implementation (delegating, no state moved)."""
+    """Per-agent runtime handle that OWNS the busy state.
+
+    The runner is the single source of truth for an agent's runtime state.
+    mailbox._busy_agents remains as a cache for mailbox-internal queries
+    (deadlock detection, interrupt targeting), but is always updated via
+    the runner's begin_cycle/end_cycle methods.
+    """
 
     def __init__(
         self,
@@ -42,6 +48,9 @@ class AgentRunner:
         self.name = name
         self._mailbox = mailbox
         self._task_getter = task_getter
+        # ── Owned state ───────────────────────────────────────────────────
+        self._busy: bool = False  # inside tool_loop
+        self._waiting: bool = False  # blocked on mailbox.wait
 
     # ── Cancel signal ─────────────────────────────────────────────────────
 
@@ -60,28 +69,34 @@ class AgentRunner:
         """The agent's asyncio task, or None if not spawned this round."""
         return self._task_getter()
 
-    # ── Derived state (migrates onto the runner in a later step) ──────────
-    # Reads mailbox's _busy_agents / _waiting until those move here. This is
-    # the single place that should touch those privates going forward.
+    # ── Owned state (no longer derived from mailbox) ─────────────────────
 
     @property
     def is_busy(self) -> bool:
-        return self.name in self._mailbox._busy_agents
+        """Whether the agent is inside tool_loop (owned state)."""
+        return self._busy
+
+    @property
+    def is_waiting(self) -> bool:
+        """Whether agent is blocked on mailbox.wait (detail of idle, read from mailbox).
+
+        This is a query detail, not a state tier. The mailbox manages this
+        internally for deadlock detection; the runner exposes it for observability.
+        """
+        return self.name in self._mailbox._waiting
 
     @property
     def state(self) -> str:
-        """busy | idle | done (derived, not owned).
+        """busy | idle | done (three-tier model).
 
-        Simplified per user insight: interrupt is a momentary event, not a
-        dwell state — agent never "stays in interrupted". Likewise, waiting
-        (blocked on mailbox.wait) is just a variant of idle (no tool_loop
-        in flight). The three-state model aligns with the core invariant:
-        busy = tool_loop racing interrupt, idle = no tool_loop, done = final.
+        busy = tool_loop racing interrupt
+        idle = no tool_loop in flight
+        done = task completed (terminal state)
         """
         t = self.task
         if t is None or t.done():
             return "done"
-        if self.is_busy:
+        if self._busy:
             return "busy"
         return "idle"
 
@@ -90,26 +105,23 @@ class AgentRunner:
         """Whether an interrupt event is set (detail of idle, not a state tier)."""
         return self.interrupt_event.is_set()
 
-    @property
-    def is_waiting(self) -> bool:
-        """Whether agent is blocked on mailbox.wait (detail of idle, not a state tier)."""
-        return self.name in self._mailbox._waiting
-
-    # ── Cycle state machine (Step 3) ──────────────────────────────────────
-    # Owns the busy/idle transitions + interrupt lifecycle that _run_one used
-    # to drive by reaching into mailbox.mark_busy / mark_idle / _interrupt_event
-    # / _interrupt_counts inline. Now the runner is the single mutator of those,
-    # matching the "agent state via concurrency" port contract. The cycle-loop
-    # *decision* (which ~10 continue branch to take) is NOT extracted here —
-    # that belongs on a separate CycleController and needs full verification.
+    # ── Cycle state machine ──────────────────────────────────────────────
+    # Owns the busy/idle transitions. mailbox._busy_agents is kept in sync
+    # for backward compatibility with mailbox-internal queries.
 
     def begin_cycle(self) -> None:
         """Mark the agent busy (entering tool_loop)."""
+        self._busy = True
         self._mailbox.mark_busy(self.name)
 
     def end_cycle(self) -> None:
-        """Mark the agent idle (tool_loop exited: interrupt/stop/normal/error)."""
+        """Mark the agent idle (tool_loop exited)."""
+        self._busy = False
         self._mailbox.mark_idle(self.name)
+
+    def set_waiting(self, waiting: bool) -> None:
+        """Update waiting state (called by mailbox.wait)."""
+        self._waiting = waiting
 
     def acknowledge_interrupt(self) -> None:
         """Clear the interrupt event + reset the per-round interrupt counter.
