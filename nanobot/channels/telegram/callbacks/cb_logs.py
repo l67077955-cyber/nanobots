@@ -41,11 +41,11 @@ class LogsCallbackMixin:
         if data.startswith("log:"):
             mode = data[4:]
             engine = self._groupchat_engine
-            if not engine or (not engine.history.messages and not engine.request_log):
+            if not engine or (not engine.history and not engine.request_log):
                 await query.edit_message_text("📭 无日志")
                 return
             rlog = engine.request_log
-            history = engine.history.messages
+            history = engine.history.to_sender_dicts()
             if mode == "brief":
                 # Brief: last 5 requests
                 entries = rlog[-5:] if rlog else []
@@ -155,7 +155,7 @@ class LogsCallbackMixin:
             engine = self._groupchat_engine
             if engine:
                 # PromptBuilder already imported at module top level
-                raw_history = engine.history.messages
+                raw_history = engine.history.to_sender_dicts()
                 active = engine.active_agents
                 registry = getattr(engine, "registry", {})
                 leader = engine.leader
@@ -163,9 +163,7 @@ class LogsCallbackMixin:
 
                 context_snapshot["raw_history"] = raw_history
                 context_snapshot["raw_history_count"] = len(raw_history)
-                context_snapshot["raw_history_chars"] = sum(
-                    len(m.get("content", "")) for m in raw_history
-                )
+                context_snapshot["raw_history_chars"] = engine.history.total_chars()
                 context_snapshot["active_agents"] = active
                 context_snapshot["leader"] = leader
                 context_snapshot["round"] = round_num
