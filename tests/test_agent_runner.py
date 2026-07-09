@@ -90,22 +90,31 @@ def test_state_derivation():
     holder["t"] = task
     assert r.state == "idle"
     assert r.is_busy is False
+    assert r.is_waiting is False
+    assert r.interrupt_pending is False
 
     mb._busy_agents.add("Kirk")
     assert r.state == "busy"
     assert r.is_busy is True
 
-    # waiting takes precedence over busy
+    # waiting is a detail of idle (no tool_loop in flight)
+    mb._busy_agents.discard("Kirk")
     mb._waiting.add("Kirk")
-    assert r.state == "waiting"
+    assert r.state == "idle"
+    assert r.is_waiting is True
     mb._waiting.discard("Kirk")
-    assert r.state == "busy"
+    assert r.state == "idle"
+    assert r.is_waiting is False
 
-    # interrupted takes precedence over everything (task still alive)
+    # interrupt is a momentary event, not a state tier
+    mb._busy_agents.add("Kirk")
     r.interrupt_event.set()
-    assert r.state == "interrupted"
+    assert r.state == "busy"  # still busy (tool_loop racing interrupt)
+    mb._busy_agents.discard("Kirk")
+    assert r.state == "idle"
+    assert r.interrupt_pending is True  # detail of idle
 
-    # task done overrides interrupt
+    # task done overrides everything
     task._done = True
     assert r.state == "done"
 
@@ -151,14 +160,15 @@ def test_acknowledge_interrupt_clears_event_and_resets_count():
     # Simulate two interrupts setting event + counter (as mailbox._try_interrupt would)
     r.interrupt_event.set()
     mb._interrupt_counts["Kirk"] = 2
-    assert r.state == "interrupted"
+    mb._busy_agents.add("Kirk")
+    assert r.state == "busy"
+    assert r.interrupt_pending is True
 
     r.acknowledge_interrupt()
 
     assert not r.interrupt_event.is_set()
     assert mb._interrupt_counts["Kirk"] == 0
-    # Event cleared → no longer "interrupted" (back to idle, task still alive)
-    assert r.state == "idle"
+    assert r.interrupt_pending is False
 
 
 def test_acknowledge_interrupt_idempotent_on_clean_state():

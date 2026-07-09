@@ -44,6 +44,11 @@ class AgentRunner(Protocol):
     agent at runtime. The key invariant: any blocking operation an agent
     performs (``wait``, an in-flight LLM call, future awaits) must race
     against ``interrupt_event`` — that is what makes cancellation reliable.
+
+    State model (simplified per user insight): interrupt is a momentary event,
+    not a dwell state. Agent only ever occupies busy (tool_loop in flight) or
+    idle (no tool_loop). The ``interrupt_pending`` and ``is_waiting`` properties
+    expose details of idle for observability, not separate state tiers.
     """
 
     name: str
@@ -55,7 +60,17 @@ class AgentRunner(Protocol):
 
     @property
     def state(self) -> str:
-        """Derived state: idle | busy | waiting | interrupted | done."""
+        """Derived state: busy | idle | done (three-tier model)."""
+        ...
+
+    @property
+    def interrupt_pending(self) -> bool:
+        """Whether an interrupt event is set (detail of idle)."""
+        ...
+
+    @property
+    def is_waiting(self) -> bool:
+        """Whether agent is blocked on mailbox.wait (detail of idle)."""
         ...
 
     def force_interrupt(self, sender: str = "用户", reason: str = "⏹ 已中断") -> bool:

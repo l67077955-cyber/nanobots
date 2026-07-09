@@ -70,17 +70,30 @@ class AgentRunner:
 
     @property
     def state(self) -> str:
-        """idle | busy | waiting | interrupted | done (derived, not owned)."""
+        """busy | idle | done (derived, not owned).
+
+        Simplified per user insight: interrupt is a momentary event, not a
+        dwell state — agent never "stays in interrupted". Likewise, waiting
+        (blocked on mailbox.wait) is just a variant of idle (no tool_loop
+        in flight). The three-state model aligns with the core invariant:
+        busy = tool_loop racing interrupt, idle = no tool_loop, done = final.
+        """
         t = self.task
         if t is None or t.done():
             return "done"
-        if self.interrupt_event.is_set():
-            return "interrupted"
-        if self.name in self._mailbox._waiting:
-            return "waiting"
         if self.is_busy:
             return "busy"
         return "idle"
+
+    @property
+    def interrupt_pending(self) -> bool:
+        """Whether an interrupt event is set (detail of idle, not a state tier)."""
+        return self.interrupt_event.is_set()
+
+    @property
+    def is_waiting(self) -> bool:
+        """Whether agent is blocked on mailbox.wait (detail of idle, not a state tier)."""
+        return self.name in self._mailbox._waiting
 
     # ── Cycle state machine (Step 3) ──────────────────────────────────────
     # Owns the busy/idle transitions + interrupt lifecycle that _run_one used
