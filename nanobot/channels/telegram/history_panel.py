@@ -227,13 +227,13 @@ def _estimate_history_tokens(messages: list[dict[str, Any]]) -> int:
 def _compiled_context_info(engine: Any | None) -> str:
     if not engine or not getattr(engine, "_active_agents", None):
         return "(engine未启动)"
-    from nanobot.groupchat.history.prompt_builder import PromptBuilder
+    from nanobot.core.history import History
 
     messages = _history_messages(engine)
     parts: list[str] = []
     for agent in engine._active_agents:
         try:
-            compiled = PromptBuilder.history_to_messages(messages, current_agent=agent)
+            compiled = History.from_sender_dicts(messages).build_for_groupchat(current_agent=agent)
             chars = sum(len(m.get("content") or "") for m in compiled)
             parts.append(f"{agent}~{chars:,}字")
         except Exception:

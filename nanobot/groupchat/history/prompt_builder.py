@@ -699,25 +699,6 @@ class PromptBuilder:
     # ── Delegation to extracted modules (backward compat) ──
 
     @staticmethod
-    def history_to_messages(
-        history: list[dict],
-        current_agent: str = "",
-        max_chars: int = 0,
-        pin_first_user: bool = True,
-        relevant_agents: list[str] | None = None,
-        agent_ranks: dict[str, int] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Convert sender-dict history to LLM messages via History.build_for_groupchat."""
-        hist_obj = History.from_sender_dicts(history)
-        rel_set = set(relevant_agents) if relevant_agents is not None else None
-        return hist_obj.build_for_groupchat(
-            current_agent=current_agent,
-            agent_ranks=agent_ranks,
-            relevant_agents=rel_set,
-            max_chars=max_chars,
-        )
-
-    @staticmethod
     def _validate_context(
         messages: list[dict],
         agent_name: str = "",

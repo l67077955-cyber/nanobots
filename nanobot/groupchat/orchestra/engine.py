@@ -283,11 +283,9 @@ class GroupChatEngine:
 
         # ── History: the single static store (core/history.py) ──────────────
         # History is the canonical conversation-history truth source. All
-        # mutation goes through the seam methods below (_add_message /
-        # _maybe_compress_history / clear_history / _restore_chat_state);
-        # readers use History accessors (last_sender / latest_user_content /
-        # has_system_message / to_sender_dicts / build_for_groupchat …) and
-        # never touch a raw sender-dict list. No HistoryContext / shadow twin.
+        # mutation goes through History methods directly; readers use
+        # History accessors (last_sender / latest_user_content / format /
+        # to_sender_dicts / build_for_groupchat …).
         self.history: History = History()
 
         # Runtime state (ephemeral, not persisted)
@@ -460,12 +458,8 @@ class GroupChatEngine:
         """Persist the current active agents list to disk."""
         self._state.save_active(self._active_agents)
 
-    # ── History seam ──────────────────────────────────────────────────────
-    # ``self.history`` is the History store. Mutation goes through the seam
-    # methods below (_add_message / _maybe_compress_history / clear_history /
-    # _restore_chat_state / _persist_chat_state). Readers use History
-    # accessors directly (last_sender / latest_user_content / has_system_message
-    # / to_sender_dicts / build_for_groupchat / build_for_llm) — no raw list.
+    # ── History operations ──────────────────────────────────────────────────
+    # History is the single truth source. Use History methods directly.
 
     def clear_history(self) -> None:
         """Clear conversation history and request log, but keep active agents and loop running."""
@@ -1213,9 +1207,7 @@ class GroupChatEngine:
             restored.append(item)
         if not restored:
             return
-        # History is the truth source: rebuild it from the persisted
-        # sender-dicts. from_sender_dicts handles sender→role /
-        # is_compact_summary the same way the old HistoryContext path did.
+        # History is the truth source: rebuild from persisted sender-dicts.
         self.history = History.from_sender_dicts(restored)
         self._topic = str(snapshot.get("topic") or "")
         self._round = int(snapshot.get("round") or 0)
@@ -1239,10 +1231,7 @@ class GroupChatEngine:
     def _add_message(self, sender: str, content: str) -> None:
         """Append a message to the History store + audit log + persist.
 
-        sender→role dispatch lives in History._semantic_add_from_sender (sets
-        meta.agent so delete_by_meta('agent', ...) hits). The audit log
-        (chat_log.txt + session.jsonl) was previously inside
-        HistoryContext.add_message; History is pure data, so it moves here.
+        sender→role dispatch lives in History._semantic_add_from_sender.
         """
         self.history._semantic_add_from_sender(sender, content)
         self._state.save_message(sender, content, self.history.to_sender_dicts())
@@ -1364,11 +1353,6 @@ class GroupChatEngine:
             protect_users=keep_user_messages(),
         )
         self._persist_chat_state()
-
-    def _format_history(self) -> str:
-        """Format history as string — delegates to History."""
-        return self.history.format()
-
 
     def _pick_next_speaker(self, last_content: str = "") -> str:
         names = self._active_agents

@@ -1,4 +1,4 @@
-"""TurnStack — turn-level operations seam for a broadcast round (Step 2).
+"""TurnStack — turn-level operations seam for a broadcast round.
 
 Important design note: the engine runs agents **concurrently** as asyncio tasks
 (launched together at round start), not as a sequential queue. So this is NOT
@@ -12,13 +12,7 @@ that cut *across* all agents mid-round:
 Before this seam, ``interject`` lived inline in ``broadcast._user_listener``
 and ``cancel_all`` inline in ``engine._stop_group_loop`` — two more places
 reaching directly into mailbox/pool/engine internals. Routing them here plants
-the third port (after ``AgentRunner`` and ``ConversationContext``).
-
-The per-agent ``while True`` cycle loop and its ~10 ``continue`` branches are
-NOT touched here (that is the higher-risk Step 3 — extract the per-agent
-next-action decision onto ``AgentRunner``).
-
-See ``docs/groupchat-coupling-fix.md`` (Step 2) and ``ports.py``.
+the third port (after ``AgentRunner`` and ``History``).
 """
 
 from __future__ import annotations

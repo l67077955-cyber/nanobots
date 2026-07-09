@@ -1,16 +1,12 @@
-"""Architecture contract for the group-chat engine (Step 0.5+).
+"""Architecture contract for the group-chat engine.
 
 The seams future feature code may depend on. Protocol only —
 implementations live elsewhere (``agent_runner.AgentRunner``,
 ``turn_stack.TurnStack``, ``cycle_controller.CycleController``).
 New code must depend on these Protocols, not on ``MailboxHub`` /
-``GroupChatEngine`` internals. If a feature cannot be expressed through a
-port, extend the port API rather than reaching past it.
+``GroupChatEngine`` internals.
 
-See ``docs/groupchat-coupling-fix.md`` for the full plan and migration table.
-
-Note: ConversationContext was removed in the History-as-single-source refactor.
-All conversation state now lives in ``engine.history`` (nanobot.core.history.History).
+Conversation state is in ``engine.history`` (nanobot.core.history.History).
 """
 
 from __future__ import annotations
