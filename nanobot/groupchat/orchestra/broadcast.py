@@ -537,7 +537,7 @@ async def broadcast_round(
 
     # ── Extract user question (for hint injection) ──
     user_question = ""
-    for msg in reversed(engine._history):
+    for msg in reversed(engine.history.to_sender_dicts()):
         if msg.get("sender") in ("User", "user", "用户"):
             content = msg.get("content", "")
             if content.startswith("["):

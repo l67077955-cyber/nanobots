@@ -300,7 +300,7 @@ class SettingsCommandsMixin:
 
         # Stats
         lines.append("📊 统计:")
-        lines.append(f"  历史消息: {len(engine._history)} 条")
+        lines.append(f"  历史消息: {len(engine.history)} 条")
         lines.append(f"  请求日志: {len(engine._request_log)} 条")
         lines.append(f"  输入队列: {engine._input_queue.qsize()} 条待处理")
         lines.append("")

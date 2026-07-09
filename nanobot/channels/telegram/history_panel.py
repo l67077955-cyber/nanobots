@@ -206,8 +206,7 @@ def _settings() -> dict[str, Any]:
 def _history_messages(engine: Any | None) -> list[dict[str, Any]]:
     if not engine:
         return []
-    history = getattr(engine, "_history", None) or []
-    return list(history)
+    return list(engine.history.to_sender_dicts())
 
 
 def _estimate_history_tokens(messages: list[dict[str, Any]]) -> int:

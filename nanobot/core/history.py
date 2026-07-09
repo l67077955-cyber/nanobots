@@ -1410,18 +1410,15 @@ class History:
 
         must 集成审视：engine._history 等读 list[dict] 含 sender/content，迁移期
         由本视图过渡。sender 取 meta.agent / meta.sender / role；压缩摘要标
-        is_compact_summary。
+        is_compact_summary（仅当 True 时包含）。
         """
         out: list[dict[str, Any]] = []
         for f in self._fragments:
             sender = _sender_of(f)
-            out.append(
-                {
-                    "sender": sender,
-                    "content": f.content,
-                    "is_compact_summary": bool(f.meta.get("is_compact_summary")),
-                }
-            )
+            item: dict[str, Any] = {"sender": sender, "content": f.content}
+            if f.meta.get("is_compact_summary"):
+                item["is_compact_summary"] = True
+            out.append(item)
         return out
 
     @classmethod

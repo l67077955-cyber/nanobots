@@ -45,11 +45,12 @@ async def ws_smoke() -> dict:
 
 
 def prompt_rebuild_smoke() -> dict:
-    """Verify frozen user_question updates when engine._history grows."""
+    """Verify frozen user_question updates when engine.history grows."""
+    from nanobot.core.history import History
     engine = MagicMock()
-    engine._history = [
+    engine.history = History.from_sender_dicts([
         {"sender": "用户", "content": "原始问题：修按钮"},
-    ]
+    ])
     engine._build_agent_prompt = MagicMock(
         side_effect=lambda _name, **kw: [
             {"role": "system", "content": f"uq={kw.get('user_question', '')}"},
@@ -73,7 +74,7 @@ def prompt_rebuild_smoke() -> dict:
     )
     assert live1 == frozen_uq
 
-    engine._history.append({"sender": "用户", "content": "澄清：是 Telegram callback 按钮无响应"})
+    engine.history._semantic_add_from_sender("用户", "澄清：是 Telegram callback 按钮无响应")
     prefix2, live2 = _rebuild_prompt_prefix(
         engine,
         "Kirk",
@@ -90,7 +91,7 @@ def prompt_rebuild_smoke() -> dict:
     rebuilt = live2 != frozen_uq and "澄清" in live2
     prompt_calls = [c.kwargs.get("user_question", "") for c in engine._build_agent_prompt.call_args_list]
     return {
-        "latest_user_question": latest_user_question(engine._history),
+        "latest_user_question": latest_user_question(engine.history.to_sender_dicts()),
         "live_uq_after_clarification": live2,
         "prompt_rebuilt_with_new_uq": rebuilt,
         "build_prompt_user_questions": prompt_calls,

@@ -49,7 +49,7 @@ async def direct_chat(
     messages: list[dict[str, Any]] = engine.prompt_builder.build_single_agent_messages(
         agent_name,
         registry=engine.registry,
-        history=engine._history,
+        history=engine.history.to_sender_dicts(),
         current_message=user_message,
         media=media,
         channel=engine._view_channel,

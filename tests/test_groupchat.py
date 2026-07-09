@@ -247,7 +247,7 @@ async def run_group_test(
 
     # Reset engine state
     engine.stop()
-    engine._history.clear()
+    engine.history.clear()
     engine._topic = test_case["question"]
 
     # Capture all sent messages
@@ -316,7 +316,8 @@ async def run_group_test(
         await asyncio.sleep(wait_step)
         total_waited += wait_step
         # Count only agent messages (sender is a known agent name)
-        agent_msgs = [m for m in engine._history if m["sender"] in engine.registry]
+        history = engine.history.to_sender_dicts()
+        agent_msgs = [m for m in history if m["sender"] in engine.registry]
         if len(agent_msgs) >= target_turns:
             # Give it 2 extra seconds to finish the last reply
             await asyncio.sleep(2)
@@ -326,10 +327,11 @@ async def run_group_test(
     await asyncio.sleep(1)
 
     # Format the full chat log for judging
+    history = engine.history.to_sender_dicts()
     chat_log = "\n\n".join(
-        f"[{m['sender']}]: {m['content']}" for m in engine._history
+        f"[{m['sender']}]: {m['content']}" for m in history
     )
-    n_messages = len(engine._history)
+    n_messages = len(history)
     print(f"   📊 讨论完成: {n_messages} 条消息", flush=True)
 
     return {

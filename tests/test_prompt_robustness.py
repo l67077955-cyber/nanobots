@@ -272,14 +272,11 @@ async def run_broadcast_test(
 
     # Reset engine state
     engine.stop()
-    engine._history.clear()
+    engine.history.clear()
     engine._topic = test_case["question"]
 
     # Inject user question into history
-    engine._history.append({
-        "sender": "User",
-        "content": test_case["question"],
-    })
+    engine.history._semantic_add_from_sender("User", test_case["question"])
 
     # Capture sent messages
     captured: list[str] = []
@@ -330,8 +327,9 @@ async def run_broadcast_test(
     elapsed = time.time() - t0
 
     # Build chat log
+    history = engine.history.to_sender_dicts()
     chat_log = "\n\n".join(
-        f"[{m['sender']}]: {m['content']}" for m in engine._history
+        f"[{m['sender']}]: {m['content']}" for m in history
     )
 
     # Build mailbox log (inter-agent communication)

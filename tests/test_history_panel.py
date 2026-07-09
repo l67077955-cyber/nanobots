@@ -179,12 +179,13 @@ def test_find_group_for_param(sample_settings):
 
 def test_live_metrics_with_mock_engine(sample_settings):
     from nanobot.channels.telegram.history_panel import collect_live_metrics
+    from nanobot.core.history import History
 
     class _Engine:
-        _history = [
+        history = History.from_sender_dicts([
             {"sender": "User", "content": "hello"},
             {"sender": "ponytail", "content": "world" * 100},
-        ]
+        ])
         _active_agents = []
 
     metrics = collect_live_metrics(_Engine())

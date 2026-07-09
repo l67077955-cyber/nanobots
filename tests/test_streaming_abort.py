@@ -119,12 +119,12 @@ async def test_finalize_keeps_pre_tool_partial_with_down_marker():
 @pytest.mark.asyncio
 async def test_direct_chat_aborts_stream_on_cancel():
     from nanobot.groupchat.orchestra import direct_chat as dc_mod
+    from nanobot.core.history import History
 
     engine = GroupChatEngine.__new__(GroupChatEngine)
     engine._active_agents = ["Harper"]
     engine.registry = {"Harper": {"model": "test/model"}}
-    # _history is now a read-only property over engine.history.messages.
-    engine.history = type("H", (), {"messages": []})()
+    engine.history = History()
     engine._view_channel = "telegram"
     engine._view_chat_id = "1"
     engine._direct_chat_queue = asyncio.Queue()
@@ -161,8 +161,9 @@ async def test_direct_chat_aborts_stream_on_cancel():
 
 
 def test_clear_history_interrupts_active_turn():
+    from nanobot.core.history import History
     engine = GroupChatEngine.__new__(GroupChatEngine)
-    engine.history = type("H", (), {"clear": lambda self: None, "messages": []})()
+    engine.history = History()
     engine._request_log = []
     engine._active_stream = None
     engine._direct_chat_task = None
@@ -181,12 +182,13 @@ async def test_direct_chat_skips_stream_callbacks_when_disabled():
     from nanobot.groupchat.config import GroupChatConfig
     from nanobot.groupchat.orchestra.direct_chat import direct_chat
     from nanobot.groupchat.history.prompt_builder import PromptBuilder
+    from nanobot.core.history import History
 
     pb = PromptBuilder(config=GroupChatConfig(), workspace=Path("/tmp"))
     engine = SimpleNamespace(
         _active_agents=["Kirk"],
         registry={"Kirk": {"model": "test/model"}},
-        _history=[],
+        history=History(),
         _request_log=[],
         _view_channel="telegram",
         _view_chat_id="1",

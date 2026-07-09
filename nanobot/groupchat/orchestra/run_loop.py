@@ -26,10 +26,11 @@ async def generate_summary(engine: Any) -> None:
         history_summarize_enabled,
     )
 
-    if not engine._history or not history_summarize_enabled():
+    history = engine.history.to_sender_dicts()
+    if not history or not history_summarize_enabled():
         return
 
-    messages = list(engine._history)
+    messages = list(history)
     if not messages:
         return
 
@@ -46,7 +47,7 @@ async def generate_summary(engine: Any) -> None:
     if len(input_text) > 15000:
         input_text = input_text[-15000:]
 
-    provider = engine._history._provider if engine._history else None
+    provider = engine.provider if hasattr(engine, 'provider') else None
     if provider is None:
         await engine._send(
             f"📋 讨论总结\n"
@@ -103,7 +104,7 @@ async def run_loop(engine: Any) -> None:
                     progress=True,
                 )
 
-        if not any(m["sender"] == "系统" for m in engine._history):
+        if not any(m["sender"] == "系统" for m in engine.history.to_sender_dicts()):
             engine._add_message("系统", f"话题：{engine._topic}")
 
         rounds = 0

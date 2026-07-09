@@ -71,8 +71,9 @@ def test_engine_restores_history_on_init(history_file: Path, monkeypatch: pytest
     engine = GroupChatEngine(GroupChatConfig(), provider, Path("/tmp"))
     engine.registry = {"Harper": {"model": "test/model"}, "Kirk": {"model": "test/model"}}
 
-    assert len(engine._history) == 2
-    assert engine._history[0]["content"] == "2077 风格 Claude 介绍页"
+    history = engine.history.to_sender_dicts()
+    assert len(history) == 2
+    assert history[0]["content"] == "2077 风格 Claude 介绍页"
     assert engine._topic == "自由讨论"
     assert engine._round == 2
 
@@ -88,7 +89,7 @@ def test_clear_history_removes_snapshot(history_file: Path, monkeypatch: pytest.
 
     engine.clear_history()
     assert not history_file.exists()
-    assert engine._history == []
+    assert len(engine.history) == 0
 
 
 def test_engine_restore_preserves_compact_boundary_flag(
@@ -128,7 +129,7 @@ def test_engine_restore_preserves_compact_boundary_flag(
     provider = MagicMock()
     engine = GroupChatEngine(GroupChatConfig(), provider, Path("/tmp"))
 
-    restored = engine._history
+    restored = engine.history.to_sender_dicts()
     assert len(restored) == 3
     summary_msg = next(m for m in restored if m["sender"] == "系统")
     assert summary_msg.get("is_compact_summary") is True, (

@@ -24,6 +24,7 @@ def _png_bytes() -> bytes:
 
 @pytest.mark.asyncio
 async def test_direct_chat_builds_multimodal_user_message(tmp_path):
+    from nanobot.core.history import History
     img = tmp_path / "shot.png"
     img.write_bytes(_png_bytes())
 
@@ -32,7 +33,7 @@ async def test_direct_chat_builds_multimodal_user_message(tmp_path):
         _active_agents=["Kirk"],
         registry={"Kirk": {"model": "test/model"}},
         _session_dir=tmp_path / "session",
-        _history=[],
+        history=History(),
         _topic="",
         _view_channel="telegram",
         _view_chat_id="99",
