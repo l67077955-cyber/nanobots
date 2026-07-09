@@ -50,6 +50,10 @@ class ConversationContext:
     def __init__(self, history: "HistoryContext", state: "GroupChatState") -> None:
         self._history = history
         self._state = state
+        # Optional shadow Context twin (set by engine). clear_for_agent is the
+        # one write seam bypassed by ClearContextTool (called directly on the
+        # context, not through engine), so the mirror must be synced here too.
+        self._shadow: Any = None
 
     # ── Read surface (delegating) ─────────────────────────────────────────
     # Reads are fine to expose widely; only mutations must go through the
@@ -123,6 +127,16 @@ class ConversationContext:
         # object (not rebind the attribute) to keep all existing references
         # valid — mirrors how maybe_compress's rebuild works.
         messages[:] = new_messages
+        # Shadow mirror (Step 3b-2): this seam is invoked directly by
+        # ClearContextTool, bypassing engine, so sync the twin here. meta.agent
+        # is set to the sender at add time (see engine._ctx_mirror_add) and at
+        # restore/re-sync time (Context.from_sender_dicts), matching this agent.
+        _shadow = getattr(self, "_shadow", None)
+        if _shadow is not None:
+            try:
+                _shadow.delete_by_meta("agent", agent, keep_last=keep_last)
+            except Exception as exc:  # noqa: BLE001 - shadow must never break prod
+                logger.warning("Shadow ctx clear_for_agent failed ({}): {}", agent, exc)
         logger.info(
             "ConversationContext: cleared {}/{} messages for {} (kept last {})",
             removed, total, agent, keep_last,
