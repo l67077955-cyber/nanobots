@@ -26,24 +26,11 @@ async def generate_summary(engine: Any) -> None:
         history_summarize_enabled,
     )
 
-    history = engine.history.to_sender_dicts()
-    if not history or not history_summarize_enabled():
+    if not engine.history or not history_summarize_enabled():
         return
 
-    messages = list(history)
-    if not messages:
-        return
-
-    # Format conversation for summarisation
-    lines = []
-    for m in messages:
-        sender = m.get("sender", "?")
-        content = m.get("content", "")
-        if len(content) > 600:
-            content = content[:600] + "…"
-        lines.append(f"[{sender}] {content}")
-
-    input_text = "\n".join(lines)
+    # Format conversation using History.format()
+    input_text = engine.history.format()
     if len(input_text) > 15000:
         input_text = input_text[-15000:]
 
@@ -104,7 +91,7 @@ async def run_loop(engine: Any) -> None:
                     progress=True,
                 )
 
-        if not any(m["sender"] == "系统" for m in engine.history.to_sender_dicts()):
+        if not engine.history.has_attr("sender", "系统"):
             engine._add_message("系统", f"话题：{engine._topic}")
 
         rounds = 0
