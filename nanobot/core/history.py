@@ -63,16 +63,23 @@ _TOOL_LOG_BLOCK_RE = re.compile(
     re.DOTALL,
 )
 _TOOL_LINE_RE = re.compile(r"^• (\w+)\(", re.MULTILINE)
-_CHATROOM_TOOL_NAMES = frozenset({
-    "chatroom_send",
-    "wait",
-    "quote_message",
-    "list_messages",
-    "manage_agent",
-    "end_discussion",
-    "transfer_credits",
-    "clear_context",
-})
+
+# Lowest retention: group-chat / coordination tools.
+CHATROOM_TOOL_NAMES = frozenset(
+    {
+        "chatroom_send",
+        "wait",
+        "quote_message",
+        "list_messages",
+        "manage_agent",
+        "end_discussion",
+        "transfer_credits",
+        "clear_context",
+    }
+)
+
+_TEAMMATE_PREFIX_RE = re.compile(r"^\[([^\]]+)\]: ")
+
 _COMPRESS_HEADER = "[早期对话压缩"
 _LINE_CAP = 280
 
@@ -108,7 +115,7 @@ def split_text_and_tool_log(content: str) -> tuple[str, str]:
     m = _TOOL_LOG_BLOCK_RE.search(content)
     if not m:
         return content, ""
-    return content[: m.start()].rstrip(), content[m.start():]
+    return content[: m.start()].rstrip(), content[m.start() :]
 
 
 def strip_chatroom_tool_lines(content: str) -> str:
@@ -121,11 +128,13 @@ def strip_chatroom_tool_lines(content: str) -> str:
     kept: list[str] = []
     for line in tool_block.splitlines():
         m = _TOOL_LINE_RE.match(line)
-        if m and m.group(1) in _CHATROOM_TOOL_NAMES:
+        if m and m.group(1) in CHATROOM_TOOL_NAMES:
             continue
         kept.append(line)
     if "<previous_tool_calls>" in tool_block:
-        body = [ln for ln in kept if ln.strip() and not ln.startswith("<") and not ln.startswith("</")]
+        body = [
+            ln for ln in kept if ln.strip() and not ln.startswith("<") and not ln.startswith("</")
+        ]
         if not body:
             return text.rstrip()
         rebuilt = "\n".join(["<previous_tool_calls>", *body, "</previous_tool_calls>"])
@@ -161,34 +170,59 @@ def _is_human_sender(sender: str) -> bool:
     return sender in ("用户", "User", "user")
 
 
-def _merge_consecutive_assistant(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """合并相邻同 role 的 assistant 消息（content 用 \\n\\n 拼接，保留首个 name）。
+# Alias (message_converter canonical name) — used by the dict-level trim
+# functions below. Same body as _is_human_sender above.
+_is_human_user_sender = _is_human_sender
 
-    LLM API 拒绝连续同 role。should 审视（集成）：build 阶段强制跑。
-    """
+
+def _merge_consecutive_assistant(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge back-to-back assistant messages into one (LLM APIs reject consecutive same-role)."""
     out: list[dict[str, Any]] = []
     for msg in messages:
-        if (
-            out
-            and out[-1].get("role") == msg.get("role") == "assistant"
-        ):
+        if out and msg.get("role") == "assistant" and out[-1].get("role") == "assistant":
             prev = out[-1]
-            prev_content = prev.get("content", "")
-            cur_content = msg.get("content", "")
-            prev["content"] = f"{prev_content}\n\n{cur_content}" if prev_content else cur_content
-            # name 保留首个
+            prev_text = prev.get("content") or ""
+            cur_text = msg.get("content") or ""
+            prev["content"] = f"{prev_text}\n\n{cur_text}".strip()
         else:
-            out.append(dict(msg))
+            out.append(msg)
     return out
 
 
-def build_compress_message(
-    sources: list[dict[str, Any]],
-    max_chars: int,
-) -> dict[str, Any] | None:
-    """把被丢弃的消息合并成单个压缩摘要块（机械降级 fallback）。"""
-    if not sources or max_chars <= 0:
-        return None
+def _message_char_len(msg: dict[str, Any]) -> int:
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        return sum(len(block.get("text", "")) for block in content if isinstance(block, dict))
+    return 0
+
+
+def _is_human_user_llm(msg: dict[str, Any]) -> bool:
+    if msg.get("role") != "user":
+        return False
+    content = msg.get("content", "")
+    if not isinstance(content, str):
+        return True
+    m = _TEAMMATE_PREFIX_RE.match(content)
+    if not m:
+        return True
+    return _is_human_user_sender(m.group(1))
+
+
+def _message_label(msg: dict[str, Any]) -> str:
+    if "sender" in msg:
+        return str(msg.get("sender") or "?")
+    role = msg.get("role", "?")
+    content = msg.get("content", "")
+    if role == "user" and isinstance(content, str):
+        m = _TEAMMATE_PREFIX_RE.match(content)
+        if m:
+            return m.group(1)
+    return str(role)
+
+
+def _compress_sources_text(sources: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     for msg in sources:
         raw = msg.get("content", "")
@@ -199,9 +233,20 @@ def build_compress_message(
             continue
         if len(text) > _LINE_CAP:
             text = text[: _LINE_CAP - 1] + "…"
-        label = str(msg.get("name") or msg.get("sender") or msg.get("role") or "?")
-        lines.append(f"[{label}] {text}")
-    body = "\n".join(lines)
+        lines.append(f"[{_message_label(msg)}] {text}")
+    return "\n".join(lines)
+
+
+def build_compress_message(
+    sources: list[dict[str, Any]],
+    max_chars: int,
+    *,
+    sender_format: bool = False,
+) -> dict[str, Any] | None:
+    """Merge dropped/overflow messages into one compressed summary block."""
+    if not sources or max_chars <= 0:
+        return None
+    body = _compress_sources_text(sources)
     if not body:
         return None
     header = f"{_COMPRESS_HEADER}（{len(sources)} 条）]\n"
@@ -210,7 +255,243 @@ def build_compress_message(
         return None
     if len(body) > available:
         body = body[: available - 1] + "…"
-    return {"role": "system", "content": header + body, "is_compact_summary": True}
+    content = header + body
+    if sender_format:
+        return {"sender": "系统", "content": content, "is_compact_summary": True}
+    return {"role": "system", "content": content, "is_compact_summary": True}
+
+
+def _merge_chronological_with_compress(
+    messages: list[dict[str, Any]],
+    mandatory: set[int],
+    optional_indices: set[int],
+    included: dict[int, tuple[int, str]],
+    compress_msg: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Rebuild list in chronological order; compress block replaces first omitted slot."""
+    out: list[dict[str, Any]] = []
+    compress_placed = False
+    for i, msg in enumerate(messages):
+        if i in mandatory:
+            out.append(msg)
+            continue
+        if i not in optional_indices:
+            continue
+        slot = included.get(i)
+        if slot is not None:
+            level, content = slot
+            if level == 0:
+                out.append(msg)
+            else:
+                out.append({**msg, "content": content})
+        elif not compress_placed:
+            out.append(compress_msg)
+            compress_placed = True
+    if not compress_placed:
+        out.append(compress_msg)
+    return out
+
+
+def _replace_optional_with_compress(
+    messages: list[dict[str, Any]],
+    mandatory: set[int],
+    optional_indices: list[int],
+    compress_msg: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Keep mandatory only; replace all optional messages with one compress block."""
+    out: list[dict[str, Any]] = []
+    compress_placed = False
+    for i, msg in enumerate(messages):
+        if i in mandatory:
+            out.append(msg)
+            continue
+        if i not in optional_indices:
+            continue
+        if not compress_placed:
+            out.append(compress_msg)
+            compress_placed = True
+    if not compress_placed:
+        out.append(compress_msg)
+    return out
+
+
+def fit_messages_to_tier_budget(
+    messages: list[dict[str, Any]],
+    max_chars: int,
+    *,
+    is_mandatory: Callable[[dict[str, Any], int], bool],
+    length_fn: Callable[[dict[str, Any]], int] | None = None,
+    sender_format: bool = False,
+) -> tuple[list[dict[str, Any]], int]:
+    """Fit messages into *max_chars* with tiered retention.
+
+    Escalation ladder:
+      1. Keep human user messages at full fidelity
+      2. Include agent messages from newest backward
+      3. Degrade in-message: chatroom tools → age tools → strip tools
+      4. Drop optional messages that still do not fit
+      5. Compress dropped/overflow into one summary block; if still over
+         budget, compress **all** optional messages into that single block
+    """
+    if max_chars <= 0 or not messages:
+        return list(messages), 0
+
+    measure = length_fn or _message_char_len
+
+    mandatory = {i for i, m in enumerate(messages) if is_mandatory(m, i)}
+    mandatory_chars = sum(measure(messages[i]) for i in mandatory)
+    budget = max(0, max_chars - mandatory_chars)
+
+    optional_indices = [i for i in range(len(messages)) if i not in mandatory]
+    optional_set = set(optional_indices)
+    included: dict[int, tuple[int, str]] = {}
+
+    # Pass 1 — newest optional first; degrade before skipping.
+    for i in reversed(optional_indices):
+        raw = messages[i].get("content", "")
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        for level in range(4):
+            degraded = degrade_content(raw, level)
+            cost = len(degraded)
+            if cost <= 0:
+                continue
+            if budget >= cost:
+                included[i] = (level, degraded)
+                budget -= cost
+                break
+
+    omitted_indices = [i for i in optional_indices if i not in included]
+
+    def _build_partial_result(active_included: dict[int, tuple[int, str]]) -> list[dict[str, Any]]:
+        partial: list[dict[str, Any]] = []
+        for i, msg in enumerate(messages):
+            if i in mandatory:
+                partial.append(msg)
+                continue
+            slot = active_included.get(i)
+            if slot is None:
+                continue
+            level, content = slot
+            if level == 0:
+                partial.append(msg)
+            else:
+                partial.append({**msg, "content": content})
+        return partial
+
+    result = _build_partial_result(included)
+    total = sum(measure(m) for m in result)
+    needs_compress = bool(omitted_indices) or total > max_chars
+
+    if needs_compress and optional_indices:
+        # Pass 2 — summarize omitted messages; shrink included oldest if needed.
+        working_included = dict(included)
+        omitted_set = list(omitted_indices)
+        compress_msg = None
+        for _ in range(len(working_included) + 1):
+            partial = _build_partial_result(working_included)
+            compress_budget = max(0, max_chars - sum(measure(m) for m in partial))
+            compress_msg = build_compress_message(
+                [messages[i] for i in omitted_set],
+                compress_budget,
+                sender_format=sender_format,
+            )
+            if compress_msg or not working_included:
+                break
+            oldest = min(working_included)
+            omitted_set.append(oldest)
+            del working_included[oldest]
+
+        if compress_msg:
+            included = working_included
+            result = _merge_chronological_with_compress(
+                messages,
+                mandatory,
+                optional_set,
+                included,
+                compress_msg,
+            )
+            total = sum(measure(m) for m in result)
+
+        # Pass 3 — still over budget: all optional → one block.
+        if total > max_chars:
+            compress_budget = max(0, max_chars - mandatory_chars)
+            compress_msg = build_compress_message(
+                [messages[i] for i in optional_indices],
+                compress_budget,
+                sender_format=sender_format,
+            )
+            if compress_msg:
+                result = _replace_optional_with_compress(
+                    messages,
+                    mandatory,
+                    optional_indices,
+                    compress_msg,
+                )
+                total = sum(measure(m) for m in result)
+
+        # Pass 4 — truncate compress body if mandatory alone almost fills budget.
+        if total > max_chars:
+            for m in result:
+                if m.get("content", "").startswith(_COMPRESS_HEADER):
+                    overhead = total - max_chars
+                    content = m.get("content", "")
+                    if isinstance(content, str) and len(content) > overhead:
+                        m["content"] = content[: len(content) - overhead]
+                    break
+
+    skipped = len(optional_indices) - len(included)
+    if needs_compress and optional_indices:
+        skipped = len(optional_indices)
+    return result, skipped
+
+
+def trim_sender_history(
+    history: list[dict[str, str]],
+    max_chars: int,
+    *,
+    protected_indices: set[int] | None = None,
+    length_fn: Callable[[dict[str, Any]], int] | None = None,
+) -> list[dict[str, str]]:
+    """Tiered trim for persisted groupchat history (sender format)."""
+    protected = protected_indices or set()
+
+    def _mandatory(msg: dict[str, Any], index: int) -> bool:
+        if index in protected:
+            return True
+        return _is_human_user_sender(msg.get("sender", ""))
+
+    trimmed, _ = fit_messages_to_tier_budget(
+        history,
+        max_chars,
+        is_mandatory=_mandatory,
+        length_fn=length_fn,
+        sender_format=True,
+    )
+    return trimmed
+
+
+def trim_llm_messages(
+    messages: list[dict[str, Any]],
+    max_chars: int,
+    *,
+    protect_index_zero: bool = True,
+    length_fn: Callable[[dict[str, Any]], int] | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Tiered trim for LLM-role messages from history_to_messages."""
+
+    def _mandatory(msg: dict[str, Any], index: int) -> bool:
+        if protect_index_zero and index == 0:
+            return True
+        return _is_human_user_llm(msg)
+
+    return fit_messages_to_tier_budget(
+        messages,
+        max_chars,
+        is_mandatory=_mandatory,
+        length_fn=length_fn,
+        sender_format=False,
+    )
 
 
 # ── Fragment ───────────────────────────────────────────────────────────────
@@ -316,7 +597,7 @@ class History:
         for f in self._fragments:
             m = f.mark
             if m.startswith(prefix + "_"):
-                tail = m[plen + 1:]
+                tail = m[plen + 1 :]
                 if tail.isdigit():
                     n = int(tail)
                     if n > best:
@@ -528,9 +809,7 @@ class History:
             frag.meta.update(meta)
         return True
 
-    def replace_prefix(
-        self, prefix: str, fn: Callable[[Fragment], Fragment | None]
-    ) -> int:
+    def replace_prefix(self, prefix: str, fn: Callable[[Fragment], Fragment | None]) -> int:
         """对每个 mark 以 prefix 开头的 fragment 调用 fn。
 
         fn 返回新 Fragment 替换原位置；返回 None 表示删除该项。返回受影响数。
@@ -626,7 +905,7 @@ class History:
         ei = self._first_idx(end)
         if si < 0 or ei < 0 or si > ei:
             return []
-        return list(self._fragments[si: ei + 1])
+        return list(self._fragments[si : ei + 1])
 
     def slice_between(self, start: str, end: str) -> list[Fragment]:
         """返回首个 start 与首个 end 之间的片段（不含边界），返回新 list。"""
@@ -634,7 +913,7 @@ class History:
         ei = self._first_idx(end)
         if si < 0 or ei < 0 or si >= ei - 1:
             return []
-        return list(self._fragments[si + 1: ei])
+        return list(self._fragments[si + 1 : ei])
 
     def slice_prefix(self, prefix: str) -> list[Fragment]:
         """返回所有 mark 以 prefix 开头的 fragment（新 list）。"""
@@ -730,11 +1009,13 @@ class History:
             if role == "assistant":
                 agent_name = str(f.meta.get("agent") or sender)
                 if current_agent is not None and agent_name == current_agent:
-                    out.append({
-                        "role": "assistant",
-                        "content": f.content,
-                        "name": agent_name.replace(" ", "_"),
-                    })
+                    out.append(
+                        {
+                            "role": "assistant",
+                            "content": f.content,
+                            "name": agent_name.replace(" ", "_"),
+                        }
+                    )
                     continue
                 # 其他 agent —— relevant_agents 白名单过滤
                 if relevant_agents is not None and agent_name not in relevant_agents:
@@ -745,11 +1026,13 @@ class History:
                     sender_rank = agent_ranks[agent_name]
                     if not see(sender_rank, viewer_rank):
                         content = strip_tool_log(content)
-                out.append({
-                    "role": "user",
-                    "content": f"[{agent_name}]: {content}",
-                    "name": agent_name.replace(" ", "_"),
-                })
+                out.append(
+                    {
+                        "role": "user",
+                        "content": f"[{agent_name}]: {content}",
+                        "name": agent_name.replace(" ", "_"),
+                    }
+                )
                 continue
 
             # 未知 role 兜底为 user
@@ -769,7 +1052,8 @@ class History:
                     "History.build_for_groupchat: total {} > max_chars {} — tiered "
                     "truncation not yet aligned with trim_llm_messages; returning "
                     "untruncated (shadow will flag mismatch on long conversations)",
-                    total, max_chars,
+                    total,
+                    max_chars,
                 )
 
         # 合并连续 assistant（LLM API 拒绝连续同 role）
@@ -829,9 +1113,7 @@ class History:
         # 按原顺序重组
         kept_ids = {id(f) for f in kept}
         added_ids = {id(f) for f in added}
-        self._fragments = [
-            f for f in self._fragments if id(f) in kept_ids or id(f) in added_ids
-        ]
+        self._fragments = [f for f in self._fragments if id(f) in kept_ids or id(f) in added_ids]
 
     def tiered_truncate(
         self,
@@ -854,11 +1136,7 @@ class History:
         mandatory: list[Fragment] = []
         optional: list[Fragment] = []
         for i, f in enumerate(self._fragments):
-            if (
-                f.mark in mandatory_set
-                or f.meta.get("is_compact_summary")
-                or i == 0
-            ):
+            if f.mark in mandatory_set or f.meta.get("is_compact_summary") or i == 0:
                 mandatory.append(f)
             else:
                 optional.append(f)
@@ -886,7 +1164,9 @@ class History:
         if not omitted_idx:
             # 全部 optional 都塞下了，按原顺序重建
             placed_map = {idx: frag for idx, frag in included}
-            self._fragments = mandatory + [placed_map[i] for i in range(len(optional)) if i in placed_map]
+            self._fragments = mandatory + [
+                placed_map[i] for i in range(len(optional)) if i in placed_map
+            ]
             return
 
         # 有遗漏：合并成 compressed_middle
@@ -901,11 +1181,13 @@ class History:
         placed_map = {idx: frag for idx, frag in included}
         new_optional = [placed_map[i] for i in range(len(optional)) if i in placed_map]
         if compress is not None:
-            new_optional.append(Fragment(
-                mark="compressed_middle",
-                content=compress["content"],
-                meta={"role": "system", "is_compact_summary": True},
-            ))
+            new_optional.append(
+                Fragment(
+                    mark="compressed_middle",
+                    content=compress["content"],
+                    meta={"role": "system", "is_compact_summary": True},
+                )
+            )
         self._fragments = mandatory + new_optional
 
     async def compress_middle(
@@ -934,8 +1216,12 @@ class History:
                 return False  # 没有中间可压缩
 
             head = self._fragments[:keep_first]
-            tail = self._fragments[total - keep_last:] if keep_last > 0 else []
-            middle = self._fragments[keep_first: total - keep_last] if keep_last > 0 else self._fragments[keep_first:]
+            tail = self._fragments[total - keep_last :] if keep_last > 0 else []
+            middle = (
+                self._fragments[keep_first : total - keep_last]
+                if keep_last > 0
+                else self._fragments[keep_first:]
+            )
 
             middle_text = "\n\n".join(f.content for f in middle if f.content.strip())
             if not middle_text.strip():
@@ -1000,14 +1286,14 @@ class History:
                     start_idx = keep_first
                     end_idx = total_at_snapshot - (keep_last if keep_last > 0 else 0)
 
-                new_middle = [Fragment(
-                    mark="compressed_middle",
-                    content=summary,
-                    meta={"role": "system", "is_compact_summary": True},
-                )]
-                self._fragments = (
-                    current[:start_idx] + new_middle + current[end_idx:]
-                )
+                new_middle = [
+                    Fragment(
+                        mark="compressed_middle",
+                        content=summary,
+                        meta={"role": "system", "is_compact_summary": True},
+                    )
+                ]
+                self._fragments = current[:start_idx] + new_middle + current[end_idx:]
                 return True
             finally:
                 self._compress_active = False
@@ -1049,8 +1335,7 @@ class History:
     def to_dicts(self) -> list[dict[str, Any]]:
         """导出为 dict 列表（mark/content/meta 无损）。"""
         return [
-            {"mark": f.mark, "content": f.content, "meta": dict(f.meta)}
-            for f in self._fragments
+            {"mark": f.mark, "content": f.content, "meta": dict(f.meta)} for f in self._fragments
         ]
 
     def to_sender_dicts(self) -> list[dict[str, Any]]:
@@ -1063,11 +1348,13 @@ class History:
         out: list[dict[str, Any]] = []
         for f in self._fragments:
             sender = _sender_of(f)
-            out.append({
-                "sender": sender,
-                "content": f.content,
-                "is_compact_summary": bool(f.meta.get("is_compact_summary")),
-            })
+            out.append(
+                {
+                    "sender": sender,
+                    "content": f.content,
+                    "is_compact_summary": bool(f.meta.get("is_compact_summary")),
+                }
+            )
         return out
 
     @classmethod
@@ -1105,7 +1392,13 @@ class History:
                 content = ""
             is_compact = bool(item.get("is_compact_summary"))
             if is_compact:
-                ctx.append("compressed_middle", content, role="system", is_compact_summary=True, agent=sender)
+                ctx.append(
+                    "compressed_middle",
+                    content,
+                    role="system",
+                    is_compact_summary=True,
+                    agent=sender,
+                )
                 continue
             if _is_human_sender(sender):
                 ctx.append_auto("user", content, role="user", sender=sender)
