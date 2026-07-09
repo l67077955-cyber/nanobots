@@ -729,7 +729,7 @@ class PromptBuilder:
         *,
         registry: dict[str, dict],
         active_agents: list[str],
-        history: list[dict[str, str]],
+        history: History,
         leader: str | None = None,
         round_num: int = 0,
         relevant_agents: list[str] | None = None,
@@ -773,11 +773,8 @@ class PromptBuilder:
         for key in order:
             if key == "history":
                 from nanobot.groupchat.history.history_settings import max_context_chars
-                # Convert sender-dict list to History, then use build_for_groupchat
-                # as the sole build path (Phase 5: retire history_to_messages).
-                hist_obj = History.from_sender_dicts(history)
                 rel_set = set(relevant_agents) if relevant_agents is not None else None
-                messages.extend(hist_obj.build_for_groupchat(
+                messages.extend(history.build_for_groupchat(
                     current_agent=agent_name,
                     agent_ranks=agent_ranks,
                     relevant_agents=rel_set,
@@ -842,7 +839,7 @@ class PromptBuilder:
         agent_name: str,
         *,
         registry: dict[str, dict],
-        history: list[dict[str, Any]],
+        history: History,
         current_message: str,
         media: list[str] | None = None,
         channel: str | None = None,

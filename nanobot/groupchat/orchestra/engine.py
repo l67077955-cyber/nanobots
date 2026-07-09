@@ -1380,7 +1380,7 @@ class GroupChatEngine:
             agent_name,
             registry=self.registry,
             active_agents=self._active_agents,
-            history=self.history.to_sender_dicts(),
+            history=self.history,
             leader=self._leader,
             round_num=self._round,
             relevant_agents=relevant_agents,
