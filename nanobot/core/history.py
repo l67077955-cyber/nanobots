@@ -755,11 +755,22 @@ class History:
             # 未知 role 兜底为 user
             out.append({"role": "user", "content": f.content})
 
-        # 构建期软截断
+        # 构建期软截断：仅当总量超 max_chars 时才需要截断。不超时直接返回 out
+        # （保留 role/name）——绝不重建 Fragment，重建会把已映射的 dict 塞进空 meta
+        # 的 Fragment 再用 build_for_llm 重映射，导致 role 全退化成 user、name 丢失，
+        # 与 history_to_messages 不一致（曾导致 SHADOW MISMATCH）。
+        # TODO: 超 max_chars 时的分层截断（mandatory idx0+user / tiered degradation /
+        # compress 块）尚未对齐 truth 的 trim_llm_messages —— core 不能反向依赖 groupchat，
+        # 需在 core 内提供等价实现。真实长对话超阈值时 shadow 会 flag mismatch，切换前必补。
         if max_chars > 0:
-            tmp = History([Fragment(m.get("name", "?"), m.get("content", ""), {}) for m in out])
-            tmp.truncate(max_chars)
-            out = tmp.build_for_llm(current_agent)
+            total = sum(len(str(m.get("content") or "")) for m in out)
+            if total > max_chars:
+                logger.warning(
+                    "History.build_for_groupchat: total {} > max_chars {} — tiered "
+                    "truncation not yet aligned with trim_llm_messages; returning "
+                    "untruncated (shadow will flag mismatch on long conversations)",
+                    total, max_chars,
+                )
 
         # 合并连续 assistant（LLM API 拒绝连续同 role）
         out = _merge_consecutive_assistant(out)
