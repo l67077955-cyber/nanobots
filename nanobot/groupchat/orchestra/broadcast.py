@@ -14,6 +14,8 @@ from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
 from loguru import logger
 
+from nanobot.core.history import History
+
 from nanobot.groupchat.display import display as _d
 from nanobot.groupchat.orchestra.agent_runner import AgentRunner
 from nanobot.groupchat.orchestra.cycle_controller import (
@@ -211,9 +213,11 @@ class BroadcastContext(Protocol):
     _round: int
     _leader: str | None
     _debug_context: bool
-    _history: list[dict[str, str]]
     _request_log: list[dict[str, Any]]
     _session_dir: Any
+
+    # ── Public attributes ──
+    history: History
 
     # ── Methods ──
     def _send(self, text: str) -> Awaitable[None]: ...
@@ -536,14 +540,7 @@ async def broadcast_round(
     orch = BroadcastOrchestrator(agents, engine, mailbox)
 
     # ── Extract user question (for hint injection) ──
-    user_question = ""
-    for msg in reversed(engine.history.to_sender_dicts()):
-        if msg.get("sender") in ("User", "user", "用户"):
-            content = msg.get("content", "")
-            if content.startswith("["):
-                continue  # skip compressed summary blocks
-            user_question = content[:300]
-            break
+    user_question = engine.history.latest_user_content(max_len=300)
 
     # ═══════════════════════════════════════════════════════════════
     # Agent Execution (broadcast) — leader runs as active agent
