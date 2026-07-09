@@ -499,12 +499,21 @@ def trim_llm_messages(
 
 @dataclass
 class Fragment:
-    """带标记的内容片段。
+    """带标记的内容片段，History 的基本单元。
 
     Attributes:
-        mark: 标记名，如 "system_prompt" / "user_1" / "harper_2"。
+        mark: 标记名，用于定位，如 "system_prompt" / "user_1" / "Harper_2"。
         content: 文本内容。
-        meta: 可选元信息（role / agent / tool / is_compact_summary 等）。
+        meta: 可选属性字典，用于查询和过滤。
+
+    用法::
+
+        frag = Fragment("user_1", "你好", {"role": "user"})
+        len(frag)      # len(content)
+        bool(frag)     # bool(content.strip())
+        frag.mark      # "user_1"
+        frag.content   # "你好"
+        frag.meta      # {"role": "user"}
     """
 
     mark: str
@@ -526,10 +535,90 @@ class Fragment:
 
 
 class History:
-    """带标记的 Fragment 列表，像字符串一样操作但可通过 mark 定位。
+    """带标记的 Fragment 列表，对话历史的唯一真相源。
 
     纯数据层：不持有 provider/state，持久化由外部 hook 承担。所有按 mark 的
-    查找/删除/修改作用于首个匹配（见模块 docstring 的 mark 唯一性约定）。
+    查找/删除/修改作用于首个匹配。
+
+    用法示例
+    --------
+    创建与追加::
+
+        history = History()
+        history.system("系统提示")
+        history.user("你好")
+        history.agent("Harper", "你好！有什么可以帮你的？")
+
+    访问与遍历::
+
+        len(history)              # 片段数量
+        history.total_chars()     # 总字符数
+        history[0]                # 第一个 Fragment
+        history[-1]               # 最后一个 Fragment
+        for frag in history:      # 遍历
+            print(frag.mark, frag.content)
+
+    查找（按 mark）::
+
+        history.find("user_1")           # 精确匹配
+        history.find_prefix("Harper")    # 前缀匹配
+        history.find_suffix("_summary")   # 后缀匹配
+        history.index_of("user_1")       # 获取索引
+
+    查找（按属性）::
+
+        history.filter_by_attr("role", "assistant")
+        history.filter_by_attr("agent", "Harper")
+        history.has_attr("is_compact_summary", True)
+        history.unique_attr_values("agent")   # 所有参与过的 agent
+        history.attr_values("role")            # role 序列
+        history.count_by_attr("role", "user")  # 用户消息数
+
+    删除::
+
+        history.delete("user_1")                    # 删除单个
+        history.delete_prefix("Harper")             # 删除前缀匹配
+        history.delete_by_attr("agent", "Harper")   # 按属性删除
+        history.delete_before("system_1")           # 删除之前
+        history.clear()                             # 清空
+
+    修改::
+
+        history.replace("user_1", "新内容")
+        history.update_meta("user_1", edited=True)
+        history.append_to("user_1", " 追加文本")
+
+    构建 LLM 消息::
+
+        messages = history.build_for_llm(current_agent="Harper")
+        messages = history.build_for_groupchat(
+            current_agent="Harper",
+            agent_ranks={"Harper": 1, "User": 0},
+            max_chars=10000,
+        )
+
+    压缩（需要异步）::
+
+        await history.compress_middle(llm_fn, max_chars=5000)
+        history.age_tools(keep_recent=6)  # 老化工具日志
+
+    序列化::
+
+        history.to_sender_dicts()  # -> list[{sender, content, ...}]
+        history.to_dicts()         # -> list[{mark, content, meta}]
+        history.to_json()          # -> JSON string
+
+        History.from_sender_dicts(dicts)  # 从持久化恢复
+        History.from_json(json_str)
+
+    属性约定
+    --------
+    常用 meta 属性（不强制，业务方按需使用）：
+
+    - role: "system" | "user" | "assistant" | "tool"
+    - agent: agent 名称（role=assistant 时）
+    - sender: 发送者显示名（用于持久化）
+    - is_compact_summary: 是否为压缩摘要块
     """
 
     __slots__ = ("_fragments", "_lock", "_compress_active")
@@ -1372,39 +1461,57 @@ class History:
         return any(str(f.meta.get("role")) == "system" for f in self._fragments)
 
     # ── 属性查询方法 ───────────────────────────────────────────────────
+    # 用于按 Fragment.meta 中的键值对进行查询和过滤。
+    # 常用 key: role, agent, sender, is_compact_summary 等。
+    # ─────────────────────────────────────────────────────────────────────
 
     def count_by_attr(self, key: str, value: Any) -> int:
-        """统计 attr[key]==value 的片段数。"""
+        """统计 attr[key]==value 的片段数。
+
+        示例: history.count_by_attr("role", "user")
+        """
         return sum(1 for f in self._fragments if f.meta.get(key) == value)
 
     def filter_by_attr(self, key: str, value: Any) -> list[Fragment]:
-        """获取 attr[key]==value 的所有片段。"""
+        """获取 attr[key]==value 的所有片段。
+
+        示例: history.filter_by_attr("agent", "Harper")
+        """
         return [f for f in self._fragments if f.meta.get(key) == value]
 
     def has_attr(self, key: str, value: Any) -> bool:
-        """是否存在 attr[key]==value 的片段。"""
+        """是否存在 attr[key]==value 的片段。
+
+        示例: history.has_attr("is_compact_summary", True)
+        """
         return any(f.meta.get(key) == value for f in self._fragments)
 
     def first_by_attr(self, key: str, value: Any) -> Fragment | None:
-        """获取首个 attr[key]==value 的片段。"""
+        """获取首个 attr[key]==value 的片段，不存在返回 None。"""
         for f in self._fragments:
             if f.meta.get(key) == value:
                 return f
         return None
 
     def last_by_attr(self, key: str, value: Any) -> Fragment | None:
-        """获取最后 attr[key]==value 的片段。"""
+        """获取最后 attr[key]==value 的片段，不存在返回 None。"""
         for f in reversed(self._fragments):
             if f.meta.get(key) == value:
                 return f
         return None
 
     def unique_attr_values(self, key: str) -> set[Any]:
-        """获取某个属性的所有唯一值。"""
+        """获取某个属性的所有唯一值。
+
+        示例: history.unique_attr_values("agent")  # {"Harper", "Grok", ...}
+        """
         return {f.meta.get(key) for f in self._fragments if key in f.meta}
 
     def attr_values(self, key: str) -> list[Any]:
-        """按顺序返回某个属性的所有值（不去重）。"""
+        """按顺序返回某个属性的所有值（不去重）。
+
+        示例: history.attr_values("role")  # ["system", "user", "assistant", ...]
+        """
         return [f.meta.get(key) for f in self._fragments if key in f.meta]
 
     # ── 内部方法 ────────────────────────────────────────────────────────
