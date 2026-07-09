@@ -303,7 +303,6 @@ class MailboxHub:
         self._on_message = on_message
         # Track which agents are currently waiting
         self._waiting: set[str] = set()
-        self._all_waiting = asyncio.Event()
         # Leader info + listener restrictions
         self._leader_name: str = ""
         self._listener_restrictions: dict[str, str] = {}
@@ -374,7 +373,6 @@ class MailboxHub:
                     break
         self._history.clear()
         self._waiting.clear()
-        self._all_waiting.clear()
         self._active_agents = set(active_agents) if active_agents else set(self._queues.keys())
         self._expected_replies.clear()
         self._next_msg_id = 0
@@ -700,7 +698,6 @@ class MailboxHub:
         if self._waiting >= self._active_agents and len(self._active_agents) > 0:
             logger.info("MailboxHub: all {} agents waiting — nudging random agent",
                         len(self._active_agents))
-            self._all_waiting.set()
             self._nudge_random_agent(reason="all-waiting")
 
         # Use the caller-provided timeout directly (no hard caps)
@@ -809,11 +806,6 @@ class MailboxHub:
         """Names of agents with mailboxes."""
         return list(self._queues.keys())
 
-    @property
-    def all_waiting_event(self) -> asyncio.Event:
-        """Event that fires when all active agents are simultaneously waiting."""
-        return self._all_waiting
-
     def _get_busy_expected_repliers(self, agent_name: str) -> set[str]:
         """Return the set of agents that are expected to reply to agent_name
         and are still actively processing (not waiting, not done).
@@ -881,7 +873,6 @@ class MailboxHub:
             self._interrupt_events[agent_name].clear()
         # Re-check: if remaining active agents are all waiting
         if self._active_agents and self._waiting >= self._active_agents:
-            self._all_waiting.set()
             self._nudge_random_agent(reason="agent-done")
 
     def is_discussion_ended(self) -> bool:
@@ -891,8 +882,6 @@ class MailboxHub:
     def mark_discussion_ended(self) -> None:
         """Mark the discussion as ended (prevents re-entrancy and further busy work)."""
         self._discussion_ended = True
-        # Also ensure all_waiting to unblock any lingering wait() calls
-        self._all_waiting.set()
         # Force-clear busy/interrupt state so any mid-turn agents exit their tool_loops promptly
         # (important for interrupt + end races and the old "waiting guard" brittleness).
         for name in list(self._busy_agents):
