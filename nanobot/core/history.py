@@ -1345,6 +1345,60 @@ class History:
 
     # ── 序列化 ──────────────────────────────────────────────────────────
 
+    # ── 读取访问器（主逻辑轻量化用：engine/广播/工具不直碰 _fragments） ─────
+
+    def last_sender(self) -> str | None:
+        """末个片段的 sender 标识（agent 优先），空列表返回 None。"""
+        if not self._fragments:
+            return None
+        return _sender_of(self._fragments[-1])
+
+    def latest_user_content(self, *, max_len: int = 300) -> str:
+        """末个真实 user 片段的 content（跳过压缩摘要），截断 max_len。无则空串。
+
+        对齐 broadcast 旧 ``reversed(sender scan)``：role=="user" 片段即人类用户
+        发言（其他 agent 在 History 里是 role=assistant，不混入）。
+        """
+        for f in reversed(self._fragments):
+            if str(f.meta.get("role")) != "user":
+                continue
+            content = f.content
+            if content.startswith("["):
+                continue  # 跳过压缩摘要（legacy 防御）
+            return content[:max_len]
+        return ""
+
+    def has_system_message(self) -> bool:
+        """是否存在 role==system 片段（系统 prompt / 话题 banner / 压缩摘要）。"""
+        return any(str(f.meta.get("role")) == "system" for f in self._fragments)
+
+    def count_by_meta(self, key: str, value: Any) -> int:
+        """统计 meta[key]==value 的片段数（ClearContextTool 按 agent 计数用）。"""
+        return sum(1 for f in self._fragments if f.meta.get(key) == value)
+
+    def _semantic_add_from_sender(self, sender: str, content: str) -> str:
+        """sender→role 分派追加（与 from_sender_dicts 同语义）。
+
+        - 人类 sender → role=user，mark=user_N，meta.sender=sender
+        - 系统 sender → role=system，mark=system_N，meta.sender=sender
+        - 其他 → role=assistant，mark=<sender>_N，meta.agent=sender（使
+          ``delete_by_meta('agent', sender)`` 命中，对齐 clear_for_agent）
+
+        engine._add_message 走此方法，sender 字符串原样保留进 meta.sender，
+        使 to_sender_dicts 落盘格式与既有 chat_history.json 一致。
+        """
+        if _is_human_sender(sender):
+            return self._semantic_append("user", content, None, role="user", sender=sender)
+        if sender in ("系统", "System", "system", ""):
+            return self._semantic_append(
+                "system", content, None, role="system", sender=sender or "系统"
+            )
+        return self._semantic_append(sender, content, None, role="assistant", agent=sender)
+
+    def format(self) -> str:
+        """可读字符串：``[sender]: content`` 用空行拼接（对齐 HistoryContext.format）。"""
+        return "\n\n".join(f"[{_sender_of(f)}]: {f.content}" for f in self._fragments)
+
     def to_dicts(self) -> list[dict[str, Any]]:
         """导出为 dict 列表（mark/content/meta 无损）。"""
         return [

@@ -19,15 +19,12 @@ from typing import Any, Awaitable, Callable
 from loguru import logger
 
 from nanobot.core.history import History
-from nanobot.core.history import _is_human_sender as _ctx_is_human_sender
 from nanobot.groupchat.config import GroupChatConfig
 from nanobot.groupchat.history.agent_loader import load_agents
-from nanobot.groupchat.history.context import HistoryContext
 from nanobot.groupchat.history.persistence import GroupChatState
 from nanobot.groupchat.history.prompt_builder import PromptBuilder
 from nanobot.groupchat.history.response_cleanup import clean_response as _clean_response_fn
 from nanobot.groupchat.orchestra.agent_runner import AgentRunner
-from nanobot.groupchat.orchestra.conversation_context import ConversationContext
 from nanobot.groupchat.orchestra.mailbox import MailboxHub
 from nanobot.groupchat.orchestra.turn_stack import TurnStack
 from nanobot.providers.base import LLMProvider
@@ -284,25 +281,14 @@ class GroupChatEngine:
         self._leader: str | None = self._state.load_leader()
         self._round: int = 0
 
-        # ── History: fully managed by HistoryContext (history module) ──
-        self.history: HistoryContext = HistoryContext(
-            state=self._state,
-            provider=self.provider,
-        )
-        # ConversationContext: the single mutation seam for history. All
-        # add/clear/compress goes through here; ``self._history`` below is a
-        # READ-ONLY view of ``self.history.messages`` (Step 1 coupling refactor).
-        self._context = ConversationContext(self.history, self._state)
-
-        # ── Shadow History mirror (Step 3b-2) ──────────────────────────────
-        # A parallel, read-only twin of HistoryContext, kept in sync at every
-        # write seam below. It NEVER feeds the LLM — its only job is to let
-        # _build_agent_prompt compare ctx.build_for_groupchat() against the
-        # real history_to_messages() output and logger.error on divergence.
-        # Existing HistoryContext / ConversationContext / message_converter
-        # remain the sole source of truth.
-        self._ctx = History()
-        self._context._shadow = self._ctx  # type: ignore[attr-defined]
+        # ── History: the single static store (core/history.py) ──────────────
+        # History is the canonical conversation-history truth source. All
+        # mutation goes through the seam methods below (_add_message /
+        # _maybe_compress_history / clear_history / _restore_chat_state);
+        # readers use History accessors (last_sender / latest_user_content /
+        # has_system_message / to_sender_dicts / build_for_groupchat …) and
+        # never touch a raw sender-dict list. No HistoryContext / shadow twin.
+        self.history: History = History()
 
         # Runtime state (ephemeral, not persisted)
         self._task: asyncio.Task | None = None
@@ -474,62 +460,17 @@ class GroupChatEngine:
         """Persist the current active agents list to disk."""
         self._state.save_active(self._active_agents)
 
-    # ── History access (Step 1 coupling refactor) ─────────────────────────
-    # ``_history`` is now a READ-ONLY view of the live messages list. All
-    # mutation goes through ``self._context`` (ConversationContext) / the
-    # ``self.history`` (HistoryContext) it wraps. The scattered
-    # ``self._history = self.history.messages`` re-syncs are gone — a property
-    # always reflects the current list even after HistoryContext rebuilds it.
-    @property
-    def _history(self) -> list[dict[str, str]]:
-        return self.history.messages
-
-    @property
-    def context(self) -> ConversationContext:
-        """The single mutation seam for conversation history."""
-        return self._context
-
-    # ── Shadow History mirror helpers (Step 3b-2) ─────────────────────────
-    # These methods keep the read-only History twin (self._ctx) aligned with
-    # HistoryContext. They perform NO observable behaviour: the existing
-    # paths remain the sole source of truth, and the mirror is only ever read
-    # by the build-output assertion in _build_agent_prompt.
-
-    def _rebind_ctx(self, ctx: History) -> None:
-        """Bind a fresh shadow History and propagate the ref to ConversationContext.
-
-        Used after wholesale rebuilds (restore / post-compress re-sync) where a
-        new Context replaces the old one. ConversationContext holds its own
-        ``_shadow`` ref for the clear_for_agent seam (which bypasses engine),
-        so it must be kept in lockstep.
-        """
-        self._ctx = ctx
-        self._context._shadow = ctx  # type: ignore[attr-defined]
-
-    def _ctx_mirror_add(self, sender: str, content: str) -> None:
-        """Mirror an add_message into the shadow (sender→role dispatch).
-
-        Uses the exact same dispatch as History.from_sender_dicts so the twin
-        and the truth source agree on role/agent for every appended message.
-        """
-        try:
-            if _ctx_is_human_sender(sender):
-                self._ctx.user(content)
-            elif sender in ("系统", "System", "system", ""):
-                self._ctx.system(content)
-            else:
-                self._ctx.agent(sender, content)
-        except Exception as exc:  # noqa: BLE001 - shadow must never break prod
-            logger.warning("Shadow ctx mirror add failed (sender={}): {}", sender, exc)
+    # ── History seam ──────────────────────────────────────────────────────
+    # ``self.history`` is the History store. Mutation goes through the seam
+    # methods below (_add_message / _maybe_compress_history / clear_history /
+    # _restore_chat_state / _persist_chat_state). Readers use History
+    # accessors directly (last_sender / latest_user_content / has_system_message
+    # / to_sender_dicts / build_for_groupchat / build_for_llm) — no raw list.
 
     def clear_history(self) -> None:
         """Clear conversation history and request log, but keep active agents and loop running."""
         self.interrupt_active_turn()
         self.history.clear()
-        try:
-            self._ctx.clear()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Shadow ctx clear failed: {}", exc)
         self._request_log.clear()
         state = getattr(self, "_state", None)
         if state is not None:
@@ -541,10 +482,6 @@ class GroupChatEngine:
         """Clear history, request log, active agents, and stop the loop."""
         self.stop()
         self.history.clear()
-        try:
-            self._ctx.clear()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Shadow ctx clear failed: {}", exc)
         self._request_log.clear()
         self._active_agents.clear()
         state = getattr(self, "_state", None)
@@ -1248,10 +1185,10 @@ class GroupChatEngine:
 
     def _persist_chat_state(self) -> None:
         """Write live history to disk so gateway restarts do not lose context."""
-        if not self._history:
+        if not self.history:
             return
         self._state.save_history_snapshot(
-            history=self._history,
+            history=self.history.to_sender_dicts(),
             topic=self._topic,
             round_num=self._round,
             session_dir=self._session_dir,
@@ -1276,15 +1213,10 @@ class GroupChatEngine:
             restored.append(item)
         if not restored:
             return
-        self._context.replace_all(restored)
-        # Shadow re-sync: rebuild the twin from the same restored dicts so the
-        # mirror matches the freshly-loaded truth source. from_sender_dicts
-        # handles sender→role / is_compact_summary the same way replace_all +
-        # HistoryContext do.
-        try:
-            self._rebind_ctx(History.from_sender_dicts(restored))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Shadow ctx restore re-sync failed: {}", exc)
+        # History is the truth source: rebuild it from the persisted
+        # sender-dicts. from_sender_dicts handles sender→role /
+        # is_compact_summary the same way the old HistoryContext path did.
+        self.history = History.from_sender_dicts(restored)
         self._topic = str(snapshot.get("topic") or "")
         self._round = int(snapshot.get("round") or 0)
         session_path = str(snapshot.get("session_dir") or "").strip()
@@ -1305,9 +1237,15 @@ class GroupChatEngine:
         )
 
     def _add_message(self, sender: str, content: str) -> None:
-        """Append a message — through the ConversationContext seam."""
-        self._context.add(sender, content)
-        self._ctx_mirror_add(sender, content)
+        """Append a message to the History store + audit log + persist.
+
+        sender→role dispatch lives in History._semantic_add_from_sender (sets
+        meta.agent so delete_by_meta('agent', ...) hits). The audit log
+        (chat_log.txt + session.jsonl) was previously inside
+        HistoryContext.add_message; History is pure data, so it moves here.
+        """
+        self.history._semantic_add_from_sender(sender, content)
+        self._state.save_message(sender, content, self.history.to_sender_dicts())
         self._persist_chat_state()
 
     def _save_event(
@@ -1351,33 +1289,84 @@ class GroupChatEngine:
         })
 
     async def _maybe_compress_history(self) -> None:
-        """Compress history if needed — through the ConversationContext seam."""
+        """Compress history if needed — directly through History."""
+        from nanobot.groupchat.history.history_settings import (
+            max_messages,
+            compress_ratio,
+            token_trigger_ratio,
+            compression_keep_recent,
+            history_summarize_enabled,
+            summarize_model,
+            compress_max_summary_tokens,
+            compress_fallback_chars,
+            keep_user_messages,
+            get_context_window_tokens,
+        )
+
         # Microcompact pre-pass (no LLM): age old tool-log blocks before the
         # threshold check / AI summary, keeping history lean so maybe_compress
         # fires later and summarises a smaller middle region.
-        self._context.microcompact()
-        # Shadow: mirror microcompact via the same age-tools rule (skips idx0 /
-        # user / system, no-op under _compress_active). Runs before the await so
-        # it can't collide with the compress guard.
+        self.history.age_tools(keep_recent=compression_keep_recent())
+
+        # Check thresholds (message-count or token-pressure)
+        limit = max_messages()
+        ratio = compress_ratio()
+        tok_trigger = token_trigger_ratio()
+
+        # Token-aware trigger
+        token_ratio = 0.0
         try:
-            from nanobot.groupchat.history.history_settings import compression_keep_recent
-            self._ctx.age_tools(keep_recent=compression_keep_recent())
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Shadow ctx age_tools failed: {}", exc)
-        await self._context.maybe_compress()
-        # Shadow: don't reproduce compress_middle's divergent head/tail semantics
-        # (its protected-head boundaries differ from ctx's fragment counts and
-        # would cause persistent false mismatch). Instead re-sync the twin from
-        # the live truth source after compress, so the mirror always realigns
-        # regardless of how HistoryContext rebuilt self.messages.
-        try:
-            self._rebind_ctx(History.from_sender_dicts(self._history))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Shadow ctx post-compress re-sync failed: {}", exc)
+            from nanobot.utils.helpers import estimate_message_tokens
+            token_window = get_context_window_tokens()
+            if token_window > 0 and len(self.history) > 0:
+                msgs = self.history.to_sender_dicts()
+                current_tok = sum(
+                    int(estimate_message_tokens({"role": "user" if m.get("sender") in ("User", "user", "用户") else "assistant", "content": m.get("content", "")}) or 0)
+                    for m in msgs
+                )
+                token_ratio = current_tok / max(1, token_window)
+        except Exception:
+            pass
+
+        msg_count_ratio = len(self.history) / max(1, limit)
+        effective_ratio = max(msg_count_ratio, token_ratio)
+
+        if effective_ratio < ratio and token_ratio < tok_trigger:
+            return  # Below threshold, no compression needed
+
+        # Above threshold, run compress_middle
+        # Use provider's chat_with_retry for AI summary if enabled
+        llm_fn = None
+        if history_summarize_enabled() and self.provider is not None:
+            async def _summarize(text: str) -> str:
+                prompt = (
+                    f"以下是群聊的一段中期历史记录（共若干条）。\n"
+                    "请用简洁的中文摘要这些内容，重点保留核心发现、关键决策、重要事实以及已经完成的进度。\n"
+                    "如果有具体的数值、文件路径或关键结论，请务必保留。\n"
+                    f"摘要须精炼，长度由调用方 max_tokens 控制。\n\n{text}"
+                )
+                resp = await self.provider.chat_with_retry(
+                    messages=[{"role": "user", "content": prompt}],
+                    model=summarize_model(),
+                    max_tokens=compress_max_summary_tokens(),
+                )
+                return (resp.content or "").strip()
+
+            llm_fn = _summarize
+
+        # compress_middle handles the actual compression with threshold check
+        # max_chars for mechanical fallback
+        max_chars = compress_fallback_chars()
+        await self.history.compress_middle(
+            llm_fn,
+            max_chars,
+            keep_last=compression_keep_recent(),
+            protect_users=keep_user_messages(),
+        )
         self._persist_chat_state()
 
     def _format_history(self) -> str:
-        """Format history as string — delegates to HistoryContext."""
+        """Format history as string — delegates to History."""
         return self.history.format()
 
 
@@ -1385,9 +1374,10 @@ class GroupChatEngine:
         names = self._active_agents
         # Avoid repeat
         candidates = list(names)
-        if self._history:
-            last_speaker = self._history[-1]["sender"]
-            candidates = [n for n in candidates if n != last_speaker]
+        if self.history:
+            last_speaker = self.history.last_sender()
+            if last_speaker:
+                candidates = [n for n in candidates if n != last_speaker]
         return random.choice(candidates) if candidates else random.choice(names)
 
     def _build_agent_prompt(
@@ -1406,7 +1396,7 @@ class GroupChatEngine:
             agent_name,
             registry=self.registry,
             active_agents=self._active_agents,
-            history=self._history,
+            history=self.history.to_sender_dicts(),
             leader=self._leader,
             round_num=self._round,
             relevant_agents=relevant_agents,
@@ -1417,79 +1407,7 @@ class GroupChatEngine:
             user_question=user_question,
         )
 
-        # Skills are now built by PromptBuilder._build_skills_content()
-        # (included in DEFAULT_PROMPT_ORDER as "skills" component).
-
-        # ── Shadow verification (Step 3b-2) ───────────────────────────────
-        # Apples-to-apples: re-run the SAME history→messages conversion the
-        # prompt_builder uses (history_to_messages, identical args), then run
-        # the shadow History twin's build_for_groupchat, and compare the two
-        # by (role, content, name) tuples. On mismatch, logger.error only —
-        # never raise, never alter the messages returned to the LLM. The
-        # existing path stays the sole source of truth.
-        self._shadow_verify_build(agent_name, relevant_agents, agent_ranks)
-
         return messages
-
-    def _shadow_verify_build(
-        self,
-        agent_name: str,
-        relevant_agents: list[str] | None,
-        agent_ranks: dict[str, int] | None,
-    ) -> None:
-        """Compare shadow ctx.build_for_groupchat vs history_to_messages.
-
-        Wrapped in try/except so a verification failure can never affect the
-        production prompt path. Mismatches are logged at ERROR level only.
-        """
-        try:
-            from nanobot.groupchat.history.history_settings import max_context_chars
-            from nanobot.groupchat.history.message_converter import history_to_messages
-
-            max_chars = max_context_chars()
-            truth = history_to_messages(
-                self._history,
-                agent_name,
-                max_chars=max_chars,
-                relevant_agents=relevant_agents,
-                agent_ranks=agent_ranks,
-            )
-            rel_set = set(relevant_agents) if relevant_agents is not None else None
-            shadow = self._ctx.build_for_groupchat(
-                current_agent=agent_name,
-                agent_ranks=agent_ranks,
-                relevant_agents=rel_set,
-                max_chars=max_chars,
-            )
-
-            def _tuple(m: dict[str, Any]) -> tuple[str, str, str]:
-                return (
-                    str(m.get("role") or ""),
-                    str(m.get("content") or ""),
-                    str(m.get("name") or ""),
-                )
-
-            first_diff = -1
-            for i in range(max(len(truth), len(shadow))):
-                t = _tuple(truth[i]) if i < len(truth) else None
-                s = _tuple(shadow[i]) if i < len(shadow) else None
-                if t != s:
-                    first_diff = i
-                    break
-            if first_diff >= 0 or len(truth) != len(shadow):
-                if first_diff < 0:
-                    first_diff = min(len(truth), len(shadow))
-                logger.error(
-                    "SHADOW MISMATCH @ build_agent_prompt: agent={} "
-                    "relevant={} ranks={} truth_len={} shadow_len={} "
-                    "first_diff_idx={} truth={} shadow={}",
-                    agent_name, relevant_agents, agent_ranks,
-                    len(truth), len(shadow), first_diff,
-                    _tuple(truth[first_diff]) if first_diff < len(truth) else None,
-                    _tuple(shadow[first_diff]) if first_diff < len(shadow) else None,
-                )
-        except Exception as exc:  # noqa: BLE001 - shadow must never break prod
-            logger.warning("Shadow verify build failed: {}", exc)
 
 
     async def _generate_summary(self) -> None:

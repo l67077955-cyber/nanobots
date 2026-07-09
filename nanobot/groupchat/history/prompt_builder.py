@@ -19,10 +19,10 @@ import platform
 
 from nanobot.utils.helpers import cn_now as _cn_now
 
+from nanobot.core.history import History
 from nanobot.groupchat.history.component_manager import get_system_warning
 from nanobot.groupchat.history.context_validator import validate_context
 from nanobot.groupchat.history.deliverable_hint import detect_deliverable_hint
-from nanobot.groupchat.history.message_converter import history_to_messages
 
 
 # ── Constants ─────────────────────────────────────────────────
@@ -707,14 +707,14 @@ class PromptBuilder:
         relevant_agents: list[str] | None = None,
         agent_ranks: dict[str, int] | None = None,
     ) -> list[dict[str, Any]]:
-        """Delegate to message_converter.history_to_messages."""
-        return history_to_messages(
-            history,
+        """Convert sender-dict history to LLM messages via History.build_for_groupchat."""
+        hist_obj = History.from_sender_dicts(history)
+        rel_set = set(relevant_agents) if relevant_agents is not None else None
+        return hist_obj.build_for_groupchat(
             current_agent=current_agent,
-            max_chars=max_chars,
-            pin_first_user=pin_first_user,
-            relevant_agents=relevant_agents,
             agent_ranks=agent_ranks,
+            relevant_agents=rel_set,
+            max_chars=max_chars,
         )
 
     @staticmethod
@@ -792,11 +792,15 @@ class PromptBuilder:
         for key in order:
             if key == "history":
                 from nanobot.groupchat.history.history_settings import max_context_chars
-                messages.extend(history_to_messages(
-                    history, agent_name,
-                    max_chars=max_context_chars(),
-                    relevant_agents=relevant_agents,
+                # Convert sender-dict list to History, then use build_for_groupchat
+                # as the sole build path (Phase 5: retire history_to_messages).
+                hist_obj = History.from_sender_dicts(history)
+                rel_set = set(relevant_agents) if relevant_agents is not None else None
+                messages.extend(hist_obj.build_for_groupchat(
+                    current_agent=agent_name,
                     agent_ranks=agent_ranks,
+                    relevant_agents=rel_set,
+                    max_chars=max_context_chars(),
                 ))
                 continue
 
