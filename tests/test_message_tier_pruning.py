@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
-from nanobot.groupchat.history.message_converter import (
+from nanobot.core.history import (
     CHATROOM_TOOL_NAMES,
     _COMPRESS_HEADER,
     degrade_content,
     fit_messages_to_tier_budget,
-    history_to_messages,
     strip_chatroom_tool_lines,
     trim_sender_history,
+    History,
 )
+
+
+def history_to_messages(history, current_agent="", max_chars=0, **kwargs):
+    """Helper wrapper for tests."""
+    return History.from_sender_dicts(history).build_for_groupchat(
+        current_agent=current_agent,
+        max_chars=max_chars,
+    )
 
 
 def _tool_block(*lines: str) -> str:
