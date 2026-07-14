@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import random
 import json as _json
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
@@ -830,10 +831,8 @@ async def broadcast_round(
 
         try:
             while True:
-                # ── Shadow mode: CycleController verification (Step 3b) ──
-                # Build CycleContext and ask the oracle what it would do.
-                # Log mismatches prominently but don't crash production.
-                _shadow_ctx = CycleContext(
+                # ── Decision 0: cycle_gate (wired) ──
+                _cycle_ctx = CycleContext(
                     agent_name=name,
                     is_leader=is_leader,
                     cycle=cycle,
@@ -851,54 +850,40 @@ async def broadcast_round(
                     consecutive_error_count=_consecutive_error_count,
                     max_consecutive_errors=MAX_CONSECUTIVE_ERRORS,
                 )
-                _shadow_gate = _cycle_ctrl.decide_cycle_gate(_shadow_ctx)
-                # Check oracle agrees with existing logic
-                _gate_should_exit_max = cycle >= max_cycles
-                _gate_should_exit_stop = (not engine._running or (mailbox and mailbox.is_discussion_ended())) and not (is_leader and _leader_ended_discussion)
-                _gate_ok = (
-                    (_gate_should_exit_max and _shadow_gate.action is CycleAction.EXIT_MAX_CYCLES_FORCE_SYNTHESIS) or
-                    (_gate_should_exit_stop and _shadow_gate.action is CycleAction.EXIT_STOPPED_OR_ENDED) or
-                    (not _gate_should_exit_max and not _gate_should_exit_stop and _shadow_gate.action is CycleAction.PROCEED_TO_CYCLE)
-                )
-                if not _gate_ok:
-                    logger.error(
-                        "SHADOW MISMATCH @ cycle_gate: cycle={} max={} running={} disc_ended={} is_leader={} leader_ended={} oracle={} existing_max={} existing_stop={}",
-                        cycle, max_cycles, engine._running, mailbox.is_discussion_ended() if mailbox else False,
-                        is_leader, _leader_ended_discussion, _shadow_gate.action, _gate_should_exit_max, _gate_should_exit_stop,
-                    )
-                # ── End shadow verification ──
+                _cycle_decision = _cycle_ctrl.decide_cycle_gate(_cycle_ctx)
 
-                # Hard cycle cap — prevent runaway agents from draining resources
-                if cycle >= max_cycles:
-                    logger.warning(
-                        "Broadcast: {} hit max_cycles={}, forcing exit", name, max_cycles
-                    )
-                    if not content:
-                        messages.append({
-                            "role": "system",
-                            "content": "[已达到最大轮次限制，请立即输出最终总结，禁止再调用工具。]",
-                        })
-                        try:
-                            _r = await tool_loop(
-                                provider=engine.provider,
-                                messages=messages,
-                                tool_registry=reg,
-                                model=model,
-                                max_tokens=engine.config.max_tokens,
-                                max_iterations=1,
-                                tool_defs=None,
-                            )
-                            content = _r.content or ""
-                        except Exception:
-                            pass
-                    break
-                # Respect /stop — exit immediately if engine is no longer running.
-                # Exception: leader called end_discussion but hasn't produced valid
-                # synthesis yet — allow the cycle loop to continue so the leader
-                # can retry (guards at line ~1125/1140 force a text-producing cycle).
-                if (not engine._running or (mailbox and getattr(mailbox, "is_discussion_ended", lambda: False)())) and not (is_leader and _leader_ended_discussion):
-                    logger.info("Broadcast: {} exiting — engine stopped or discussion ended", name)
-                    break
+                match _cycle_decision.action:
+                    case CycleAction.EXIT_MAX_CYCLES_FORCE_SYNTHESIS:
+                        logger.warning(
+                            "Broadcast: {} hit max_cycles={}, forcing exit", name, max_cycles
+                        )
+                        if not content:
+                            messages.append({
+                                "role": "system",
+                                "content": "[已达到最大轮次限制，请立即输出最终总结，禁止再调用工具。]",
+                            })
+                            try:
+                                _r = await tool_loop(
+                                    provider=engine.provider,
+                                    messages=messages,
+                                    tool_registry=reg,
+                                    model=model,
+                                    max_tokens=engine.config.max_tokens,
+                                    max_iterations=1,
+                                    tool_defs=None,
+                                )
+                                content = _r.content or ""
+                            except Exception:
+                                pass
+                        break
+
+                    case CycleAction.EXIT_STOPPED_OR_ENDED:
+                        logger.info("Broadcast: {} exiting — engine stopped or discussion ended", name)
+                        break
+
+                    case CycleAction.PROCEED_TO_CYCLE:
+                        pass  # fall through to cycle body
+
                 cycle += 1
                 # Re-read model from registry each cycle so mid-round changes take effect
                 _live_cfg = engine.registry.get(name, agent_cfg)
@@ -1039,8 +1024,8 @@ async def broadcast_round(
                 if is_leader and "end_discussion" in (result.tools_used or []) and not engine._running:
                     _leader_ended_discussion = True
 
-                # ── Shadow: error_recovery decision ──
-                _shadow_err_ctx = CycleContext(
+                # ── Decision 1: error_recovery (wired) ──
+                _err_ctx = CycleContext(
                     agent_name=name,
                     is_leader=is_leader,
                     cycle=cycle,
@@ -1058,138 +1043,113 @@ async def broadcast_round(
                     consecutive_error_count=_consecutive_error_count,
                     max_consecutive_errors=MAX_CONSECUTIVE_ERRORS,
                 )
-                _shadow_err = _cycle_ctrl.decide_error_recovery(_shadow_err_ctx)
-                # Check oracle vs existing logic (nested conditions)
-                _err_should_first_timeout = is_timeout and _timeout_recovery_count == 0
-                _err_should_repeat_fallthrough = is_timeout and _timeout_recovery_count != 0
-                _err_should_max_break = is_error and _consecutive_error_count >= MAX_CONSECUTIVE_ERRORS
-                _err_should_placeholder_continue = is_error and _consecutive_error_count < MAX_CONSECUTIVE_ERRORS
-                _err_no_recovery = not (is_error or is_timeout)
-                _err_ok = (
-                    (_err_should_first_timeout and _shadow_err.action is CycleAction.TIMEOUT_FIRST_RETRY) or
-                    (_err_should_repeat_fallthrough and _shadow_err.action is CycleAction.TIMEOUT_REPEATED_FALLTHROUGH) or
-                    (_err_should_max_break and _shadow_err.action is CycleAction.ERROR_MAX_BREAK) or
-                    (_err_should_placeholder_continue and _shadow_err.action is CycleAction.ERROR_PLACEHOLDER_CONTINUE) or
-                    (_err_no_recovery and _shadow_err.action is CycleAction.NO_ERROR_RECOVERY)
-                )
-                if not _err_ok:
-                    logger.error(
-                        "SHADOW MISMATCH @ error_recovery: finish={} timeout_cnt={} err_cnt={} oracle={} is_timeout={} is_error={}",
-                        result.finish_reason, _timeout_recovery_count, _consecutive_error_count,
-                        _shadow_err.action, is_timeout, is_error,
-                    )
-                # ── End shadow: error_recovery ──
+                _err_decision = _cycle_ctrl.decide_error_recovery(_err_ctx)
 
-                if is_error or is_timeout:
-                    if is_timeout:
+                match _err_decision.action:
+                    case CycleAction.TIMEOUT_FIRST_RETRY:
+                        # C1: First timeout gets one clean retry (body-internal outcome)
                         _base_timeout = gc_settings.get(
-                            "leader_call_timeout" if is_leader else "call_timeout",
-                            90,
+                            "leader_call_timeout" if is_leader else "call_timeout", 90
                         )
-                        err_short = f"LLM 超时 ({_base_timeout}s)"
-
-                        # ── Clean retry on first timeout ──
-                        # Re-use the same messages context (no injection) so history
-                        # stays clean. Run one short no-tool call to get at least a
-                        # brief output rather than abandoning the turn entirely.
-                        if _timeout_recovery_count == 0:
-                            _timeout_recovery_count += 1
-                            await tracker.set_state(name, "thinking", detail="retry...")
-                            await engine._send(f"⏰ {name} 超时，重试中...")
-                            logger.warning(
-                                "Broadcast: {} LLM timeout ({:.1f}s), retrying once (no tools)",
-                                name, latency,
+                        _timeout_recovery_count += 1
+                        await tracker.set_state(name, "thinking", detail="retry...")
+                        await engine._send(f"⏰ {name} 超时，重试中...")
+                        logger.warning(
+                            "Broadcast: {} LLM timeout ({:.1f}s), retrying once (no tools)",
+                            name, latency,
+                        )
+                        try:
+                            _r = await tool_loop(
+                                provider=engine.provider,
+                                messages=messages,
+                                tool_registry=reg,
+                                model=model,
+                                max_tokens=600,
+                                max_iterations=1,
+                                tool_defs=None,
+                                call_timeout=60.0,
                             )
-                            try:
-                                _r = await tool_loop(
-                                    provider=engine.provider,
-                                    messages=messages,          # unchanged — no injection
-                                    tool_registry=reg,
-                                    model=model,
-                                    max_tokens=600,             # short answer only
-                                    max_iterations=1,
-                                    tool_defs=None,             # text-only, no tools
-                                    call_timeout=60.0,          # hard cap for retry
-                                )
-                                if _r.content:
-                                    content = _r.content
-                                    total_latency += _r.latency
-                                    engine._add_message(name, content)
-                                    search_pool.on_output(name)
-                                    mailbox.send(name, ["All"], content[:300])
-                                    await engine._send(
-                                        _d.chatroom_send_msg(
-                                            name, "重试输出", content, max_len=1000, leader=leader_name
-                                        )
+                            if _r.content:
+                                content = _r.content
+                                total_latency += _r.latency
+                                engine._add_message(name, content)
+                                search_pool.on_output(name)
+                                mailbox.send(name, ["All"], content[:300])
+                                await engine._send(
+                                    _d.chatroom_send_msg(
+                                        name, "重试输出", content, max_len=1000, leader=leader_name
                                     )
-                                    logger.info(
-                                        "Broadcast: {} retry succeeded ({:.1f}s): {}",
-                                        name, _r.latency, content[:80],
-                                    )
-                                    _timeout_recovery_count = 0
-                                    continue  # back to auto-wait
-
-                            except Exception as _rec_exc:
-                                logger.warning("Broadcast: {} recovery also failed: {}", name, _rec_exc)
-
-                            # ── Recovery failed — send placeholder and stay alive ──
-                            # Instead of hard-exiting, pretend the agent produced a
-                            # brief status message so downstream flow continues.
-                            _placeholder = (
-                                f"⏳ [{name}] 当前模型响应超时，我仍在线。"
-                                f"等待队友消息后将继续工作。"
-                            )
-                            content = _placeholder
-                            engine._add_message(name, _placeholder)
-                            mailbox.send(name, ["All"], _placeholder)
-                            await engine._send(
-                                _d.chatroom_send_msg(
-                                    name, "超时占位", _placeholder, max_len=1000, leader=leader_name
                                 )
+                                logger.info(
+                                    "Broadcast: {} retry succeeded ({:.1f}s): {}",
+                                    name, _r.latency, content[:80],
                                 )
-                            await tracker.set_state(name, "waiting", detail="timeout recovery")
-                            logger.warning(
-                                "Broadcast: {} timeout recovery failed, injecting placeholder and continuing",
-                                name,
+                                _timeout_recovery_count = 0
+                                continue  # back to auto-wait
+                        except Exception as _rec_exc:
+                            logger.warning("Broadcast: {} recovery also failed: {}", name, _rec_exc)
+
+                        # C2: Retry failed — inject placeholder, then fall through
+                        _placeholder = (
+                            f"⏳ [{name}] 当前模型响应超时，我仍在线。"
+                            f"等待队友消息后将继续工作。"
+                        )
+                        content = _placeholder
+                        engine._add_message(name, _placeholder)
+                        mailbox.send(name, ["All"], _placeholder)
+                        await engine._send(
+                            _d.chatroom_send_msg(
+                                name, "超时占位", _placeholder, max_len=1000, leader=leader_name
                             )
-                            # Reset recovery counter so next timeout also gets a retry chance
-                            _timeout_recovery_count = 0
-                            continue  # enter auto-wait, agent stays alive
+                        )
+                        await tracker.set_state(name, "waiting", detail="timeout recovery")
+                        logger.warning(
+                            "Broadcast: {} timeout recovery failed, injecting placeholder and continuing",
+                            name,
+                        )
+                        _timeout_recovery_count = 0
+                        # FALL THROUGH to history-recording body
 
-                        else:
-                            # Repeated timeout (shouldn't normally reach here due to counter reset above)
-                            err_short_disp = f"LLM 超时 ({_base_timeout}s)"
-                            await tracker.set_state(name, "error", reason=err_short_disp[:40])
-                            await engine._send(f"  ✗ {name} timeout ({latency:.1f}s): {err_short_disp}")
+                    case CycleAction.TIMEOUT_REPEATED_FALLTHROUGH:
+                        # C3: Repeated timeout — set error state, then fall through
+                        _base_timeout = gc_settings.get(
+                            "leader_call_timeout" if is_leader else "call_timeout", 90
+                        )
+                        err_short_disp = f"LLM 超时 ({_base_timeout}s)"
+                        await tracker.set_state(name, "error", reason=err_short_disp[:40])
+                        await engine._send(f"  ✗ {name} timeout ({latency:.1f}s): {err_short_disp}")
+                        # FALL THROUGH to history-recording body
 
-                    else:  # is_error
+                    case CycleAction.ERROR_MAX_BREAK:
+                        # C4: Max consecutive errors — force exit
                         err_short = content[:150] if content else "Unknown error"
                         await tracker.set_state(name, "error", reason=err_short[:40])
                         await engine._send(f"  ✗ {name} failed ({latency:.1f}s): {err_short}")
-
                         _consecutive_error_count += 1
-                        if _consecutive_error_count >= MAX_CONSECUTIVE_ERRORS:
-                            logger.error(
-                                "Broadcast: {} hit {} consecutive LLM errors, forcing exit",
-                                name, _consecutive_error_count,
+                        logger.error(
+                            "Broadcast: {} hit {} consecutive LLM errors, forcing exit",
+                            name, _consecutive_error_count,
+                        )
+                        await engine._send(
+                            f"  ✗ {name} 连续 {_consecutive_error_count} 次 LLM 错误，强制退出"
+                        )
+                        if is_leader:
+                            _reason = f"Leader {name} 连续 {_consecutive_error_count} 次 LLM 错误"
+                            engine._leader_end_reason = _reason
+                            engine._running = False
+                            leader_end_event.set()
+                            logger.warning(
+                                "Broadcast: leader %s force-exited, ending group chat: %s",
+                                name, _reason,
                             )
-                            await engine._send(
-                                f"  ✗ {name} 连续 {_consecutive_error_count} 次 LLM 错误，强制退出"
-                            )
-                            # If the leader crashes, end the entire group chat
-                            # so other agents don't hang until timeout.
-                            if is_leader:
-                                _reason = f"Leader {name} 连续 {_consecutive_error_count} 次 LLM 错误"
-                                engine._leader_end_reason = _reason
-                                engine._running = False
-                                leader_end_event.set()
-                                logger.warning(
-                                    "Broadcast: leader %s force-exited, ending group chat: %s",
-                                    name, _reason,
-                                )
-                            break
+                        break
 
-                        # Keep agent alive instead of killing it (mirrors timeout recovery)
+                    case CycleAction.ERROR_PLACEHOLDER_CONTINUE:
+                        # C5: Error but under max — inject placeholder, stay alive
+                        err_short = content[:150] if content else "Unknown error"
+                        await tracker.set_state(name, "error", reason=err_short[:40])
+                        await engine._send(f"  ✗ {name} failed ({latency:.1f}s): {err_short}")
+                        _consecutive_error_count += 1
                         _placeholder = (
                             f"⚠️ [{name}] LLM调用出错（{err_short[:60]}），我仍在线。"
                             f"等待队友消息后将继续工作。"
@@ -1207,8 +1167,10 @@ async def broadcast_round(
                             "Broadcast: {} LLM error ({}/{}), injecting placeholder and continuing",
                             name, _consecutive_error_count, MAX_CONSECUTIVE_ERRORS,
                         )
-                        continue  # stay alive like timeout branch
+                        continue
 
+                    case CycleAction.NO_ERROR_RECOVERY:
+                        pass  # fall through to history-recording body
 
                 _used_chatroom_send = result.tools_used and "chatroom_send" in result.tools_used
 
@@ -1248,8 +1210,8 @@ async def broadcast_round(
                             leader_name=leader_name,
                         )
 
-                # ── Shadow: post_error_guard decision ──
-                _shadow_guard_ctx = CycleContext(
+                # ── Decision 2: post_error_guard (wired) ──
+                _guard_ctx = CycleContext(
                     agent_name=name,
                     is_leader=is_leader,
                     cycle=cycle,
@@ -1267,172 +1229,137 @@ async def broadcast_round(
                     consecutive_error_count=_consecutive_error_count,
                     max_consecutive_errors=MAX_CONSECUTIVE_ERRORS,
                 )
-                _shadow_guard = _cycle_ctrl.decide_post_error_guard(_shadow_guard_ctx)
-                # Check oracle vs existing logic (if/elif chain)
-                _guard_is_interrupted = is_interrupted
-                _guard_is_idle = cycle == 1 and not content and not (set(result.tools_used or []) & _substantive_tools)
-                _guard_no_text_after_tools = not content and (set(result.tools_used or []) & _substantive_tools) and "chatroom_send" not in (result.tools_used or [])
-                _guard_leader_mgmt_only = is_leader and not content and result.tools_used and "chatroom_send" not in (result.tools_used or []) and not (set(result.tools_used or []) & _substantive_tools)
-                _guard_ok = (
-                    (_guard_is_interrupted and _shadow_guard.action is CycleAction.INTERRUPT_CONTINUE) or
-                    (_guard_is_idle and _shadow_guard.action is CycleAction.IDLE_WARNING_CONTINUE) or
-                    (_guard_no_text_after_tools and _shadow_guard.action is CycleAction.NO_TEXT_AFTER_TOOLS_CONTINUE) or
-                    (_guard_leader_mgmt_only and _shadow_guard.action is CycleAction.LEADER_MGMT_NO_TEXT_CONTINUE) or
-                    (not _guard_is_interrupted and not _guard_is_idle and not _guard_no_text_after_tools and not _guard_leader_mgmt_only and _shadow_guard.action is CycleAction.PROCEED_TO_DISPLAY)
-                )
-                if not _guard_ok:
-                    logger.error(
-                        "SHADOW MISMATCH @ post_error_guard: finish={} cycle={} content_len={} tools={} oracle={} is_int={} is_idle={} no_text={} leader_mgmt={}",
-                        result.finish_reason, cycle, len(content), result.tools_used, _shadow_guard.action,
-                        _guard_is_interrupted, _guard_is_idle, _guard_no_text_after_tools, _guard_leader_mgmt_only,
-                    )
-                # ── End shadow: post_error_guard ──
+                _guard_decision = _cycle_ctrl.decide_post_error_guard(_guard_ctx)
 
-                # ── Handle forced interrupt ──
-                if is_interrupted:
-                    # Clear the interrupt event + reset the per-round counter so
-                    # newer messages can re-interrupt in subsequent cycles
-                    # (freshness guarantee). Owned by the runner now.
-                    _runner.acknowledge_interrupt()
-                    # (agent is already idle — the try/finally around tool_loop handled it)
+                match _guard_decision.action:
+                    case CycleAction.INTERRUPT_CONTINUE:
+                        # D — forced interrupt: drain queue + inject, re-enter tool_loop
+                        _runner.acknowledge_interrupt()
 
-                    # Drain the entire queue and use the LATEST message so the
-                    # agent always responds to the most recent state, not a
-                    # stale message that happened to arrive first (FIFO).
-                    _intr_q = mailbox._queues.get(name)
-                    _intr_all: list = []
-                    if _intr_q:
-                        while not _intr_q.empty():
-                            try:
-                                _intr_all.append(_intr_q.get_nowait())
-                            except Exception:
-                                break
-                    # Latest message is the one we respond to; earlier ones
-                    # become background context.
-                    _intr_msg = _intr_all[-1] if _intr_all else None
-                    _intr_earlier = _intr_all[:-1] if len(_intr_all) > 1 else []
+                        # Drain the entire queue and use the LATEST message so the
+                        # agent always responds to the most recent state, not a
+                        # stale message that happened to arrive first (FIFO).
+                        _intr_q = mailbox._queues.get(name)
+                        _intr_all: list = []
+                        if _intr_q:
+                            while not _intr_q.empty():
+                                try:
+                                    _intr_all.append(_intr_q.get_nowait())
+                                except Exception:
+                                    break
+                        # Latest message is the one we respond to; earlier ones
+                        # become background context.
+                        _intr_msg = _intr_all[-1] if _intr_all else None
+                        _intr_earlier = _intr_all[:-1] if len(_intr_all) > 1 else []
 
-                    # UI: show who interrupted whom, with distinct label for user vs agent
-                    # Fallback to mailbox._last_interrupt_sender because the actual message
-                    # may have been consumed by wait() before drain runs.
-                    _sender_name = (_intr_msg.sender if _intr_msg
-                                    else mailbox._last_interrupt_sender.get(name, "teammate"))
-                    # Defensive: skip displaying self-interrupt (redundant/noop)
-                    if _sender_name == name:
-                        _sender_name = "teammate"
-                    # Attach rank badge for debugging interrupt hierarchy violations
-                    def _badge(a: str) -> str:
-                        r = ranks_map.get(a, "?")
-                        return f"{a}[{r}]"
-                    await tracker.set_state(name, "interrupted", detail=f"from {_sender_name}")
-                    if _sender_name == "用户":
-                        await engine._send(
-                            f"⚡ {_badge(name)} 被【用户消息】打断，正在立即响应..."
+                        # UI: show who interrupted whom, with distinct label for user vs agent
+                        # Fallback to mailbox._last_interrupt_sender because the actual message
+                        # may have been consumed by wait() before drain runs.
+                        _sender_name = (_intr_msg.sender if _intr_msg
+                                        else mailbox._last_interrupt_sender.get(name, "teammate"))
+                        # Defensive: skip displaying self-interrupt (redundant/noop)
+                        if _sender_name == name:
+                            _sender_name = "teammate"
+                        # Attach rank badge for debugging interrupt hierarchy violations
+                        def _badge(a: str) -> str:
+                            r = ranks_map.get(a, "?")
+                            return f"{a}[{r}]"
+                        await tracker.set_state(name, "interrupted", detail=f"from {_sender_name}")
+                        if _sender_name == "用户":
+                            await engine._send(
+                                f"⚡ {_badge(name)} 被【用户消息】打断，正在立即响应..."
+                            )
+                        elif is_leader and _sender_name != "用户":
+                            await engine._send(
+                                f"⚡ {_badge(name)}（Leader）被队友 **{_badge(_sender_name)}** 汇报实时打断，正在响应..."
+                            )
+                        else:
+                            await engine._send(
+                                f"⚡ {_badge(name)} 被 {_badge(_sender_name)} 的消息打断，正在立即响应..."
+                            )
+                        logger.info(
+                            "Broadcast: ⚡ {} interrupted by {} mid-turn (cycle {})",
+                            name, _sender_name, cycle,
                         )
-                    elif is_leader and _sender_name != "用户":
-                        await engine._send(
-                            f"⚡ {_badge(name)}（Leader）被队友 **{_badge(_sender_name)}** 汇报实时打断，正在响应..."
-                        )
-                    else:
-                        await engine._send(
-                            f"⚡ {_badge(name)} 被 {_badge(_sender_name)} 的消息打断，正在立即响应..."
-                        )
-                    logger.info(
-                        "Broadcast: ⚡ {} interrupted by {} mid-turn (cycle {})",
-                        name, _sender_name, cycle,
-                    )
 
-                    # Save any partial content already produced this cycle
-                    if content:
-                        history_content = content + build_tool_log(result.tool_calls_detail)
-                        engine._add_message(name, history_content)
-                        search_pool.on_output(name)
-                        # Don't re-display partial content — it may be incomplete/mid-thought
+                        # Save any partial content already produced this cycle
+                        if content:
+                            history_content = content + build_tool_log(result.tool_calls_detail)
+                            engine._add_message(name, history_content)
+                            search_pool.on_output(name)
 
-                    # NOTE: Do NOT prune messages here.  Keeping the full
-                    # prefix intact guarantees prompt-cache hits on the next
-                    # LLM call.  Pruning would shift the prefix and force a
-                    # full recompute, wasting cached tokens.
+                        # Inject any partial content so LLM knows what it said already
+                        if content:
+                            messages.append({"role": "assistant", "content": content})
 
-                    # Inject any partial content so LLM knows what it said already
-                    if content:
-                        messages.append({"role": "assistant", "content": content})
+                        # Inject the interrupt message as a "user" message from the sender.
+                        if _intr_earlier:
+                            _earlier_lines = "\n".join(
+                                f"- [{m.sender}]: {m.content[:200]}" for m in _intr_earlier
+                            )
+                            messages.append({
+                                "role": "system",
+                                "content": (
+                                    f"[打断期间积压的 {len(_intr_earlier)} 条较早消息（仅供参考）]\n"
+                                    f"{_earlier_lines}\n"
+                                    f"请重点关注下面的最新消息。"
+                                ),
+                            })
+                        if _intr_msg:
+                            messages.append({
+                                "role": "user",
+                                "content": f"[{_intr_msg.sender} — 最新消息]: {_intr_msg.content}",
+                            })
+                        else:
+                            messages.append({
+                                "role": "system",
+                                "content": f"[打断通知] 你的执行被中断，请立即总结当前进展并响应队友的最新需求。",
+                            })
 
-                    # Inject the interrupt message as a "user" message from the sender.
-                    # If multiple messages accumulated, inject earlier ones as
-                    # summarised context first, then the LATEST as the primary
-                    # message so the LLM responds to the newest state.
-                    if _intr_earlier:
-                        _earlier_lines = "\n".join(
-                            f"- [{m.sender}]: {m.content[:200]}" for m in _intr_earlier
+                        await tracker.set_state(name, "thinking")
+                        _runner.begin_cycle()
+                        content = ""  # reset for the new cycle
+                        continue  # re-enter tool_loop with injected message
+
+                    case CycleAction.IDLE_WARNING_CONTINUE:
+                        # E — anti-idle: cycle 1 produced nothing and ran no substantive tool
+                        logger.warning(
+                            "Broadcast: {} idle on cycle 1 (no content, tools={}), forcing retry",
+                            name, result.tools_used,
                         )
                         messages.append({
                             "role": "system",
-                            "content": (
-                                f"[打断期间积压的 {len(_intr_earlier)} 条较早消息（仅供参考）]\n"
-                                f"{_earlier_lines}\n"
-                                f"请重点关注下面的最新消息。"
-                            ),
+                            "content": get_system_warning("idle", name=name)
                         })
-                    if _intr_msg:
-                        messages.append({
-                            "role": "user",
-                            "content": f"[{_intr_msg.sender} — 最新消息]: {_intr_msg.content}",
-                        })
-                    else:
-                        # Fallback: no message in queue (already consumed by auto-wait?)
+                        continue
+
+                    case CycleAction.NO_TEXT_AFTER_TOOLS_CONTINUE:
+                        # F — ran substantive tools but produced no text
+                        logger.warning(
+                            "Broadcast: {} used tools on cycle {} but produced no text (tools={}), forcing summary",
+                            name, cycle, result.tools_used,
+                        )
                         messages.append({
                             "role": "system",
-                            "content": f"[打断通知] 你的执行被中断，请立即总结当前进展并响应队友的最新需求。",
+                            "content": get_system_warning("no_text_after_tools", name=name)
                         })
+                        continue
 
-                    await tracker.set_state(name, "thinking")
-                    _runner.begin_cycle()
-                    content = ""  # reset for the new cycle
-                    continue  # re-enter tool_loop with injected message
+                    case CycleAction.LEADER_MGMT_NO_TEXT_CONTINUE:
+                        # G — leader management-only cycle produced no text
+                        logger.warning(
+                            "Broadcast: leader {} management-only cycle {} (tools={}), forcing synthesis",
+                            name, cycle, result.tools_used,
+                        )
+                        messages.append({
+                            "role": "system",
+                            "content": get_system_warning("leader_no_text_after_tools", name=name)
+                        })
+                        continue
 
-                # ── Anti-idle guard: force re-entry if agent did nothing ──
-                if cycle == 1 and not content and not (set(result.tools_used or []) & _substantive_tools):
-                    logger.warning(
-                        "Broadcast: {} idle on cycle 1 (no content, tools={}), forcing retry",
-                        name, result.tools_used,
-                    )
-                    messages.append({
-                        "role": "system",
-                        "content": get_system_warning("idle", name=name)
-                    })
-                    continue  # skip auto-wait, re-enter tool_loop
+                    case CycleAction.PROCEED_TO_DISPLAY:
+                        pass  # fall through to display body
 
-                # ── Guard: used tools but produced no text ──
-                # Agent ran substantive tools but finished without writing any text.
-                # Force a summary cycle so the output is not silently swallowed.
-                elif not content and (set(result.tools_used or []) & _substantive_tools) and "chatroom_send" not in (result.tools_used or []):
-                    logger.warning(
-                        "Broadcast: {} used tools on cycle {} but produced no text (tools={}), forcing summary",
-                        name, cycle, result.tools_used,
-                    )
-                    messages.append({
-                        "role": "system",
-                        "content": get_system_warning("no_text_after_tools", name=name)
-                    })
-                    continue  # re-enter tool_loop to produce text
-
-                # ── Leader guard: management-only cycle produced no text ──
-                # Leader used manage_agent / end_discussion / transfer_credits but no
-                # substantive data tool.  The existing guard above won't fire for these
-                # tool names, so the leader silently exits without a synthesis message.
-                elif is_leader and not content and result.tools_used \
-                        and "chatroom_send" not in (result.tools_used or []) \
-                        and not (set(result.tools_used or []) & _substantive_tools):
-                    logger.warning(
-                        "Broadcast: leader {} management-only cycle {} (tools={}), forcing synthesis",
-                        name, cycle, result.tools_used,
-                    )
-                    messages.append({
-                        "role": "system",
-                        "content": get_system_warning("leader_no_text_after_tools", name=name)
-                    })
-                    continue  # re-enter tool_loop to produce synthesis text
 
                 # ── Auto-wait: enter idle state ──
                 # Display the agent's final text for this cycle.
@@ -1477,8 +1404,8 @@ async def broadcast_round(
                 # clean-exit path was likely used to bypass the waiting guard.  Force a
                 # synthesis retry so the user still gets a proper summary.
 
-                # ── Shadow: leader_or_single_exit decision ──
-                _shadow_exit_ctx = CycleContext(
+                # ── Decision 3: leader_or_single_exit (wired) ──
+                _exit_ctx = CycleContext(
                     agent_name=name,
                     is_leader=is_leader,
                     cycle=cycle,
@@ -1496,32 +1423,11 @@ async def broadcast_round(
                     consecutive_error_count=_consecutive_error_count,
                     max_consecutive_errors=MAX_CONSECUTIVE_ERRORS,
                 )
-                _shadow_exit = _cycle_ctrl.decide_leader_or_single_exit(_shadow_exit_ctx)
-                # Check oracle vs existing logic
-                _exit_is_leader_ended = is_leader and _leader_ended_discussion
-                _exit_leader_no_text = _exit_is_leader_ended and not content
-                _exit_leader_has_text = _exit_is_leader_ended and bool(content)
-                _exit_single_agent = total == 1
-                _exit_ok = (
-                    (_exit_leader_no_text and _shadow_exit.action is CycleAction.LEADER_END_NO_TEXT_CONTINUE) or
-                    (_exit_leader_has_text and _shadow_exit.action is CycleAction.LEADER_END_DISPLAY_BREAK) or
-                    (not _exit_is_leader_ended and _exit_single_agent and _shadow_exit.action is CycleAction.SINGLE_AGENT_BREAK) or
-                    (not _exit_is_leader_ended and not _exit_single_agent and _shadow_exit.action is CycleAction.PROCEED_TO_AUTO_WAIT)
-                )
-                if not _exit_ok:
-                    logger.error(
-                        "SHADOW MISMATCH @ leader_or_single_exit: is_leader={} leader_ended={} content_len={} total={} oracle={}",
-                        is_leader, _leader_ended_discussion, len(content), total, _shadow_exit.action,
-                    )
-                # ── End shadow: leader_or_single_exit ──
+                _exit_decision = _cycle_ctrl.decide_leader_or_single_exit(_exit_ctx)
 
-                if is_leader and _leader_ended_discussion:
-                    # Stable behavior: if end_discussion produced no text, force ONE
-                    # synthesis cycle; otherwise display whatever was produced and exit.
-                    # The previous length-gated + quality-gated retry loop (up to 3 full
-                    # tool_loop calls) caused severe end-of-discussion stalls; the
-                    # max_cycles cap is the only backstop needed.
-                    if not content:
+                match _exit_decision.action:
+                    case CycleAction.LEADER_END_NO_TEXT_CONTINUE:
+                        # H1 — leader called end_discussion without text, force ONE synthesis cycle
                         logger.warning(
                             "Broadcast: leader {} called end_discussion without text (cycle {}), forcing synthesis",
                             name, cycle,
@@ -1530,37 +1436,40 @@ async def broadcast_round(
                             "role": "system",
                             "content": get_system_warning("leader_end_without_text", name=name),
                         })
-                        continue  # re-enter tool_loop to produce synthesis text
-                    # Synthesis produced — display it (always, even if chatroom_send
-                    # was used: chatroom_send targets teammates, this is the user's
-                    # only delivery channel and must never be silently dropped).
-                    tok = result.token_usage
-                    total_tok = tok.get("total", 0)
-                    tok_suffix = ""
-                    if total_tok > 0:
-                        elapsed = _t.time() - _cycle_t0
-                        cost = result.cost or 0
-                        cache_t = result.cache_tokens or 0
-                        reasoning_t = sum(
-                            (m.get("reasoning_tokens") or 0)
-                            for m in (result.provider_meta or [])
-                            if isinstance(m, dict)
-                        )
-                        tok_suffix = "\n" + _d.format_token_stats(
-                            tok.get("prompt", 0), tok.get("completion", 0),
-                            elapsed=elapsed, cost=cost, cache_tokens=cache_t,
-                            reasoning_tokens=reasoning_t,
-                        )
-                    # Finalize streaming message in place (no duplicate send).
-                    await _stream.finalize(content + tok_suffix, fallback_send=engine._send)
-                    logger.info("Broadcast: displayed {} synthesis output ({} chars)", name, len(content))
-                    logger.info("Broadcast: leader {} called end_discussion, exiting cycle loop", name)
-                    break
+                        continue
 
-                # Single agent: no teammates to wait for, exit immediately
-                if total == 1:
-                    logger.info("Broadcast: {} single agent mode, exiting cycle loop", name)
-                    break
+                    case CycleAction.LEADER_END_DISPLAY_BREAK:
+                        # H2 — synthesis produced: display it then exit
+                        tok = result.token_usage
+                        total_tok = tok.get("total", 0)
+                        tok_suffix = ""
+                        if total_tok > 0:
+                            elapsed = _t.time() - _cycle_t0
+                            cost = result.cost or 0
+                            cache_t = result.cache_tokens or 0
+                            reasoning_t = sum(
+                                (m.get("reasoning_tokens") or 0)
+                                for m in (result.provider_meta or [])
+                                if isinstance(m, dict)
+                            )
+                            tok_suffix = "\n" + _d.format_token_stats(
+                                tok.get("prompt", 0), tok.get("completion", 0),
+                                elapsed=elapsed, cost=cost, cache_tokens=cache_t,
+                                reasoning_tokens=reasoning_t,
+                            )
+                        await _stream.finalize(content + tok_suffix, fallback_send=engine._send)
+                        logger.info("Broadcast: displayed {} synthesis output ({} chars)", name, len(content))
+                        logger.info("Broadcast: leader {} called end_discussion, exiting cycle loop", name)
+                        break
+
+                    case CycleAction.SINGLE_AGENT_BREAK:
+                        # I — single agent: no teammates to wait for, exit immediately
+                        logger.info("Broadcast: {} single agent mode, exiting cycle loop", name)
+                        break
+
+                    case CycleAction.PROCEED_TO_AUTO_WAIT:
+                        pass  # fall through to auto-wait body
+
 
                 # Now wait for teammate messages
                 await tracker.set_state(name, "waiting")
@@ -1589,8 +1498,8 @@ async def broadcast_round(
                 msg = await mailbox.wait(name, timeout=600)
                 _runner.set_waiting(False)
 
-                # ── Shadow: after_wait decision ──
-                _shadow_wait_ctx = CycleContext(
+                # ── Decision 4: after_wait (wired) ──
+                _wait_ctx = CycleContext(
                     agent_name=name,
                     is_leader=is_leader,
                     cycle=cycle,
@@ -1609,41 +1518,17 @@ async def broadcast_round(
                     max_consecutive_errors=MAX_CONSECUTIVE_ERRORS,
                     wait_msg=msg,
                 )
-                _shadow_wait = _cycle_ctrl.decide_after_wait(_shadow_wait_ctx)
-                # Check oracle vs existing logic
-                _wait_none = msg is None
-                _wait_none_ended = _wait_none and (not engine._running or (leader_end_event and leader_end_event.is_set()) or (mailbox and mailbox.is_discussion_ended()))
-                _wait_none_leader_no_text = _wait_none and not _wait_none_ended and is_leader and not content
-                _wait_none_nonleader = _wait_none and not _wait_none_ended and not _wait_none_leader_no_text
-                _wait_msg_stopped = msg is not None and (not engine._running or (leader_end_event and leader_end_event.is_set()))
-                _wait_msg_inject = msg is not None and not _wait_msg_stopped
-                _wait_ok = (
-                    (_wait_none_ended and _shadow_wait.action is CycleAction.WAIT_NONE_ENDED_BREAK) or
-                    (_wait_none_leader_no_text and _shadow_wait.action is CycleAction.WAIT_NONE_LEADER_SYNTHESIS_CONTINUE) or
-                    (_wait_none_nonleader and _shadow_wait.action is CycleAction.WAIT_NONE_NONLEADER_CONTINUE) or
-                    (_wait_msg_stopped and _shadow_wait.action is CycleAction.WAIT_MSG_STOPPED_BREAK) or
-                    (_wait_msg_inject and _shadow_wait.action is CycleAction.WAIT_MSG_INJECT_CONTINUE)
-                )
-                if not _wait_ok:
-                    logger.error(
-                        "SHADOW MISMATCH @ after_wait: msg_is_none={} running={} leader_end={} disc_ended={} is_leader={} content_len={} oracle={}",
-                        msg is None, engine._running,
-                        leader_end_event.is_set() if leader_end_event else False,
-                        mailbox.is_discussion_ended() if mailbox else False,
-                        is_leader, len(content), _shadow_wait.action,
-                    )
-                # ── End shadow: after_wait ──
+                _wait_decision = _cycle_ctrl.decide_after_wait(_wait_ctx)
 
-                if msg is None:
-                    # No message — check if engine stopped or leader ended discussion
-                    ended = (not engine._running or leader_end_event.is_set() or
-                             (mailbox and getattr(mailbox, "is_discussion_ended", lambda: False)()))
-                    if ended:
+                match _wait_decision.action:
+                    case CycleAction.WAIT_NONE_ENDED_BREAK:
+                        # J1 — round winding down
                         await tracker.set_state(name, "done", reason="discussion ended")
                         logger.info("Broadcast: {} wait returned None, discussion ended, exiting", name)
                         break
-                    # Leader fallback: if no text was produced, force synthesis
-                    if is_leader and not content:
+
+                    case CycleAction.WAIT_NONE_LEADER_SYNTHESIS_CONTINUE:
+                        # J2 — leader wait-timeout with no text, force synthesis
                         logger.warning(
                             "Broadcast: leader {} wait timeout with no text (cycle {}), forcing synthesis",
                             name, cycle,
@@ -1652,71 +1537,68 @@ async def broadcast_round(
                             "role": "system",
                             "content": get_system_warning("leader_wait_timeout", name=name)
                         })
-                        continue  # re-enter tool_loop for synthesis
-                    # Non-leader: keep waiting (stable behavior). The mailbox's
-                    # all-waiting nudge + leader end_discussion are the only exit
-                    # paths. A force-exit here causes cascading stalls when other
-                    # agents are still expecting this agent to reply.
-                    logger.info("Broadcast: {} wait timeout, retrying wait", name)
-                    continue
+                        continue
 
-                # Got a message! Inject it and re-run tool_loop
-                # But first check if /stop was issued or leader ended discussion
-                if not engine._running or leader_end_event.is_set():
-                    logger.info("Broadcast: {} exiting after wait — engine stopped", name)
-                    break
-                logger.info("Broadcast: {} reactivated by {}: {}", name, msg.sender, msg.content[:60])
-                await tracker.set_state(name, "thinking")
-                await engine._send(_d.chatroom_wait_msg(name, str(msg), leader=leader_name))
+                    case CycleAction.WAIT_NONE_NONLEADER_CONTINUE:
+                        # J3 — non-leader: keep waiting (stable behavior)
+                        logger.info("Broadcast: {} wait timeout, retrying wait", name)
+                        continue
 
-                # ── Prune conversation tail to prevent unbounded growth ──
-                # Keep system-prompt prefix intact; only retain the last
-                # _CONV_KEEP_TURNS conversation turns (3 msgs per turn).
-                # Dropped messages are AI-summarised before removal so the
-                # agent retains context of earlier discussion.
-                from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
-                from nanobot.groupchat.history.history_settings import summarize_model as _summarize_model
-                _conv_keep_turns = gc_settings.get("conv_keep_turns", 3)  # configurable via groupchat_settings.json
-                dropped = await prune_conversation_tail_with_summary(
-                    messages, _sys_msg_count, _conv_keep_turns,
-                    provider=engine.provider,
-                    model=_summarize_model(),
-                    agent_name=name,
-                )
-                if dropped > 0:
-                    logger.debug(
-                        "Broadcast: {} pruned {} conversation messages (kept {})",
-                        name, dropped, _conv_keep_turns * 3,
-                    )
+                    case CycleAction.WAIT_MSG_STOPPED_BREAK:
+                        # K — got a message, but engine stopped or leader ended
+                        logger.info("Broadcast: {} exiting after wait — engine stopped", name)
+                        break
 
-                # Inject agent's own previous output so LLM knows what it already said
-                if content:
-                    messages.append({
-                        "role": "assistant",
-                        "content": content,
-                    })
-                # Anti-repeat injection: remind agent not to repeat itself
-                # Only inject if not already present (avoid accumulation across rounds)
-                _anti_repeat_tag = f"[提醒] 你（{name}）已经发表过上述观点"
-                _already_injected = any(
-                    m.get("role") == "system"
-                    and isinstance(m.get("content"), str)
-                    and _anti_repeat_tag in m["content"]
-                    for m in messages[-6:]  # check last 6 only — sufficient
-                )
-                if not _already_injected:
-                    messages.append({
-                        "role": "system",
-                        "content": (
-                            f"{_anti_repeat_tag}。"
-                            f"针对队友的新消息做出回应或补充新观点，不要重复已说的内容。"
-                        ),
-                    })
-                # Then inject the received teammate message
-                messages.append({
-                    "role": "user",
-                    "content": f"[队友消息] {msg}",
-                })
+                    case CycleAction.WAIT_MSG_INJECT_CONTINUE:
+                        # L — inject teammate message and re-enter tool_loop
+                        logger.info("Broadcast: {} reactivated by {}: {}", name, msg.sender, msg.content[:60])
+                        await tracker.set_state(name, "thinking")
+                        await engine._send(_d.chatroom_wait_msg(name, str(msg), leader=leader_name))
+
+                        # ── Prune conversation tail to prevent unbounded growth ──
+                        from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
+                        from nanobot.groupchat.history.history_settings import summarize_model as _summarize_model
+                        _conv_keep_turns = gc_settings.get("conv_keep_turns", 3)
+                        dropped = await prune_conversation_tail_with_summary(
+                            messages, _sys_msg_count, _conv_keep_turns,
+                            provider=engine.provider,
+                            model=_summarize_model(),
+                            agent_name=name,
+                        )
+                        if dropped > 0:
+                            logger.debug(
+                                "Broadcast: {} pruned {} conversation messages (kept {})",
+                                name, dropped, _conv_keep_turns * 3,
+                            )
+
+                        # Inject agent's own previous output so LLM knows what it already said
+                        if content:
+                            messages.append({
+                                "role": "assistant",
+                                "content": content,
+                            })
+                        # Anti-repeat injection: remind agent not to repeat itself
+                        _anti_repeat_tag = f"[提醒] 你（{name}）已经发表过上述观点"
+                        _already_injected = any(
+                            m.get("role") == "system"
+                            and isinstance(m.get("content"), str)
+                            and _anti_repeat_tag in m["content"]
+                            for m in messages[-6:]
+                        )
+                        if not _already_injected:
+                            messages.append({
+                                "role": "system",
+                                "content": (
+                                    f"{_anti_repeat_tag}。"
+                                    f"针对队友的新消息做出回应或补充新观点，不要重复已说的内容。"
+                                ),
+                            })
+                        # Then inject the received teammate message
+                        messages.append({
+                            "role": "user",
+                            "content": f"[队友消息] {msg}",
+                        })
+
 
             # ── Final completion ──
             await tracker.set_state(name, "done")

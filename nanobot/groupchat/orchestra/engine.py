@@ -70,7 +70,12 @@ class GroupChatEngine:
         self._cron_service = cron_service
         self._send_outbound_fn = send_outbound_fn  # Callable[[OutboundMessage], Awaitable[None]]
 
-        self._mailbox = MailboxHub(on_message=self._on_agent_comm)
+        # Inject get_busy_agents callback so mailbox can query AgentRunner state
+        # instead of maintaining a redundant _busy_agents set (Step 4).
+        self._mailbox = MailboxHub(
+            on_message=self._on_agent_comm,
+            get_busy_agents=lambda: {n for n, r in self._runners.items() if r.is_busy},
+        )
         self._prompt_builder = PromptBuilder(config=config, workspace=workspace)
 
         # MCP servers (lazy-connected on first run)
@@ -297,6 +302,8 @@ class GroupChatEngine:
         # Per-agent runtime facades (cancel signal + state) for the current
         # round. Populated by broadcast _run_one; the canonical handle new code
         # should use instead of mailbox._busy_agents / _interrupt_events.
+        # mailbox._busy_agents is now deprecated: when engine provides
+        # get_busy_agents callback, the set is ignored.
         self._runners: dict[str, AgentRunner] = {}
         # TurnStack for the current round (turn-level ops: interject / cancel_all).
         # Set by broadcast_round before launch, cleared on stop / round end.
@@ -1086,7 +1093,8 @@ class GroupChatEngine:
         """Runtime facade for an agent active in the current round.
 
         New code should call this (and the runner's interrupt/cancel API)
-        instead of reaching into mailbox._busy_agents / _interrupt_events.
+        instead of reaching into mailbox._busy_agents / _interrupt_events
+        (busy_agents is now deprecated — use runner.is_busy).
         Returns None if the agent has no runner this round.
         """
         return self._runners.get(name)

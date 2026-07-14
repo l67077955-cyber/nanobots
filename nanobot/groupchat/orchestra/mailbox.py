@@ -296,11 +296,16 @@ class MailboxHub:
     def __init__(
         self,
         on_message: Any | None = None,
+        get_busy_agents: Any | None = None,
     ) -> None:
         self._queues: dict[str, asyncio.Queue[AgentMessage]] = {}
         self._history: list[AgentMessage] = []
         # Optional callback: called with (sender, targets, content) on every send()
         self._on_message = on_message
+        # Optional callback: returns set of currently busy agent names.
+        # When provided, interrupt logic queries this instead of maintaining
+        # a redundant _busy_agents set (Step 4 of coupling refactor).
+        self._get_busy_agents = get_busy_agents
         # Track which agents are currently waiting
         self._waiting: set[str] = set()
         # Leader info + listener restrictions
@@ -330,7 +335,9 @@ class MailboxHub:
         # Hard limit: 3 interrupts per agent per round (raised from 1 so that
         # newer messages can re-trigger interrupts for freshness).
         self._interrupt_counts: dict[str, int] = {}
-        # Agents currently inside tool_loop (busy — eligible for interruption).
+        # DEPRECATED: Agents currently inside tool_loop.
+        # Kept for backward compatibility when _get_busy_agents is not provided.
+        # When engine injects the callback, this set is ignored.
         self._busy_agents: set[str] = set()
         # Auto-incrementing message ID for quote_message support
         self._next_msg_id: int = 0
@@ -378,6 +385,7 @@ class MailboxHub:
         self._next_msg_id = 0
         # Reset interrupt state for the new round
         self._interrupt_counts.clear()
+        # Legacy set: cleared for consistency, but ignored when callback is active
         self._busy_agents.clear()
         self._listener_restrictions.clear()
         for evt in self._interrupt_events.values():
@@ -398,13 +406,25 @@ class MailboxHub:
         return self._interrupt_events[agent_name]
 
     def mark_busy(self, agent_name: str) -> None:
-        """Mark an agent as busy inside tool_loop (interrupt-eligible)."""
-        self._busy_agents.add(agent_name)
+        """Mark an agent as busy inside tool_loop (interrupt-eligible).
+
+        DEPRECATED: AgentRunner.is_busy is the canonical state. This method
+        only updates the legacy _busy_agents set when no callback is provided.
+        Called from AgentRunner.begin_cycle() for backward compatibility.
+        """
+        if self._get_busy_agents is None:
+            self._busy_agents.add(agent_name)
         logger.debug("MailboxHub: {} is now busy", agent_name)
 
     def mark_idle(self, agent_name: str) -> None:
-        """Mark an agent as no longer inside tool_loop."""
-        self._busy_agents.discard(agent_name)
+        """Mark an agent as no longer inside tool_loop.
+
+        DEPRECATED: AgentRunner.is_busy is the canonical state. This method
+        only updates the legacy _busy_agents set when no callback is provided.
+        Called from AgentRunner.end_cycle() for backward compatibility.
+        """
+        if self._get_busy_agents is None:
+            self._busy_agents.discard(agent_name)
         logger.debug("MailboxHub: {} is now idle", agent_name)
 
     def set_ranks(self, ranks: dict[str, str], leader: str = "") -> None:
@@ -470,7 +490,12 @@ class MailboxHub:
         """
         if target == sender:
             return False
-        if target not in self._busy_agents:
+        # Query busy state from callback or fallback to legacy set
+        if self._get_busy_agents is not None:
+            is_busy = target in self._get_busy_agents()
+        else:
+            is_busy = target in self._busy_agents
+        if not is_busy:
             return False
         # Rank check: low-rank agents cannot interrupt higher-or-equal rank
         if not self._can_interrupt(sender, target):
@@ -522,8 +547,15 @@ class MailboxHub:
         Returns:
             Number of agents whose interrupt event was set.
         """
+        # Query busy agents from the canonical source (engine._runners) if available.
+        # Fallback to legacy _busy_agents set for backward compatibility.
+        if self._get_busy_agents is not None:
+            busy_set = self._get_busy_agents()
+        else:
+            busy_set = self._busy_agents
+
         count = 0
-        for agent in list(self._busy_agents):
+        for agent in list(busy_set):
             if agent == sender:
                 continue
             if not self._is_high_priority(sender) and not self._can_interrupt(sender, agent):
@@ -656,8 +688,13 @@ class MailboxHub:
 
         # ── Proactive nudge: if waiting for a specific busy agent, interrupt them
         # so they break out of tool_loop and can reply.
-        if from_agent and from_agent in self._busy_agents:
-            if self._can_interrupt(agent_name, from_agent):
+        if from_agent:
+            # Query busy state from callback or fallback
+            if self._get_busy_agents is not None:
+                is_busy = from_agent in self._get_busy_agents()
+            else:
+                is_busy = from_agent in self._busy_agents
+            if is_busy and self._can_interrupt(agent_name, from_agent):
                 evt = self.get_interrupt_event(from_agent)
                 if not evt.is_set():
                     evt.set()
@@ -744,8 +781,9 @@ class MailboxHub:
         """Mark an agent as finished (no longer active)."""
         self._active_agents.discard(agent_name)
         self._waiting.discard(agent_name)
-        # Cleanup interrupt state
-        self._busy_agents.discard(agent_name)
+        # Cleanup interrupt state (legacy set only; ignored when callback is active)
+        if self._get_busy_agents is None:
+            self._busy_agents.discard(agent_name)
         self._interrupt_counts.pop(agent_name, None)
         if agent_name in self._interrupt_events:
             self._interrupt_events[agent_name].clear()
@@ -757,9 +795,13 @@ class MailboxHub:
     def mark_discussion_ended(self) -> None:
         """Mark the discussion as ended (prevents re-entrancy and further busy work)."""
         self._discussion_ended = True
-        # Force-clear busy/interrupt state so any mid-turn agents exit their tool_loops promptly
-        # (important for interrupt + end races and the old "waiting guard" brittleness).
-        for name in list(self._busy_agents):
+        # Force-clear busy/interrupt state so any mid-turn agents exit their tool_loops promptly.
+        # Query busy agents from callback (canonical) or legacy set.
+        if self._get_busy_agents is not None:
+            busy = list(self._get_busy_agents())
+        else:
+            busy = list(self._busy_agents)
+        for name in busy:
             self.mark_idle(name)
         for evt in self._interrupt_events.values():
             evt.set()  # wake any polling loops

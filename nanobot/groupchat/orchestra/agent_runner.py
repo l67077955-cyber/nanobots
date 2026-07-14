@@ -34,9 +34,9 @@ class AgentRunner:
     """Per-agent runtime handle that OWNS the busy state.
 
     The runner is the single source of truth for an agent's runtime state.
-    mailbox._busy_agents remains as a cache for mailbox-internal queries
-    (deadlock detection, interrupt targeting), but is always updated via
-    the runner's begin_cycle/end_cycle methods.
+    mailbox._busy_agents is now deprecated: when engine provides a
+    get_busy_agents callback to MailboxHub, the set is ignored and
+    all busy-state queries go through this runner's is_busy property.
     """
 
     def __init__(
@@ -69,7 +69,7 @@ class AgentRunner:
         """The agent's asyncio task, or None if not spawned this round."""
         return self._task_getter()
 
-    # ── Owned state (no longer derived from mailbox) ─────────────────────
+    # ── Owned state (canonical — mailbox._busy_agents is deprecated) ────
 
     @property
     def is_busy(self) -> bool:
