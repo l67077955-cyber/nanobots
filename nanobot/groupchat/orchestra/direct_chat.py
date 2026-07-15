@@ -22,6 +22,7 @@ from nanobot.groupchat.orchestra.chat_utils import (
     reasoning_tokens_from_provider_meta,
 )
 from nanobot.utils.helpers import build_user_content
+from nanobot.groupchat.orchestra.working_memory import commit_agent_turn
 
 _MAX_CYCLES = 999
 
@@ -106,8 +107,9 @@ async def direct_chat(
                 _tool_details = stats.get("tool_calls_detail", [])
                 if content or _tool_details:
                     engine._add_message("用户", current_user_msg)
-                    history_content = (content or "") + build_tool_log(_tool_details)
-                    engine._add_message(agent_name, history_content)
+                    history_content = commit_agent_turn(
+                        engine, agent_name, content, _tool_details
+                    )
                     await engine._maybe_compress_history()
                     tok = stats.get("tokens", {})
                     total = tok.get("total", 0)

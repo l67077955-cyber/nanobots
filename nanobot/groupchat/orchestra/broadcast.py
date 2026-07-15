@@ -26,6 +26,7 @@ from nanobot.groupchat.orchestra.cycle_controller import (
 from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool
 from nanobot.groupchat.orchestra.turn_stack import TurnStack
 from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
+from nanobot.groupchat.orchestra.working_memory import WorkingMemory, commit_agent_turn
 from nanobot.groupchat.history.component_manager import (
     get_system_warning,
 )
@@ -608,15 +609,20 @@ async def broadcast_round(
         # Tool call logs are appended as text inside each agent's message, so teammates
         # can read a concise summary of what was done without the full tool protocol overhead.
         # Rank-based isolation: agents only see tool calls from agents with rank <= their own.
-        messages = engine._build_agent_prompt(
-            name,
-            relevant_agents=None,
-            agent_ranks=agent_ranks,
-            agent_idx=agent_idx,
-            total=total,
-            teammates=teammates,
-            user_question=user_question,
-        )
+        def _build_prompt_snapshot() -> list[dict[str, Any]]:
+            return engine._build_agent_prompt(
+                name,
+                relevant_agents=None,
+                agent_ranks=agent_ranks,
+                agent_idx=agent_idx,
+                total=total,
+                teammates=teammates,
+                user_question=user_question,
+            )
+
+        # Working memory: ephemeral LLM session. Shared transcript is engine.history.
+        wm = WorkingMemory(messages=_build_prompt_snapshot())
+        messages = wm.messages
 
         is_leader = (name == leader_name)
         _leader_ended_discussion = False
@@ -694,17 +700,18 @@ async def broadcast_round(
                 f"  继续搜索直到能给出正面结论（即使度数更高），而不是仅报告'不成立'。\n"
                 f"- ⚠️ 禁止在未存记忆的情况下调用 end_discussion。存记忆 → end_discussion 是强制顺序。\n"
             )
-            messages.insert(max(len(messages) - 1, 0), {
+            wm.insert_before_last({
                 "role": "system",
                 "content": leader_hint,
             })
+            messages = wm.messages
         else:
             # ── Non-leader: broadcast_hint already expanded by build_agent_prompt ──
             pass
 
             # If there's a leader, tell non-leader agents to expect instructions
             if leader_name:
-                messages.insert(max(len(messages) - 1, 0), {
+                wm.insert_before_last({
                     "role": "system",
                     "content": (
                         f"[团队协作模式 — 严格发言规则]\n"
@@ -717,13 +724,14 @@ async def broadcast_round(
                         f"正确流程: 做工作 → chatroom_send(结果) → wait() → 收到 Leader 指令 → 继续"
                     ),
                 })
+                messages = wm.messages
 
         # ── Inject agent permissions context (Placeholder) ──
-        perm_insert_idx = max(len(messages) - 1, 0)
-        messages.insert(perm_insert_idx, {
+        wm.insert_before_last({
             "role": "system",
             "content": "[团队工具权限及搜索额度见消息末尾 [本轮状态汇总]]",
         })
+        messages = wm.messages
 
         # The volatile state message is always the last one (added by PromptBuilder)
         volatile_msg_idx = len(messages) - 1
@@ -802,7 +810,7 @@ async def broadcast_round(
         _substantive_tools = {"web_search", "web_fetch", "exec", "read_file", "write_file"}
         # Separate system-prompt messages (stable prefix) from conversation messages
         # so we can prune conversation turns without touching the system prompt.
-        _sys_msg_count = len(messages)
+        _sys_msg_count = wm.sys_msg_count
 
         # ── AgentRunner: per-agent runtime facade (cancel signal + state) ──
         # The runner wraps this agent's interrupt event + task; it is the
@@ -1114,7 +1122,7 @@ async def broadcast_round(
                                 if _r.content:
                                     content = _r.content
                                     total_latency += _r.latency
-                                    engine._add_message(name, content)
+                                    commit_agent_turn(engine, name, content)
                                     search_pool.on_output(name)
                                     mailbox.send(name, ["All"], content[:300])
                                     await engine._send(
@@ -1140,7 +1148,7 @@ async def broadcast_round(
                                 f"等待队友消息后将继续工作。"
                             )
                             content = _placeholder
-                            engine._add_message(name, _placeholder)
+                            commit_agent_turn(engine, name, _placeholder)
                             mailbox.send(name, ["All"], _placeholder)
                             await engine._send(
                                 _d.chatroom_send_msg(
@@ -1195,7 +1203,7 @@ async def broadcast_round(
                             f"等待队友消息后将继续工作。"
                         )
                         content = _placeholder
-                        engine._add_message(name, _placeholder)
+                        commit_agent_turn(engine, name, _placeholder)
                         mailbox.send(name, ["All"], _placeholder)
                         await engine._send(
                             _d.chatroom_send_msg(
@@ -1222,8 +1230,9 @@ async def broadcast_round(
                             "broadcast [{}] cycle {} output ({}c): {}",
                             name, cycle, len(content), content,
                         )
-                    history_content = (content or "") + build_tool_log(result.tool_calls_detail)
-                    engine._add_message(name, history_content)
+                    history_content = commit_agent_turn(
+                        engine, name, content, result.tool_calls_detail
+                    )
 
                     # Track output for search pool credit recovery
                     if content:
@@ -1344,8 +1353,9 @@ async def broadcast_round(
 
                     # Save any partial content already produced this cycle
                     if content:
-                        history_content = content + build_tool_log(result.tool_calls_detail)
-                        engine._add_message(name, history_content)
+                        history_content = commit_agent_turn(
+                            engine, name, content, result.tool_calls_detail
+                        )
                         search_pool.on_output(name)
                         # Don't re-display partial content — it may be incomplete/mid-thought
 
@@ -1669,54 +1679,25 @@ async def broadcast_round(
                 await tracker.set_state(name, "thinking")
                 await engine._send(_d.chatroom_wait_msg(name, str(msg), leader=leader_name))
 
-                # ── Prune conversation tail to prevent unbounded growth ──
-                # Keep system-prompt prefix intact; only retain the last
-                # _CONV_KEEP_TURNS conversation turns (3 msgs per turn).
-                # Dropped messages are AI-summarised before removal so the
-                # agent retains context of earlier discussion.
-                from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
-                from nanobot.groupchat.history.history_settings import summarize_model as _summarize_model
-                _conv_keep_turns = gc_settings.get("conv_keep_turns", 3)  # configurable via groupchat_settings.json
-                dropped = await prune_conversation_tail_with_summary(
-                    messages, _sys_msg_count, _conv_keep_turns,
-                    provider=engine.provider,
-                    model=_summarize_model(),
-                    agent_name=name,
-                )
-                if dropped > 0:
-                    logger.debug(
-                        "Broadcast: {} pruned {} conversation messages (kept {})",
-                        name, dropped, _conv_keep_turns * 3,
-                    )
-
-                # Inject agent's own previous output so LLM knows what it already said
-                if content:
-                    messages.append({
-                        "role": "assistant",
-                        "content": content,
-                    })
-                # Anti-repeat injection: remind agent not to repeat itself
-                # Only inject if not already present (avoid accumulation across rounds)
+                # ── Refresh working memory from shared History ──
+                # Prior cycle already committed via commit_agent_turn; teammates'
+                # commits during our wait are also in History. Rebuild the LLM
+                # session from History instead of prune+append on a private list.
+                trailing: list[dict[str, Any]] = []
                 _anti_repeat_tag = f"[提醒] 你（{name}）已经发表过上述观点"
-                _already_injected = any(
-                    m.get("role") == "system"
-                    and isinstance(m.get("content"), str)
-                    and _anti_repeat_tag in m["content"]
-                    for m in messages[-6:]  # check last 6 only — sufficient
-                )
-                if not _already_injected:
-                    messages.append({
-                        "role": "system",
-                        "content": (
-                            f"{_anti_repeat_tag}。"
-                            f"针对队友的新消息做出回应或补充新观点，不要重复已说的内容。"
-                        ),
-                    })
-                # Then inject the received teammate message
-                messages.append({
+                trailing.append({
+                    "role": "system",
+                    "content": (
+                        f"{_anti_repeat_tag}。"
+                        f"针对队友的新消息做出回应或补充新观点，不要重复已说的内容。"
+                    ),
+                })
+                trailing.append({
                     "role": "user",
                     "content": f"[队友消息] {msg}",
                 })
+                messages = wm.refresh(_build_prompt_snapshot, trailing=trailing)
+                _sys_msg_count = wm.sys_msg_count - len(trailing)
 
             # ── Final completion ──
             await tracker.set_state(name, "done")

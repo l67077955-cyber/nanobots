@@ -1516,16 +1516,16 @@ class History:
 
     # ── 内部方法 ────────────────────────────────────────────────────────
 
-    def _semantic_add_from_sender(self, sender: str, content: str) -> str:
-        """sender→role 分派追加（与 from_sender_dicts 同语义）。
+    def add_from_sender(self, sender: str, content: str) -> str:
+        """sender→role 分派追加（公开 API；与 from_sender_dicts 同语义）。
 
         - 人类 sender → role=user，mark=user_N，meta.sender=sender
         - 系统 sender → role=system，mark=system_N，meta.sender=sender
         - 其他 → role=assistant，mark=<sender>_N，meta.agent=sender（使
           ``delete_by_attr('agent', sender)`` 命中）
 
-        engine._add_message 走此方法，sender 字符串原样保留进 meta.sender，
-        使 to_sender_dicts 落盘格式与既有 chat_history.json 一致。
+        engine._add_message / commit_agent_turn 走此方法，sender 字符串原样
+        保留进 meta.sender，使 to_sender_dicts 落盘格式与既有 chat_history.json 一致。
         """
         if _is_human_sender(sender):
             return self._semantic_append("user", content, None, role="user", sender=sender)
@@ -1534,6 +1534,10 @@ class History:
                 "system", content, None, role="system", sender=sender or "系统"
             )
         return self._semantic_append(sender, content, None, role="assistant", agent=sender)
+
+    def _semantic_add_from_sender(self, sender: str, content: str) -> str:
+        """Deprecated alias for add_from_sender."""
+        return self.add_from_sender(sender, content)
 
     def format(self) -> str:
         """可读字符串：``[sender]: content`` 用空行拼接。"""

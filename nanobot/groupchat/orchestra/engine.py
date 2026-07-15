@@ -1231,9 +1231,9 @@ class GroupChatEngine:
     def _add_message(self, sender: str, content: str) -> None:
         """Append a message to the History store + audit log + persist.
 
-        sender→role dispatch lives in History._semantic_add_from_sender.
+        sender→role dispatch lives in History.add_from_sender.
         """
-        self.history._semantic_add_from_sender(sender, content)
+        self.history.add_from_sender(sender, content)
         self._state.save_message(sender, content, self.history.to_sender_dicts())
         self._persist_chat_state()
 
