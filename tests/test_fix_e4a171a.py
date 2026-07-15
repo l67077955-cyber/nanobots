@@ -17,7 +17,7 @@ import pytest
 
 from nanobot.groupchat.runtime.tools.tool_loop import tool_loop
 from nanobot.groupchat.runtime.mailbox import MailboxHub
-from nanobot.groupchat.history.component_manager import _MIN_SYNTHESIS_LEN
+from nanobot.groupchat.context.component_manager import _MIN_SYNTHESIS_LEN
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from nanobot.tools.base import Tool
 from nanobot.tools.registry import ToolRegistry

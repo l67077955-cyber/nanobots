@@ -21,7 +21,7 @@ async def generate_summary(engine: Any) -> None:
     ``end_discussion``.  Uses the same provider + model as history
     compression (``tool_results.summarize_model``).
     """
-    from nanobot.groupchat.history.history_settings import (
+    from nanobot.groupchat.context.history_settings import (
         summarize_model as _get_summarize_model,
         history_summarize_enabled,
     )

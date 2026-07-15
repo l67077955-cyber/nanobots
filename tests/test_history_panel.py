@@ -64,10 +64,10 @@ def sample_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     path = tmp_path / "history_settings.json"
     path.write_text(json.dumps(cfg), encoding="utf-8")
     monkeypatch.setattr(
-        "nanobot.groupchat.history.history_settings._SETTINGS_FILE",
+        "nanobot.groupchat.context.history_settings._SETTINGS_FILE",
         path,
     )
-    from nanobot.groupchat.history import history_settings as hs
+    from nanobot.groupchat.context import history_settings as hs
 
     hs.reload()
     yield cfg

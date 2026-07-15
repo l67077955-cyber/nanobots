@@ -1,4 +1,4 @@
-from nanobot.groupchat.history.response_cleanup import clean_response
+from nanobot.groupchat.context.response_cleanup import clean_response
 
 
 def test_clean_response_strips_agent_prefix_only_at_line_start():

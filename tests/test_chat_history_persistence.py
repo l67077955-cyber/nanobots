@@ -9,13 +9,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from nanobot.groupchat.config import GroupChatConfig
-from nanobot.groupchat.history.persistence import GroupChatState
+from nanobot.groupchat.context.persistence import GroupChatState
 from nanobot.groupchat.runtime.engine import GroupChatEngine
 
 
 @pytest.fixture()
 def history_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    import nanobot.groupchat.history.persistence as persistence_mod
+    import nanobot.groupchat.context.persistence as persistence_mod
 
     target = tmp_path / "chat_history.json"
     monkeypatch.setattr(persistence_mod, "_NANOBOT_DIR", tmp_path)
@@ -48,7 +48,7 @@ def test_clear_history_snapshot(history_file: Path) -> None:
 
 
 def test_engine_restores_history_on_init(history_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import nanobot.groupchat.history.persistence as persistence_mod
+    import nanobot.groupchat.context.persistence as persistence_mod
 
     monkeypatch.setattr(persistence_mod, "_NANOBOT_DIR", history_file.parent)
     history_file.write_text(
@@ -79,7 +79,7 @@ def test_engine_restores_history_on_init(history_file: Path, monkeypatch: pytest
 
 
 def test_clear_history_removes_snapshot(history_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import nanobot.groupchat.history.persistence as persistence_mod
+    import nanobot.groupchat.context.persistence as persistence_mod
 
     monkeypatch.setattr(persistence_mod, "_NANOBOT_DIR", history_file.parent)
     provider = MagicMock()
@@ -102,7 +102,7 @@ def test_engine_restore_preserves_compact_boundary_flag(
     silently dropped the structured compact-boundary flag — forcing the
     legacy string-prefix fallback to do all the work.
     """
-    import nanobot.groupchat.history.persistence as persistence_mod
+    import nanobot.groupchat.context.persistence as persistence_mod
 
     monkeypatch.setattr(persistence_mod, "_NANOBOT_DIR", history_file.parent)
     history_file.write_text(

@@ -23,7 +23,7 @@ from typing import Any, Awaitable, Callable
 from loguru import logger
 
 from nanobot.tools.registry import ToolRegistry
-from nanobot.groupchat.history.result_processor import process_tool_result
+from nanobot.groupchat.context.result_processor import process_tool_result
 from nanobot.observability.context_trace import write_context_snapshot
 from nanobot.providers.base import LLMProvider, LLMResponse
 from nanobot.utils.helpers import build_assistant_message
@@ -301,7 +301,7 @@ async def tool_loop(
     # ── Resolve dynamic defaults ──
     if result_max_chars is None:
         try:
-            from nanobot.groupchat.history.history_settings import get_tool_result_max_chars
+            from nanobot.groupchat.context.history_settings import get_tool_result_max_chars
             result_max_chars = get_tool_result_max_chars()
         except Exception:
             result_max_chars = 64_000
@@ -327,7 +327,7 @@ async def tool_loop(
 
     # Resolve context_window_tokens for pruning (from history_settings or default)
     try:
-        from nanobot.groupchat.history.history_settings import get_context_window_tokens
+        from nanobot.groupchat.context.history_settings import get_context_window_tokens
         _ctx_window = get_context_window_tokens()
     except Exception:
         _ctx_window = 200_000
@@ -350,7 +350,7 @@ async def tool_loop(
         # This is a read-only operation — the original messages list is not
         # mutated, so new tool results continue to be appended correctly.
         if iteration > 1:
-            from nanobot.groupchat.history.tool_pruning import prune_messages
+            from nanobot.groupchat.context.tool_pruning import prune_messages
             ignored = set(result.forgotten_tool_call_ids or [])
             llm_messages = prune_messages(
                 messages, _ctx_window, ignored_tool_call_ids=ignored,

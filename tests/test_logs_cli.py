@@ -10,13 +10,13 @@ from typer.testing import CliRunner
 
 from nanobot.cli.commands import app
 from nanobot.cli.logs import recover_conversation, resolve_session_dir
-from nanobot.groupchat.history.persistence import GroupChatState
+from nanobot.groupchat.context.persistence import GroupChatState
 
 
 @pytest.fixture()
 def nanobot_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     import nanobot.cli.logs as logs_mod
-    import nanobot.groupchat.history.persistence as persistence_mod
+    import nanobot.groupchat.context.persistence as persistence_mod
 
     monkeypatch.setattr(persistence_mod, "_NANOBOT_DIR", tmp_path)
     monkeypatch.setattr(logs_mod, "_NANOBOT_DIR", tmp_path)

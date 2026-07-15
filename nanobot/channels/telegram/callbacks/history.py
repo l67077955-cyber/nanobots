@@ -37,7 +37,7 @@ class HistoryCallbackMixin:
 
     async def _handle_history_callback(self, query, data: str) -> None:
         """Handle /history interactive settings callbacks."""
-        from nanobot.groupchat.history import history_settings as hs
+        from nanobot.groupchat.context import history_settings as hs
 
         # ── Reload ──
         if data == "hs_reload":

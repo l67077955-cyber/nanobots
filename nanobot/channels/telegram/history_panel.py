@@ -199,7 +199,7 @@ def find_group_for_param(section: str, key: str) -> str:
 # ── Settings / engine helpers (unchanged) ────────────────────────────────
 
 def _settings() -> dict[str, Any]:
-    from nanobot.groupchat.history import history_settings as hs
+    from nanobot.groupchat.context import history_settings as hs
     return hs.get_all()
 
 
@@ -609,7 +609,7 @@ def restore_defaults(group: str | None = None) -> str:
 
     Returns a confirmation message.
     """
-    from nanobot.groupchat.history import history_settings as hs
+    from nanobot.groupchat.context import history_settings as hs
     import json
 
     defaults = json.loads(json.dumps(hs._DEFAULTS))

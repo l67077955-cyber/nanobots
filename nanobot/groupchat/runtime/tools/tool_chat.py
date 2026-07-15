@@ -265,7 +265,7 @@ async def chat_with_tools(
     )
 
     try:
-        from nanobot.groupchat.history.history_settings import direct_result_max_chars
+        from nanobot.groupchat.context.history_settings import direct_result_max_chars
         _direct_result_max = direct_result_max_chars()
     except Exception:
         _direct_result_max = 8_000

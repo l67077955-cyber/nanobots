@@ -68,7 +68,7 @@ def _make_engine(tmp_path, monkeypatch, agent_names: list[str]) -> GroupChatEngi
     )
     # Isolate persistence: GroupChatState hardcodes ~/.nanobot as its state dir
     # and would otherwise restore the real chat_history.json into the test engine.
-    import nanobot.groupchat.history.persistence as persistence
+    import nanobot.groupchat.context.persistence as persistence
     monkeypatch.setattr(persistence, "_NANOBOT_DIR", tmp_path)
     engine = GroupChatEngine(config, FakeProvider(), tmp_path)
     engine._active_agents = list(agent_names)

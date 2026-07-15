@@ -303,7 +303,7 @@ class SmartSearchTool(Tool):
     def _get_summarize_threshold(self) -> int:
         """Read threshold from history_settings instead of hardcode."""
         try:
-            from nanobot.groupchat.history.history_settings import get_all
+            from nanobot.groupchat.context.history_settings import get_all
             tr = get_all().get("tool_results", {})
             return int(tr.get("summarize_threshold", 8000))
         except Exception:

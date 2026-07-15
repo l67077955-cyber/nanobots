@@ -1,6 +1,6 @@
 """Tests for the two-phase context pruning module."""
 
-from nanobot.groupchat.history.tool_pruning import prune_messages
+from nanobot.groupchat.context.tool_pruning import prune_messages
 
 
 def _make_messages(tool_content_sizes: list[int], recent_assistants: int = 3) -> list[dict]:

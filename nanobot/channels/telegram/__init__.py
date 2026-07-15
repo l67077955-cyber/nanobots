@@ -23,7 +23,7 @@ from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import TelegramConfig
 from nanobot.groupchat.runtime.engine import GroupChatEngine
 from nanobot.groupchat.display import display as _d
-from nanobot.groupchat.history.prompt_builder import (
+from nanobot.groupchat.context.prompt_builder import (
     PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
     GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
 )

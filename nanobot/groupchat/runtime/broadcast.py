@@ -28,7 +28,7 @@ from nanobot.groupchat.runtime.mailbox import MailboxHub, ConversationPool
 from nanobot.groupchat.runtime.turn_stack import TurnStack
 from nanobot.groupchat.runtime.engine import log_request
 from nanobot.groupchat.runtime.working_memory import WorkingMemory, commit_agent_turn
-from nanobot.groupchat.history.component_manager import (
+from nanobot.groupchat.context.component_manager import (
     get_system_warning,
 )
 from nanobot.config.validate import SAMPLING_KEYS
@@ -782,7 +782,7 @@ async def broadcast_round(
 
         # Load configurable result_max_chars for broadcast mode
         try:
-            from nanobot.groupchat.history.history_settings import broadcast_result_max_chars
+            from nanobot.groupchat.context.history_settings import broadcast_result_max_chars
             _broadcast_result_max = broadcast_result_max_chars()
         except Exception:
             _broadcast_result_max = 20_000

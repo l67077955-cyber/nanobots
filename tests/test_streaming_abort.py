@@ -181,7 +181,7 @@ async def test_direct_chat_skips_stream_callbacks_when_disabled():
 
     from nanobot.groupchat.config import GroupChatConfig
     from nanobot.groupchat.runtime.direct_chat import direct_chat
-    from nanobot.groupchat.history.prompt_builder import PromptBuilder
+    from nanobot.groupchat.context.prompt_builder import PromptBuilder
     from nanobot.core.history import History
 
     pb = PromptBuilder(config=GroupChatConfig(), workspace=Path("/tmp"))

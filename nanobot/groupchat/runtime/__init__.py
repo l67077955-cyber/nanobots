@@ -1,7 +1,9 @@
-"""Groupchat runtime — parent package for main execution code.
+"""Groupchat runtime — execution / scheduling parent package.
 
-Implementation modules keep their original names (broadcast.py, engine.py,
-mailbox.py, …). Prefer this package over legacy groupchat.orchestra shims.
+Does not own prompt/History plumbing (see groupchat.context) or message
+formatting (see groupchat.display).
+
+Module basenames (broadcast.py, engine.py, …) unchanged.
 """
 
 from nanobot.groupchat.runtime.engine import GroupChatEngine

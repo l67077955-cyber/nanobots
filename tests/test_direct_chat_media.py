@@ -10,7 +10,7 @@ import pytest
 
 from nanobot.groupchat.config import GroupChatConfig
 from nanobot.groupchat.runtime.direct_chat import direct_chat
-from nanobot.groupchat.history.prompt_builder import PromptBuilder
+from nanobot.groupchat.context.prompt_builder import PromptBuilder
 
 
 def _png_bytes() -> bytes:

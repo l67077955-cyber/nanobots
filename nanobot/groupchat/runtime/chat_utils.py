@@ -40,7 +40,7 @@ def build_tool_log(tool_calls_detail: list[dict[str, Any]]) -> str:
         return ""
 
     try:
-        from nanobot.groupchat.history import history_settings as hs
+        from nanobot.groupchat.context import history_settings as hs
         _PREVIEW_LIMITS = hs.tool_log_preview_limits()
         _DEFAULT_PREVIEW = hs.tool_log_default_preview()
         _TOTAL_CAP = hs.tool_log_total_cap()

@@ -20,10 +20,10 @@ from loguru import logger
 
 from nanobot.core.history import History
 from nanobot.groupchat.config import GroupChatConfig
-from nanobot.groupchat.history.agent_loader import load_agents
-from nanobot.groupchat.history.persistence import GroupChatState
-from nanobot.groupchat.history.prompt_builder import PromptBuilder
-from nanobot.groupchat.history.response_cleanup import clean_response as _clean_response_fn
+from nanobot.groupchat.context.agent_loader import load_agents
+from nanobot.groupchat.context.persistence import GroupChatState
+from nanobot.groupchat.context.prompt_builder import PromptBuilder
+from nanobot.groupchat.context.response_cleanup import clean_response as _clean_response_fn
 from nanobot.groupchat.runtime.agent_runner import AgentRunner
 from nanobot.groupchat.runtime.mailbox import MailboxHub
 from nanobot.groupchat.runtime.turn_stack import TurnStack
@@ -1286,7 +1286,7 @@ class GroupChatEngine:
 
     async def _maybe_compress_history(self) -> None:
         """Compress history if needed — directly through History."""
-        from nanobot.groupchat.history.history_settings import (
+        from nanobot.groupchat.context.history_settings import (
             max_messages,
             compress_ratio,
             token_trigger_ratio,

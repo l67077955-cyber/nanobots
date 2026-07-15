@@ -67,7 +67,7 @@ class EditCallbackMixin:
                 except ValueError:
                     await self._gc_send(chat_id, f"❌ 请输入数字，收到: {raw}")
                     return
-            from nanobot.groupchat.history import history_settings as hs
+            from nanobot.groupchat.context import history_settings as hs
             result = hs.update_field(section, key, value)
             await self._gc_send(chat_id, result)
             return

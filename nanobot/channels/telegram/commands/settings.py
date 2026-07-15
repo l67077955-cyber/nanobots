@@ -14,7 +14,7 @@ from telegram.ext import ContextTypes
 from loguru import logger
 
 from nanobot.channels.telegram.formatting import to_cli_style
-from nanobot.groupchat.history.prompt_builder import (
+from nanobot.groupchat.context.prompt_builder import (
     PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
     GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
     COMPONENT_PHASES as _COMPONENT_PHASES,

@@ -29,8 +29,8 @@ class TestStage1_ToolTruncation:
     @pytest.fixture(autouse=True)
     def patch_deps(self):
         with (
-            patch("nanobot.groupchat.history.result_processor._get_max_chars") as mock_get,
-            patch("nanobot.groupchat.history.result_processor._persist_to_disk") as mock_persist,
+            patch("nanobot.groupchat.context.result_processor._get_max_chars") as mock_get,
+            patch("nanobot.groupchat.context.result_processor._persist_to_disk") as mock_persist,
         ):
             def _side_effect(tool_name):
                 m = {"exec": 10_000, "web_fetch": 8_000, "web_search": 5_000, "read_file": 5_000}
@@ -42,7 +42,7 @@ class TestStage1_ToolTruncation:
     @pytest.mark.asyncio
     async def test_exec_head_tail_truncation(self):
         """exec uses head_tail strategy: keeps head + tail when over limit."""
-        from nanobot.groupchat.history.result_processor import process_tool_result
+        from nanobot.groupchat.context.result_processor import process_tool_result
         output = "line 0: hello world\n" * 500 + "middle\n" * 250 + "tail: end\n" * 500
         assert len(output) > 10_000
         result = await process_tool_result(output, "exec", "call_exec_1")
@@ -54,7 +54,7 @@ class TestStage1_ToolTruncation:
     @pytest.mark.asyncio
     async def test_small_result_passthrough(self):
         """Small results under the per-tool limit pass through unchanged."""
-        from nanobot.groupchat.history.result_processor import process_tool_result
+        from nanobot.groupchat.context.result_processor import process_tool_result
         small = "hello world"
         # Small enough, no truncation needed
         result = await process_tool_result(small, "exec", "call_exec_2")
@@ -63,7 +63,7 @@ class TestStage1_ToolTruncation:
     @pytest.mark.asyncio
     async def test_multimodal_list_passthrough(self):
         """Multimodal lists (with image_url) are returned unchanged (not strings)."""
-        from nanobot.groupchat.history.result_processor import process_tool_result
+        from nanobot.groupchat.context.result_processor import process_tool_result
         ml = [{"type": "image_url", "image_url": {"url": "data:..."}}]
         result = await process_tool_result(ml, "exec", "call_exec_3")
         assert result is ml  # same object, unchanged
@@ -96,7 +96,7 @@ class TestStage3_ContextPrune:
         The test uses explicit args. 6*5k chars on 40k-token window is still low ratio.
         """
         msgs = self._make_messages(6)
-        from nanobot.groupchat.history.tool_pruning import prune_messages
+        from nanobot.groupchat.context.tool_pruning import prune_messages
         result = prune_messages(msgs, context_window_tokens=40_000, soft_ratio=0.3, keep_recent=3)
         assert len(result) == len(msgs)
         tool_contents = [m["content"] for m in result if m.get("role") == "tool"]
@@ -107,7 +107,7 @@ class TestStage3_ContextPrune:
         Use small window to force high ratio under accurate tiktoken estimator
         (repetitive 'x' data is very cheap in real tokens).
         """
-        from nanobot.groupchat.history.tool_pruning import prune_messages
+        from nanobot.groupchat.context.tool_pruning import prune_messages
         msgs = self._make_messages(10)
         # Small window forces the soft trigger even with real token estimates
         result = prune_messages(msgs, context_window_tokens=3000, soft_ratio=0.3, keep_recent=3)
@@ -121,7 +121,7 @@ class TestStage3_ContextPrune:
 
     def test_summarize_tool_result_format(self):
         """_summarize_tool_result produces expected 1-line summaries per tool type."""
-        from nanobot.groupchat.history.tool_pruning import _summarize_tool_result
+        from nanobot.groupchat.context.tool_pruning import _summarize_tool_result
 
         # exec: content must contain "exit_code: N" or "returncode = N" etc for regex to match
         exec_content = "line1\nreturncode: 0\n47 lines in total\n"
@@ -160,7 +160,7 @@ class TestStage4_HistoryCompress:
     @pytest.mark.asyncio
     async def test_min_dropped_silent_discard(self):
         """When dropped < min_dropped_for_summary, no LLM call, silently discard."""
-        from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
+        from nanobot.groupchat.context.tool_pruning import prune_conversation_tail_with_summary
         # 6 pairs = 12 conv msgs. With keep_turns=3, max_conv=9, dropped=3 <5 -> silent
         msgs = self._make_long_conversation(6)
         sys_msg_count = 1
@@ -175,7 +175,7 @@ class TestStage4_HistoryCompress:
     async def test_summary_injected_when_above_threshold(self):
         """When dropped >= min_dropped_for_summary, AI summary is injected."""
         provider = mock_provider()
-        from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
+        from nanobot.groupchat.context.tool_pruning import prune_conversation_tail_with_summary
         msgs = self._make_long_conversation(20)  # 20 pairs, 40 conv msgs
         sys_msg_count = 1
         dropped = await prune_conversation_tail_with_summary(
@@ -190,7 +190,7 @@ class TestStage4_HistoryCompress:
     async def test_summary_separator_replacement(self):
         """[上下文摘要] separator prevents accumulation on repeated calls."""
         provider = mock_provider()
-        from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
+        from nanobot.groupchat.context.tool_pruning import prune_conversation_tail_with_summary
         msgs = self._make_long_conversation(30)
         sys_msg_count = 1
         await prune_conversation_tail_with_summary(

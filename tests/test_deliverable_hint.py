@@ -1,6 +1,6 @@
 """Tests for deliverable task detection in groupchat prompts."""
 
-from nanobot.groupchat.history.deliverable_hint import detect_deliverable_hint
+from nanobot.groupchat.context.deliverable_hint import detect_deliverable_hint
 
 
 def test_empty_question_returns_empty():
