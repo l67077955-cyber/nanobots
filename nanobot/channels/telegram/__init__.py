@@ -21,7 +21,7 @@ from nanobot.channels.base import BaseChannel
 from nanobot.channels.commands_core import CoreCommandsMixin
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import TelegramConfig
-from nanobot.groupchat.orchestra.engine import GroupChatEngine
+from nanobot.groupchat.runtime.engine import GroupChatEngine
 from nanobot.groupchat.display import display as _d
 from nanobot.groupchat.history.prompt_builder import (
     PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,

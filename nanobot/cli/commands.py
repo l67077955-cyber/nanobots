@@ -425,7 +425,7 @@ def gateway(
     channels = ChannelManager(config, bus)
 
     # Always create GroupChatEngine (unified prompt building)
-    from nanobot.groupchat.orchestra.engine import GroupChatEngine
+    from nanobot.groupchat.runtime.engine import GroupChatEngine
     gc_engine = GroupChatEngine(
         config=config.groupchat,
         provider=provider,

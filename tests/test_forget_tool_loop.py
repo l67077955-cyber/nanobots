@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from nanobot.groupchat.orchestra.tools.tool_loop import tool_loop
+from nanobot.groupchat.runtime.tools.tool_loop import tool_loop
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from nanobot.tools.base import Tool
 from nanobot.tools.forget import ForgetTool

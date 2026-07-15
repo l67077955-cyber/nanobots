@@ -27,7 +27,7 @@ import pytest
 from loguru import logger
 
 from nanobot.groupchat.config import GroupChatAgentConfig, GroupChatConfig
-from nanobot.groupchat.orchestra.engine import GroupChatEngine
+from nanobot.groupchat.runtime.engine import GroupChatEngine
 from nanobot.providers.base import LLMProvider, LLMResponse
 from nanobot.tools.registry import ToolRegistry
 

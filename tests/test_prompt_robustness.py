@@ -27,9 +27,9 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from nanobot.groupchat.config import GroupChatConfig
-from nanobot.groupchat.orchestra.engine import GroupChatEngine
-from nanobot.groupchat.orchestra.broadcast import broadcast_round
-from nanobot.groupchat.orchestra.mailbox import MailboxHub
+from nanobot.groupchat.runtime.engine import GroupChatEngine
+from nanobot.groupchat.runtime.round import broadcast_round
+from nanobot.groupchat.runtime.mailbox import MailboxHub
 from nanobot.providers.litellm_provider import LiteLLMProvider
 
 

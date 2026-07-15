@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from nanobot.groupchat.display.streaming import StreamingDisplay
-from nanobot.groupchat.orchestra.engine import GroupChatEngine
+from nanobot.groupchat.runtime.engine import GroupChatEngine
 
 
 @pytest.mark.asyncio
@@ -180,7 +180,7 @@ async def test_direct_chat_skips_stream_callbacks_when_disabled():
     from unittest.mock import AsyncMock
 
     from nanobot.groupchat.config import GroupChatConfig
-    from nanobot.groupchat.orchestra.direct_chat import direct_chat
+    from nanobot.groupchat.runtime.direct import direct_chat
     from nanobot.groupchat.history.prompt_builder import PromptBuilder
     from nanobot.core.history import History
 

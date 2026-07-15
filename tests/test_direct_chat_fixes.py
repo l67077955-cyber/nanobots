@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from nanobot.groupchat.orchestra.engine import (
+from nanobot.groupchat.runtime.engine import (
     build_tool_log,
     reasoning_tokens_from_provider_meta,
     resolve_max_tool_iterations,

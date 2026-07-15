@@ -1,5 +1,5 @@
-from nanobot.groupchat.orchestra.broadcast import _valid_agent_sampling
-from nanobot.groupchat.orchestra.tools.tool_chat import valid_agent_sampling
+from nanobot.groupchat.runtime.round import _valid_agent_sampling
+from nanobot.groupchat.runtime.tools.tool_chat import valid_agent_sampling
 
 
 def test_valid_agent_sampling_filters_unknown_keys():

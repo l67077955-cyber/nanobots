@@ -272,7 +272,7 @@ class SettingsCommandsMixin:
 
         # Agents detail
         pm = self._load_pm()
-        from nanobot.groupchat.orchestra.engine import GroupChatEngine
+        from nanobot.groupchat.runtime.engine import GroupChatEngine
         lines.append("👥 Agent 详情:")
         for name, info in engine.registry.items():
             active = "🟢" if name in engine._active_agents else "⚪"

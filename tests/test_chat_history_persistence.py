@@ -10,7 +10,7 @@ import pytest
 
 from nanobot.groupchat.config import GroupChatConfig
 from nanobot.groupchat.history.persistence import GroupChatState
-from nanobot.groupchat.orchestra.engine import GroupChatEngine
+from nanobot.groupchat.runtime.engine import GroupChatEngine
 
 
 @pytest.fixture()

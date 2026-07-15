@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from nanobot.groupchat.orchestra.agent_runner import AgentRunner
+from nanobot.groupchat.runtime.agent_runner import AgentRunner
 
 
 class _StubMailbox:

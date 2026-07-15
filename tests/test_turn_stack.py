@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from nanobot.groupchat.orchestra.turn_stack import TurnStack
+from nanobot.groupchat.runtime.turn_stack import TurnStack
 
 
 class _StubMailbox:

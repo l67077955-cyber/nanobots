@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from nanobot.groupchat.orchestra.mailbox import MailboxHub
+from nanobot.groupchat.runtime.mailbox import MailboxHub
 
 
 class _R:

@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from nanobot.groupchat.orchestra.cycle_controller import (
+from nanobot.groupchat.runtime.cycle_controller import (
     CycleAction,
     CycleContext,
     CycleController,

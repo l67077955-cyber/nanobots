@@ -5,7 +5,7 @@ from typing import Any
 from loguru import logger
 
 from nanobot.groupchat.display import display as _d
-from nanobot.groupchat.orchestra.events import trigger_realtime_interrupts
+from nanobot.groupchat.runtime.events import trigger_realtime_interrupts
 
 
 class BroadcastView:

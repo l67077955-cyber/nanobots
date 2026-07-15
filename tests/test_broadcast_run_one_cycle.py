@@ -243,7 +243,7 @@ async def test_cycle_gate_max_cycles_forces_exit():
     Note: Full wiring requires monkeypatching _run_one internals.
     This test validates the stub harness + oracle interaction.
     """
-    from nanobot.groupchat.orchestra.cycle_controller import (
+    from nanobot.groupchat.runtime.cycle_controller import (
         CycleController, CycleContext, CycleAction,
     )
 

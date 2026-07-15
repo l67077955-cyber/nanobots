@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from nanobot.bus.events import OutboundMessage
-from nanobot.groupchat.orchestra.engine import GroupChatEngine
+from nanobot.groupchat.runtime.engine import GroupChatEngine
 
 
 def _minimal_engine() -> GroupChatEngine:

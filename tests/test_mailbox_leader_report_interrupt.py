@@ -1,6 +1,6 @@
 """Interrupt hierarchy: higher configured tier preempts lower tier."""
 
-from nanobot.groupchat.orchestra.mailbox import MailboxHub
+from nanobot.groupchat.runtime.mailbox import MailboxHub
 
 
 def test_advanced_interrupts_standard_leader():

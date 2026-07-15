@@ -94,7 +94,7 @@ def validate_config_files() -> list[str]:
 def log_effective_config(*, gc_settings: dict[str, Any] | None = None, sampling: dict[str, Any] | None = None) -> None:
     """One-line startup summary of runtime config (timeouts + sampling)."""
     if gc_settings is None:
-        from nanobot.groupchat.orchestra.broadcast_orchestrator import load_groupchat_settings
+        from nanobot.groupchat.runtime.round_setup import load_groupchat_settings
         gc_settings = load_groupchat_settings()
     if sampling is None:
         sampling = _read_json(_NANOBOT / "hyperparams.json")

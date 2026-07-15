@@ -18,7 +18,7 @@ from nanobot.groupchat.tool_policy import (
     forget_tool_enabled,
     memory_palace_tool_enabled,
 )
-from nanobot.groupchat.orchestra.engine import GroupChatEngine
+from nanobot.groupchat.runtime.engine import GroupChatEngine
 from nanobot.tools.forget import ForgetTool
 from nanobot.tools.registry import ToolRegistry
 

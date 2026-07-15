@@ -131,7 +131,7 @@ class TestBuildToolLog(unittest.TestCase):
     """Verify the tool log helper still produces output."""
 
     def test_build_tool_log_imports(self):
-        from nanobot.groupchat.orchestra.engine import build_tool_log
+        from nanobot.groupchat.runtime.engine import build_tool_log
         result = build_tool_log([
             {"name": "web_search", "args": {"query": "AI news"}, "content": "result: Google I/O 2026 confirmed"}
         ])
@@ -139,12 +139,12 @@ class TestBuildToolLog(unittest.TestCase):
         self.assertIn("web_search", result, "Tool name appears in log")
 
     def test_build_tool_log_empty(self):
-        from nanobot.groupchat.orchestra.engine import build_tool_log
+        from nanobot.groupchat.runtime.engine import build_tool_log
         result = build_tool_log([])
         self.assertEqual(result, "", "Empty calls → empty string")
 
     def test_build_tool_log_no_substantive(self):
-        from nanobot.groupchat.orchestra.engine import build_tool_log
+        from nanobot.groupchat.runtime.engine import build_tool_log
         result = build_tool_log([
             {"name": "chatroom_send", "args": {"to": "All"}, "content": "hello"},
             {"name": "wait", "args": {}, "content": ""},

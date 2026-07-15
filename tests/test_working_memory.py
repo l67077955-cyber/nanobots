@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from nanobot.core.history import History
-from nanobot.groupchat.orchestra.working_memory import WorkingMemory, commit_agent_turn
+from nanobot.groupchat.runtime.working_memory import WorkingMemory, commit_agent_turn
 
 
 class _FakeEngine:
