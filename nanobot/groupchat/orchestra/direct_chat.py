@@ -17,7 +17,6 @@ from loguru import logger
 from nanobot.groupchat.display import display as _d
 from nanobot.groupchat.display.streaming import StreamingDisplay
 from nanobot.groupchat.orchestra.chat_utils import (
-    build_tool_log,
     log_request,
     reasoning_tokens_from_provider_meta,
 )
@@ -168,11 +167,16 @@ async def direct_chat(
         current_user_msg = new_msg
         media = new_media
 
-        if content:
-            messages.append({"role": "assistant", "content": content})
-        messages.append({
-            "role": "user",
-            "content": _user_message_content(new_msg, new_media),
-        })
+        # Rebuild from shared History (prior turn already committed). Avoid
+        # growing a private messages list that can desync from engine.history.
+        messages = engine.prompt_builder.build_single_agent_messages(
+            agent_name,
+            registry=engine.registry,
+            history=engine.history,
+            current_message=new_msg,
+            media=new_media,
+            channel=engine._view_channel,
+            chat_id=engine._view_chat_id,
+        )
 
     return last_response

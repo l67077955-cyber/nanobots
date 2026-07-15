@@ -70,7 +70,14 @@ class GroupChatEngine:
         self._cron_service = cron_service
         self._send_outbound_fn = send_outbound_fn  # Callable[[OutboundMessage], Awaitable[None]]
 
-        self._mailbox = MailboxHub(on_message=self._on_agent_comm)
+        # _runners is created in _init_state(); callback uses getattr so early
+        # construction / pre-init calls stay safe.
+        self._mailbox = MailboxHub(
+            on_message=self._on_agent_comm,
+            get_busy_agents=lambda: {
+                n for n, r in getattr(self, '_runners', {}).items() if r.is_busy
+            },
+        )
         self._prompt_builder = PromptBuilder(config=config, workspace=workspace)
 
         # MCP servers (lazy-connected on first run)
