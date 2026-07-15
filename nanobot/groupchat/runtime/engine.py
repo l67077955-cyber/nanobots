@@ -936,7 +936,7 @@ class GroupChatEngine:
         media: list[str] | None = None,
     ) -> str | None:
         """Send message to single active agent — delegates to direct_chat module."""
-        from nanobot.groupchat.runtime.direct import direct_chat as _direct_chat
+        from nanobot.groupchat.runtime.direct_chat import direct_chat as _direct_chat
         return await _direct_chat(self, user_message, media=media)
 
     def inject(
@@ -1403,12 +1403,12 @@ class GroupChatEngine:
 
     async def _generate_summary(self) -> None:
         """Generate discussion summary — delegates to run_loop module."""
-        from nanobot.groupchat.runtime.loop import generate_summary
+        from nanobot.groupchat.runtime.run_loop import generate_summary
         await generate_summary(self)
 
     async def _run_loop(self) -> None:
         """Main group chat loop — delegates to run_loop module."""
-        from nanobot.groupchat.runtime.loop import run_loop
+        from nanobot.groupchat.runtime.run_loop import run_loop
         await run_loop(self)
 
 
@@ -1418,7 +1418,7 @@ from nanobot.groupchat.runtime.chat_utils import (
     log_request,
     reasoning_tokens_from_provider_meta,
 )
-from nanobot.groupchat.runtime.direct import direct_chat
+from nanobot.groupchat.runtime.direct_chat import direct_chat
 from nanobot.groupchat.runtime.tools.tool_chat import (
     chat_with_tools,
     resolve_max_tool_iterations,

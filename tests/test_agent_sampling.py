@@ -1,4 +1,4 @@
-from nanobot.groupchat.runtime.round import _valid_agent_sampling
+from nanobot.groupchat.runtime.broadcast import _valid_agent_sampling
 from nanobot.groupchat.runtime.tools.tool_chat import valid_agent_sampling
 
 

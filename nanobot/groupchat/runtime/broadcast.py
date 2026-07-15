@@ -1,7 +1,7 @@
-"""Multi-agent concurrent round -- main groupchat execution path.
+"""Broadcast execution mode for group chat (main multi-agent path).
 
-Historically named broadcast (fan-out). This is the primary multi-agent
-loop, not a partial mode. Prefer run_round; broadcast_round is an alias.
+Lives under groupchat.runtime (parent package for execution).
+Runs all agents concurrently with out-of-order display.
 """
 
 from __future__ import annotations
@@ -436,7 +436,7 @@ class BroadcastOrchestrator:
             self.agent_tool_registries[self.leader_name].register(transfer_tool)
             self.agent_tool_registries[self.leader_name].register(clear_ctx_tool)
 
-async def run_round(
+async def broadcast_round(
     agents: list[str],
     engine: BroadcastContext,
     mailbox: MailboxHub,
@@ -459,8 +459,8 @@ async def run_round(
         List of (agent_name, content) tuples in completion order.
     """
     # Clear stale rank cache from previous round
-    if hasattr(run_round, "_agent_ranks_cache"):
-        del run_round._agent_ranks_cache
+    if hasattr(broadcast_round, "_agent_ranks_cache"):
+        del broadcast_round._agent_ranks_cache
     if not agents:
         return []
 
@@ -561,9 +561,9 @@ async def run_round(
 
     # ── Compute agent_ranks early (needed by BroadcastView and build_for_groupchat visibility) ──
     from nanobot.groupchat.display.visibility import compute_agent_ranks
-    if not hasattr(run_round, "_agent_ranks_cache"):
-        run_round._agent_ranks_cache = compute_agent_ranks(list(agents), engine.registry, leader_name)
-    agent_ranks = run_round._agent_ranks_cache
+    if not hasattr(broadcast_round, "_agent_ranks_cache"):
+        broadcast_round._agent_ranks_cache = compute_agent_ranks(list(agents), engine.registry, leader_name)
+    agent_ranks = broadcast_round._agent_ranks_cache
 
     from nanobot.groupchat.display.broadcast_view import BroadcastView
     view = BroadcastView(engine, orch.tracker, mailbox, orch.pool, orch.search_pool, list(agents), leader_name, agent_ranks=agent_ranks)
@@ -2099,5 +2099,5 @@ async def run_round(
 
     return [(name, content) for name, content, _ in results]
 
-# Back-compat alias
-broadcast_round = run_round
+# Optional clearer alias (same function)
+run_round = broadcast_round

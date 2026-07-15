@@ -126,7 +126,7 @@ async def test_end_discussion_takes_priority_over_phantom_interrupt():
 @pytest.mark.asyncio
 async def test_short_leader_message_skips_realtime_interrupt():
     """Leader content < _MIN_SYNTHESIS_LEN must not call _trigger_realtime_interrupts."""
-    from nanobot.groupchat.runtime import round as bcast_mod
+    from nanobot.groupchat.runtime import broadcast as bcast_mod
 
     # Patch _trigger_realtime_interrupts to track calls
     call_count = 0
@@ -152,7 +152,7 @@ async def test_short_leader_message_skips_realtime_interrupt():
 @pytest.mark.asyncio
 async def test_long_leader_message_triggers_realtime_interrupt():
     """Leader content >= _MIN_SYNTHESIS_LEN must still call _trigger_realtime_interrupts."""
-    from nanobot.groupchat.runtime import round as bcast_mod
+    from nanobot.groupchat.runtime import broadcast as bcast_mod
 
     call_count = 0
 
@@ -175,7 +175,7 @@ async def test_long_leader_message_triggers_realtime_interrupt():
 @pytest.mark.asyncio
 async def test_short_teammate_message_still_triggers_interrupt():
     """Non-leader short content must still trigger interrupts (only Leader is gated)."""
-    from nanobot.groupchat.runtime import round as bcast_mod
+    from nanobot.groupchat.runtime import broadcast as bcast_mod
 
     call_count = 0
 
@@ -202,7 +202,7 @@ def test_grace_period_completion_counted():
 
     We simulate the relevant code block from broadcast_round's grace period loop.
     """
-    from nanobot.groupchat.runtime import round as bcast_mod
+    from nanobot.groupchat.runtime import broadcast as bcast_mod
 
     completed = 0
     total = 2

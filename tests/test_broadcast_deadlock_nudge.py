@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from nanobot.groupchat.runtime import round as broadcast_mod
+from nanobot.groupchat.runtime import broadcast as broadcast_mod
 
 
 def test_broadcast_module_imports_random():

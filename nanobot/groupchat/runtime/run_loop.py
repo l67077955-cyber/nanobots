@@ -1,6 +1,7 @@
-"""Main group chat event loop -- multi-agent or direct mode.
+"""Main group chat event loop — dispatches to broadcast / direct mode.
 
-Leader final text (before end_discussion) is the synthesis.
+Leader's final text reply (before end_discussion) serves as the
+synthesis; no separate summary generation stage exists.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from typing import Any
 
 from loguru import logger
 
-from nanobot.groupchat.runtime.round import run_round
+from nanobot.groupchat.runtime.broadcast import broadcast_round
 
 
 async def generate_summary(engine: Any) -> None:
@@ -120,11 +121,11 @@ async def run_loop(engine: Any) -> None:
             # Determine speaking order
             speak_order = list(engine._active_agents)
 
-            from nanobot.groupchat.runtime.round_setup import load_groupchat_settings
+            from nanobot.groupchat.runtime.broadcast_orchestrator import load_groupchat_settings
             _gc = load_groupchat_settings()
             _global_timeout = float(_gc.get("global_timeout", 600))
 
-            await run_round(
+            await broadcast_round(
                 speak_order,
                 engine,
                 engine._mailbox,

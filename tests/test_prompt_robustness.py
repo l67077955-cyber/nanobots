@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from nanobot.groupchat.config import GroupChatConfig
 from nanobot.groupchat.runtime.engine import GroupChatEngine
-from nanobot.groupchat.runtime.round import broadcast_round
+from nanobot.groupchat.runtime.broadcast import broadcast_round
 from nanobot.groupchat.runtime.mailbox import MailboxHub
 from nanobot.providers.litellm_provider import LiteLLMProvider
 

@@ -1,11 +1,11 @@
-"""Deprecated package name: use nanobot.groupchat.runtime.
+"""Deprecated parent package name: use nanobot.groupchat.runtime.
 
-Kept as re-exports so existing imports keep working.
+Module basenames (broadcast, engine, …) are unchanged.
 """
 from nanobot.groupchat.runtime import (  # noqa: F401
     GroupChatEngine,
-    run_round,
     broadcast_round,
+    run_round,
     direct_chat,
     run_loop,
 )

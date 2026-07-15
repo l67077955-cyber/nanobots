@@ -1,7 +1,6 @@
 """Legacy shim — implementation lives in nanobot.groupchat.runtime.
 
-This module re-exports for backward compatibility. New code should import
-from nanobot.groupchat.runtime (e.g. runtime.round, runtime.engine).
+Parent package moved for layout clarity; module basenames unchanged.
 """
 from nanobot.groupchat.runtime.engine import *  # noqa: F403
-from nanobot.groupchat.runtime.engine import GroupChatEngine
+from nanobot.groupchat.runtime.engine import GroupChatEngine  # noqa: F401

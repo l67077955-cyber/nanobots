@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from nanobot.groupchat.config import GroupChatConfig
-from nanobot.groupchat.runtime.direct import direct_chat
+from nanobot.groupchat.runtime.direct_chat import direct_chat
 from nanobot.groupchat.history.prompt_builder import PromptBuilder
 
 
@@ -50,7 +50,7 @@ async def test_direct_chat_builds_multimodal_user_message(tmp_path):
         _edit_fn=None,
     )
 
-    with patch("nanobot.groupchat.runtime.direct.StreamingDisplay") as mock_stream:
+    with patch("nanobot.groupchat.runtime.direct_chat.StreamingDisplay") as mock_stream:
         inst = mock_stream.return_value
         inst.enabled = False
         inst.finalize = AsyncMock()

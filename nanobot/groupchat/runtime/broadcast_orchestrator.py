@@ -1,4 +1,4 @@
-"""Per-round resource setup for multi-agent concurrent rounds."""
+"""Per-round resource setup for broadcast mode."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from typing import Any, Callable
 
 from loguru import logger
 
-from nanobot.groupchat.runtime.round_context import BroadcastContext
-from nanobot.groupchat.runtime.agent_status import AgentStatusTracker
+from nanobot.groupchat.runtime.broadcast_context import BroadcastContext
+from nanobot.groupchat.runtime.broadcast_status import AgentStatusTracker
 from nanobot.groupchat.runtime.mailbox import MailboxHub, ConversationPool
 
 _GC_SETTINGS_DEFAULTS = {
