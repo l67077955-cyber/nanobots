@@ -87,3 +87,36 @@ def test_history_add_from_sender_public():
     assert h.count_by_attr("role", "user") == 1
     assert h.count_by_attr("role", "assistant") == 1
     assert h.latest_user_content() == "hello"
+
+
+def test_interrupt_style_refresh_trailing():
+    """Interrupt re-entry: History holds partial turn; trailing carries latest interrupt."""
+    eng = _FakeEngine()
+    eng.history.add_from_sender("用户", "start")
+    eng.history.add_from_sender("Harper", "partial thought")
+
+    def build():
+        return eng.history.build_for_groupchat(current_agent="Harper")
+
+    wm = WorkingMemory(messages=build())
+    wm.insert_before_last({"role": "system", "content": "role-hint"})
+
+    # teammate spoke while we were mid-tool_loop
+    eng.history.add_from_sender("Kirk", "urgent update")
+
+    trailing = [
+        {
+            "role": "system",
+            "content": "[打断期间积压的 1 条较早消息（仅供参考）]\n- [Kirk]: stale\n请重点关注下面的最新消息。",
+        },
+        {
+            "role": "user",
+            "content": "[Kirk — 最新消息]: urgent update",
+        },
+    ]
+    msgs = wm.refresh(build, trailing=trailing)
+    blob = " ".join(str(m.get("content", "")) for m in msgs)
+    assert "partial thought" in blob
+    assert "urgent update" in blob or "[Kirk]" in blob
+    assert any("最新消息" in str(m.get("content", "")) for m in msgs)
+    assert any(m.get("content") == "role-hint" for m in msgs)

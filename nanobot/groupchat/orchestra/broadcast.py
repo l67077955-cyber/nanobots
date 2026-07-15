@@ -1353,30 +1353,22 @@ async def broadcast_round(
 
                     # Save any partial content already produced this cycle
                     if content:
-                        history_content = commit_agent_turn(
+                        commit_agent_turn(
                             engine, name, content, result.tool_calls_detail
                         )
                         search_pool.on_output(name)
                         # Don't re-display partial content — it may be incomplete/mid-thought
 
-                    # NOTE: Do NOT prune messages here.  Keeping the full
-                    # prefix intact guarantees prompt-cache hits on the next
-                    # LLM call.  Pruning would shift the prefix and force a
-                    # full recompute, wasting cached tokens.
-
-                    # Inject any partial content so LLM knows what it said already
-                    if content:
-                        messages.append({"role": "assistant", "content": content})
-
-                    # Inject the interrupt message as a "user" message from the sender.
-                    # If multiple messages accumulated, inject earlier ones as
-                    # summarised context first, then the LATEST as the primary
-                    # message so the LLM responds to the newest state.
+                    # ── Refresh working memory from shared History ──
+                    # Partial output (if any) is already committed. Rebuild from
+                    # History so the next tool_loop sees teammates/user commits
+                    # made during this turn, not a drifted private message list.
+                    trailing: list[dict[str, Any]] = []
                     if _intr_earlier:
                         _earlier_lines = "\n".join(
                             f"- [{m.sender}]: {m.content[:200]}" for m in _intr_earlier
                         )
-                        messages.append({
+                        trailing.append({
                             "role": "system",
                             "content": (
                                 f"[打断期间积压的 {len(_intr_earlier)} 条较早消息（仅供参考）]\n"
@@ -1385,21 +1377,25 @@ async def broadcast_round(
                             ),
                         })
                     if _intr_msg:
-                        messages.append({
+                        trailing.append({
                             "role": "user",
                             "content": f"[{_intr_msg.sender} — 最新消息]: {_intr_msg.content}",
                         })
                     else:
                         # Fallback: no message in queue (already consumed by auto-wait?)
-                        messages.append({
+                        trailing.append({
                             "role": "system",
-                            "content": f"[打断通知] 你的执行被中断，请立即总结当前进展并响应队友的最新需求。",
+                            "content": (
+                                "[打断通知] 你的执行被中断，请立即总结当前进展并响应队友的最新需求。"
+                            ),
                         })
+                    messages = wm.refresh(_build_prompt_snapshot, trailing=trailing)
+                    _sys_msg_count = wm.sys_msg_count - len(trailing)
 
                     await tracker.set_state(name, "thinking")
                     _runner.begin_cycle()
                     content = ""  # reset for the new cycle
-                    continue  # re-enter tool_loop with injected message
+                    continue  # re-enter tool_loop with History-refreshed context
 
                 # ── Anti-idle guard: force re-entry if agent did nothing ──
                 if cycle == 1 and not content and not (set(result.tools_used or []) & _substantive_tools):
