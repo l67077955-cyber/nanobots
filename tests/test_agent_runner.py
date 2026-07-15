@@ -97,7 +97,9 @@ def test_state_derivation():
     r.begin_cycle()
     assert r.state == "busy"
     assert r.is_busy is True
-    assert "Kirk" in mb._busy_agents  # mailbox kept in sync
+    # Mailbox is not the write path; runner owns busy.
+    assert "Kirk" not in getattr(mb, "_busy_fallback", set())
+    assert "Kirk" not in getattr(mb, "_busy_agents", set())
 
     # waiting is a detail of idle (no tool_loop in flight)
     r.end_cycle()

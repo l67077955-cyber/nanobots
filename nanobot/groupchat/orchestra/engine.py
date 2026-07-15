@@ -303,7 +303,7 @@ class GroupChatEngine:
         self._broadcast_tasks: dict[str, asyncio.Task] = {}
         # Per-agent runtime facades (cancel signal + state) for the current
         # round. Populated by broadcast _run_one; the canonical handle new code
-        # should use instead of mailbox._busy_agents / _interrupt_events.
+        # should use instead of mailbox internals / raw interrupt events.
         self._runners: dict[str, AgentRunner] = {}
         # TurnStack for the current round (turn-level ops: interject / cancel_all).
         # Set by broadcast_round before launch, cleared on stop / round end.
@@ -1093,7 +1093,7 @@ class GroupChatEngine:
         """Runtime facade for an agent active in the current round.
 
         New code should call this (and the runner's interrupt/cancel API)
-        instead of reaching into mailbox._busy_agents / _interrupt_events.
+        instead of reaching into mailbox internals / raw interrupt events.
         Returns None if the agent has no runner this round.
         """
         return self._runners.get(name)

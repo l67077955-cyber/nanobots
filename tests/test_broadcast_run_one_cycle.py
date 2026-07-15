@@ -100,6 +100,9 @@ class _StubMailbox:
     def mark_idle(self, name: str) -> None:
         self._busy_agents.discard(name)
 
+    def busy_agents(self) -> set[str]:
+        return set(self._busy_agents)
+
     def send(self, sender: str, targets: list[str], content: str) -> None:
         for t in targets:
             if t in self._queues:
@@ -210,10 +213,10 @@ async def test_stub_harness_assembles():
     assert not evt.is_set()
 
     mailbox.mark_busy("TestAgent")
-    assert "TestAgent" in mailbox._busy_agents
+    assert "TestAgent" in mailbox.busy_agents()
 
     mailbox.mark_idle("TestAgent")
-    assert "TestAgent" not in mailbox._busy_agents
+    assert "TestAgent" not in mailbox.busy_agents()
 
 
 # ── Placeholder for real integration tests ────────────────────────────────

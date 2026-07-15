@@ -1172,7 +1172,11 @@ class EndDiscussionTool(Tool):
         # Leader can still be "executing" its own call.
         if self._mailbox is not None:
             active = getattr(self._mailbox, "_active_agents", set())
-            busy = getattr(self._mailbox, "_busy_agents", set())
+            if hasattr(self._mailbox, "busy_agents"):
+                busy = set(self._mailbox.busy_agents())
+            else:
+                busy = set(getattr(self._mailbox, "_busy_fallback", set())
+                           or getattr(self._mailbox, "_busy_agents", set()))
             leader = getattr(self._mailbox, "_leader_name", "")
             # Agents that are active AND currently inside tool_loop (producing) — excluding the leader caller.
             still_producing = (active & busy) - {leader}

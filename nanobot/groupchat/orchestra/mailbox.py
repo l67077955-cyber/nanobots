@@ -302,9 +302,8 @@ class MailboxHub:
         self._history: list[AgentMessage] = []
         # Optional callback: called with (sender, targets, content) on every send()
         self._on_message = on_message
-        # Optional live busy source (engine._runners). When set, busy_agents()
-        # prefers this over the legacy _busy_agents cache so AgentRunner is the
-        # single runtime authority for interrupt eligibility.
+        # Optional live busy source (engine._runners / AgentRunner.is_busy).
+        # When set, busy_agents() uses it exclusively; mark_busy is a no-op.
         self._get_busy_agents_cb = get_busy_agents
         # Track which agents are currently waiting
         self._waiting: set[str] = set()
@@ -335,8 +334,9 @@ class MailboxHub:
         # Hard limit: 3 interrupts per agent per round (raised from 1 so that
         # newer messages can re-trigger interrupts for freshness).
         self._interrupt_counts: dict[str, int] = {}
-        # Agents currently inside tool_loop (busy — eligible for interruption).
-        self._busy_agents: set[str] = set()
+        # Fallback busy set ONLY when get_busy_agents is not wired (unit tests /
+        # stubs). Production engine always passes a callback over AgentRunner.
+        self._busy_fallback: set[str] = set()
         # Auto-incrementing message ID for quote_message support
         self._next_msg_id: int = 0
         # Discussion end state (for idempotency and final lock)
@@ -383,7 +383,7 @@ class MailboxHub:
         self._next_msg_id = 0
         # Reset interrupt state for the new round
         self._interrupt_counts.clear()
-        self._busy_agents.clear()
+        self._busy_fallback.clear()
         self._listener_restrictions.clear()
         for evt in self._interrupt_events.values():
             evt.clear()
@@ -403,35 +403,39 @@ class MailboxHub:
         return self._interrupt_events[agent_name]
 
     def mark_busy(self, agent_name: str) -> None:
-        """Mark an agent as busy inside tool_loop (interrupt-eligible).
+        """Test/stub-only busy write when no AgentRunner callback is wired.
 
-        Legacy cache write. Prefer AgentRunner.begin_cycle(); this set remains
-        for stubs/tests and as a fallback when no get_busy_agents callback.
+        Production: use ``AgentRunner.begin_cycle()``. When ``get_busy_agents``
+        is set this is a no-op so the runner remains the sole write path.
         """
-        self._busy_agents.add(agent_name)
-        logger.debug("MailboxHub: {} is now busy", agent_name)
+        if self._get_busy_agents_cb is not None:
+            logger.debug(
+                "MailboxHub.mark_busy ignored (runner owns busy): {}", agent_name
+            )
+            return
+        self._busy_fallback.add(agent_name)
+        logger.debug("MailboxHub: {} is now busy (fallback)", agent_name)
 
     def mark_idle(self, agent_name: str) -> None:
-        """Mark an agent as no longer inside tool_loop."""
-        self._busy_agents.discard(agent_name)
-        logger.debug("MailboxHub: {} is now idle", agent_name)
+        """Test/stub-only idle write when no AgentRunner callback is wired."""
+        if self._get_busy_agents_cb is not None:
+            return
+        self._busy_fallback.discard(agent_name)
+        logger.debug("MailboxHub: {} is now idle (fallback)", agent_name)
 
     def busy_agents(self) -> set[str]:
         """Agents currently inside tool_loop (interrupt-eligible).
 
-        Prefer the live AgentRunner view when the engine wired
-        ``get_busy_agents``; fall back to the legacy set for stubs/tests.
+        Production: live ``AgentRunner.is_busy`` via ``get_busy_agents``.
+        Tests/stubs without a callback: ``_busy_fallback`` via mark_busy/idle.
         """
         if self._get_busy_agents_cb is not None:
             try:
-                live = set(self._get_busy_agents_cb() or ())
-                # Keep cache in view for any external readers of _busy_agents
-                # that expect the runner-synced set; do not *union* stale names
-                # that runners already marked idle (runner is authority).
-                return live
+                return set(self._get_busy_agents_cb() or ())
             except Exception as exc:
                 logger.warning("MailboxHub.busy_agents callback failed: {}", exc)
-        return set(self._busy_agents)
+                return set()
+        return set(self._busy_fallback)
 
     def set_ranks(self, ranks: dict[str, str], leader: str = "") -> None:
         """Store agent ranks for interrupt permission checking.
@@ -771,7 +775,7 @@ class MailboxHub:
         self._active_agents.discard(agent_name)
         self._waiting.discard(agent_name)
         # Cleanup interrupt state
-        self._busy_agents.discard(agent_name)
+        self._busy_fallback.discard(agent_name)
         self._interrupt_counts.pop(agent_name, None)
         if agent_name in self._interrupt_events:
             self._interrupt_events[agent_name].clear()
@@ -783,8 +787,8 @@ class MailboxHub:
     def mark_discussion_ended(self) -> None:
         """Mark the discussion as ended (prevents re-entrancy and further busy work)."""
         self._discussion_ended = True
-        # Force-clear busy/interrupt state so any mid-turn agents exit their tool_loops promptly
-        # (important for interrupt + end races and the old "waiting guard" brittleness).
+        # Wake tool_loops; AgentRunner.end_cycle runs in their finally.
+        # Fallback set only applies when no get_busy_agents callback (tests).
         for name in list(self.busy_agents()):
             self.mark_idle(name)
         for evt in self._interrupt_events.values():

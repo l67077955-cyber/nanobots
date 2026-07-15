@@ -21,11 +21,20 @@ def test_busy_agents_legacy_set_without_callback():
 def test_busy_agents_prefers_runner_callback():
     runners = {"A": _R(True), "B": _R(False), "C": _R(True)}
     mb = MailboxHub(get_busy_agents=lambda: {n for n, r in runners.items() if r.is_busy})
-    # legacy cache may be empty or stale — callback wins
-    mb.mark_busy("Z")  # should NOT appear when callback is set
+    # write via mailbox is no-op when callback is wired (runner owns busy)
+    mb.mark_busy("Z")
+    assert "Z" not in mb.busy_agents()
     assert mb.busy_agents() == {"A", "C"}
     runners["A"].is_busy = False
     assert mb.busy_agents() == {"C"}
+
+
+def test_mark_busy_noop_does_not_pollute_fallback_under_callback():
+    runners = {"A": _R(True)}
+    mb = MailboxHub(get_busy_agents=lambda: {n for n, r in runners.items() if r.is_busy})
+    mb.mark_busy("ghost")
+    assert mb._busy_fallback == set()
+    assert mb.busy_agents() == {"A"}
 
 
 def test_try_interrupt_uses_live_busy():

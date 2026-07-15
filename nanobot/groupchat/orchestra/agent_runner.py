@@ -1,20 +1,14 @@
-"""AgentRunner — per-agent runtime facade (Step 0.5 of the coupling refactor).
+"""AgentRunner — per-agent runtime handle (busy/idle + cancel signal).
 
-Owns the agent's *cancel signal* and exposes a stable runtime API. State is
-NOT moved here yet: busy/idle/waiting still live on ``MailboxHub`` and the
-async task still lives on ``engine._broadcast_tasks``. This class wraps those
-so that NEW code depends on ``AgentRunner`` rather than reaching into
-mailbox/engine internals.
+Owns:
+- ``_busy`` / ``_waiting`` lifecycle (tool_loop in flight / mailbox wait)
+- cooperative cancel signal (``interrupt_event``, shared with MailboxHub)
 
-Existing interrupt paths (``interrupt_busy_agents``, ``_try_interrupt``)
-continue to work unchanged — they set the same ``asyncio.Event`` object this
-runner wraps, so the two are always consistent.
+Does **not** own the asyncio task registry (still on ``engine._broadcast_tasks``)
+or the shared conversation History (``engine.history``).
 
-Why this is the seed of the refactor: the 2026-07-08 2-min hang happened
-because the interrupt was a side-channel ``Event`` that blocking operations
-(``wait()``, in-flight LLM calls) did not poll. Centralising the cancel
-signal behind this facade makes the contract explicit and is the migration
-target for owning the full agent state machine.
+MailboxHub may *read* busy via engine-wired ``get_busy_agents``; it must not
+be the write path. Call ``begin_cycle`` / ``end_cycle`` only.
 
 See ``docs/groupchat-coupling-fix.md`` and ``nanobot/groupchat/orchestra/ports.py``.
 """
@@ -33,10 +27,9 @@ if TYPE_CHECKING:
 class AgentRunner:
     """Per-agent runtime handle that OWNS the busy state.
 
-    The runner is the single source of truth for an agent's runtime state.
-    mailbox._busy_agents remains as a cache for mailbox-internal queries
-    (deadlock detection, interrupt targeting), but is always updated via
-    the runner's begin_cycle/end_cycle methods.
+    Single write path for busy/idle: ``begin_cycle`` / ``end_cycle``.
+    Mailbox interrupt targeting reads busy through the engine callback over
+    ``runner.is_busy`` — it does not maintain a parallel authoritative set.
     """
 
     def __init__(
@@ -102,18 +95,15 @@ class AgentRunner:
         return self.interrupt_event.is_set()
 
     # ── Cycle state machine ──────────────────────────────────────────────
-    # Owns the busy/idle transitions. mailbox._busy_agents is kept in sync
-    # for backward compatibility with mailbox-internal queries.
+    # Sole write path for busy/idle. Mailbox must not be updated here.
 
     def begin_cycle(self) -> None:
         """Mark the agent busy (entering tool_loop)."""
         self._busy = True
-        self._mailbox.mark_busy(self.name)
 
     def end_cycle(self) -> None:
         """Mark the agent idle (tool_loop exited)."""
         self._busy = False
-        self._mailbox.mark_idle(self.name)
 
     def set_waiting(self, waiting: bool) -> None:
         """Update waiting state (called by mailbox.wait)."""
