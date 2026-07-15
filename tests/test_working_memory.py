@@ -120,3 +120,55 @@ def test_interrupt_style_refresh_trailing():
     assert "urgent update" in blob or "[Kirk]" in blob
     assert any("最新消息" in str(m.get("content", "")) for m in msgs)
     assert any(m.get("content") == "role-hint" for m in msgs)
+
+
+def test_volatile_index_after_refresh_with_trailing():
+    eng = _FakeEngine()
+    eng.history.add_from_sender("用户", "q")
+    eng.history.add_from_sender("Harper", "a")
+
+    def build():
+        # mimic prompt builder tail: static + volatile user
+        msgs = eng.history.build_for_groupchat(current_agent="Harper")
+        msgs.append({"role": "user", "content": "[Current date]"})
+        return msgs
+
+    wm = WorkingMemory(messages=build())
+    assert wm.trailing_count == 0
+    assert wm.messages[wm.volatile_index]["content"] == "[Current date]"
+
+    wm.insert_before_last({"role": "system", "content": "hint"})
+    # still last is volatile
+    assert wm.messages[wm.volatile_index]["content"] == "[Current date]"
+
+    eng.history.add_from_sender("Kirk", "update")
+    msgs = wm.refresh(
+        build,
+        trailing=[
+            {"role": "system", "content": "nudge"},
+            {"role": "user", "content": "[队友消息] hi"},
+        ],
+    )
+    assert wm.trailing_count == 2
+    assert wm.messages[wm.volatile_index]["content"] == "[Current date]"
+    assert msgs[-1]["content"].startswith("[队友消息]")
+    assert msgs[-2]["content"] == "nudge"
+    # status target still the volatile user msg
+    vi = wm.volatile_index
+    wm.messages[vi]["content"] += "\n### [本轮状态汇总]"
+    assert "本轮状态汇总" in wm.messages[vi]["content"]
+    assert "本轮状态汇总" not in msgs[-1]["content"]
+
+
+def test_reenter_helper():
+    eng = _FakeEngine()
+    eng.history.add_from_sender("用户", "q")
+
+    def build():
+        return [{"role": "user", "content": "v"}]
+
+    wm = WorkingMemory(messages=build())
+    out = wm.reenter(build, {"role": "system", "content": "idle-nudge"})
+    assert out[-1]["content"] == "idle-nudge"
+    assert wm.trailing_count == 1
+    assert wm.volatile_index == 0

@@ -25,7 +25,7 @@ from nanobot.groupchat.orchestra.cycle_controller import (
 )
 from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool
 from nanobot.groupchat.orchestra.turn_stack import TurnStack
-from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
+from nanobot.groupchat.orchestra.engine import log_request
 from nanobot.groupchat.orchestra.working_memory import WorkingMemory, commit_agent_turn
 from nanobot.groupchat.history.component_manager import (
     get_system_warning,
@@ -734,7 +734,7 @@ async def broadcast_round(
         messages = wm.messages
 
         # The volatile state message is always the last one (added by PromptBuilder)
-        volatile_msg_idx = len(messages) - 1
+        volatile_msg_idx = wm.volatile_index
 
         # ── Edit-in-place display (broadcast mode) ──
         # Each tool call gets one message (🟡), then edited with result (🟢/🔴).
@@ -882,10 +882,15 @@ async def broadcast_round(
                         "Broadcast: {} hit max_cycles={}, forcing exit", name, max_cycles
                     )
                     if not content:
-                        messages.append({
-                            "role": "system",
-                            "content": "[已达到最大轮次限制，请立即输出最终总结，禁止再调用工具。]",
-                        })
+                        messages = wm.refresh(
+                            _build_prompt_snapshot,
+                            trailing=[{
+                                "role": "system",
+                                "content": "[已达到最大轮次限制，请立即输出最终总结，禁止再调用工具。]",
+                            }],
+                        )
+                        _sys_msg_count = wm.sys_msg_count
+                        volatile_msg_idx = wm.volatile_index
                         try:
                             _r = await tool_loop(
                                 provider=engine.provider,
@@ -964,23 +969,21 @@ async def broadcast_round(
                     for k in ("prompt", "completion", "total"):
                         _cycle_usage[k] += usage.get(k, usage.get(f"{k}_tokens", 0))
 
-                # ── Pre-tool_loop pruning: cover all cycle paths (not just wait) ──
+                # ── Pre-tool_loop size guard ──
+                # After wait/interrupt/nudge re-entry all refresh from History,
+                # working memory should stay bounded. If a path still grew it
+                # (legacy injects / tool_loop multi-iter), rebuild from History
+                # rather than AI-pruning a private list that can desync.
                 _conv_keep_turns = gc_settings.get("conv_keep_turns", 3)
                 _max_conv_msgs = _sys_msg_count + (_conv_keep_turns * 3) + 6
                 if len(messages) > _max_conv_msgs:
-                    from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
-                    from nanobot.groupchat.history.history_settings import summarize_model as _summarize_model
-                    dropped = await prune_conversation_tail_with_summary(
-                        messages, _sys_msg_count, _conv_keep_turns,
-                        provider=engine.provider,
-                        model=_summarize_model(),
-                        agent_name=name,
+                    logger.info(
+                        "Broadcast: {} working memory oversized ({} > {}), refreshing from History",
+                        name, len(messages), _max_conv_msgs,
                     )
-                    if dropped > 0:
-                        logger.debug(
-                            "Broadcast: {} pre-tool_loop pruned {} msgs (len {} → {})",
-                            name, dropped, len(messages) + dropped, len(messages),
-                        )
+                    messages = wm.refresh(_build_prompt_snapshot)
+                    _sys_msg_count = wm.sys_msg_count
+                    volatile_msg_idx = wm.volatile_index
 
                 # Per-agent hyperparams: pass per-call sampling so concurrent
                 # broadcast agents do not mutate shared provider state.
@@ -1390,7 +1393,8 @@ async def broadcast_round(
                             ),
                         })
                     messages = wm.refresh(_build_prompt_snapshot, trailing=trailing)
-                    _sys_msg_count = wm.sys_msg_count - len(trailing)
+                    _sys_msg_count = wm.sys_msg_count
+                    volatile_msg_idx = wm.volatile_index
 
                     await tracker.set_state(name, "thinking")
                     _runner.begin_cycle()
@@ -1403,10 +1407,15 @@ async def broadcast_round(
                         "Broadcast: {} idle on cycle 1 (no content, tools={}), forcing retry",
                         name, result.tools_used,
                     )
-                    messages.append({
-                        "role": "system",
-                        "content": get_system_warning("idle", name=name)
-                    })
+                    messages = wm.refresh(
+                        _build_prompt_snapshot,
+                        trailing=[{
+                            "role": "system",
+                            "content": get_system_warning("idle", name=name),
+                        }],
+                    )
+                    _sys_msg_count = wm.sys_msg_count
+                    volatile_msg_idx = wm.volatile_index
                     continue  # skip auto-wait, re-enter tool_loop
 
                 # ── Guard: used tools but produced no text ──
@@ -1417,10 +1426,15 @@ async def broadcast_round(
                         "Broadcast: {} used tools on cycle {} but produced no text (tools={}), forcing summary",
                         name, cycle, result.tools_used,
                     )
-                    messages.append({
-                        "role": "system",
-                        "content": get_system_warning("no_text_after_tools", name=name)
-                    })
+                    messages = wm.refresh(
+                        _build_prompt_snapshot,
+                        trailing=[{
+                            "role": "system",
+                            "content": get_system_warning("no_text_after_tools", name=name),
+                        }],
+                    )
+                    _sys_msg_count = wm.sys_msg_count
+                    volatile_msg_idx = wm.volatile_index
                     continue  # re-enter tool_loop to produce text
 
                 # ── Leader guard: management-only cycle produced no text ──
@@ -1434,10 +1448,15 @@ async def broadcast_round(
                         "Broadcast: leader {} management-only cycle {} (tools={}), forcing synthesis",
                         name, cycle, result.tools_used,
                     )
-                    messages.append({
-                        "role": "system",
-                        "content": get_system_warning("leader_no_text_after_tools", name=name)
-                    })
+                    messages = wm.refresh(
+                        _build_prompt_snapshot,
+                        trailing=[{
+                            "role": "system",
+                            "content": get_system_warning("leader_no_text_after_tools", name=name),
+                        }],
+                    )
+                    _sys_msg_count = wm.sys_msg_count
+                    volatile_msg_idx = wm.volatile_index
                     continue  # re-enter tool_loop to produce synthesis text
 
                 # ── Auto-wait: enter idle state ──
@@ -1532,10 +1551,15 @@ async def broadcast_round(
                             "Broadcast: leader {} called end_discussion without text (cycle {}), forcing synthesis",
                             name, cycle,
                         )
-                        messages.append({
-                            "role": "system",
-                            "content": get_system_warning("leader_end_without_text", name=name),
-                        })
+                        messages = wm.refresh(
+                            _build_prompt_snapshot,
+                            trailing=[{
+                                "role": "system",
+                                "content": get_system_warning("leader_end_without_text", name=name),
+                            }],
+                        )
+                        _sys_msg_count = wm.sys_msg_count
+                        volatile_msg_idx = wm.volatile_index
                         continue  # re-enter tool_loop to produce synthesis text
                     # Synthesis produced — display it (always, even if chatroom_send
                     # was used: chatroom_send targets teammates, this is the user's
@@ -1654,10 +1678,15 @@ async def broadcast_round(
                             "Broadcast: leader {} wait timeout with no text (cycle {}), forcing synthesis",
                             name, cycle,
                         )
-                        messages.append({
-                            "role": "system",
-                            "content": get_system_warning("leader_wait_timeout", name=name)
-                        })
+                        messages = wm.refresh(
+                            _build_prompt_snapshot,
+                            trailing=[{
+                                "role": "system",
+                                "content": get_system_warning("leader_wait_timeout", name=name),
+                            }],
+                        )
+                        _sys_msg_count = wm.sys_msg_count
+                        volatile_msg_idx = wm.volatile_index
                         continue  # re-enter tool_loop for synthesis
                     # Non-leader: keep waiting (stable behavior). The mailbox's
                     # all-waiting nudge + leader end_discussion are the only exit
@@ -1693,7 +1722,8 @@ async def broadcast_round(
                     "content": f"[队友消息] {msg}",
                 })
                 messages = wm.refresh(_build_prompt_snapshot, trailing=trailing)
-                _sys_msg_count = wm.sys_msg_count - len(trailing)
+                _sys_msg_count = wm.sys_msg_count
+                volatile_msg_idx = wm.volatile_index
 
             # ── Final completion ──
             await tracker.set_state(name, "done")
