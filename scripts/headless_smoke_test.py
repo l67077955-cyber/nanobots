@@ -7,14 +7,12 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import websockets
 
-from nanobot.groupchat.orchestra.broadcast_agent import _rebuild_prompt_prefix
-from nanobot.groupchat.history.message_converter import latest_user_question
+from nanobot.core.history import History
 
 
 WS_URL = "ws://127.0.0.1:18791/?token=nanobot-watch-2026&chat_id=smoke-test"
@@ -45,57 +43,24 @@ async def ws_smoke() -> dict:
 
 
 def prompt_rebuild_smoke() -> dict:
-    """Verify frozen user_question updates when engine.history grows."""
-    from nanobot.core.history import History
-    engine = MagicMock()
-    engine.history = History.from_sender_dicts([
+    """Verify History.latest_user_content tracks the newest human question."""
+    history = History.from_sender_dicts([
         {"sender": "用户", "content": "原始问题：修按钮"},
     ])
-    engine._build_agent_prompt = MagicMock(
-        side_effect=lambda _name, **kw: [
-            {"role": "system", "content": f"uq={kw.get('user_question', '')}"},
-            {"role": "user", "content": kw.get("user_question", "")},
-        ]
-    )
-    engine.get_agent_enabled_tool_names = MagicMock(return_value=["read_file"])
-
     frozen_uq = "原始问题：修按钮"
-    prefix1, live1 = _rebuild_prompt_prefix(
-        engine,
-        "Kirk",
-        agent_ranks={"Kirk": 1},
-        agent_idx=0,
-        total=1,
-        teammates=[],
-        user_question=frozen_uq,
-        is_leader=True,
-        leader_name="Kirk",
-        non_leader_agents=[],
-    )
+    live1 = history.latest_user_content(max_len=300)
     assert live1 == frozen_uq
 
-    engine.history._semantic_add_from_sender("用户", "澄清：是 Telegram callback 按钮无响应")
-    prefix2, live2 = _rebuild_prompt_prefix(
-        engine,
-        "Kirk",
-        agent_ranks={"Kirk": 1},
-        agent_idx=0,
-        total=1,
-        teammates=[],
-        user_question=frozen_uq,
-        is_leader=True,
-        leader_name="Kirk",
-        non_leader_agents=[],
-    )
-
+    history._semantic_add_from_sender("用户", "澄清：是 Telegram callback 按钮无响应")
+    live2 = history.latest_user_content(max_len=300)
     rebuilt = live2 != frozen_uq and "澄清" in live2
-    prompt_calls = [c.kwargs.get("user_question", "") for c in engine._build_agent_prompt.call_args_list]
+
     return {
-        "latest_user_question": latest_user_question(engine.history.to_sender_dicts()),
+        "latest_user_question": live2,
         "live_uq_after_clarification": live2,
         "prompt_rebuilt_with_new_uq": rebuilt,
-        "build_prompt_user_questions": prompt_calls,
-        "prefix_msg_count": len(prefix2),
+        "build_prompt_user_questions": [live1, live2],
+        "prefix_msg_count": len(history),
     }
 
 

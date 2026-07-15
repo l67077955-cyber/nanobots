@@ -557,7 +557,7 @@ async def broadcast_round(
 
     await orch.setup_tools_and_pools(_spawn_agent_task)
 
-    # ── Compute agent_ranks early (needed by BroadcastView and message_converter) ──
+    # ── Compute agent_ranks early (needed by BroadcastView and build_for_groupchat visibility) ──
     from nanobot.groupchat.display.visibility import compute_agent_ranks
     if not hasattr(broadcast_round, "_agent_ranks_cache"):
         broadcast_round._agent_ranks_cache = compute_agent_ranks(list(agents), engine.registry, leader_name)
