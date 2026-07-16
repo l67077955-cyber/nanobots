@@ -243,6 +243,7 @@ async def broadcast_round(
         leader_name=leader_name,
         leader_end_event=leader_end_event,
         agent_ranks=agent_ranks,
+        ranks_map=ranks_map,
         agent_tool_registries=agent_tool_registries,
         agents=list(agents),
         exec_agents=list(exec_agents),

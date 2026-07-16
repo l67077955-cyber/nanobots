@@ -17,6 +17,7 @@ Free variables that used to close over ``broadcast_round`` now live on
 from __future__ import annotations
 
 import asyncio
+import random
 import copy
 import json as _json
 import time as _time
@@ -36,6 +37,7 @@ from nanobot.groupchat.runtime.cycle_controller import (
 from nanobot.groupchat.runtime.mailbox import ConversationPool, MailboxHub
 from nanobot.groupchat.runtime.collab_bus import CollabBus, deliver
 from nanobot.groupchat.runtime.working_memory import WorkingMemory, commit_agent_turn
+from nanobot.groupchat.runtime.chat_utils import log_request
 from nanobot.groupchat.context.component_manager import get_system_warning
 
 
@@ -52,6 +54,7 @@ class AgentCycleEnv:
     leader_name: str | None
     leader_end_event: Any
     agent_ranks: dict[str, int]
+    ranks_map: dict[str, str]
     agent_tool_registries: dict[str, Any]
     agents: list[str]
     exec_agents: list[str]
@@ -81,6 +84,7 @@ async def run_agent_cycle(
     leader_name = env.leader_name
     leader_end_event = env.leader_end_event
     agent_ranks = env.agent_ranks
+    ranks_map = env.ranks_map
     agent_tool_registries = env.agent_tool_registries
     agents = env.agents
     exec_agents = env.exec_agents
