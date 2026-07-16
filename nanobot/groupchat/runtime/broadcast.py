@@ -575,7 +575,7 @@ async def broadcast_round(
     await tracker.finalize()
 
     # ── Round summary ──
-    comm_count = len(mailbox.history)
+    comm_count = len(mailbox.round_log)
     round_duration = _time.time() - _round_t0
     engine._save_round_summary(
         round_num=engine._round + 1,
@@ -586,7 +586,7 @@ async def broadcast_round(
     await engine._send(_d.broadcast_complete_msg(completed, total, comm_count))
 
     # Output chat chain summary
-    # chain = _d.chat_chain_summary(mailbox.history, leader=leader_name)
+    # chain = _d.chat_chain_summary(mailbox.round_log, leader=leader_name)
     # if chain:
     #     await engine._send(chain)
 

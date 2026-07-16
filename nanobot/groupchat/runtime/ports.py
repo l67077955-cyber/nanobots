@@ -8,6 +8,8 @@ New code must depend on these Protocols, not on ``MailboxHub`` /
 
 Conversation state is in ``engine.history`` (nanobot.core.history.History).
 
+Inter-agent *delivery* (not transcript): ``CollabBus`` / ``round_log``.
+
 Conversation state port: ``nanobot.groupchat.context.conversation.ConversationContext`` (History façade). Not re-exported here to keep runtime ports focused on cancel/turn/cycle seams.
 """
 
@@ -23,6 +25,7 @@ from nanobot.groupchat.runtime.cycle_controller import (
     CycleContext,
     CycleDecision,
 )
+from nanobot.groupchat.runtime.collab_bus import CollabBus
 
 __all__ = [
     "AgentRunner",
@@ -31,6 +34,7 @@ __all__ = [
     "CycleContext",
     "CycleDecision",
     "CycleAction",
+    "CollabBus",
 ]
 
 

@@ -17,6 +17,7 @@ from typing import Any
 
 from nanobot.tools.base import Tool
 from nanobot.groupchat.runtime.mailbox import MailboxHub, ConversationPool, SpeakQueue
+from nanobot.groupchat.runtime.collab_bus import CollabBus
 
 
 class SearchPool:
@@ -635,7 +636,7 @@ class ChatroomSendTool(Tool):
     user with ``"User"``.
     """
 
-    def __init__(self, mailbox: MailboxHub, agent_name: str = "", pool: ConversationPool | None = None,
+    def __init__(self, mailbox: CollabBus, agent_name: str = "", pool: ConversationPool | None = None,
                  search_pool: "SearchPool | None" = None,
                  leader_gate: LeaderGate | None = None) -> None:
         self._mailbox = mailbox
@@ -767,7 +768,7 @@ class WaitTool(Tool):
     in its mailbox, or the timeout is reached.
     """
 
-    def __init__(self, mailbox: MailboxHub, agent_name: str = "", pool: ConversationPool | None = None) -> None:
+    def __init__(self, mailbox: CollabBus, agent_name: str = "", pool: ConversationPool | None = None) -> None:
         self._mailbox = mailbox
         self._agent_name = agent_name
         self._pool = pool
@@ -1365,13 +1366,9 @@ class TransferCreditsTool(Tool):
         return f"Error: {msg}"
 
 class QuoteMessageTool(Tool):
-    """Quote a historical message by its ID.
+    """Quote a round_log message by its ID (not History transcript)."""
 
-    Returns the full content of a previously sent/received message,
-    so agents can reference it without copying the text manually.
-    """
-
-    def __init__(self, mailbox: Any) -> None:
+    def __init__(self, mailbox: CollabBus) -> None:
         self._mailbox = mailbox
 
     def set_agent(self, name: str) -> None:
@@ -1411,13 +1408,9 @@ class QuoteMessageTool(Tool):
 
 
 class ListMessagesTool(Tool):
-    """List historical messages with IDs for quoting.
+    """List this round's delivery log (round_log) with IDs for quoting."""
 
-    Shows a compact index of all messages sent this round so agents
-    can find the right ID to pass to quote_message().
-    """
-
-    def __init__(self, mailbox: Any) -> None:
+    def __init__(self, mailbox: CollabBus) -> None:
         self._mailbox = mailbox
 
     def set_agent(self, name: str) -> None:
@@ -1452,16 +1445,16 @@ class ListMessagesTool(Tool):
         }
 
     async def execute(self, limit: int = 20, sender: str = "", **kwargs: Any) -> str:
-        history = self._mailbox.history
+        log = self._mailbox.round_log
         if sender:
-            history = [m for m in history if m.sender == sender]
-        recent = history[-limit:] if len(history) > limit else history
+            log = [m for m in log if m.sender == sender]
+        recent = log[-limit:] if len(log) > limit else log
         if not recent:
-            return "当前无历史消息"
+            return "当前无投递记录（本轮）"
         lines = []
         for m in recent:
             preview = m.content[:80].replace("\n", " ")
             if len(m.content) > 80:
                 preview += "…"
             lines.append(f"  ID:{m.id} [{m.sender}] {preview}")
-        return "历史消息列表（最新在后）：\n" + "\n".join(lines)
+        return "本轮投递记录（最新在后，非对话 History）：\n" + "\n".join(lines)

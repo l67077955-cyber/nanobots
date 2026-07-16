@@ -83,7 +83,7 @@ agent/user 产出
 | `engine.py` | 注册表、持有 `history`、persist hook |
 | `broadcast.py` | round setup / launch / gather |
 | `agent_cycle.py` | per-agent cycle（调用 History commit + WM refresh） |
-| `mailbox.py` | 协作消息，非 transcript 真相 |
+| `mailbox.py` / `collab_bus.py` | 协作投递总线（`CollabBus`）；`round_log` ≠ History |
 | `working_memory.py` | ephemeral tool buffer + `commit_agent_turn` |
 | `cycle_controller.py` | cycle 分支决策（仍可 shadow） |
 
@@ -103,6 +103,7 @@ agent/user 产出
 - [x] `agent_cycle` 抽出  
 - [x] History.commit_turn + persist 钩子分离  
 - [ ] CycleController shadow → 权威  
+- [x] 消息投递收口（`CollabBus` + `round_log` 命名；≠ History）
 - [ ] 更多 call-site 只通过 `HistoryConversation` / `commit_turn`  
 - [ ] display.visibility 去掉 ranks 策略 re-export  
 
@@ -119,3 +120,9 @@ agent/user 产出
 | `groupchat/display/*` | **对话过程** UI（流式、BroadcastView、status_tracker） |
 
 二者分离：设置不走 BroadcastView；对话不走 settings_history_panel。
+
+### Collab delivery vs History
+
+- `CollabBus.round_log`：本轮投递索引（list/quote），`start_round`/`clear` 清空。
+- `History`：唯一 durable 对话上下文；`chatroom_send` 不直接 commit。
+- Durable 写入：`commit_agent_turn` → `History.commit_turn`。

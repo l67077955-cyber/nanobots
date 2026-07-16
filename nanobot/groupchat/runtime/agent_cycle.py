@@ -34,6 +34,7 @@ from nanobot.groupchat.runtime.cycle_controller import (
     CycleController,
 )
 from nanobot.groupchat.runtime.mailbox import ConversationPool, MailboxHub
+from nanobot.groupchat.runtime.collab_bus import CollabBus, deliver
 from nanobot.groupchat.runtime.working_memory import WorkingMemory, commit_agent_turn
 from nanobot.groupchat.context.component_manager import get_system_warning
 
@@ -76,6 +77,7 @@ async def run_agent_cycle(
     # ── Round environment (was nested closure in broadcast_round) ──
     engine = env.engine
     mailbox = env.mailbox
+    bus: CollabBus = mailbox
     leader_name = env.leader_name
     leader_end_event = env.leader_end_event
     agent_ranks = env.agent_ranks
@@ -631,7 +633,7 @@ async def run_agent_cycle(
                                 total_latency += _r.latency
                                 commit_agent_turn(engine, name, content)
                                 search_pool.on_output(name)
-                                mailbox.send(name, ["All"], content[:300])
+                                deliver(bus, name, ["All"], content[:300])
                                 await engine._send(
                                     _d.chatroom_send_msg(
                                         name, "重试输出", content, max_len=1000, leader=leader_name
@@ -656,7 +658,7 @@ async def run_agent_cycle(
                         )
                         content = _placeholder
                         commit_agent_turn(engine, name, _placeholder)
-                        mailbox.send(name, ["All"], _placeholder)
+                        deliver(bus, name, ["All"], _placeholder)
                         await engine._send(
                             _d.chatroom_send_msg(
                                 name, "超时占位", _placeholder, max_len=1000, leader=leader_name
@@ -711,7 +713,7 @@ async def run_agent_cycle(
                     )
                     content = _placeholder
                     commit_agent_turn(engine, name, _placeholder)
-                    mailbox.send(name, ["All"], _placeholder)
+                    deliver(bus, name, ["All"], _placeholder)
                     await engine._send(
                         _d.chatroom_send_msg(
                             name, "错误恢复", _placeholder, max_len=1000, leader=leader_name
@@ -755,7 +757,7 @@ async def run_agent_cycle(
                         # 队友未用 chatroom_send 时，默认只汇报给 Leader，避免唤醒其他正在 wait 的队友导致死循环
                         _implicit_targets = [leader_name]
 
-                    mailbox.send(name, _implicit_targets, content)
+                    deliver(bus, name, _implicit_targets, content)
                     await _trigger_realtime_interrupts(
                         sender=name,
                         targets=_implicit_targets,

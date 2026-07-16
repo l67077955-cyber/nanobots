@@ -333,7 +333,7 @@ async def run_broadcast_test(
     )
 
     # Build mailbox log (inter-agent communication)
-    mailbox_entries = mailbox.history
+    mailbox_entries = mailbox.round_log
     if mailbox_entries:
         mailbox_log = "\n".join(
             f"[{m.sender} → {','.join(m.targets)}]: {m.content}"

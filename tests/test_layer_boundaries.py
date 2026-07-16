@@ -196,3 +196,36 @@ def test_settings_panel_does_not_import_engine() -> None:
     bad = [m for m in imports if "engine" in m.split(".")[-1] or m.endswith(".engine")]
     assert not bad, f"settings panel must not import engine: {bad}"
     assert any("settings_view" in m for m in imports)
+
+
+def test_collab_bus_round_log_not_history() -> None:
+    """Delivery log API must not be named history (History is core.history)."""
+    import ast
+    from pathlib import Path
+
+    src = Path("nanobot/groupchat/runtime/mailbox.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == "MailboxHub":
+            names = []
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == "history":
+                    # allow only if not property public history
+                    names.append(item.name)
+                if isinstance(item, ast.AsyncFunctionDef) and item.name == "history":
+                    names.append(item.name)
+            assert "history" not in names, "MailboxHub must not expose history()"
+            break
+    assert "def round_log" in src
+
+
+def test_chatroom_send_tools_type_collab_bus() -> None:
+    from nanobot.groupchat.runtime.collab_bus import CollabBus
+    from nanobot.groupchat.runtime.tools.chatroom_tools import ChatroomSendTool, WaitTool
+    import inspect
+    from typing import get_type_hints
+
+    hints = get_type_hints(ChatroomSendTool.__init__)
+    assert hints.get("mailbox") is CollabBus
+    hints_w = get_type_hints(WaitTool.__init__)
+    assert hints_w.get("mailbox") is CollabBus

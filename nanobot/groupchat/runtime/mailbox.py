@@ -1,7 +1,20 @@
-"""Inter-agent mailbox system for group chat communication.
+"""Inter-agent collaboration bus (delivery + provisional runtime hooks).
 
-Provides an async message-passing hub so agents can send messages
-to each other (or broadcast to all) and wait for replies.
+**Owns (delivery — CollabBus surface)**
+- per-agent asyncio queues
+- round-local delivery log (``round_log`` / ``AgentMessage``) for list/quote
+- listener restrictions, send fan-out
+
+**Does NOT own**
+- durable conversation transcript → ``nanobot.core.history.History``
+- busy write path → ``AgentRunner.begin_cycle`` / ``end_cycle``
+
+**Still co-located (Phase 2 will peel)**
+- interrupt events / ranks / discussion_ended / busy read callback
+
+``round_log`` is **not** History: it is an ephemeral per-round delivery index
+cleared on ``start_round`` / ``clear``. Durable agent output enters History only
+via ``commit_agent_turn``.
 """
 
 from __future__ import annotations
@@ -299,7 +312,7 @@ class MailboxHub:
         get_busy_agents: Any | None = None,
     ) -> None:
         self._queues: dict[str, asyncio.Queue[AgentMessage]] = {}
-        self._history: list[AgentMessage] = []
+        self._round_log: list[AgentMessage] = []
         # Optional callback: called with (sender, targets, content) on every send()
         self._on_message = on_message
         # Optional live busy source (engine._runners / AgentRunner.is_busy).
@@ -376,7 +389,7 @@ class MailboxHub:
                     q.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-        self._history.clear()
+        self._round_log.clear()
         self._waiting.clear()
         self._active_agents = set(active_agents) if active_agents else set(self._queues.keys())
         self._expected_replies.clear()
@@ -593,7 +606,7 @@ class MailboxHub:
             id=self._next_msg_id, sender=sender, content=content, targets=targets,
         )
         self._next_msg_id += 1
-        self._history.append(msg)
+        self._round_log.append(msg)
 
         delivered = 0
         if "All" in targets or "all" in targets:
@@ -751,16 +764,16 @@ class MailboxHub:
     def destroy(self) -> None:
         """Remove all mailboxes."""
         self._queues.clear()
-        self._history.clear()
+        self._round_log.clear()
 
     @property
-    def history(self) -> list[AgentMessage]:
-        """All messages sent this round."""
-        return list(self._history)
+    def round_log(self) -> list[AgentMessage]:
+        """Round-local delivery log (not History / not durable transcript)."""
+        return list(self._round_log)
 
     def get_message(self, msg_id: int) -> AgentMessage | None:
         """Look up a message by its ID. Returns None if not found."""
-        for msg in self._history:
+        for msg in self._round_log:
             if msg.id == msg_id:
                 return msg
         return None
