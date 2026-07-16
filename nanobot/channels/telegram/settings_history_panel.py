@@ -13,6 +13,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from nanobot.groupchat.context.settings_view import (
+    HistorySettingsView,
+    compiled_context_info,
+    history_messages,
+)
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 # SmartSearchTool hardcodes this; not read from history_settings yet.
@@ -205,10 +211,8 @@ def _settings() -> dict[str, Any]:
     return hs.get_all()
 
 
-def _history_messages(engine: Any | None) -> list[dict[str, Any]]:
-    if not engine:
-        return []
-    return list(engine.history.to_sender_dicts())
+def _history_messages(view: HistorySettingsView | None) -> list[dict[str, Any]]:
+    return history_messages(view)
 
 
 def _estimate_history_tokens(messages: list[dict[str, Any]]) -> int:
@@ -226,27 +230,14 @@ def _estimate_history_tokens(messages: list[dict[str, Any]]) -> int:
         return sum(len(m.get("content", "")) for m in messages) // 4
 
 
-def _compiled_context_info(engine: Any | None) -> str:
-    if not engine or not getattr(engine, "_active_agents", None):
-        return "(engine未启动)"
-    from nanobot.core.history import History
-
-    messages = _history_messages(engine)
-    parts: list[str] = []
-    for agent in engine._active_agents:
-        try:
-            compiled = History.from_sender_dicts(messages).build_for_groupchat(current_agent=agent)
-            chars = sum(len(m.get("content") or "") for m in compiled)
-            parts.append(f"{agent}~{chars:,}字")
-        except Exception:
-            parts.append(f"{agent}:?")
-    return " | ".join(parts) if parts else "(无活跃agent)"
+def _compiled_context_info(view: HistorySettingsView | None) -> str:
+    return compiled_context_info(view)
 
 
 # ── Live metrics (unchanged) ─────────────────────────────────────────────
 
-def collect_live_metrics(engine: Any | None) -> dict[str, Any]:
-    """Gather runtime numbers used by the /history dashboard."""
+def collect_live_metrics(engine: HistorySettingsView | None) -> dict[str, Any]:
+    """Gather numbers for the /history settings dashboard (HistorySettingsView)."""
     settings = _settings()
     tr = settings["tool_results"]
     hist = settings["history"]
@@ -451,7 +442,7 @@ def _flow_demo(metrics: dict[str, Any]) -> str:
 
 # ── Main panel ───────────────────────────────────────────────────────────
 
-def build_main_panel_text(engine: Any | None, *, expanded: bool = False) -> str:
+def build_main_panel_text(engine: HistorySettingsView | None, *, expanded: bool = False) -> str:
     metrics = collect_live_metrics(engine)
     parts = [_dashboard_block(metrics), _grouped_overview(metrics)]
     if expanded:
@@ -460,7 +451,7 @@ def build_main_panel_text(engine: Any | None, *, expanded: bool = False) -> str:
 
 
 def build_main_panel_buttons(
-    engine: Any | None,
+    engine: HistorySettingsView | None,
     *,
     expanded: bool = False,
 ) -> InlineKeyboardMarkup:
@@ -510,7 +501,7 @@ def _group_summary_line(group: str, metrics: dict[str, Any]) -> str:
 # ── Group sub-panel builder ──────────────────────────────────────────────
 
 def build_group_panel(
-    engine: Any | None,
+    engine: HistorySettingsView | None,
     group: str,
     *,
     advanced: bool = False,
@@ -637,7 +628,7 @@ def restore_defaults(group: str | None = None) -> str:
 # ── Public API ───────────────────────────────────────────────────────────
 
 def build_history_panel(
-    engine: Any | None,
+    engine: HistorySettingsView | None,
     *,
     expanded: bool = False,
 ) -> tuple[str, InlineKeyboardMarkup]:
@@ -647,6 +638,6 @@ def build_history_panel(
     return text, markup
 
 
-def build_stage3_panel(engine: Any | None) -> tuple[str, InlineKeyboardMarkup]:
+def build_stage3_panel(engine: HistorySettingsView | None) -> tuple[str, InlineKeyboardMarkup]:
     """Backward-compat wrapper — delegates to memory group panel."""
     return build_group_panel(engine, "memory")

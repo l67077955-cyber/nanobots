@@ -1,6 +1,13 @@
 """Telegram agent/group/hyperparam callbacks."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+from nanobot.groupchat.runtime.tool_catalog import TOOL_NAMES
+
+if TYPE_CHECKING:
+    from nanobot.groupchat.runtime.control_port import GroupChatControlPort
+
 import json
 from pathlib import Path
 
@@ -10,14 +17,21 @@ from loguru import logger
 
 
 class AgentCallbackMixin:
+    """Agent admin callbacks; engine accessed as GroupChatControlPort."""
+
+    @property
+    def _control(self) -> "GroupChatControlPort":
+        """Narrow control surface (registry/agents/groups), not full engine."""
+        return self._groupchat_engine  # type: ignore[return-value]
+
     async def _dispatch_agents(self, query, data: str, chat_id: str) -> bool:
         if data == "al":
             # Show agent list as inline keyboard
             if not self._groupchat_engine:
                 await query.edit_message_text("⚠️ 无 agent")
                 return True
-            registry = self._groupchat_engine.registry
-            active = self._groupchat_engine.active_agents
+            registry = self._control.registry
+            active = self._control.active_agents
             buttons = []
             for name in registry:
                 status = "🟢" if name in active else "⚪"
@@ -35,18 +49,18 @@ class AgentCallbackMixin:
         if data.startswith("add:"):
             name = data[4:]
             self._ensure_gc_send(chat_id)
-            result = self._groupchat_engine.add_agent(name)
+            result = self._control.add_agent(name)
             await query.edit_message_text(result)
 
         elif data.startswith("rm:"):
             name = data[3:]
-            result = self._groupchat_engine.remove_agent(name)
+            result = self._control.remove_agent(name)
             await query.edit_message_text(result)
 
         elif data.startswith("edit:"):
             name = data[5:]
             self._sync_agent_settings_from_disk(name)
-            agent = self._groupchat_engine.registry.get(name)
+            agent = self._control.registry.get(name)
             if not agent:
                 await query.edit_message_text(f"❌ Agent '{name}' 不存在")
                 return True
@@ -58,7 +72,7 @@ class AgentCallbackMixin:
         elif data.startswith("da:"):
             # da:AgentName — show delete confirmation
             name = data[3:]
-            agent = self._groupchat_engine.registry.get(name)
+            agent = self._control.registry.get(name)
             if not agent:
                 await query.edit_message_text(f"❌ Agent '{name}' 不存在")
                 return True
@@ -107,8 +121,7 @@ class AgentCallbackMixin:
                 return await self._dispatch_agents(query, "al", chat_id)
             if field == "tools":
                 # Show per-tool toggle buttons
-                from nanobot.groupchat.runtime.engine import GroupChatEngine
-                agent = self._groupchat_engine.registry.get(name, {})
+                agent = self._control.registry.get(name, {})
                 tools_cfg = agent.get("tools")
                 # Migrate legacy tools_enabled → granular dict only when there
                 # is no dict yet. If a dict exists but is missing some tool
@@ -116,11 +129,11 @@ class AgentCallbackMixin:
                 # WITHOUT dropping the user's existing per-tool toggles.
                 if not isinstance(tools_cfg, dict):
                     all_on = agent.get("tools_enabled", False)
-                    tools_cfg = {t: all_on for t in GroupChatEngine.TOOL_NAMES}
+                    tools_cfg = {t: all_on for t in TOOL_NAMES}
                     agent["tools"] = tools_cfg
                 else:
                     missing = [
-                        t for t in GroupChatEngine.TOOL_NAMES if t not in tools_cfg
+                        t for t in TOOL_NAMES if t not in tools_cfg
                     ]
                     if missing:
                         all_on = agent.get("tools_enabled", False)
@@ -138,7 +151,7 @@ class AgentCallbackMixin:
                     "memory_palace": "🧠 记忆宫殿",
                 }
                 buttons = []
-                for t in GroupChatEngine.TOOL_NAMES:
+                for t in TOOL_NAMES:
                     on = tools_cfg.get(t, False)
                     icon = "✅" if on else "❌"
                     label = labels.get(t, t)
@@ -158,7 +171,7 @@ class AgentCallbackMixin:
             elif field == "rank":
                 from nanobot.groupchat.context.ranks import RANK_DISPLAY, RANK_ORDER, resolve_rank
 
-                agent = self._groupchat_engine.registry.get(name, {})
+                agent = self._control.registry.get(name, {})
                 current = agent.get("rank")
                 MODERN_RANKS = list(RANK_ORDER.keys())
                 resolved = resolve_rank(current, agent=name) if current is not None else "basic"
@@ -239,7 +252,7 @@ class AgentCallbackMixin:
                 return True
             self._edit_state[chat_id] = {"agent": name, "field": field}
             if field == "persona":
-                current = self._groupchat_engine.registry.get(name, {}).get("prompt", "")
+                current = self._control.registry.get(name, {}).get("prompt", "")
                 await query.edit_message_text(f"📄 当前人设:\n\n{current[:3000]}")
                 await self._gc_send(chat_id, "请输入新人设内容:")
             elif field == "model":
@@ -305,7 +318,7 @@ class AgentCallbackMixin:
             if len(parts) < 3:
                 return
             name, preset = parts[1], parts[2]
-            agent = self._groupchat_engine.registry.get(name, {}) if self._groupchat_engine else {}
+            agent = self._control.registry.get(name, {}) if self._groupchat_engine else {}
             cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
 
             async def _refresh_edit_menu(status: str) -> None:
@@ -401,13 +414,12 @@ class AgentCallbackMixin:
             if len(parts) < 3:
                 return
             name, tool = parts[1], parts[2]
-            from nanobot.groupchat.runtime.engine import GroupChatEngine
-            agent = self._groupchat_engine.registry.get(name, {})
+            agent = self._control.registry.get(name, {})
             tools_cfg = agent.get("tools")
             if not isinstance(tools_cfg, dict) or "web_search" not in tools_cfg:
                 # Legacy or missing config — rebuild from tools_enabled flag
                 all_on = agent.get("tools_enabled", False)
-                tools_cfg = {t: all_on for t in GroupChatEngine.TOOL_NAMES}
+                tools_cfg = {t: all_on for t in TOOL_NAMES}
                 agent["tools"] = tools_cfg
 
             if tool == "__all_on":
@@ -420,7 +432,7 @@ class AgentCallbackMixin:
                 tools_cfg[tool] = not tools_cfg[tool]
 
             # Persist to config.json
-            agent_entry = self._groupchat_engine.registry.get(name, {})
+            agent_entry = self._control.registry.get(name, {})
             if agent_entry.get("_default"):
                 # Default agent (Nanobot): its config lives under
                 # config.json → agents.defaults (same place its model is
@@ -460,7 +472,7 @@ class AgentCallbackMixin:
                 "memory_palace": "🧠 记忆宫殿",
             }
             buttons = []
-            for t in GroupChatEngine.TOOL_NAMES:
+            for t in TOOL_NAMES:
                 on = tools_cfg.get(t, False)
                 icon = "✅" if on else "❌"
                 label = labels.get(t, t)
@@ -489,7 +501,7 @@ class AgentCallbackMixin:
             if rank_val not in MODERN_RANKS:
                 return
 
-            agent = self._groupchat_engine.registry.get(name, {})
+            agent = self._control.registry.get(name, {})
             old_rank = agent.get("rank")
             agent["rank"] = rank_val
 
@@ -536,18 +548,18 @@ class AgentCallbackMixin:
 
         if data.startswith("sl:"):
             name = data[3:]
-            result = self._groupchat_engine.set_leader(name)
+            result = self._control.set_leader(name)
             await query.edit_message_text(result)
 
         elif data.startswith("lg:"):
             name = data[3:]
             self._ensure_gc_send(chat_id)
-            result = self._groupchat_engine.load_group(name)
+            result = self._control.load_group(name)
             await query.edit_message_text(result)
 
         elif data.startswith("dg:"):
             name = data[3:]
-            result = self._groupchat_engine.delete_group(name)
+            result = self._control.delete_group(name)
             await query.edit_message_text(result)
 
         elif data.startswith("hp:"):
@@ -646,7 +658,7 @@ class AgentCallbackMixin:
             if len(parts) < 3:
                 return
             a_name, key = parts[1], parts[2]
-            if self._groupchat_engine and a_name in self._groupchat_engine.registry:
+            if self._groupchat_engine and a_name in self._control.registry:
                 agent = self._sync_agent_settings_from_disk(a_name)
                 agent_hp = agent.get("hyperparams") or {}
                 if key in agent_hp:
@@ -668,7 +680,7 @@ class AgentCallbackMixin:
         elif data.startswith("ahp_sync:"):
             # ahp_sync:AgentName
             a_name = data[9:]
-            if self._groupchat_engine and a_name in self._groupchat_engine.registry:
+            if self._groupchat_engine and a_name in self._control.registry:
                 global_hp = {}
                 global_hp = self._sync_global_hyperparams_from_disk()
                 if not global_hp:
@@ -678,7 +690,7 @@ class AgentCallbackMixin:
 
                 if global_hp:
                     global_hp = {k: v for k, v in global_hp.items() if k != "reasoning_effort"}
-                    agent = self._groupchat_engine.registry[a_name]
+                    agent = self._control.registry[a_name]
                     agent_hp = agent.get("hyperparams") or {}
                     agent_hp.update(global_hp)
                     agent["hyperparams"] = agent_hp
@@ -759,12 +771,12 @@ class AgentCallbackMixin:
         elif data.startswith("ord:"):
             val = data[4:]
             if val == "done":
-                agents = self._groupchat_engine.active_agents
+                agents = self._control.active_agents
                 # Persist the active order only. Do NOT silently overwrite the
                 # saved group that happened to be loaded — reordering a loaded
                 # group is a transient active change; the user can /savegroup
                 # explicitly if they want to update the saved roster.
-                self._groupchat_engine.save_active()
+                self._control.save_active()
                 order_str = " → ".join(agents)
                 await query.edit_message_text(
                     f"📢 发言顺序（当前会话）:\n{order_str}\n\n"
@@ -772,13 +784,13 @@ class AgentCallbackMixin:
                 )
             else:
                 idx = int(val)
-                agents = self._groupchat_engine.active_agents
+                agents = self._control.active_agents
                 if 0 < idx < len(agents):
                     # Swap with previous
                     agents[idx], agents[idx-1] = agents[idx-1], agents[idx]
-                    self._groupchat_engine.reorder_agents(list(agents))
+                    self._control.reorder_agents(list(agents))
                 # Refresh keyboard
                 await query.edit_message_text("📢 更新中...")
-                await self._send_order_keyboard(chat_id, self._groupchat_engine.active_agents)
+                await self._send_order_keyboard(chat_id, self._control.active_agents)
 
         return False

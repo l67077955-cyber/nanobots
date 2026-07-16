@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from nanobot.groupchat.runtime.tool_catalog import TOOL_NAMES
+
 import asyncio
 import json
 import os
@@ -272,7 +274,6 @@ class SettingsCommandsMixin:
 
         # Agents detail
         pm = self._load_pm()
-        from nanobot.groupchat.runtime.engine import GroupChatEngine
         lines.append("👥 Agent 详情:")
         for name, info in engine.registry.items():
             active = "🟢" if name in engine._active_agents else "⚪"
@@ -285,8 +286,8 @@ class SettingsCommandsMixin:
                     break
             # Tools
             tools_cfg = info.get("tools", {})
-            if isinstance(tools_cfg, dict) and any(k in GroupChatEngine.TOOL_NAMES for k in tools_cfg):
-                on = [k for k, v in tools_cfg.items() if v and k in GroupChatEngine.TOOL_NAMES]
+            if isinstance(tools_cfg, dict) and any(k in TOOL_NAMES for k in tools_cfg):
+                on = [k for k, v in tools_cfg.items() if v and k in TOOL_NAMES]
                 tools_str = ",".join(on) if on else "无"
             elif info.get("tools_enabled"):
                 tools_str = "全部"

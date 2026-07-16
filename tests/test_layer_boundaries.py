@@ -128,3 +128,71 @@ def test_context_config_modules_importable() -> None:
     h.commit_turn("用户", "hi")
     msgs = preview_groupchat_messages(h, agent="Harper")
     assert isinstance(msgs, list)
+
+
+def test_history_settings_view_protocol() -> None:
+    from nanobot.core.history import History
+    from nanobot.groupchat.context.settings_view import HistorySettingsView, history_messages
+
+    class Stub:
+        def __init__(self) -> None:
+            self.history = History()
+            self.history.commit_turn("用户", "x")
+
+        @property
+        def active_agents(self) -> list[str]:
+            return ["Harper"]
+
+    s = Stub()
+    assert isinstance(s, HistorySettingsView)
+    assert history_messages(s)[0]["content"] == "x"
+
+
+def test_settings_panel_accepts_view_not_only_engine() -> None:
+    from nanobot.core.history import History
+    from nanobot.channels.telegram.settings_history_panel import collect_live_metrics
+
+    class Stub:
+        def __init__(self) -> None:
+            self.history = History()
+
+        @property
+        def active_agents(self) -> list[str]:
+            return []
+
+    m = collect_live_metrics(Stub())
+    assert "current_msgs" in m
+    assert m["current_msgs"] == 0
+
+
+def test_tool_catalog_shared() -> None:
+    from nanobot.groupchat.runtime.tool_catalog import TOOL_NAMES
+    from nanobot.groupchat.runtime.engine import GroupChatEngine
+
+    assert GroupChatEngine.TOOL_NAMES == TOOL_NAMES
+    assert "web_search" in TOOL_NAMES
+
+
+def test_control_port_extends_settings_view() -> None:
+    from nanobot.groupchat.context.settings_view import HistorySettingsView
+    from nanobot.groupchat.runtime.control_port import GroupChatControlPort
+
+    # Protocols with attribute members reject issubclass(); check MRO instead.
+    assert HistorySettingsView in GroupChatControlPort.__mro__
+
+
+def test_settings_panel_does_not_import_engine() -> None:
+    import ast
+    from pathlib import Path
+
+    src = Path("nanobot/channels/telegram/settings_history_panel.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    imports = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imports.append(node.module)
+        elif isinstance(node, ast.Import):
+            imports.extend(a.name for a in node.names)
+    bad = [m for m in imports if "engine" in m.split(".")[-1] or m.endswith(".engine")]
+    assert not bad, f"settings panel must not import engine: {bad}"
+    assert any("settings_view" in m for m in imports)

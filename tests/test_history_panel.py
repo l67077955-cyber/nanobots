@@ -186,7 +186,10 @@ def test_live_metrics_with_mock_engine(sample_settings):
             {"sender": "User", "content": "hello"},
             {"sender": "ponytail", "content": "world" * 100},
         ])
-        _active_agents = []
+
+        @property
+        def active_agents(self):
+            return []
 
     metrics = collect_live_metrics(_Engine())
     assert metrics["current_msgs"] == 2

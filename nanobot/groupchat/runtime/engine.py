@@ -27,9 +27,9 @@ from nanobot.groupchat.context.response_cleanup import clean_response as _clean_
 from nanobot.groupchat.runtime.agent_runner import AgentRunner
 from nanobot.groupchat.runtime.mailbox import MailboxHub
 from nanobot.groupchat.runtime.turn_stack import TurnStack
+from nanobot.groupchat.runtime.tool_catalog import TOOL_NAMES as _CATALOG_TOOL_NAMES
 from nanobot.providers.base import LLMProvider
 from nanobot.utils.helpers import cn_now as _cn_now
-
 
 class GroupChatEngine:
     """Async multi-agent group chat engine with fluid agent management.
@@ -45,11 +45,7 @@ class GroupChatEngine:
     """
 
     # All available tool names for granular control
-    TOOL_NAMES = [
-        "web_search", "web_fetch", "exec",
-        "read_file", "write_file", "edit_file", "list_dir",
-        "memory_palace", "forget",
-    ]
+    TOOL_NAMES = _CATALOG_TOOL_NAMES
 
     def __init__(
         self,

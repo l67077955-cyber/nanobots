@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from nanobot.groupchat.runtime.tool_catalog import TOOL_NAMES
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
@@ -90,10 +92,9 @@ class AgentCommandsMixin:
             leader = agent_badge(name, self._groupchat_engine.leader)
             model = info.get("model", "?")
             # Tools summary
-            from nanobot.groupchat.runtime.engine import GroupChatEngine
             tools_cfg = info.get("tools")
             if isinstance(tools_cfg, dict):
-                on = [k for k, v in tools_cfg.items() if v and k in GroupChatEngine.TOOL_NAMES]
+                on = [k for k, v in tools_cfg.items() if v and k in TOOL_NAMES]
                 tools_str = ", ".join(on) if on else "无"
             elif info.get("tools_enabled", False):
                 tools_str = "全部"
