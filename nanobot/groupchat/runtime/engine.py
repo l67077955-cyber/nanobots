@@ -19,7 +19,7 @@ from typing import Any, Awaitable, Callable
 from loguru import logger
 
 from nanobot.core.history import History
-from nanobot.groupchat.config import GroupChatConfig
+from nanobot.groupchat.context.gc_config import GroupChatConfig
 from nanobot.groupchat.context.agent_loader import load_agents
 from nanobot.groupchat.context.persistence import GroupChatState
 from nanobot.groupchat.context.prompt_builder import PromptBuilder

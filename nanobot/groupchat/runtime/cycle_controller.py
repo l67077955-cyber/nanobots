@@ -1,70 +1,9 @@
-"""CycleController — per-agent cycle-loop decision seam (Step 3b).
+"""Per-agent *branch* decisions inside the cycle loop (not busy/idle).
 
-Owns the **decision** half of ``_run_one``'s ``while True`` cycle loop: which
-of the ~10 ``continue``/``break`` branches to take, given a snapshot of the
-cycle's state. The **bodies** (tool_loop calls, message injection, display,
-state mutations) stay inline in ``broadcast._run_one`` for now — they migrate
-onto the controller in a later Step 3c. This is the Strangler-Fig "plant the
-decision contract" step: the branch predicates become named, documented, and
-unit-testable in isolation, while control flow and side effects are preserved
-byte-for-byte.
-
-Why this is a separate seam from ``AgentRunner``: the cycle-loop decision
-depends on broadcast-level context (``is_leader`` / ``_substantive_tools`` /
-``result.finish_reason`` / ``content`` / ``leader_ended_discussion`` …) that
-does not belong on the per-agent runtime handle. ``AgentRunner`` owns the
-*state machine* (busy/idle + interrupt lifecycle, Step 3); ``CycleController``
-owns the *next-action selection*. The two compose: the runner mutates state,
-the controller reads a snapshot and says what to do next.
-
-## Why five methods, not one
-
-The post-``tool_loop`` cascade is **not** a flat first-match switch. Two
-unconditional bodies are sandwiched between the decision branches:
-
-1. The history-recording body (records ``content``/tool-logs, implicit
-   broadcast) runs *between* the error/timeout block and the interrupt block —
-   unconditionally for the fall-through case.
-2. The display body (finalize the streaming message) runs *between* the
-   E/F/G adequacy guards and the leader/single-exit block — whenever there is
-   content to show.
-
-A single ``decide_after_cycle() -> action`` cannot express "run body X, then
-keep evaluating the rest of the cascade". So the cascade is split at the
-sandwiched bodies into five call sites, each a pure first-match over
-``CycleContext``:
-
-    decide_cycle_gate            # A max_cycles / B engine-stopped       (pre-cycle)
-    decide_error_recovery        # C1–C5 error/timeout                   (post-tool_loop)
-      ← history-recording body inline (runs for NO_ERROR_RECOVERY + C3 fall-through)
-    decide_post_error_guard      # D interrupt / E idle / F no-text / G leader-mgmt
-      ← display body inline (runs for PROCEED_TO_DISPLAY)
-    decide_leader_or_single_exit # H1/H2 leader-synth / I single-agent
-      ← auto-wait body inline (runs for PROCEED_TO_AUTO_WAIT)
-    decide_after_wait            # J1/J2/J3 wait-none / K stopped / L inject
-
-## Honesty boundary: C1 retry outcome is not pure
-
-``decide_error_recovery`` resolves the *gate-level* pure decisions
-(``TIMEOUT_FIRST_RETRY`` / ``TIMEOUT_REPEATED_FALLTHROUGH`` /
-``ERROR_MAX_BREAK`` / ``ERROR_PLACEHOLDER_CONTINUE``). The C1 retry's
-**success-vs-failure outcome** (retry produced content → continue back to
-auto-wait; retry failed/empty → C2 placeholder → continue) is **not** a pure
-function of ``CycleContext`` — it depends on the retry ``tool_loop`` call's
-side effect. That outcome branch therefore stays body-internal inside the
-``TIMEOUT_FIRST_RETRY`` case; the controller only says "attempt the first
-retry". Likewise C2 (retry-failed placeholder) is a body-internal outcome, not
-a separate action.
-
-## Dead state deliberately excluded
-
-``_leader_disabled_agent`` was set at ``broadcast.py`` (init + a manage_agent
-scan) but never read — the "clean-exit guard" comment was stale. It has been
-**deleted** in the accompanying dead-state cleanup; it was never a
-``CycleContext`` field. ``CycleContext`` also excludes ``tool_calls_detail``
-(only the now-removed scan consumed it).
-
-See ``docs/groupchat-coupling-fix.md`` (Step 3b) and ``ports.py``.
+AgentRunner owns the only runtime lifecycle that matters: busy | idle
+(plus terminal done). This module names continue/break choices after a
+tool_loop result (interrupt inject, idle guard, wait, …) for testability.
+It is not a multi-phase state machine and must not grow into one.
 """
 
 from __future__ import annotations

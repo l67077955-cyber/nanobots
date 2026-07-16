@@ -89,3 +89,42 @@ def test_conversation_port_uses_history() -> None:
     conv.commit("用户", "q")
     assert h.latest_user_content() == "q"
     assert writes == [("用户", "q")]
+
+
+def test_settings_panel_does_not_import_live_display_stack() -> None:
+    """Telegram settings UI is not the live chat view stack."""
+    import ast
+    from pathlib import Path
+
+    settings_files = [
+        ROOT / "nanobot/channels/telegram/settings_history_panel.py",
+        ROOT / "nanobot/channels/telegram/callbacks/history.py",
+        ROOT / "nanobot/channels/telegram/commands/settings.py",
+    ]
+    forbidden = {
+        "nanobot.groupchat.display.broadcast_view",
+        "nanobot.groupchat.display.streaming",
+        "nanobot.groupchat.display.status_tracker",
+    }
+    bad: list[str] = []
+    for path in settings_files:
+        if not path.exists():
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module in forbidden:
+                bad.append(f"{path.name}: {node.module}")
+    assert not bad, bad
+
+
+def test_context_config_modules_importable() -> None:
+    from nanobot.groupchat.context.gc_config import GroupChatConfig
+    from nanobot.groupchat.config import GroupChatConfig as Pub
+    from nanobot.groupchat.context.history_preview import preview_groupchat_messages
+    from nanobot.core.history import History
+
+    assert Pub is GroupChatConfig
+    h = History()
+    h.commit_turn("用户", "hi")
+    msgs = preview_groupchat_messages(h, agent="Harper")
+    assert isinstance(msgs, list)

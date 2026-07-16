@@ -13,8 +13,9 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from loguru import logger
 
-from nanobot.groupchat import display as _d
+from nanobot.groupchat.display import display as _d
 from nanobot.core.history import History
+from nanobot.groupchat.context.history_preview import preview_groupchat_messages
 from nanobot.groupchat.context.prompt_builder import (
     PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
     GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
@@ -174,8 +175,11 @@ class LogsCallbackMixin:
                     if agent_name not in registry:
                         continue
                     try:
-                        compiled = History.from_sender_dicts(raw_history).build_for_groupchat(
-                            current_agent=agent_name,
+                        compiled = preview_groupchat_messages(
+                            raw_history,
+                            agent=agent_name,
+                            registry=registry,
+                            leader=leader,
                         )
                         validation = PromptBuilder._validate_context(
                             compiled, agent_name
