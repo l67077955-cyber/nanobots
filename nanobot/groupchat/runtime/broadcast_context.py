@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Protocol, runtime_checkable
 
+from nanobot.core.history import History
+
 
 @runtime_checkable
 class BroadcastContext(Protocol):
@@ -22,7 +24,7 @@ class BroadcastContext(Protocol):
     _round: int
     _leader: str | None
     _debug_context: bool
-    _history: list[dict[str, str]]
+    history: History
     _request_log: list[dict[str, Any]]
     _session_dir: Any
 
