@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="nanobot_logo.png" alt="nanobot" width="500">
+  <img src="assets/nanobot_logo.png" alt="nanobot" width="500">
   <h1>nanobot: Ultra-Lightweight Personal AI Assistant</h1>
   <p>
     <a href="https://pypi.org/project/nanobot-ai/"><img src="https://img.shields.io/pypi/v/nanobot-ai" alt="PyPI"></a>
@@ -16,7 +16,7 @@
 
 ⚡️ Delivers core agent functionality with **99% fewer lines of code** than OpenClaw.
 
-📏 Real-time line count: run `bash core_agent_lines.sh` to verify anytime.
+📏 Real-time line count: run `bash scripts/core_agent_lines.sh` to verify anytime.
 
 ## 📢 News
 
@@ -85,7 +85,7 @@
 ## 🏗️ Architecture
 
 <p align="center">
-  <img src="nanobot_arch.png" alt="nanobot architecture" width="800">
+  <img src="assets/nanobot_arch.png" alt="nanobot architecture" width="800">
 </p>
 
 ## Table of Contents
@@ -117,10 +117,10 @@
     <th><p align="center">📚 Personal Knowledge Assistant</p></th>
   </tr>
   <tr>
-    <td align="center"><p align="center"><img src="case/search.gif" width="180" height="400"></p></td>
-    <td align="center"><p align="center"><img src="case/code.gif" width="180" height="400"></p></td>
-    <td align="center"><p align="center"><img src="case/scedule.gif" width="180" height="400"></p></td>
-    <td align="center"><p align="center"><img src="case/memory.gif" width="180" height="400"></p></td>
+    <td align="center"><p align="center"><img src="assets/case/search.gif" width="180" height="400"></p></td>
+    <td align="center"><p align="center"><img src="assets/case/code.gif" width="180" height="400"></p></td>
+    <td align="center"><p align="center"><img src="assets/case/scedule.gif" width="180" height="400"></p></td>
+    <td align="center"><p align="center"><img src="assets/case/memory.gif" width="180" height="400"></p></td>
   </tr>
   <tr>
     <td align="center">Discovery • Insights • Trends</td>
