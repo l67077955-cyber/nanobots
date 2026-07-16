@@ -566,7 +566,27 @@ async def broadcast_round(
     agent_ranks = broadcast_round._agent_ranks_cache
 
     from nanobot.groupchat.display.broadcast_view import BroadcastView
-    view = BroadcastView(engine, orch.tracker, mailbox, orch.pool, orch.search_pool, list(agents), leader_name, agent_ranks=agent_ranks)
+
+    async def _on_chatroom_send_ok(sender: str, targets: list[str]) -> None:
+        await _trigger_realtime_interrupts(
+            sender=sender,
+            targets=targets,
+            mailbox=mailbox,
+            engine=engine,
+            leader_name=leader_name,
+        )
+
+    view = BroadcastView(
+        engine,
+        orch.tracker,
+        mailbox,
+        orch.pool,
+        orch.search_pool,
+        list(agents),
+        leader_name,
+        agent_ranks=agent_ranks,
+        on_chatroom_send_ok=_on_chatroom_send_ok,
+    )
 
     # Map back to local variables to keep downstream code unmodified for now
     exec_agents = orch.exec_agents

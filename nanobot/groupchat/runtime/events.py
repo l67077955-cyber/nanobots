@@ -1,4 +1,7 @@
-"""Orchestra events and cross-layer hooks for group chat broadcast."""
+"""Runtime-side events/hooks for multi-agent rounds.
+
+Display must not import this module — inject callbacks from runtime instead.
+"""
 
 from __future__ import annotations
 

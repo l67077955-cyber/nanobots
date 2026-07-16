@@ -5,11 +5,10 @@ from typing import Any
 from loguru import logger
 
 from nanobot.groupchat.display import display as _d
-from nanobot.groupchat.runtime.events import trigger_realtime_interrupts
 
 
 class BroadcastView:
-    """Handles Telegram UI rendering for broadcast events."""
+    """Telegram UI rendering for multi-agent round events (display layer only)."""
 
     def __init__(
         self,
@@ -21,7 +20,15 @@ class BroadcastView:
         agents: list[str],
         leader_name: str | None,
         agent_ranks: dict[str, int] | None = None,
+        *,
+        on_chatroom_send_ok: Any | None = None,
     ):
+        """UI rendering only.
+
+        Runtime scheduling hooks (e.g. realtime interrupts after chatroom_send)
+        are injected via ``on_chatroom_send_ok`` so display never imports runtime.
+        Signature: async (sender, targets) -> None
+        """
         self.engine = engine
         self.tracker = tracker
         self.mailbox = mailbox
@@ -30,6 +37,7 @@ class BroadcastView:
         self.agents = agents
         self.leader_name = leader_name
         self.agent_ranks = agent_ranks or {}
+        self._on_chatroom_send_ok = on_chatroom_send_ok
 
         self.pending_tool_msgs: dict[str, tuple[int | None, str]] = {}
         self.last_chatroom_send_to: dict[str, list[str]] = {a: [] for a in agents}
@@ -133,21 +141,15 @@ class BroadcastView:
                 await self.engine._send(
                     f"  {self.pool.status()}", progress=True,
                 )
-                await trigger_realtime_interrupts(
-                    sender=name,
-                    targets=self.last_chatroom_send_to.get(name, []),
-                    mailbox=self.mailbox,
-                    engine=self.engine,
-                    leader_name=self.leader_name,
-                )
+                if self._on_chatroom_send_ok is not None:
+                    await self._on_chatroom_send_ok(
+                        name, self.last_chatroom_send_to.get(name, []),
+                    )
             else:
-                await trigger_realtime_interrupts(
-                    sender=name,
-                    targets=self.last_chatroom_send_to.get(name, []),
-                    mailbox=self.mailbox,
-                    engine=self.engine,
-                    leader_name=self.leader_name,
-                )
+                if self._on_chatroom_send_ok is not None:
+                    await self._on_chatroom_send_ok(
+                        name, self.last_chatroom_send_to.get(name, []),
+                    )
 
         elif tool_name == "wait" and result_str and not result_str.startswith("⏰"):
             await self.engine._send(_d.chatroom_wait_msg(name, result_str, leader=self.leader_name), progress=True)
