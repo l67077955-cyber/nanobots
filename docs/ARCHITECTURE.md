@@ -102,7 +102,8 @@ agent/user 产出
 - [x] orchestra/history shim 删除；gateway 改名  
 - [x] `agent_cycle` 抽出  
 - [x] History.commit_turn + persist 钩子分离  
-- [ ] CycleController shadow → 权威  
+- [x] CycleController `decide_cycle_gate` → 权威（其余 decide_* 仍 shadow）
+- [ ] CycleController 其余 shadow → 权威  
 - [x] 消息投递收口（`CollabBus` + `round_log` 命名；≠ History）
 - [ ] 更多 call-site 只通过 `HistoryConversation` / `commit_turn`  
 - [ ] display.visibility 去掉 ranks 策略 re-export  
@@ -126,3 +127,8 @@ agent/user 产出
 - `CollabBus.round_log`：本轮投递索引（list/quote），`start_round`/`clear` 清空。
 - `History`：唯一 durable 对话上下文；`chatroom_send` 不直接 commit。
 - Durable 写入：`commit_agent_turn` → `History.commit_turn`。
+
+### 配置 vs 代码策略
+
+- **配置**（`~/.nanobot`）：可整段回滚（见该仓 `CONFIG_ROLLBACK.md`）。
+- **代码**：不回滚到 4–5 月高耦合形态；按 runtime 分层做选择性优化（History / CollabBus / AgentRunner / CycleController 逐步权威化）。

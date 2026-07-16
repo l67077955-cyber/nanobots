@@ -333,10 +333,9 @@ async def run_agent_cycle(
     engine._runners[name] = _runner
     _interrupt_event = _runner.interrupt_event
 
-    # ── CycleController: per-agent cycle-loop decision oracle (Step 3b) ──
-    # Pure decision oracle — bodies stay inline, only branch conditions move
-    # here. Shadow mode: oracle runs in parallel with existing logic and
-    # assertions verify consistency before we switch.
+    # ── CycleController (Step 3b): cycle_gate is authoritative; other stages shadow ──
+    # Bodies stay inline. Gate (max_cycles / stop / discussion_ended) uses
+    # decide_cycle_gate only — no dual-path. Remaining decide_* stay shadow.
     _cycle_ctrl = CycleController(name)
     # Tracks how many timeout-recovery attempts this agent has made.
     # Hard cap at 1 to prevent recovery loops.
@@ -348,10 +347,10 @@ async def run_agent_cycle(
 
     try:
         while True:
-            # ── Shadow mode: CycleController verification (Step 3b) ──
-            # Build CycleContext and ask the oracle what it would do.
-            # Log mismatches prominently but don't crash production.
-            _shadow_ctx = CycleContext(
+            # ── Cycle gate (authoritative CycleController — Step 3b partial) ──
+            # Single decision path for max_cycles / stop / discussion-ended.
+            # Other cascade stages remain shadow until promoted.
+            _gate_ctx = CycleContext(
                 agent_name=name,
                 is_leader=is_leader,
                 cycle=cycle,
@@ -361,7 +360,7 @@ async def run_agent_cycle(
                 discussion_ended=(mailbox.is_discussion_ended() if mailbox else False),
                 leader_ended_discussion=_leader_ended_discussion,
                 leader_end_event_set=leader_end_event.is_set() if leader_end_event else False,
-                finish_reason="",  # not relevant for cycle_gate
+                finish_reason="",
                 content=content,
                 tools_used=(),
                 substantive_tools=_substantive_tools,
@@ -369,25 +368,10 @@ async def run_agent_cycle(
                 consecutive_error_count=_consecutive_error_count,
                 max_consecutive_errors=MAX_CONSECUTIVE_ERRORS,
             )
-            _shadow_gate = _cycle_ctrl.decide_cycle_gate(_shadow_ctx)
-            # Check oracle agrees with existing logic
-            _gate_should_exit_max = cycle >= max_cycles
-            _gate_should_exit_stop = (not engine._running or (mailbox and mailbox.is_discussion_ended())) and not (is_leader and _leader_ended_discussion)
-            _gate_ok = (
-                (_gate_should_exit_max and _shadow_gate.action is CycleAction.EXIT_MAX_CYCLES_FORCE_SYNTHESIS) or
-                (_gate_should_exit_stop and _shadow_gate.action is CycleAction.EXIT_STOPPED_OR_ENDED) or
-                (not _gate_should_exit_max and not _gate_should_exit_stop and _shadow_gate.action is CycleAction.PROCEED_TO_CYCLE)
-            )
-            if not _gate_ok:
-                logger.error(
-                    "SHADOW MISMATCH @ cycle_gate: cycle={} max={} running={} disc_ended={} is_leader={} leader_ended={} oracle={} existing_max={} existing_stop={}",
-                    cycle, max_cycles, engine._running, mailbox.is_discussion_ended() if mailbox else False,
-                    is_leader, _leader_ended_discussion, _shadow_gate.action, _gate_should_exit_max, _gate_should_exit_stop,
-                )
-            # ── End shadow verification ──
+            _gate = _cycle_ctrl.decide_cycle_gate(_gate_ctx)
 
-            # Hard cycle cap — prevent runaway agents from draining resources
-            if cycle >= max_cycles:
+            if _gate.action is CycleAction.EXIT_MAX_CYCLES_FORCE_SYNTHESIS:
+                # Hard cycle cap — prevent runaway agents from draining resources
                 logger.warning(
                     "Broadcast: {} hit max_cycles={}, forcing exit", name, max_cycles
                 )
@@ -415,13 +399,14 @@ async def run_agent_cycle(
                     except Exception:
                         pass
                 break
-            # Respect /stop — exit immediately if engine is no longer running.
-            # Exception: leader called end_discussion but hasn't produced valid
-            # synthesis yet — allow the cycle loop to continue so the leader
-            # can retry (guards at line ~1125/1140 force a text-producing cycle).
-            if (not engine._running or (mailbox and getattr(mailbox, "is_discussion_ended", lambda: False)())) and not (is_leader and _leader_ended_discussion):
+
+            if _gate.action is CycleAction.EXIT_STOPPED_OR_ENDED:
+                # /stop or discussion ended. Leader mid-synthesis exception is
+                # inside CycleController.decide_cycle_gate (leader_ended_discussion).
                 logger.info("Broadcast: {} exiting — engine stopped or discussion ended", name)
                 break
+
+            # PROCEED_TO_CYCLE
             cycle += 1
             # Re-read model from registry each cycle so mid-round changes take effect
             _live_cfg = engine.registry.get(name, agent_cfg)
