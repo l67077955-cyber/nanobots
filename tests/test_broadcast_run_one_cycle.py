@@ -139,14 +139,19 @@ class _AgentMessage:
 # ── Minimal Engine stub ───────────────────────────────────────────────────
 
 class _StubEngine:
-    """Minimal GroupChatEngine surface needed by _run_one."""
+    """Minimal GroupChatEngine surface needed by _run_one.
+
+    History is the sole context store; persist hooks are I/O only.
+    """
     def __init__(self, running: bool = True) -> None:
+        from nanobot.core.history import History
         self._running = running
         self._broadcast_tasks: dict[str, asyncio.Task] = {}
         self._runners: dict[str, Any] = {}
         self.registry: dict[str, dict[str, Any]] = {}
         self.provider: Any = None  # not used in cycle decision tests
         self.config: Any = _StubConfig()
+        self.history = History()
         self._add_message_calls: list[tuple[str, str]] = []
         self._send_calls: list[str] = []
         self.stream_replies = False
@@ -159,7 +164,11 @@ class _StubEngine:
         return [{"role": "user", "content": "test prompt"}]
 
     def _add_message(self, name: str, content: str) -> None:
+        self.history.commit_turn(name, content)
         self._add_message_calls.append((name, content))
+
+    def _persist_after_history_write(self, sender: str, content: str) -> None:
+        self._add_message_calls.append((sender, content))
 
     async def _send(self, msg: str) -> None:
         self._send_calls.append(msg)

@@ -1,10 +1,15 @@
-"""Groupchat **context** layer — shared transcript plumbing & prompt views.
+"""Prompt / policy helpers that *project* History — not a second store.
 
-Owns: prompt assembly, persistence snapshots, compression settings, pruning
-helpers, agent loading. Transcript truth object is ``nanobot.core.history.History``;
-scheduling/busy/mailbox live in ``groupchat.runtime``.
+**Context ownership:** ``nanobot.core.history.History`` only.
 
-Formerly named ``groupchat.history`` (package renamed; old path removed).
+This package provides:
+- PromptBuilder — History → LLM message list (read projection)
+- ranks / history_settings / pruning — policy knobs for that projection
+- persistence — disk snapshots of History (I/O)
+- conversation — thin port onto History for collaboration code
+
+Scheduling, busy/idle, mailbox, cycle loop → ``groupchat.runtime``.
+Rendering → ``groupchat.display``.
 """
 
 from nanobot.core.history import History

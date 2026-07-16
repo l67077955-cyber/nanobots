@@ -170,7 +170,7 @@ class GroupChatEngine:
 
     def _sync_forget_tool(self, registry: "ToolRegistry", agent_name: str) -> None:
         """Register or unregister ForgetTool according to per-agent config."""
-        from nanobot.groupchat.tool_policy import forget_tool_enabled
+        from nanobot.groupchat.context.tool_policy import forget_tool_enabled
         from nanobot.tools.forget import ForgetTool
 
         agent_cfg = self.registry.get(agent_name, {})
@@ -293,7 +293,7 @@ class GroupChatEngine:
         # mutation goes through History methods directly; readers use
         # History accessors (last_sender / latest_user_content / format /
         # to_sender_dicts / build_for_groupchat …).
-        self.history: History = History()
+        self.history: History = History()  # sole context logic layer
 
         # Runtime state (ephemeral, not persisted)
         self._task: asyncio.Task | None = None
@@ -360,7 +360,7 @@ class GroupChatEngine:
 
     @property
     def room_id(self) -> str:
-        from nanobot.groupchat.room_observability import resolve_room_id
+        from nanobot.groupchat.runtime.room_observability import resolve_room_id
         return resolve_room_id(self._view_channel, self._view_chat_id)
 
     def pin_reply_route(self, channel: str, chat_id: str) -> None:
@@ -772,14 +772,14 @@ class GroupChatEngine:
             
         if isinstance(tools_cfg, dict):
             names = [k for k, v in tools_cfg.items() if v]
-            from nanobot.groupchat.tool_policy import forget_tool_enabled
+            from nanobot.groupchat.context.tool_policy import forget_tool_enabled
             if forget_tool_enabled(agent_cfg, session_override=tools_cfg) and "forget" not in names:
                 names.append("forget")
             return names
         elif agent_cfg.get("tools_enabled", False) or agent_cfg.get("_default"):
             return list(self.TOOL_NAMES)
 
-        from nanobot.groupchat.tool_policy import forget_tool_enabled
+        from nanobot.groupchat.context.tool_policy import forget_tool_enabled
         return ["forget"] if forget_tool_enabled(agent_cfg) else []
 
     def _get_agent_tools(self, agent_cfg: dict, registry, agent_name: str = None) -> list:
@@ -798,7 +798,7 @@ class GroupChatEngine:
         # Granular tools dict
         if isinstance(tools_cfg, dict):
             enabled = {k for k, v in tools_cfg.items() if v}
-            from nanobot.groupchat.tool_policy import forget_tool_enabled
+            from nanobot.groupchat.context.tool_policy import forget_tool_enabled
             if forget_tool_enabled(agent_cfg, session_override=tools_cfg):
                 enabled.add("forget")
             if not enabled:
@@ -814,7 +814,7 @@ class GroupChatEngine:
         if agent_cfg.get("_default"):
             return registry.get_definitions()
 
-        from nanobot.groupchat.tool_policy import forget_tool_enabled
+        from nanobot.groupchat.context.tool_policy import forget_tool_enabled
         if forget_tool_enabled(agent_cfg):
             return [
                 d for d in registry.get_definitions()
@@ -951,7 +951,7 @@ class GroupChatEngine:
         this path unified so single chat gets the same interrupt/mailbox
         semantics as group chat.
         """
-        from nanobot.groupchat.room_observability import emit_room_event
+        from nanobot.groupchat.runtime.room_observability import emit_room_event
         emit_room_event(
             room_id=self.room_id,
             kind="user_input",
@@ -1152,7 +1152,7 @@ class GroupChatEngine:
 
     async def _send(self, text: str, progress: bool = False) -> None:
         from nanobot.bus.events import OutboundMessage
-        from nanobot.groupchat.room_observability import emit_room_event
+        from nanobot.groupchat.runtime.room_observability import emit_room_event
         emit_room_event(
             room_id=self.room_id,
             kind="ui_push",
@@ -1236,11 +1236,18 @@ class GroupChatEngine:
         )
 
     def _add_message(self, sender: str, content: str) -> None:
-        """Append a message to the History store + audit log + persist.
+        """Commit one turn: History handles context; this method only I/O hooks.
 
-        sender→role dispatch lives in History.add_from_sender.
+        Context logic (role mapping, fragment list) lives entirely in
+        ``History.commit_turn`` / ``add_from_sender``. Engine must not keep a
+        parallel transcript.
         """
-        self.history.add_from_sender(sender, content)
+        committed = self.history.commit_turn(sender, content)
+        if committed:
+            self._persist_after_history_write(sender, committed)
+
+    def _persist_after_history_write(self, sender: str, content: str) -> None:
+        """I/O side effects after History mutation — not context logic."""
         self._state.save_message(sender, content, self.history.to_sender_dicts())
         self._persist_chat_state()
 
@@ -1253,7 +1260,7 @@ class GroupChatEngine:
         extra: dict[str, Any] | None = None,
     ) -> None:
         """Delegate to persistence layer + phase-0 observability log."""
-        from nanobot.groupchat.room_observability import emit_room_event
+        from nanobot.groupchat.runtime.room_observability import emit_room_event
 
         merged_extra = dict(extra or {})
         if self._session_dir:
@@ -1382,7 +1389,11 @@ class GroupChatEngine:
         teammates: list[str] | None = None,
         user_question: str = "",
     ) -> list[dict[str, Any]]:
-        """Build prompt — delegates entirely to PromptBuilder."""
+        """Project History (+ role config) into LLM messages — no parallel store.
+
+        PromptBuilder reads ``history``; runtime must not invent another
+        durable transcript. Ephemeral tool-protocol lists are WorkingMemory only.
+        """
         messages = self._prompt_builder.build_agent_prompt(
             agent_name,
             registry=self.registry,

@@ -3,7 +3,7 @@ Provider Registry — single source of truth for LLM provider metadata.
 
 Adding a new provider:
   1. Add a ProviderSpec to PROVIDERS below.
-  2. Add a field to ProvidersConfig in config/schema.py.
+  2. Add a field to ProvidersConfig in nanobot/config/schema.py.
   Done. Env vars, prefixing, config matching, status display all derive from here.
 
 Order matters — it controls match priority and fallback. Gateways first.

@@ -32,7 +32,7 @@ async def test_inject_single_agent_uses_shared_loop():
     engine._start_group_loop = lambda: setattr(engine, "_running", True)
     engine.direct_chat = AsyncMock()
 
-    with patch("nanobot.groupchat.room_observability.emit_room_event"):
+    with patch("nanobot.groupchat.runtime.room_observability.emit_room_event"):
         engine.inject("hello")
 
     assert engine._running
@@ -48,7 +48,7 @@ async def test_inject_single_agent_media_keeps_shared_loop_route():
     engine.direct_chat = AsyncMock()
     media = ["/tmp/photo.jpg"]
 
-    with patch("nanobot.groupchat.room_observability.emit_room_event"):
+    with patch("nanobot.groupchat.runtime.room_observability.emit_room_event"):
         engine.inject("look at this", media=media)
 
     assert engine._running
@@ -60,10 +60,10 @@ async def test_inject_single_agent_media_keeps_shared_loop_route():
 async def test_inject_single_agent_second_message_uses_input_queue():
     engine = _minimal_engine(active=["Kirk"])
     engine._start_group_loop = lambda: setattr(engine, "_running", True)
-    with patch("nanobot.groupchat.room_observability.emit_room_event"):
+    with patch("nanobot.groupchat.runtime.room_observability.emit_room_event"):
         engine.inject("first")
 
-    with patch("nanobot.groupchat.room_observability.emit_room_event"):
+    with patch("nanobot.groupchat.runtime.room_observability.emit_room_event"):
         engine.inject("second", media=["/tmp/a.png"])
     assert engine._input_queue.get_nowait() == "first"
     assert engine._input_queue.get_nowait() == "second"
@@ -75,7 +75,7 @@ async def test_inject_multi_agent_uses_broadcast_queue():
     engine = _minimal_engine(active=["Kirk", "Spock"])
     engine._start_group_loop = lambda: setattr(engine, "_running", True)
 
-    with patch("nanobot.groupchat.room_observability.emit_room_event"):
+    with patch("nanobot.groupchat.runtime.room_observability.emit_room_event"):
         engine.inject("discuss this")
 
     assert engine._running

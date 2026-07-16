@@ -1420,23 +1420,23 @@ If you edit the `.service` file itself, run `systemctl --user daemon-reload` bef
 ## 📁 Project Structure
 
 ```
-nanobot/
-├── agent/          # 🧠 Core agent logic
-│   ├── loop.py     #    Agent loop (LLM ↔ tool execution)
-│   ├── context.py  #    Prompt builder
-│   ├── memory.py   #    Persistent memory
-│   ├── skills.py   #    Skills loader
-│   ├── subagent.py #    Background task execution
-│   └── tools/      #    Built-in tools (incl. spawn)
-├── skills/         # 🎯 Bundled skills (github, weather, tmux...)
-├── channels/       # 📱 Chat channel integrations (supports plugins)
-├── bus/            # 🚌 Message routing
-├── cron/           # ⏰ Scheduled tasks
-├── heartbeat/      # 💓 Proactive wake-up
-├── providers/      # 🤖 LLM providers (OpenRouter, etc.)
-├── session/        # 💬 Conversation sessions
-├── config/         # ⚙️ Configuration
-└── cli/            # 🖥️ Commands
+nanobot-src/
+├── nanobot/                 # Installable Python package
+│   ├── groupchat/           # Multi-agent: runtime / context / display
+│   ├── gateway/             # Inbound dispatch + inbox
+│   ├── channels/            # Telegram and other surfaces
+│   ├── providers/           # LLM providers
+│   ├── tools/               # Agent tools (shell, web, memory_palace, …)
+│   ├── config/              # App config schema & paths (≠ repo memory-palace/)
+│   ├── cli/ + headless.py   # Entrypoints
+│   └── …
+├── tests/
+├── docs/                    # Architecture & ops notes
+├── scripts/                 # Dev / ops helpers
+├── bridge/                  # Optional Node bridge
+├── memory-palace/           # Optional Memory-Palace submodule
+├── assets/
+└── pyproject.toml
 ```
 
 ## 🤝 Contribute & Roadmap
@@ -1450,7 +1450,7 @@ PRs welcome! The codebase is intentionally small and readable. 🤗
 | `main` | Stable releases — bug fixes and minor improvements |
 | `nightly` | Experimental features — new features and breaking changes |
 
-**Unsure which branch to target?** See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
+**Unsure which branch to target?** See [CONTRIBUTING.md](./CONTRIBUTING.md); this fork also documents policy in [docs/BRANCHING.md](./docs/BRANCHING.md).
 
 **Roadmap** — Pick an item and [open a PR](https://github.com/HKUDS/nanobot/pulls)!
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import nanobot.groupchat.room_observability as obs
+import nanobot.groupchat.runtime.room_observability as obs
 
 
 def test_emit_and_ring_buffer(tmp_path, monkeypatch):

@@ -164,7 +164,7 @@ class BroadcastOrchestrator:
             session_cfg = None
             if hasattr(self.engine, "_session_tools_override") and name in self.engine._session_tools_override:
                 session_cfg = self.engine._session_tools_override[name]
-            from nanobot.groupchat.tool_policy import (
+            from nanobot.groupchat.context.tool_policy import (
                 forget_tool_enabled,
                 memory_palace_tool_enabled,
             )

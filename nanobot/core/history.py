@@ -535,10 +535,20 @@ class Fragment:
 
 
 class History:
-    """带标记的 Fragment 列表，对话历史的唯一真相源。
+    """带标记的 Fragment 列表 — **唯一的上下文逻辑层**（数据 + 上下文处理）。
 
-    纯数据层：不持有 provider/state，持久化由外部 hook 承担。所有按 mark 的
-    查找/删除/修改作用于首个匹配。
+    架构定位
+    --------
+    - **History**：共享 transcript 的唯一写入/处理入口（append、压缩、裁剪、
+      build_for_groupchat / build_for_llm、age_tools …）。
+    - **runtime（群聊/协作）**：只负责谁发言、打断、mailbox、tool_loop 调度；
+      不得另起平行的长期上下文库。
+    - **display（视图）**：只渲染；禁止改 History。
+    - **WorkingMemory**：仅 tool_loop 一轮内的 ephemeral 协议缓冲；re-entry
+      必须从 History 重建，不是第二套上下文。
+
+    持久化 / 会话落盘是 I/O 副作用，由 engine hook 承担，不属于上下文逻辑。
+    所有按 mark 的查找/删除/修改作用于首个匹配。
 
     用法示例
     --------
@@ -1524,8 +1534,8 @@ class History:
         - 其他 → role=assistant，mark=<sender>_N，meta.agent=sender（使
           ``delete_by_attr('agent', sender)`` 命中）
 
-        engine._add_message / commit_agent_turn 走此方法，sender 字符串原样
-        保留进 meta.sender，使 to_sender_dicts 落盘格式与既有 chat_history.json 一致。
+        **所有 durable 上下文写入最终应落到本方法（或 system/user/agent 等
+        语义 API）**。engine 的落盘只是 hook，不在别处复制一份 fragment 列表。
         """
         if _is_human_sender(sender):
             return self._semantic_append("user", content, None, role="user", sender=sender)
@@ -1534,6 +1544,18 @@ class History:
                 "system", content, None, role="system", sender=sender or "系统"
             )
         return self._semantic_append(sender, content, None, role="assistant", agent=sender)
+
+    def commit_turn(self, sender: str, content: str) -> str:
+        """Commit one durable turn into this History (empty content → no-op).
+
+        Preferred name for collaboration code: emphasizes that runtime
+        *commits* outcomes into History rather than owning context itself.
+        Returns the committed string (or "" if skipped).
+        """
+        if not content:
+            return ""
+        self.add_from_sender(sender, content)
+        return content
 
     def _semantic_add_from_sender(self, sender: str, content: str) -> str:
         """Deprecated alias for add_from_sender."""

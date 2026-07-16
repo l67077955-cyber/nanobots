@@ -3,7 +3,8 @@
 Does not own prompt/History plumbing (see groupchat.context) or message
 formatting (see groupchat.display).
 
-Module basenames (broadcast.py, engine.py, …) unchanged.
+Module basenames (broadcast.py, engine.py, agent_cycle.py, …).
+Per-agent cycle body: ``agent_cycle.run_agent_cycle``.
 """
 
 from nanobot.groupchat.runtime.engine import GroupChatEngine

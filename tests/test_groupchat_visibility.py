@@ -13,7 +13,7 @@ from nanobot.groupchat.context.ranks import (
     resolve_rank,
 )
 from nanobot.groupchat.config_normalize import normalize_agent_config, unwrap_config_value
-from nanobot.groupchat.tool_policy import (
+from nanobot.groupchat.context.tool_policy import (
     agent_tool_enabled,
     forget_tool_enabled,
     memory_palace_tool_enabled,

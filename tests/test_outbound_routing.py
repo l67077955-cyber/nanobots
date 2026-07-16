@@ -27,7 +27,7 @@ async def test_send_uses_bus_when_context_wired():
     engine = _minimal_engine()
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(
-            "nanobot.groupchat.room_observability.emit_room_event",
+            "nanobot.groupchat.runtime.room_observability.emit_room_event",
             lambda **kwargs: None,
         )
         await engine._send("hello from agent")
@@ -49,7 +49,7 @@ async def test_send_uses_pinned_reply_route_over_view_context():
     engine._reply_chat_id = "8008274300"
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(
-            "nanobot.groupchat.room_observability.emit_room_event",
+            "nanobot.groupchat.runtime.room_observability.emit_room_event",
             lambda **kwargs: None,
         )
         await engine._send("pinned reply")
@@ -86,7 +86,7 @@ async def test_send_falls_back_to_legacy_send_fn():
     engine._send_fn = AsyncMock()
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(
-            "nanobot.groupchat.room_observability.emit_room_event",
+            "nanobot.groupchat.runtime.room_observability.emit_room_event",
             lambda **kwargs: None,
         )
         await engine._send("legacy")
