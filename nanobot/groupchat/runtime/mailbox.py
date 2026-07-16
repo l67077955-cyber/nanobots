@@ -14,7 +14,7 @@ from typing import Any
 
 from loguru import logger
 
-from nanobot.groupchat.display.visibility import resolve_rank, rank_interrupt_level
+from nanobot.groupchat.context.ranks import resolve_rank, rank_interrupt_level
 
 
 @dataclass

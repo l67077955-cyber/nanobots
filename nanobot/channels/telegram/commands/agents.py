@@ -262,7 +262,7 @@ class AgentCommandsMixin:
             tools_str = "全部开启"
         else:
             tools_str = "全部关闭"
-        from nanobot.groupchat.display.visibility import RANK_DISPLAY, resolve_rank
+        from nanobot.groupchat.context.ranks import RANK_DISPLAY, resolve_rank
         raw_rank = agent.get("rank")
         resolved = resolve_rank(raw_rank, agent=agent_name) if raw_rank is not None else "basic"
         if resolved:

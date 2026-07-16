@@ -95,7 +95,7 @@ class BroadcastOrchestrator:
         from nanobot.tools.memory_palace import MemoryPalaceTool
         import os
 
-        from nanobot.groupchat.display.visibility import per_agent_pool_capacities
+        from nanobot.groupchat.context.ranks import per_agent_pool_capacities
 
         per_agent_cap = per_agent_pool_capacities(
             self.exec_agents, self.engine.registry, self.leader_name,

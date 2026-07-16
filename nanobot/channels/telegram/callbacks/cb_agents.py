@@ -156,7 +156,7 @@ class AgentCallbackMixin:
                 )
                 return True
             elif field == "rank":
-                from nanobot.groupchat.display.visibility import RANK_DISPLAY, RANK_ORDER, resolve_rank
+                from nanobot.groupchat.context.ranks import RANK_DISPLAY, RANK_ORDER, resolve_rank
 
                 agent = self._groupchat_engine.registry.get(name, {})
                 current = agent.get("rank")
@@ -483,7 +483,7 @@ class AgentCallbackMixin:
                 return
             name, rank_val = parts[1], parts[2]
 
-            from nanobot.groupchat.display.visibility import RANK_DISPLAY, RANK_ORDER
+            from nanobot.groupchat.context.ranks import RANK_DISPLAY, RANK_ORDER
 
             MODERN_RANKS = list(RANK_ORDER.keys())
             if rank_val not in MODERN_RANKS:

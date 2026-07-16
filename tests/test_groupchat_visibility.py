@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from nanobot.groupchat.display.visibility import (
+from nanobot.groupchat.context.ranks import (
     RANK_POOL_CAPACITY,
     compute_agent_ranks,
     per_agent_pool_capacities,

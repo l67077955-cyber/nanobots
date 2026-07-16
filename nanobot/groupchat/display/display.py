@@ -171,7 +171,7 @@ def broadcast_start_msg(
     sampling: dict[str, dict] | None = None,
 ) -> str:
     """Render broadcast start banner with role indicators and rank badges."""
-    from nanobot.groupchat.display.visibility import RANK_DISPLAY, resolve_rank
+    from nanobot.groupchat.context.ranks import RANK_DISPLAY, resolve_rank
 
     total = len(agents)
     lines = [f"══ Broadcast · {total} agents · {timeout}s ══"]
