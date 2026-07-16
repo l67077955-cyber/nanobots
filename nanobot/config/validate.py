@@ -115,7 +115,7 @@ def log_effective_config(*, gc_settings: dict[str, Any] | None = None, sampling:
             logger.info("config: sampling {}", sample_preview)
 
     try:
-        from nanobot.groupchat.history import history_settings as hs
+        from nanobot.groupchat.context import history_settings as hs
         hs.reload()
         logger.info(
             "config: history max_msgs={} max_chars={} ctx_window={}",

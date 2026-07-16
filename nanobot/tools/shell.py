@@ -46,12 +46,12 @@ class ExecTool(Tool):
 
     @property
     def _MAX_TIMEOUT(self) -> int:
-        from nanobot.groupchat.history import history_settings as hs
+        from nanobot.groupchat.context import history_settings as hs
         return hs.exec_max_timeout()
 
     @property
     def _MAX_OUTPUT(self) -> int:
-        from nanobot.groupchat.history import history_settings as hs
+        from nanobot.groupchat.context import history_settings as hs
         return hs.exec_max_output()
 
     @property

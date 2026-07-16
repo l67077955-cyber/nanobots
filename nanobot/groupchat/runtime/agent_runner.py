@@ -10,7 +10,7 @@ or the shared conversation History (``engine.history``).
 MailboxHub may *read* busy via engine-wired ``get_busy_agents``; it must not
 be the write path. Call ``begin_cycle`` / ``end_cycle`` only.
 
-See ``docs/groupchat-coupling-fix.md`` and ``nanobot/groupchat/orchestra/ports.py``.
+See ``docs/groupchat-coupling-fix.md`` and ``nanobot/groupchat/runtime/ports.py``.
 """
 
 from __future__ import annotations

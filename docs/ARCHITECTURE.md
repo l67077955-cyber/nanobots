@@ -35,7 +35,7 @@ nanobot/
   agent/             # 轻量 agent 路径
   channels/          # Telegram / 其它通道
   gateway/           # 网关：dispatch + inbox（原 nanobot.runtime，现为主名）
-  runtime/           # shim → gateway（兼容旧 import）
+  # runtime/         # 已移除（曾 shim → gateway）
   providers/         # LLM
   tools/             # 工具实现
   cli/ + headless.py # 入口
@@ -48,7 +48,7 @@ nanobot/
 |----|------|----------|
 | `nanobot.gateway` | 网关：统一 slash 路由、inbox 文件轮询 | `dispatch.py`, `inbox.py` |
 | `nanobot.groupchat.runtime` | 群聊中间逻辑：一轮多 agent、mailbox、WorkingMemory | `engine.py`, `broadcast.py` |
-| `nanobot.runtime` | 兼容 shim → `nanobot.gateway` | 请勿再新增代码 |
+| ~~`nanobot.runtime`~~ | 已移除 → 使用 `nanobot.gateway` | — |
 
 ## 3. 群聊三层（核心）
 
@@ -102,8 +102,8 @@ nanobot/groupchat/
 
 | 旧路径 | 指向 |
 |--------|------|
-| `groupchat.orchestra.*` | `groupchat.runtime.*` |
-| `groupchat.history.*` | `groupchat.context.*` |
+| ~~`groupchat.orchestra.*`~~ | `groupchat.runtime.*`（shim 已删） |
+| ~~`groupchat.history.*`~~ | `groupchat.context.*`（shim 已删） |
 | `display.visibility` 策略 API | 再导出 `context.ranks`（`tool_call_label` 仍在 display） |
 
 新代码请直接 import **runtime / context / display** 与 **core.history**。
@@ -139,7 +139,7 @@ nanobot/groupchat/
 
 ## 6. 演进备忘
 
-- ~~网关改名 gateway~~ 已完成；`nanobot.runtime` 为 shim
+- ~~网关改名 gateway~~ 已完成；`nanobot.runtime` shim 已删除
 - `broadcast.py` 内嵌 `_run_one` 仍长 → 可再抽 `agent_cycle` 模块
 - 删除 `orchestra/`、`history/` 空壳前确认无外部硬依赖
 

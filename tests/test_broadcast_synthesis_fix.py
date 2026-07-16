@@ -17,8 +17,8 @@ import sys
 import unittest
 from pathlib import Path
 
-BROADCAST = Path("/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py")
-HISTORY = Path("/root/nanobot-src/nanobot/groupchat/history/component_manager.py")
+BROADCAST = Path("/root/nanobot-src/nanobot/groupchat/runtime/broadcast.py")
+HISTORY = Path("/root/nanobot-src/nanobot/groupchat/context/component_manager.py")
 
 
 # ── Test 1: Syntax Integrity ──────────────────────────────

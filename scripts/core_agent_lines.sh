@@ -8,7 +8,7 @@ echo ""
 echo "  Core = groupchat/ (GroupChatEngine multi-agent collaboration)"
 echo ""
 
-for dir in groupchat/orchestra groupchat/history groupchat/display bus config cron heartbeat session utils tools; do
+for dir in groupchat/runtime groupchat/context groupchat/display bus config cron heartbeat session utils tools; do
   count=$(find "nanobot/$dir" -name "*.py" 2>/dev/null -exec cat {} + | wc -l)
   printf "  %-24s %6s lines\n" "$dir/" "$count"
 done

@@ -139,12 +139,12 @@ class ReadFileTool(_FsTool):
 
     @property
     def _MAX_CHARS(self) -> int:
-        from nanobot.groupchat.history import history_settings as hs
+        from nanobot.groupchat.context import history_settings as hs
         return hs.read_file_max_chars()
 
     @property
     def _DEFAULT_LIMIT(self) -> int:
-        from nanobot.groupchat.history import history_settings as hs
+        from nanobot.groupchat.context import history_settings as hs
         return hs.read_file_default_lines()
 
     @property
@@ -470,7 +470,7 @@ class ListDirTool(_FsTool):
 
     @property
     def _DEFAULT_MAX(self) -> int:
-        from nanobot.groupchat.history import history_settings as hs
+        from nanobot.groupchat.context import history_settings as hs
         return hs.list_dir_default_max()
 
     @property

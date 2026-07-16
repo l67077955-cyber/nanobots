@@ -1,10 +1,9 @@
 """Gateway services — inbound dispatch and inbox poller.
 
-Formerly ``nanobot.runtime`` (renamed to avoid clashing with
-``nanobot.groupchat.runtime``, the multi-agent logic layer).
-
 Prefer: ``from nanobot.gateway.dispatch import …``
-Legacy ``nanobot.runtime`` remains a re-export shim.
+
+Renamed from ``nanobot.runtime`` (removed) to avoid clashing with
+``nanobot.groupchat.runtime``.
 """
 
 from nanobot.gateway.dispatch import (  # noqa: F401

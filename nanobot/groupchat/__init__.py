@@ -1,7 +1,7 @@
 """Group chat package.
 
 Preferred parents: runtime/ (execution), context/ (prompt+History plumbing),
-display/ (surface). Legacy: orchestra->runtime, history->context shims.
+display/ (surface).
 """
 
 from nanobot.groupchat.runtime.engine import GroupChatEngine

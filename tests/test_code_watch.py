@@ -47,12 +47,13 @@ def test_changed_files_returns_list() -> None:
         assert "status" in item
 
 
-def test_module_stats_has_orchestra() -> None:
+def test_module_stats_has_runtime_and_context() -> None:
     mods = module_stats(_repo())
     ids = {m["id"] for m in mods}
-    assert "orchestra" in ids
-    orch = next(m for m in mods if m["id"] == "orchestra")
-    assert orch["lines"] > 1000
+    assert "runtime" in ids
+    assert "context" in ids
+    rt = next(m for m in mods if m["id"] == "runtime")
+    assert rt["lines"] > 1000
 
 
 def test_architecture_includes_runtime() -> None:

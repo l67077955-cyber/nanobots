@@ -118,7 +118,10 @@ async def test_finalize_keeps_pre_tool_partial_with_down_marker():
 
 @pytest.mark.asyncio
 async def test_direct_chat_aborts_stream_on_cancel():
-    from nanobot.groupchat.orchestra import direct_chat as dc_mod
+    import importlib
+    # runtime/__init__ re-exports direct_chat function, which shadows the submodule
+    # on attribute access; load the real module via importlib.
+    dc_mod = importlib.import_module("nanobot.groupchat.runtime.direct_chat")
     from nanobot.core.history import History
 
     engine = GroupChatEngine.__new__(GroupChatEngine)
@@ -149,7 +152,10 @@ async def test_direct_chat_aborts_stream_on_cancel():
 
     with (
         patch.object(dc_mod, "log_request"),
-        patch.object(dc_mod, "build_tool_log", return_value=""),
+        patch(
+            "nanobot.groupchat.runtime.chat_utils.build_tool_log",
+            return_value="",
+        ),
     ):
         with pytest.raises(asyncio.CancelledError):
             await dc_mod.direct_chat(engine, "hello")

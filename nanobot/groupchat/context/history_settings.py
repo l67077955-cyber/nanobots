@@ -85,7 +85,7 @@ _DEFAULTS: dict[str, Any] = {
         # message is ≥ this similar to its own previous message, log a
         # WARNING so the repeat is observable in gateway.log. Does NOT
         # mutate content (stubbing risks re-explanation → more repetition).
-        # See nanobot/groupchat/history/repetition.py.
+        # See nanobot/groupchat/context/repetition.py.
         "cross_turn_repeat_guard": True,
         "cross_turn_repeat_ratio": 0.85,
     },

@@ -4,7 +4,7 @@ Owns: prompt assembly, persistence snapshots, compression settings, pruning
 helpers, agent loading. Transcript truth object is ``nanobot.core.history.History``;
 scheduling/busy/mailbox live in ``groupchat.runtime``.
 
-Formerly named ``groupchat.history`` (kept as a re-export shim).
+Formerly named ``groupchat.history`` (package renamed; old path removed).
 """
 
 from nanobot.core.history import History

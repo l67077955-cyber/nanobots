@@ -25,8 +25,8 @@ _LOG_TAIL_LINES = 18
 _EVENT_TAIL_LINES = 40
 
 MODULES = (
-    {"id": "orchestra", "label": "Orchestra", "prefix": "nanobot/groupchat/orchestra/", "role": "引擎 · 路由 · 工具循环"},
-    {"id": "history", "label": "History", "prefix": "nanobot/groupchat/history/", "role": "Prompt · 上下文"},
+    {"id": "runtime", "label": "Runtime", "prefix": "nanobot/groupchat/runtime/", "role": "引擎 · 路由 · 工具循环"},
+    {"id": "context", "label": "Context", "prefix": "nanobot/groupchat/context/", "role": "Prompt · 上下文"},
     {"id": "channels", "label": "Channels", "prefix": "nanobot/channels/", "role": "Telegram · 入站出站"},
     {"id": "groupchat", "label": "Groupchat", "prefix": "nanobot/groupchat/", "role": "群聊核心"},
     {"id": "providers", "label": "Providers", "prefix": "nanobot/providers/", "role": "LLM 提供商"},

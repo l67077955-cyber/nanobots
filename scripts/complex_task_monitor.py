@@ -30,8 +30,8 @@ TASK = """\
 
 ## 必须交付（缺一不可）
 1. **代码审计报告**（markdown）：逐文件列出
-   - `nanobot/groupchat/orchestra/broadcast_agent.py` 中 `_apply_live_prefix` 触发条件
-   - `nanobot/groupchat/history/message_converter.py` 中 tier 优先级逻辑
+   - `nanobot/groupchat/runtime/broadcast.py` (was orchestra/broadcast_agent) 中 `_apply_live_prefix` 触发条件
+   - `nanobot/groupchat/context/` (was history/message_converter) 中 tier 优先级逻辑
    - 仍存在的缺口（例如 wait 非 rebuild 分支仍用 `prune_conversation_tail_with_summary`）
    每条结论附 `文件:行号` 证据。
 
