@@ -1,10 +1,12 @@
-"""Shared builder for the /history Telegram settings panel.
+"""Telegram **settings** UI for context/history knobs (command: /history).
 
-Game-style grouped layout inspired by AAA game settings panels:
-  记忆范围 / 压缩策略 / 工具限制 / 跨轮可见性 / 全局
+This is the channel **control panel**, NOT live chat bubble rendering.
+Live multi-agent conversation UI lives in ``groupchat.display``
+(BroadcastView / StreamingDisplay / status_tracker).
 
-Each group is organised by user-facing experience, not by internal
-function name.  Advanced parameters are collapsible per-group.
+Game-style groups: 记忆范围 / 压缩策略 / 工具限制 / 跨轮可见性 / 全局.
+Organised by user-facing experience, not internal function names.
+Reads/writes ``groupchat.context`` (history_settings, etc.).
 """
 
 from __future__ import annotations

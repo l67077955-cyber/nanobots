@@ -1,4 +1,8 @@
-"""Parameter documentation for /history settings UI."""
+"""Parameter documentation for the /history Telegram **settings** panel.
+
+Paths refer to groupchat.context / runtime (post layer split).
+This is settings help text, not live chat display.
+"""
 
 PARAM_DOCS: dict[str, dict[str, str]] = {
     "__top__:context_window_tokens": {
@@ -156,7 +160,7 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
             "doc": (
                 "对话历史的总字符数上限。\n\n"
                 "算法: sum(所有消息 content 长度)，超过时从最早丢弃\n"
-                "位置: groupchat/prompt_builder.py 构建 prompt 时检查\n\n"
+                "位置: groupchat/context/prompt_builder.py 构建 prompt 时检查\n\n"
                 "与 context_window_tokens 的关系:\n"
                 "  此值是字符数，context_window 是 token 数\n"
                 "  粗略换算: 1 token ≈ 4 字符 (英文) / 2 字符 (中文)\n"

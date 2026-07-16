@@ -109,3 +109,13 @@ agent/user 产出
 ## 7. 旧文档
 
 `groupchat-coupling-fix.md` 等路径名可能仍写 orchestra；以本文与 `AGENTS.md` 为准。
+
+## 8. Telegram：设置面板 vs 对话显示
+
+| 路径 | 用途 |
+|------|------|
+| `channels/telegram/settings_history_panel.py` | **/history 设置面板**（改 context 旋钮） |
+| `channels/telegram/commands/settings.py` + `callbacks/*` | 设置命令与按钮回调 |
+| `groupchat/display/*` | **对话过程** UI（流式、BroadcastView、status_tracker） |
+
+二者分离：设置不走 BroadcastView；对话不走 settings_history_panel。

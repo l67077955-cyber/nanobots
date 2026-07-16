@@ -476,7 +476,7 @@ class SettingsCommandsMixin:
         if not self.is_allowed(self._sender_id(update.effective_user)):
             return
 
-        from nanobot.channels.telegram.history_panel import build_history_panel
+        from nanobot.channels.telegram.settings_history_panel import build_history_panel
 
         text, markup = build_history_panel(self._groupchat_engine)
         hist_text = to_cli_style(text, title="📚 上下文 & 历史")

@@ -75,7 +75,7 @@ def sample_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def test_config_warnings_detect_threshold_mismatch(sample_settings):
-    from nanobot.channels.telegram.history_panel import collect_config_warnings
+    from nanobot.channels.telegram.settings_history_panel import collect_config_warnings
 
     warnings = collect_config_warnings()
     joined = "\n".join(warnings)
@@ -84,7 +84,7 @@ def test_config_warnings_detect_threshold_mismatch(sample_settings):
 
 
 def test_main_panel_shows_grouped_layout(sample_settings):
-    from nanobot.channels.telegram.history_panel import build_main_panel_text
+    from nanobot.channels.telegram.settings_history_panel import build_main_panel_text
 
     text = build_main_panel_text(engine=None)
     # New grouped layout terms
@@ -102,7 +102,7 @@ def test_main_panel_shows_grouped_layout(sample_settings):
 
 
 def test_main_panel_shows_status_dashboard(sample_settings):
-    from nanobot.channels.telegram.history_panel import build_main_panel_text
+    from nanobot.channels.telegram.settings_history_panel import build_main_panel_text
 
     text = build_main_panel_text(engine=None)
     assert "实时状态" in text
@@ -111,7 +111,7 @@ def test_main_panel_shows_status_dashboard(sample_settings):
 
 
 def test_expanded_panel_includes_flow_demo(sample_settings):
-    from nanobot.channels.telegram.history_panel import build_main_panel_text
+    from nanobot.channels.telegram.settings_history_panel import build_main_panel_text
 
     compact = build_main_panel_text(engine=None, expanded=False)
     expanded = build_main_panel_text(engine=None, expanded=True)
@@ -124,7 +124,7 @@ def test_expanded_panel_includes_flow_demo(sample_settings):
 
 
 def test_group_panel_memory(sample_settings):
-    from nanobot.channels.telegram.history_panel import build_group_panel
+    from nanobot.channels.telegram.settings_history_panel import build_group_panel
 
     text, markup = build_group_panel(None, "memory")
     assert "记忆范围" in text
@@ -140,7 +140,7 @@ def test_group_panel_memory(sample_settings):
 
 
 def test_main_panel_has_close_button(sample_settings):
-    from nanobot.channels.telegram.history_panel import build_history_panel
+    from nanobot.channels.telegram.settings_history_panel import build_history_panel
 
     _, markup = build_history_panel(None)
     cb_data = [str(b.callback_data) for row in markup.inline_keyboard for b in row]
@@ -148,7 +148,7 @@ def test_main_panel_has_close_button(sample_settings):
 
 
 def test_group_panel_compress_advanced(sample_settings):
-    from nanobot.channels.telegram.history_panel import build_group_panel
+    from nanobot.channels.telegram.settings_history_panel import build_group_panel
 
     text_basic, markup_basic = build_group_panel(None, "compress", advanced=False)
     text_adv, markup_adv = build_group_panel(None, "compress", advanced=True)
@@ -159,7 +159,7 @@ def test_group_panel_compress_advanced(sample_settings):
 
 
 def test_group_panel_vis(sample_settings):
-    from nanobot.channels.telegram.history_panel import build_group_panel
+    from nanobot.channels.telegram.settings_history_panel import build_group_panel
 
     text, markup = build_group_panel(None, "vis")
     assert "跨轮可见性" in text
@@ -168,7 +168,7 @@ def test_group_panel_vis(sample_settings):
 
 
 def test_find_group_for_param(sample_settings):
-    from nanobot.channels.telegram.history_panel import find_group_for_param
+    from nanobot.channels.telegram.settings_history_panel import find_group_for_param
 
     assert find_group_for_param("history", "max_messages") == "memory"
     assert find_group_for_param("tool_results", "exec_max_chars") == "compress"
@@ -178,7 +178,7 @@ def test_find_group_for_param(sample_settings):
 
 
 def test_live_metrics_with_mock_engine(sample_settings):
-    from nanobot.channels.telegram.history_panel import collect_live_metrics
+    from nanobot.channels.telegram.settings_history_panel import collect_live_metrics
     from nanobot.core.history import History
 
     class _Engine:
@@ -196,14 +196,14 @@ def test_live_metrics_with_mock_engine(sample_settings):
 
 
 def test_restore_defaults_all(sample_settings):
-    from nanobot.channels.telegram.history_panel import restore_defaults
+    from nanobot.channels.telegram.settings_history_panel import restore_defaults
 
     msg = restore_defaults(None)
     assert "全部" in msg
 
 
 def test_restore_defaults_group(sample_settings):
-    from nanobot.channels.telegram.history_panel import restore_defaults
+    from nanobot.channels.telegram.settings_history_panel import restore_defaults
 
     msg = restore_defaults("compress")
     assert "压缩策略" in msg
@@ -211,7 +211,7 @@ def test_restore_defaults_group(sample_settings):
 
 def test_memory_advanced_shows_new_compaction_fields(sample_settings):
     """Phase-1 knobs are exposed in the memory group's advanced panel."""
-    from nanobot.channels.telegram.history_panel import build_group_panel
+    from nanobot.channels.telegram.settings_history_panel import build_group_panel
 
     text, markup = build_group_panel(None, "memory", advanced=True)
     assert "高级" in text
@@ -234,7 +234,7 @@ def test_compress_ready_uses_token_trigger_ratio_not_hardcoded(monkeypatch):
       token_trigger_ratio=0.6 -> 50 < 60 -> not ready
       token_trigger_ratio=0.4 -> 50 >= 40 -> ready
     """
-    from nanobot.channels.telegram import history_panel as hp
+    from nanobot.channels.telegram import settings_history_panel as hp
 
     def fake_settings(tok_trigger: float):
         return {

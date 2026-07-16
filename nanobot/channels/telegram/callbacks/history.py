@@ -1,13 +1,14 @@
-"""History settings callback handlers.
+"""Callbacks for the /history **settings panel** (not live chat history UI).
 
-Game-style grouped routing: memory / compress / tools / vis / global
+Routes inline-button taps for context knobs (memory / compress / tools / vis).
+Live conversation rendering is groupchat.display, not this module.
 """
 from __future__ import annotations
 
 import json
 
 from nanobot.channels.telegram.formatting import to_cli_style
-from nanobot.channels.telegram.history_panel import (
+from nanobot.channels.telegram.settings_history_panel import (
     GROUPS,
     build_group_panel,
     build_history_panel,
