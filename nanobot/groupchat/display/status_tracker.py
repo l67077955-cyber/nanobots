@@ -1,4 +1,4 @@
-"""Live agent status dashboard for broadcast rounds."""
+"""Live agent status dashboard (view layer — UI states, not runtime busy/idle)."""
 
 from __future__ import annotations
 
@@ -25,10 +25,10 @@ _TOOL_STATE_MAP: dict[str, str] = {
 
 
 class AgentStatusTracker:
-    """Live status dashboard — one Telegram message edited in-place.
+    """UI status panel (thinking/searching/…), not AgentRunner busy/idle.
 
-    Thread-safe for concurrent agent coroutines on the same event loop.
-    Gracefully degrades to no-op when edit_fn is unavailable (e.g. CLI).
+    One Telegram message edited in-place. Concurrent-safe on one event loop.
+    No-op when edit_fn is unavailable (e.g. CLI).
     """
 
     EDIT_INTERVAL = 0.8  # seconds — matches StreamingDisplay throttle

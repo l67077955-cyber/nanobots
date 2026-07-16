@@ -1424,8 +1424,8 @@ class GroupChatEngine:
 
 
 # Re-exports for backward compatibility
+from nanobot.groupchat.context.tool_log import build_tool_log
 from nanobot.groupchat.runtime.chat_utils import (
-    build_tool_log,
     log_request,
     reasoning_tokens_from_provider_meta,
 )

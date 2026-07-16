@@ -115,7 +115,7 @@ _DEFAULTS: dict[str, Any] = {
         "exec_max_output": 10_000,      # shell output truncation cap (head+tail)
     },
 
-    # ── Stage 6: tool log preview limits (chat_utils.build_tool_log) ──
+    # ── Stage 6: tool log preview limits (context.tool_log.build_tool_log) ──
     # Controls how much of each tool's result preview is retained in the
     # <previous_tool_calls> block appended to assistant messages.
     "tool_log_preview": {

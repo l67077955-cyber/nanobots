@@ -10,7 +10,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from nanobot.groupchat.runtime.broadcast_context import BroadcastContext
-from nanobot.groupchat.runtime.broadcast_status import AgentStatusTracker
+from nanobot.groupchat.display.status_tracker import AgentStatusTracker
 from nanobot.groupchat.runtime.mailbox import MailboxHub, ConversationPool
 
 _GC_SETTINGS_DEFAULTS = {

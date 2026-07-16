@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from nanobot.groupchat.runtime.chat_utils import build_tool_log
+from nanobot.groupchat.context.tool_log import build_tool_log
 
 
 def commit_agent_turn(

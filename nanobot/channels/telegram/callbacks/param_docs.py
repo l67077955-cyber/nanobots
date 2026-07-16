@@ -374,7 +374,7 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
             "<previous_tool_calls> 块中 web_search 结果的\n"
             "预览字符上限。\n\n"
             "决定模型在后续轮次能看到多少之前的搜索结果。\n"
-            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "位置: context/tool_log.py build_tool_log\n\n"
             "建议: 1,500 (搜索结果需较长预览供回忆)"
         ),
     },
@@ -383,7 +383,7 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
         "location": "Stage 6 → build_tool_log _PREVIEW_LIMITS",
         "doc": (
             "web_fetch 结果在工具日志中的预览字符上限。\n\n"
-            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "位置: context/tool_log.py build_tool_log\n\n"
             "建议: 1,500"
         ),
     },
@@ -395,7 +395,7 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
             "代码任务中 read 的内容常是后续 edit 的依据，\n"
             "预览过短会导致模型忘记之前读过什么。\n"
             "旧硬编码值 800，已调高到 1500。\n"
-            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "位置: context/tool_log.py build_tool_log\n\n"
             "建议: 1,500 (代码任务可调到 2,000+)"
         ),
     },
@@ -404,7 +404,7 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
         "location": "Stage 6 → build_tool_log _PREVIEW_LIMITS",
         "doc": (
             "exec 命令输出在工具日志中的预览字符上限。\n\n"
-            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "位置: context/tool_log.py build_tool_log\n\n"
             "建议: 500 (命令输出只需结论性预览)"
         ),
     },
@@ -413,7 +413,7 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
         "location": "Stage 6 → build_tool_log _PREVIEW_LIMITS",
         "doc": (
             "list_dir 结果在工具日志中的预览字符上限。\n\n"
-            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "位置: context/tool_log.py build_tool_log\n\n"
             "建议: 300 (目录列表信息密度低)"
         ),
     },
@@ -423,7 +423,7 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
         "doc": (
             "chatroom_send 在工具日志中的预览字符上限。\n\n"
             "仅显示 (N字) 或 OK，不展开内容。\n"
-            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "位置: context/tool_log.py build_tool_log\n\n"
             "建议: 200"
         ),
     },
@@ -432,7 +432,7 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
         "location": "Stage 6 → build_tool_log _PREVIEW_LIMITS",
         "doc": (
             "wait 工具在工具日志中的预览字符上限。\n\n"
-            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "位置: context/tool_log.py build_tool_log\n\n"
             "建议: 200"
         ),
     },
@@ -443,7 +443,7 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
             "write_file 在工具日志中的预览字符上限。\n\n"
             "旧硬编码值 100，已调高到 300 以保留更多\n"
             "写入路径信息供后续 edit 参考。\n"
-            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "位置: context/tool_log.py build_tool_log\n\n"
             "建议: 300"
         ),
     },
@@ -453,7 +453,7 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
         "doc": (
             "edit_file 在工具日志中的预览字符上限。\n\n"
             "旧硬编码值 100，已调高到 300。\n"
-            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "位置: context/tool_log.py build_tool_log\n\n"
             "建议: 300"
         ),
     },
@@ -463,7 +463,7 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
         "doc": (
             "未在 _PREVIEW_LIMITS 中显式列出的工具的\n"
             "兜底预览字符上限。\n\n"
-            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "位置: context/tool_log.py build_tool_log\n\n"
             "建议: 500"
         ),
     },
@@ -474,7 +474,7 @@ PARAM_DOCS: dict[str, dict[str, str]] = {
             "整个 <previous_tool_calls> 块的字符硬上限。\n\n"
             "超过此值后剩余工具调用只显示 '(还有 N 个工具调用，已省略)'。\n"
             "直接影响每轮 assistant 消息的工具日志体积。\n"
-            "位置: orchestra/chat_utils.py build_tool_log\n\n"
+            "位置: context/tool_log.py build_tool_log\n\n"
             "建议: 4,000 (上下文紧张时调到 2,000-3,000)"
         ),
     },

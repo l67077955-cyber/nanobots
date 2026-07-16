@@ -5,7 +5,7 @@ Orchestrates one round: setup (BroadcastOrchestrator) → per-agent cycles
 ``display.BroadcastView`` via callbacks.
 
 Heavy helpers live in sibling modules:
-- broadcast_orchestrator / broadcast_status / broadcast_context
+- broadcast_orchestrator / broadcast_context; UI tracker in display.status_tracker
 - events.trigger_realtime_interrupts
 - agent cycle body: ``agent_cycle.run_agent_cycle`` (AgentCycleEnv)
 """

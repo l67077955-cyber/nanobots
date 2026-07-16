@@ -153,7 +153,7 @@ async def test_direct_chat_aborts_stream_on_cancel():
     with (
         patch.object(dc_mod, "log_request"),
         patch(
-            "nanobot.groupchat.runtime.chat_utils.build_tool_log",
+            "nanobot.groupchat.context.tool_log.build_tool_log",
             return_value="",
         ),
     ):
