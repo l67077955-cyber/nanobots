@@ -496,7 +496,7 @@ def gateway(
     console.print(f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s")
 
     from nanobot.config.paths import get_inbox_dir
-    from nanobot.runtime.inbox import start_inbox_poller
+    from nanobot.gateway.inbox import start_inbox_poller
 
     inbox_dir = get_inbox_dir()
     console.print(f"[green]✓[/green] Inbox: drop .txt/.md into {inbox_dir}")

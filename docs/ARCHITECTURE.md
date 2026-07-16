@@ -34,19 +34,21 @@ nanobot/
   groupchat/         # 多 agent（见下节三层）
   agent/             # 轻量 agent 路径
   channels/          # Telegram / 其它通道
-  runtime/           # 网关：dispatch + inbox（命名易与 groupchat.runtime 混淆）
+  gateway/           # 网关：dispatch + inbox（原 nanobot.runtime，现为主名）
+  runtime/           # shim → gateway（兼容旧 import）
   providers/         # LLM
   tools/             # 工具实现
   cli/ + headless.py # 入口
   …
 ```
 
-### 双 `runtime` 对照
+### 网关 vs 群聊 `runtime`
 
 | 包 | 职责 | 典型入口 |
 |----|------|----------|
-| `nanobot.runtime` | 网关：统一 slash 路由、inbox 文件轮询 | `dispatch.py`, `inbox.py` |
-| `nanobot.groupchat.runtime` | **群聊中间逻辑**：一轮多 agent、mailbox、WorkingMemory | `engine.py`, `broadcast.py` |
+| `nanobot.gateway` | 网关：统一 slash 路由、inbox 文件轮询 | `dispatch.py`, `inbox.py` |
+| `nanobot.groupchat.runtime` | 群聊中间逻辑：一轮多 agent、mailbox、WorkingMemory | `engine.py`, `broadcast.py` |
+| `nanobot.runtime` | 兼容 shim → `nanobot.gateway` | 请勿再新增代码 |
 
 ## 3. 群聊三层（核心）
 
@@ -137,7 +139,7 @@ nanobot/groupchat/
 
 ## 6. 演进备忘
 
-- 网关包名 `nanobot.runtime` 与群聊 `groupchat.runtime` 仍易混 → 后续可考虑改名 `nanobot.gateway`（非本 P0）
+- ~~网关改名 gateway~~ 已完成；`nanobot.runtime` 为 shim
 - `broadcast.py` 内嵌 `_run_one` 仍长 → 可再抽 `agent_cycle` 模块
 - 删除 `orchestra/`、`history/` 空壳前确认无外部硬依赖
 

@@ -6,7 +6,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 from nanobot.channels.web import WebChannel, WebConfig
-from nanobot.runtime.dispatch import SLASH_COMMANDS, InboundDispatcher, parse_slash_command
+from nanobot.gateway.dispatch import SLASH_COMMANDS, InboundDispatcher, parse_slash_command
 
 
 def test_slash_command_map_has_core_commands() -> None:

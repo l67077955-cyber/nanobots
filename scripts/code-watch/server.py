@@ -24,7 +24,7 @@ def main() -> None:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-    from nanobot.runtime.dashboard import DashboardServer, resolve_repo
+    from nanobot.gateway.dashboard import DashboardServer, resolve_repo
 
     print("note: chat requires `nanobot gateway` — this mode is git/architecture only")
     repo = resolve_repo(args.repo)

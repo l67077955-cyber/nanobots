@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from nanobot.channels.web import WebChannel
 from nanobot.channels.web_shim import WebContext, WebReplyMessage, WebUpdate, WebUser
-from nanobot.runtime.dispatch import SLASH_COMMANDS
+from nanobot.gateway.dispatch import SLASH_COMMANDS
 
 
 def test_runtime_command_map_has_core_commands() -> None:

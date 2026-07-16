@@ -7,16 +7,16 @@ import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from nanobot.channels.web import WebChannel, WebConfig
-from nanobot.runtime.chat_controls import (
+from nanobot.gateway.chat_controls import (
     apply_control_action,
     command_catalog,
     providers_panel,
     runtime_control_commands,
 )
-from nanobot.runtime.chat_events import OutboundMirrorSink
-from nanobot.runtime.chat_hub import ChatHub
-from nanobot.runtime.dashboard import DashboardHandler, resolve_repo
-from nanobot.runtime.dispatch import SLASH_COMMANDS
+from nanobot.gateway.chat_events import OutboundMirrorSink
+from nanobot.gateway.chat_hub import ChatHub
+from nanobot.gateway.dashboard import DashboardHandler, resolve_repo
+from nanobot.gateway.dispatch import SLASH_COMMANDS
 
 
 def test_resolve_repo_finds_nanobot_src() -> None:
@@ -154,7 +154,7 @@ def test_providers_panel_and_save(tmp_path, monkeypatch) -> None:
         '{"providers": {"demo": {"url": "https://old.example/v1", "apiKey": "sk-old"}}, "models": {"demo": []}}',
         encoding="utf-8",
     )
-    monkeypatch.setattr("nanobot.runtime.chat_controls.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("nanobot.gateway.chat_controls.Path.home", lambda: tmp_path)
 
     panel = providers_panel()
     assert panel["providers"][0]["name"] == "demo"

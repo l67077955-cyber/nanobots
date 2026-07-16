@@ -30,7 +30,8 @@
 | `providers/` | LLM 提供商 |
 | `tools/` | 通用工具实现（read_file、exec、web…） |
 | `core/` | 跨子系统原语，当前核心是 **`History`** |
-| `nanobot/runtime/` | **网关** inbound 路由、inbox 轮询（**不是**群聊中间层） |
+| `nanobot/gateway/` | **网关** inbound 路由、inbox（**不是**群聊中间层） |
+| `nanobot/runtime/` | **废弃 shim** → `nanobot.gateway` |
 | `config/` / `session/` / `cron/` / … | 配置路径、会话、定时等 |
 
 ### 3. 群聊 `nanobot/groupchat/`（三层）
@@ -55,14 +56,15 @@ Legacy shim（勿再扩展）：
 - `groupchat/orchestra/` → `groupchat/runtime/`
 - `groupchat/history/` → `groupchat/context/`
 
-### 4. 两个 `runtime`（易混）
+### 4. 网关 vs 群聊逻辑层（勿混）
 
 | 符号 | 含义 |
 |------|------|
-| `nanobot.runtime` | 网关：slash 命令表、inbox 文件投放 |
+| `nanobot.gateway` | 网关：slash 命令表、inbox 文件投放 |
 | `nanobot.groupchat.runtime` | 群聊中间逻辑：engine / broadcast / mailbox |
+| `nanobot.runtime` | **废弃 shim** → 再导出 gateway |
 
-新代码：群聊逻辑只 import **`nanobot.groupchat.runtime`**。
+新代码：网关用 **`nanobot.gateway`**；群聊逻辑用 **`nanobot.groupchat.runtime`**。
 
 ### 5. 上下文真相
 

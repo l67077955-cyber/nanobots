@@ -27,7 +27,7 @@ from nanobot.groupchat.context.prompt_builder import (
     PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
     GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
 )
-from nanobot.runtime.dispatch import InboundDispatcher
+from nanobot.gateway.dispatch import InboundDispatcher
 from nanobot.security.network import validate_url_target
 from nanobot.utils.helpers import split_message
 
