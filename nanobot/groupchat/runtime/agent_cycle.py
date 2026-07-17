@@ -415,10 +415,18 @@ async def run_agent_cycle(
             # Fresh StreamingDisplay per cycle (mirrors direct_chat): a new
             # LLM call starts a new streaming message. Reusing the same
             # instance across cycles would edit the previous cycle's message.
-            _stream = StreamingDisplay(_stream_header, engine._send_and_get_id_fn, engine._edit_fn)
+            # Thinking + TTFT placeholder: avoid long zero-output wait (no config).
+            await tracker.set_state(name, "thinking", detail=(model.split("/")[-1] if model else ""))
+            _stream = StreamingDisplay(
+                _stream_header,
+                engine._send_and_get_id_fn,
+                engine._edit_fn,
+                placeholder_on_start=True,
+            )
             _stream_on = getattr(engine, "stream_replies", True) and _stream.enabled
             if _stream_on:
                 engine.register_active_stream(_stream)
+                await _stream.ensure_started()
             _on_content_delta = _stream.on_delta if _stream_on else None
             _on_content_reset = _stream.on_reset if _stream_on else None
 
@@ -615,7 +623,7 @@ async def run_agent_cycle(
                                 max_tokens=600,             # short answer only
                                 max_iterations=1,
                                 tool_defs=None,             # text-only, no tools
-                                call_timeout=60.0,          # hard cap for retry
+                                call_timeout=10.0,          # hard cap for retry (single-call budget 10s)
                             )
                             if _r.content:
                                 content = _r.content
@@ -646,7 +654,7 @@ async def run_agent_cycle(
                             f"等待队友消息后将继续工作。"
                         )
                         content = _placeholder
-                        commit_agent_turn(engine, name, _placeholder)
+                        # [fix-B] placeholder NOT committed to History (avoids pollution/imitation loop)
                         deliver(bus, name, ["All"], _placeholder)
                         await engine._send(
                             _d.chatroom_send_msg(
@@ -701,7 +709,7 @@ async def run_agent_cycle(
                         f"等待队友消息后将继续工作。"
                     )
                     content = _placeholder
-                    commit_agent_turn(engine, name, _placeholder)
+                    # [fix-B] placeholder NOT committed to History (avoids pollution/imitation loop)
                     deliver(bus, name, ["All"], _placeholder)
                     await engine._send(
                         _d.chatroom_send_msg(

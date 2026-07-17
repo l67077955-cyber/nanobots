@@ -48,6 +48,12 @@ def clean_response(content: str, agent_name: str, all_agent_names: list[str]) ->
         "", content, flags=re.IGNORECASE,
     )
 
+    # 3. Strip DeepSeek DSML markers (full-width pipe U+FF5C ｜)
+    # e.g. <｜DSML｜tool_calls>...</｜DSML｜tool_calls>,
+    #      <｜DSML｜parameter name="x">v</｜DSML｜parameter>
+    content = re.sub(r"<｜[^>]*>[\s\S]*?</｜[^>]*>", "", content)
+    content = re.sub(r"</?｜[^>]*>", "", content)
+
     # 4. Strip agent name prefixes only at line starts. A global replace can
     # corrupt normal content that mentions an agent label mid-sentence.
     for name in all_agent_names:
