@@ -670,6 +670,15 @@ class History:
         """所有 fragment content 字符总数。"""
         return sum(len(f) for f in self._fragments)
 
+    def estimate_tokens(self, fn: Callable[[dict[str, Any]], int]) -> int:
+        """用 fn 估算当前上下文的 token 总数。
+
+        通过 build_for_llm 产出标准 role-based messages（与真实 LLM 调用
+        同形态），逐条喂给 fn，避免调用方绕过 History 手写 role 映射或有损
+        转换。fn 典型为 utils.helpers.estimate_message_tokens。
+        """
+        return sum(int(fn(m) or 0) for m in self.build_for_llm())
+
     def marks(self) -> list[str]:
         """按出现顺序返回所有 mark。"""
         return [f.mark for f in self._fragments]

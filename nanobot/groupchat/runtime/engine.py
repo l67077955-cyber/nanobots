@@ -1312,17 +1312,15 @@ class GroupChatEngine:
         ratio = compress_ratio()
         tok_trigger = token_trigger_ratio()
 
-        # Token-aware trigger
+        # Token-aware trigger — delegate to History (no manual role mapping,
+        # no lossy to_sender_dicts round-trip; build_for_llm is the single
+        # source of LLM-message truth).
         token_ratio = 0.0
         try:
             from nanobot.utils.helpers import estimate_message_tokens
             token_window = get_context_window_tokens()
             if token_window > 0 and len(self.history) > 0:
-                msgs = self.history.to_sender_dicts()
-                current_tok = sum(
-                    int(estimate_message_tokens({"role": "user" if m.get("sender") in ("User", "user", "用户") else "assistant", "content": m.get("content", "")}) or 0)
-                    for m in msgs
-                )
+                current_tok = self.history.estimate_tokens(estimate_message_tokens)
                 token_ratio = current_tok / max(1, token_window)
         except Exception:
             pass
