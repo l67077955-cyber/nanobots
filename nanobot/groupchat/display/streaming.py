@@ -31,6 +31,8 @@ class StreamingDisplay:
         send_and_get_id_fn: Callable[[str], Awaitable[int | None]] | None = None,
         edit_fn: Callable[[int, str], Awaitable[None]] | None = None,
         tool_in_progress_text: str | None = None,
+        *,
+        placeholder_on_start: bool = False,
     ) -> None:
         self.header = header
         self._send_and_get_id = send_and_get_id_fn
@@ -48,11 +50,27 @@ class StreamingDisplay:
         # than overwriting the in-progress reply with a bare "🔧 ..." icon —
         # which made the user's streamed text appear to vanish mid-stream.
         self._pre_tool_partial: str = ""
+        self._placeholder_on_start = placeholder_on_start
+        self._placeholder_active = False
 
     @property
     def enabled(self) -> bool:
         """Whether streaming is possible (both send and edit callbacks set)."""
         return bool(self._send_and_get_id and self._edit)
+
+    async def ensure_started(self) -> None:
+        """Post a TTFT placeholder before first delta (no config)."""
+        if not self._placeholder_on_start:
+            return
+        if self.msg_id is not None or not self._send_and_get_id:
+            return
+        try:
+            text = f"{self.header}▍ …"
+            self.msg_id = await self._send_and_get_id(text)
+            self._placeholder_active = True
+            self._last_edit = time.time()
+        except Exception as e:
+            logger.debug("StreamingDisplay ensure_started failed: {}", e)
 
     @property
     def buffer_text(self) -> str:
@@ -63,18 +81,29 @@ class StreamingDisplay:
         """Content delta callback — accumulate and periodically edit."""
         self._buffer.append(delta)
         now = time.time()
+        body = self.header + "".join(self._buffer) + " ▍"
 
         if self.msg_id is None and self._send_and_get_id:
-            text = self.header + "".join(self._buffer) + " ▍"
-            self.msg_id = await self._send_and_get_id(text)
+            self.msg_id = await self._send_and_get_id(body)
+            self._placeholder_active = False
             self._last_edit = now
-        elif self.msg_id and self._edit and (now - self._last_edit) >= self.EDIT_INTERVAL:
-            text = self.header + "".join(self._buffer) + " ▍"
-            try:
-                await self._edit(self.msg_id, text)
-            except Exception:
-                pass
-            self._last_edit = now
+            return
+
+        if self.msg_id and self._edit:
+            if self._placeholder_active:
+                try:
+                    await self._edit(self.msg_id, body)
+                except Exception:
+                    pass
+                self._placeholder_active = False
+                self._last_edit = now
+                return
+            if (now - self._last_edit) >= self.EDIT_INTERVAL:
+                try:
+                    await self._edit(self.msg_id, body)
+                except Exception:
+                    pass
+                self._last_edit = now
 
     async def on_reset(self) -> None:
         """Reset callback — tool calls interrupt mid-stream.

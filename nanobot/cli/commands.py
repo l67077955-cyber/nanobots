@@ -923,6 +923,10 @@ def logs_grep(
 
 app.add_typer(logs_app, name="logs")
 
+from nanobot.debug.cli import debug_app
+app.add_typer(debug_app, name="debug")
+
+
 
 if __name__ == "__main__":
     app()

@@ -612,6 +612,7 @@ def status_panel(
     details: dict[str, str],
     reasons: dict[str, str],
     leader: str | None = None,
+    elapsed_s: dict[str, int] | None = None,
 ) -> str:
     """Render a live status dashboard for all agents.
 
@@ -625,6 +626,7 @@ def status_panel(
     """
     lines: list[str] = []
     max_name = max((len(a) for a in agents), default=6)
+    elapsed_s = elapsed_s or {}
 
     for agent in agents:
         state = states.get(agent, "thinking")
@@ -632,16 +634,21 @@ def status_panel(
         detail = details.get(agent, "")
         reason = reasons.get(agent, "")
         badge = "👑" if agent == leader else "  "
+        sec = int(elapsed_s.get(agent, 0) or 0)
+        time_tag = f" {sec}s" if sec > 0 else ""
 
         # Build activity text
         if state in ("blocked", "error", "cancelled") and reason:
             activity = f"{label}: {reason[:35]}"
         elif state == "done" and reason:
-            activity = f"{label} ({reason[:30]})"
+            activity = f"{label} ({reason[:30]}){time_tag}"
         elif detail:
-            activity = f"{label} {detail[:30]}" if not label.endswith("...") else f"{label[:-3]} {detail[:30]}..."
+            activity = (
+                f"{label} {detail[:30]}{time_tag}" if not label.endswith("...")
+                else f"{label[:-3]} {detail[:30]}...{time_tag}"
+            )
         else:
-            activity = label
+            activity = f"{label}{time_tag}"
 
         name_pad = agent.ljust(max_name)
         lines.append(f"┃ {emoji} {badge} {name_pad}  {activity}")
