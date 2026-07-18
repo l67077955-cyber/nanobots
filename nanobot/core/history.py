@@ -679,6 +679,19 @@ class History:
         """
         return sum(int(fn(m) or 0) for m in self.build_for_llm())
 
+    @staticmethod
+    def estimate_llm_messages_tokens(
+        messages: Sequence[dict[str, Any]],
+        fn: Callable[[dict[str, Any]], int],
+    ) -> int:
+        """Sum *fn* over an **already LLM-shaped** message list.
+
+        Use this for prompt-time lists (tool_pruning, etc.). For durable
+        conversation state always prefer :meth:`estimate_tokens` on a History.
+        """
+        return sum(int(fn(m) or 0) for m in (messages or []))
+
+
     def marks(self) -> list[str]:
         """按出现顺序返回所有 mark。"""
         return [f.mark for f in self._fragments]

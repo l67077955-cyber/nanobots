@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from nanobot.groupchat.context.settings_view import (
+from nanobot.groupchat.context.settings_view import HistorySettingsView
     HistorySettingsView,
     compiled_context_info,
     history_messages,
@@ -215,19 +216,11 @@ def _history_messages(view: HistorySettingsView | None) -> list[dict[str, Any]]:
     return history_messages(view)
 
 
-def _estimate_history_tokens(messages: list[dict[str, Any]]) -> int:
-    if not messages:
-        return 0
-    try:
-        from nanobot.utils.helpers import estimate_message_tokens
+def _estimate_history_tokens(view: HistorySettingsView | None) -> int:
+    """Delegate to context.settings_view (History.estimate_tokens)."""
+    from nanobot.groupchat.context.settings_view import estimate_history_tokens
 
-        def _as_llm(m: dict[str, Any]) -> dict[str, str]:
-            role = "user" if m.get("sender") in ("User", "user", "用户") else "assistant"
-            return {"role": role, "content": m.get("content", "")}
-
-        return sum(int(estimate_message_tokens(_as_llm(m)) or 0) for m in messages)
-    except Exception:
-        return sum(len(m.get("content", "")) for m in messages) // 4
+    return estimate_history_tokens(view)
 
 
 def _compiled_context_info(view: HistorySettingsView | None) -> str:
@@ -245,7 +238,10 @@ def collect_live_metrics(engine: HistorySettingsView | None) -> dict[str, Any]:
     messages = _history_messages(engine)
 
     current_msgs = len(messages)
-    current_chars = sum(len(m.get("content", "")) for m in messages)
+    if engine is not None and getattr(engine, "history", None) is not None:
+        current_chars = int(engine.history.total_chars())
+    else:
+        current_chars = sum(len(m.get("content", "")) for m in messages)
     max_msgs = int(hist["max_messages"])
     max_chars = int(hist["max_context_chars"])
     ctx_window = int(settings["context_window_tokens"])
@@ -253,7 +249,7 @@ def collect_live_metrics(engine: HistorySettingsView | None) -> dict[str, Any]:
     soft_ratio = float(cp.get("soft_ratio", 0.55))
     token_trigger_ratio = float(hist.get("token_trigger_ratio", 0.55))
 
-    current_tok = _estimate_history_tokens(messages)
+    current_tok = _estimate_history_tokens(engine)
     msg_pct = int(current_msgs / max(1, max_msgs) * 100)
     char_pct = int(current_chars / max(1, max_chars) * 100) if max_chars else 0
     tok_pct = int(current_tok / max(1, ctx_window) * 100) if ctx_window else 0

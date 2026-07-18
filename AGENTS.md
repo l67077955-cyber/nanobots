@@ -82,6 +82,18 @@ display 渲染（runtime 调用，视图不写 History）
 
 历史包名已移除：`groupchat.orchestra`、`groupchat.history`、`nanobot.runtime`。
 
+
+### 上下文 API 约定（深化）
+
+| 场景 | 正确 API | 禁止 |
+|------|----------|------|
+| 写入对话 | `History.commit_turn` / `add_from_sender` | 平行 list/dict 当真相源 |
+| LLM 投影 | `build_for_llm` / `build_for_groupchat` | 手写 sender→role |
+| Token 估算（History） | `history.estimate_tokens(estimate_message_tokens)` | `to_sender_dicts` + 手写 role 再估 |
+| Token 估算（已是 LLM messages） | `History.estimate_llm_messages_tokens(msgs, fn)` | 与 History 估算两套公式分叉 |
+| UI /history 面板 | `context.settings_view.estimate_history_tokens(view)` | 面板内 lossy `_as_llm` |
+| 预览编译上下文 | `context.history_preview.preview_*` | 通道层 reimplement build_for_groupchat |
+
 ## 开发约定
 
 - Python ≥ 3.11；轻量优先（YAGNI）

@@ -72,3 +72,30 @@ def preview_raw_and_compiled(
         "agent": agent,
         "agent_ranks": ranks or {},
     }
+
+
+def estimate_history_tokens(
+    history: History | list[dict[str, Any]],
+    *,
+    fn=None,
+) -> int:
+    """Estimate tokens for History (or legacy sender-dicts) via build_for_llm.
+
+    Prefer passing a ``History`` instance. Sender-dicts are rehydrated first so
+    role/name mapping stays consistent with compress + LLM paths.
+    """
+    if isinstance(history, History):
+        h = history
+    else:
+        h = History.from_sender_dicts(list(history or []))
+    if not h:
+        return 0
+    if fn is None:
+        from nanobot.utils.helpers import estimate_message_tokens
+
+        fn = estimate_message_tokens
+    try:
+        return int(h.estimate_tokens(fn) or 0)
+    except Exception:
+        return max(0, int(h.total_chars()) // 4)
+

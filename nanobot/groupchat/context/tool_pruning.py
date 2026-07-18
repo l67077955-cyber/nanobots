@@ -56,16 +56,26 @@ def _estimate_total_chars(messages: list[dict[str, Any]]) -> int:
 
 
 def _estimate_total_tokens(messages: list[dict[str, Any]]) -> int:
-    """Best-effort token estimate for the whole message list.
+    """Best-effort token estimate for an **already LLM-shaped** message list.
 
-    Uses the project's tiktoken helper when available (much better for CJK,
-    tool_calls framing, etc). Falls back to the old char//4 rule.
+    Callers must pass ``role``/``content`` messages (e.g. from
+    ``History.build_for_llm`` / ``build_for_groupchat``), **not** sender-dicts.
+    For durable History estimation use ``History.estimate_tokens`` or
+    ``context.history_preview.estimate_history_tokens`` instead.
+
+    Uses the project's tiktoken helper when available (CJK, tool_calls, etc).
+    Falls back to char//4.
     """
     if _estimate_one_message_tokens is not None:
         try:
-            return sum(int(_estimate_one_message_tokens(m) or 0) for m in messages)
+            from nanobot.core.history import History
+
+            return History.estimate_llm_messages_tokens(messages, _estimate_one_message_tokens)
         except Exception:
-            pass
+            try:
+                return sum(int(_estimate_one_message_tokens(m) or 0) for m in messages)
+            except Exception:
+                pass
     # Fallback (original behavior)
     return sum(_estimate_message_chars(m) for m in messages) // CHARS_PER_TOKEN + len(messages) * 3  # small framing overhead
 
