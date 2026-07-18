@@ -66,7 +66,7 @@ feat/* ──PR──► dev ──验证通过──► stable-YYYYMMDD ──�
 
 ```bash
 # 源码 + 匹配 config 子模块
-./tools/switch-with-config.sh <branch-or-tag>
+./scripts/switch-with-config.sh <branch-or-tag>
 ```
 
 ## Tag 清理
@@ -74,10 +74,10 @@ feat/* ──PR──► dev ──验证通过──► stable-YYYYMMDD ──�
 审计与渐进清理脚本（**默认 dry-run，不改动任何 tag**）：
 
 ```bash
-./tools/tag-cleanup.sh                              # 完整审计
-./tools/tag-cleanup.sh --duplicates-only            # 仅重复 tag
-./tools/tag-cleanup.sh --execute                    # 删除重复别名（015 等）
-./tools/tag-cleanup.sh --tag-stable --date 20260527 --execute  # 发布稳定版 v-stable-20260527
+./scripts/tag-cleanup.sh                              # 完整审计
+./scripts/tag-cleanup.sh --duplicates-only            # 仅重复 tag
+./scripts/tag-cleanup.sh --execute                    # 删除重复别名（015 等）
+./scripts/tag-cleanup.sh --tag-stable --date 20260527 --execute  # 发布稳定版 v-stable-20260527
 ```
 
 当前 46 个 tag 均在本地，远程 0 个。并行开发期间建议只跑 dry-run。

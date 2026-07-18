@@ -9,7 +9,7 @@ Dev and ops helpers for this repo. **Not** the same as `nanobot/tools/` (LLM too
 | `headless_*.py`, `live_chat.py` | Local gateway / chat smoke |
 | `complex_task_monitor.py` | Broadcast / complex-task checks |
 | `migrate_to_manifest.py`, `regen_cb_agents.py` | One-off migrations |
-| `capture-config.sh`, `switch-with-config.sh`, `switch-debug-copy.sh` | Pair source checkout with `~/.nanobot` snapshots |
+| `capture-config.sh`, `switch-with-config.sh` | Pair source checkout with `~/.nanobot` snapshots |
 | `tag-cleanup.sh` | Tag maintenance |
 | `bench_matrix.yaml` | Bench matrix |
 
