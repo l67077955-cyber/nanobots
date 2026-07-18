@@ -10,14 +10,13 @@ Reads/writes ``groupchat.context`` (history_settings, etc.).
 """
 
 from __future__ import annotations
-from nanobot.groupchat.context.settings_view import HistorySettingsView
-
 from typing import Any
 
 from nanobot.groupchat.context.settings_view import (
     HistorySettingsView,
     compiled_context_info,
     history_messages,
+    estimate_history_tokens,
 )
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
