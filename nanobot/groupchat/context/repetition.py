@@ -18,6 +18,12 @@ than curb it. Convergence is left to the leader/scheduler, as before.
 from __future__ import annotations
 
 from difflib import SequenceMatcher
+from typing import TYPE_CHECKING
+
+from loguru import logger
+
+if TYPE_CHECKING:
+    from nanobot.core.history import History
 
 # Below this similarity ratio the check short-circuits (treat as "no prior
 # message" rather than "0% similar") — avoids noisy warnings early in a
@@ -64,3 +70,44 @@ def is_cross_turn_repeat(
     """
     score = cross_turn_similarity(new, prev)
     return (score >= threshold, score)
+
+
+def warn_if_cross_turn_repeat(history: History, agent: str, new: str) -> None:
+    """Observational guard: WARNING when *agent*'s new turn repeats its previous.
+
+    Call on the agent-speech write path **before** committing to History
+    (``commit_agent_turn``). Never raises and never mutates content — a
+    tripwire failure must not break the durable write path. Toggle and
+    threshold live in ``history_settings`` (``cross_turn_repeat_guard`` /
+    ``cross_turn_repeat_ratio``).
+    """
+    if not isinstance(new, str) or not new:
+        return
+    try:
+        from nanobot.groupchat.context.history_settings import (
+            cross_turn_repeat_guard,
+            cross_turn_repeat_ratio,
+        )
+
+        if not cross_turn_repeat_guard():
+            return
+        threshold = cross_turn_repeat_ratio()
+        for item in reversed(history.to_sender_dicts()):
+            if item.get("sender") != agent:
+                continue
+            prev = item.get("content") or ""
+            if isinstance(prev, str):
+                repeated, score = is_cross_turn_repeat(new, prev, threshold)
+                if repeated:
+                    logger.warning(
+                        "History: cross-turn repeat by {} "
+                        "(similarity {:.0%}, new {}字 vs prev {}字) "
+                        "— no new info this turn",
+                        agent,
+                        score,
+                        len(new),
+                        len(prev),
+                    )
+            break
+    except Exception as e:  # observational only — never break the write path
+        logger.debug("History: cross-turn repeat check skipped: {}", e)

@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from nanobot.groupchat.context.repetition import warn_if_cross_turn_repeat
 from nanobot.groupchat.context.tool_log import build_tool_log
 
 
@@ -45,6 +46,10 @@ def commit_agent_turn(
     history = getattr(engine, "history", None)
     if history is None:
         raise RuntimeError("commit_agent_turn requires engine.history (History)")
+
+    # Observational cross-turn repeat guard (log-only; must run pre-commit
+    # so the comparison target is the agent's *previous* committed turn)
+    warn_if_cross_turn_repeat(history, agent, history_content)
 
     # Context logic: History only
     committed = history.commit_turn(agent, history_content)
