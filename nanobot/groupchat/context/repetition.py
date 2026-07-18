@@ -92,22 +92,17 @@ def warn_if_cross_turn_repeat(history: History, agent: str, new: str) -> None:
         if not cross_turn_repeat_guard():
             return
         threshold = cross_turn_repeat_ratio()
-        for item in reversed(history.to_sender_dicts()):
-            if item.get("sender") != agent:
-                continue
-            prev = item.get("content") or ""
-            if isinstance(prev, str):
-                repeated, score = is_cross_turn_repeat(new, prev, threshold)
-                if repeated:
-                    logger.warning(
-                        "History: cross-turn repeat by {} "
-                        "(similarity {:.0%}, new {}字 vs prev {}字) "
-                        "— no new info this turn",
-                        agent,
-                        score,
-                        len(new),
-                        len(prev),
-                    )
-            break
+        prev = history.last_content_by_sender(agent)
+        repeated, score = is_cross_turn_repeat(new, prev, threshold)
+        if repeated:
+            logger.warning(
+                "History: cross-turn repeat by {} "
+                "(similarity {:.0%}, new {}字 vs prev {}字) "
+                "— no new info this turn",
+                agent,
+                score,
+                len(new),
+                len(prev),
+            )
     except Exception as e:  # observational only — never break the write path
         logger.debug("History: cross-turn repeat check skipped: {}", e)

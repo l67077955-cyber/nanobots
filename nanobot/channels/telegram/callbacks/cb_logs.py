@@ -175,8 +175,10 @@ class LogsCallbackMixin:
                     if agent_name not in registry:
                         continue
                     try:
+                        # Pass History itself — sender-dicts round-trip is lossy
+                        # (drops fragment meta) and rebuilds a throwaway History.
                         compiled = preview_groupchat_messages(
-                            raw_history,
+                            engine.history,
                             agent=agent_name,
                             registry=registry,
                             leader=leader,

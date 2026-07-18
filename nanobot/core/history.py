@@ -240,8 +240,6 @@ def _compress_sources_text(sources: list[dict[str, Any]]) -> str:
 def build_compress_message(
     sources: list[dict[str, Any]],
     max_chars: int,
-    *,
-    sender_format: bool = False,
 ) -> dict[str, Any] | None:
     """Merge dropped/overflow messages into one compressed summary block."""
     if not sources or max_chars <= 0:
@@ -256,8 +254,6 @@ def build_compress_message(
     if len(body) > available:
         body = body[: available - 1] + "…"
     content = header + body
-    if sender_format:
-        return {"sender": "系统", "content": content, "is_compact_summary": True}
     return {"role": "system", "content": content, "is_compact_summary": True}
 
 
@@ -321,7 +317,6 @@ def fit_messages_to_tier_budget(
     *,
     is_mandatory: Callable[[dict[str, Any], int], bool],
     length_fn: Callable[[dict[str, Any]], int] | None = None,
-    sender_format: bool = False,
 ) -> tuple[list[dict[str, Any]], int]:
     """Fit messages into *max_chars* with tiered retention.
 
@@ -394,7 +389,6 @@ def fit_messages_to_tier_budget(
             compress_msg = build_compress_message(
                 [messages[i] for i in omitted_set],
                 compress_budget,
-                sender_format=sender_format,
             )
             if compress_msg or not working_included:
                 break
@@ -419,7 +413,6 @@ def fit_messages_to_tier_budget(
             compress_msg = build_compress_message(
                 [messages[i] for i in optional_indices],
                 compress_budget,
-                sender_format=sender_format,
             )
             if compress_msg:
                 result = _replace_optional_with_compress(
@@ -446,31 +439,6 @@ def fit_messages_to_tier_budget(
     return result, skipped
 
 
-def trim_sender_history(
-    history: list[dict[str, str]],
-    max_chars: int,
-    *,
-    protected_indices: set[int] | None = None,
-    length_fn: Callable[[dict[str, Any]], int] | None = None,
-) -> list[dict[str, str]]:
-    """Tiered trim for persisted groupchat history (sender format)."""
-    protected = protected_indices or set()
-
-    def _mandatory(msg: dict[str, Any], index: int) -> bool:
-        if index in protected:
-            return True
-        return _is_human_user_sender(msg.get("sender", ""))
-
-    trimmed, _ = fit_messages_to_tier_budget(
-        history,
-        max_chars,
-        is_mandatory=_mandatory,
-        length_fn=length_fn,
-        sender_format=True,
-    )
-    return trimmed
-
-
 def trim_llm_messages(
     messages: list[dict[str, Any]],
     max_chars: int,
@@ -490,7 +458,6 @@ def trim_llm_messages(
         max_chars,
         is_mandatory=_mandatory,
         length_fn=length_fn,
-        sender_format=False,
     )
 
 
@@ -1491,6 +1458,18 @@ class History:
     def has_system_message(self) -> bool:
         """是否存在 role==system 片段（系统 prompt / 话题 banner / 压缩摘要）。"""
         return any(str(f.meta.get("role")) == "system" for f in self._fragments)
+
+    def last_content_by_sender(self, sender: str) -> str:
+        """最后一次该 sender 发言的 content（无则空串）。
+
+        sender 语义与 ``to_sender_dicts`` 一致（meta.agent → meta.sender →
+        role），供跨轮比较、查重等场景使用——调用方无需自行 reversed 扫描
+        sender-dicts，也不依赖 meta 布局。
+        """
+        for f in reversed(self._fragments):
+            if _sender_of(f) == sender:
+                return f.content
+        return ""
 
     # ── 属性查询方法 ───────────────────────────────────────────────────
     # 用于按 Fragment.meta 中的键值对进行查询和过滤。
