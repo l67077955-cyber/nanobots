@@ -1579,10 +1579,6 @@ class History:
         self.add_from_sender(sender, content)
         return content
 
-    def _semantic_add_from_sender(self, sender: str, content: str) -> str:
-        """Deprecated alias for add_from_sender."""
-        return self.add_from_sender(sender, content)
-
     def format(self) -> str:
         """可读字符串：``[sender]: content`` 用空行拼接。"""
         return "\n\n".join(f"[{_sender_of(f)}]: {f.content}" for f in self._fragments)

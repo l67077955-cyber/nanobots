@@ -63,11 +63,6 @@ class HistoryConversation:
             self.on_write(sender, committed)
         return committed
 
-    # Back-compat alias used by earlier ConversationContext name
-    def add_from_sender(self, sender: str, content: str, **meta: Any) -> str:
-        _ = meta
-        return self.commit(sender, content)
-
     def latest_user_content(self, max_len: int = 300) -> str:
         return self.history.latest_user_content(max_len=max_len)
 
@@ -92,15 +87,8 @@ def conversation_from_engine(engine: Any) -> HistoryConversation:
     return HistoryConversation(history=engine.history, on_write=_on_write)
 
 
-# Back-compat names
-ConversationContext = ConversationPort
-HistoryConversationContext = HistoryConversation
-
-
 __all__ = [
     "ConversationPort",
     "HistoryConversation",
     "conversation_from_engine",
-    "ConversationContext",
-    "HistoryConversationContext",
 ]

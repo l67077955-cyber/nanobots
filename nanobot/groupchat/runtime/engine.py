@@ -24,10 +24,16 @@ from nanobot.groupchat.context.agent_loader import load_agents
 from nanobot.groupchat.context.persistence import GroupChatState
 from nanobot.groupchat.context.prompt_builder import PromptBuilder
 from nanobot.groupchat.context.response_cleanup import clean_response as _clean_response_fn
+from nanobot.groupchat.context.tool_policy import forget_tool_enabled
 from nanobot.groupchat.runtime.agent_runner import AgentRunner
 from nanobot.groupchat.runtime.mailbox import MailboxHub
 from nanobot.groupchat.runtime.turn_stack import TurnStack
+from nanobot.groupchat.runtime.room_observability import emit_room_event
 from nanobot.groupchat.runtime.tool_catalog import TOOL_NAMES as _CATALOG_TOOL_NAMES
+from nanobot.groupchat.runtime.tools.tool_chat import (
+    chat_with_tools,
+    resolve_max_tool_iterations,
+)
 from nanobot.providers.base import LLMProvider
 from nanobot.utils.helpers import cn_now as _cn_now
 
@@ -166,7 +172,6 @@ class GroupChatEngine:
 
     def _sync_forget_tool(self, registry: "ToolRegistry", agent_name: str) -> None:
         """Register or unregister ForgetTool according to per-agent config."""
-        from nanobot.groupchat.context.tool_policy import forget_tool_enabled
         from nanobot.tools.forget import ForgetTool
 
         agent_cfg = self.registry.get(agent_name, {})
@@ -768,14 +773,12 @@ class GroupChatEngine:
             
         if isinstance(tools_cfg, dict):
             names = [k for k, v in tools_cfg.items() if v]
-            from nanobot.groupchat.context.tool_policy import forget_tool_enabled
             if forget_tool_enabled(agent_cfg, session_override=tools_cfg) and "forget" not in names:
                 names.append("forget")
             return names
         elif agent_cfg.get("tools_enabled", False) or agent_cfg.get("_default"):
             return list(self.TOOL_NAMES)
 
-        from nanobot.groupchat.context.tool_policy import forget_tool_enabled
         return ["forget"] if forget_tool_enabled(agent_cfg) else []
 
     def _get_agent_tools(self, agent_cfg: dict, registry, agent_name: str = None) -> list:
@@ -794,7 +797,6 @@ class GroupChatEngine:
         # Granular tools dict
         if isinstance(tools_cfg, dict):
             enabled = {k for k, v in tools_cfg.items() if v}
-            from nanobot.groupchat.context.tool_policy import forget_tool_enabled
             if forget_tool_enabled(agent_cfg, session_override=tools_cfg):
                 enabled.add("forget")
             if not enabled:
@@ -810,7 +812,6 @@ class GroupChatEngine:
         if agent_cfg.get("_default"):
             return registry.get_definitions()
 
-        from nanobot.groupchat.context.tool_policy import forget_tool_enabled
         if forget_tool_enabled(agent_cfg):
             return [
                 d for d in registry.get_definitions()
@@ -838,11 +839,6 @@ class GroupChatEngine:
         """
         # Lazy-connect MCP servers (one-time, idempotent)
         await self._connect_mcp()
-
-        from nanobot.groupchat.runtime.tools.tool_chat import (
-            chat_with_tools,
-            resolve_max_tool_iterations,
-        )
 
         # Tool selection — use per-agent registry based on workspace_scope
         agent_cfg = self.registry.get(agent_name, {})
@@ -947,7 +943,6 @@ class GroupChatEngine:
         this path unified so single chat gets the same interrupt/mailbox
         semantics as group chat.
         """
-        from nanobot.groupchat.runtime.room_observability import emit_room_event
         emit_room_event(
             room_id=self.room_id,
             kind="user_input",
@@ -1148,7 +1143,6 @@ class GroupChatEngine:
 
     async def _send(self, text: str, progress: bool = False) -> None:
         from nanobot.bus.events import OutboundMessage
-        from nanobot.groupchat.runtime.room_observability import emit_room_event
         emit_room_event(
             room_id=self.room_id,
             kind="ui_push",
@@ -1256,7 +1250,6 @@ class GroupChatEngine:
         extra: dict[str, Any] | None = None,
     ) -> None:
         """Delegate to persistence layer + phase-0 observability log."""
-        from nanobot.groupchat.runtime.room_observability import emit_room_event
 
         merged_extra = dict(extra or {})
         if self._session_dir:
@@ -1417,24 +1410,4 @@ class GroupChatEngine:
         await run_loop(self)
 
 
-# Re-exports for backward compatibility
-from nanobot.groupchat.context.tool_log import build_tool_log
-from nanobot.groupchat.runtime.chat_utils import (
-    log_request,
-    reasoning_tokens_from_provider_meta,
-)
-from nanobot.groupchat.runtime.direct_chat import direct_chat
-from nanobot.groupchat.runtime.tools.tool_chat import (
-    chat_with_tools,
-    resolve_max_tool_iterations,
-)
-
-__all__ = [
-    "GroupChatEngine",
-    "build_tool_log",
-    "log_request",
-    "reasoning_tokens_from_provider_meta",
-    "direct_chat",
-    "chat_with_tools",
-    "resolve_max_tool_iterations",
-]
+__all__ = ["GroupChatEngine"]

@@ -276,7 +276,7 @@ async def run_broadcast_test(
     engine._topic = test_case["question"]
 
     # Inject user question into history
-    engine.history._semantic_add_from_sender("User", test_case["question"])
+    engine.history.add_from_sender("User", test_case["question"])
 
     # Capture sent messages
     captured: list[str] = []

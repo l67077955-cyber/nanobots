@@ -33,7 +33,7 @@ from nanobot.groupchat.runtime.cycle_controller import (
 from nanobot.groupchat.runtime.events import trigger_realtime_interrupts
 from nanobot.groupchat.runtime.mailbox import MailboxHub, ConversationPool
 from nanobot.groupchat.runtime.turn_stack import TurnStack
-from nanobot.groupchat.runtime.engine import log_request
+from nanobot.groupchat.runtime.chat_utils import log_request
 from nanobot.groupchat.runtime.working_memory import WorkingMemory, commit_agent_turn
 from nanobot.groupchat.runtime.tools.tool_chat import valid_agent_sampling
 from nanobot.groupchat.context.component_manager import get_system_warning

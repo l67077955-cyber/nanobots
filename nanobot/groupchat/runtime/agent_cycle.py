@@ -7,7 +7,7 @@ long per-agent ``while True`` cycle loop.
 Layering
 --------
 - **runtime** (this module): when to run, interrupt, tool_loop, commit
-- **context**: prompt build / History via ``engine.history`` + ConversationContext
+- **context**: prompt build / History via ``engine.history`` + HistoryConversation
 - **display**: StreamingDisplay / BroadcastView called from here via callbacks
 
 Free variables that used to close over ``broadcast_round`` now live on

@@ -10,7 +10,7 @@ Conversation state is in ``engine.history`` (nanobot.core.history.History).
 
 Inter-agent *delivery* (not transcript): ``CollabBus`` / ``round_log``.
 
-Conversation state port: ``nanobot.groupchat.context.conversation.ConversationContext`` (History façade). Not re-exported here to keep runtime ports focused on cancel/turn/cycle seams.
+Conversation state port: ``nanobot.groupchat.context.conversation.ConversationPort`` (History façade). Not re-exported here to keep runtime ports focused on cancel/turn/cycle seams.
 """
 
 from __future__ import annotations
