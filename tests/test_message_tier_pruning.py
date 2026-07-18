@@ -8,7 +8,6 @@ from nanobot.core.history import (
     degrade_content,
     fit_messages_to_tier_budget,
     strip_chatroom_tool_lines,
-    trim_sender_history,
     History,
 )
 
@@ -65,11 +64,11 @@ def test_user_messages_survive_budget_pressure():
         {"sender": "用户", "content": "第二条用户消息也要留"},
         {"sender": "Kirk", "content": "可以丢掉的队友消息" + ("。" * 40)},
     ]
-    trimmed = trim_sender_history(history, max_chars=70, protected_indices={0})
-    users = [m["content"] for m in trimmed if m["sender"] == "用户"]
+    msgs = history_to_messages(history, current_agent="Harper", max_chars=70)
+    users = [m["content"] for m in msgs if m.get("role") == "user" and not m.get("name")]
     assert "必须保留的用户澄清" in users
     assert "第二条用户消息也要留" in users
-    assert all(m["sender"] != "Kirk" for m in trimmed)
+    assert not any(m.get("name") == "Kirk" for m in msgs)
 
 
 def test_newer_agent_message_preferred_over_older():
@@ -78,10 +77,9 @@ def test_newer_agent_message_preferred_over_older():
         {"sender": "Harper", "content": "旧消息" + ("A" * 120)},
         {"sender": "Kirk", "content": "最新消息：Telegram按钮"},
     ]
-    trimmed = trim_sender_history(history, max_chars=80, protected_indices={0})
-    texts = [m["content"] for m in trimmed if m["sender"] != "用户"]
-    assert any("Telegram按钮" in t for t in texts)
-    assert not any(m["sender"] == "Harper" for m in trimmed)
+    msgs = history_to_messages(history, current_agent="Harper", max_chars=80)
+    assert any("Telegram按钮" in m.get("content", "") for m in msgs)
+    assert not any(m.get("name") == "Harper" for m in msgs)
 
 
 def test_chatroom_tools_stripped_before_substantive_tools():
@@ -96,10 +94,10 @@ def test_chatroom_tools_stripped_before_substantive_tools():
             ),
         },
     ]
-    trimmed = trim_sender_history(history, max_chars=130, protected_indices={0})
-    harper = next(m for m in trimmed if m["sender"] == "Harper")
-    assert "chatroom_send" not in harper["content"]
-    assert "read_file(cb.py)" in harper["content"]
+    msgs = history_to_messages(history, current_agent="Harper", max_chars=130)
+    combined = "\n".join(m["content"] for m in msgs if isinstance(m.get("content"), str))
+    assert "chatroom_send" not in combined
+    assert "read_file(cb.py)" in combined
 
 
 def test_history_to_messages_protects_human_user_not_teammate():
@@ -169,9 +167,9 @@ def test_omitted_messages_become_compress_block():
         {"sender": "Harper", "content": "旧结论 A" + ("x" * 80)},
         {"sender": "Kirk", "content": "最新结论 B"},
     ]
-    trimmed = trim_sender_history(history, max_chars=60, protected_indices={0})
-    assert any(m["sender"] == "用户" and "必须保留" in m["content"] for m in trimmed)
-    compressed = [m for m in trimmed if _COMPRESS_HEADER in m.get("content", "")]
+    msgs = history_to_messages(history, current_agent="Harper", max_chars=60)
+    assert any(m.get("role") == "user" and "必须保留" in m["content"] for m in msgs)
+    compressed = [m for m in msgs if _COMPRESS_HEADER in m.get("content", "")]
     assert compressed, "dropped messages should be summarized, not silently lost"
     assert "旧结论 A" in compressed[0]["content"] or "Harper" in compressed[0]["content"]
 
@@ -187,7 +185,7 @@ def test_full_compress_when_budget_still_exceeded():
         return msg.get("sender") == "用户"
 
     fitted, skipped = fit_messages_to_tier_budget(
-        history, 120, is_mandatory=_mandatory, sender_format=True,
+        history, 120, is_mandatory=_mandatory,
     )
     assert sum(len(m.get("content", "")) for m in fitted) <= 120
     assert any(_COMPRESS_HEADER in m.get("content", "") for m in fitted)
@@ -201,9 +199,9 @@ def test_omitted_never_silently_dropped_on_tight_budget():
         {"sender": "用户", "content": "keep"},
         {"sender": "Harper", "content": "要压缩的旧消息" + ("x" * 120)},
     ]
-    trimmed = trim_sender_history(history, max_chars=40, protected_indices={0})
-    assert any(m.get("sender") == "用户" for m in trimmed)
-    assert any(_COMPRESS_HEADER in m.get("content", "") for m in trimmed)
+    msgs = history_to_messages(history, current_agent="Harper", max_chars=40)
+    assert any(m.get("role") == "user" for m in msgs)
+    assert any(_COMPRESS_HEADER in m.get("content", "") for m in msgs)
 
 
 def test_chatroom_tool_names_cover_coordination_tools():

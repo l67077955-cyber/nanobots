@@ -12,7 +12,7 @@ from nanobot.groupchat.context.ranks import (
     rank_pool_capacity,
     resolve_rank,
 )
-from nanobot.groupchat.config_normalize import normalize_agent_config, unwrap_config_value
+from nanobot.groupchat.context.config_normalize import normalize_agent_config, unwrap_config_value
 from nanobot.groupchat.context.tool_policy import (
     agent_tool_enabled,
     forget_tool_enabled,
