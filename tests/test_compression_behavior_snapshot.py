@@ -31,12 +31,23 @@ class TestStage1_ToolTruncation:
         with (
             patch("nanobot.groupchat.context.result_processor._get_max_chars") as mock_get,
             patch("nanobot.groupchat.context.result_processor._persist_to_disk") as mock_persist,
+            patch("nanobot.groupchat.context.result_processor._get_summarizer_provider") as mock_prov,
+            patch("nanobot.groupchat.context.result_processor._get_summarizer_config") as mock_cfg,
         ):
             def _side_effect(tool_name):
                 m = {"exec": 10_000, "web_fetch": 8_000, "web_search": 5_000, "read_file": 5_000}
                 return m.get(tool_name, 64_000)
             mock_get.side_effect = _side_effect
             mock_persist.return_value = None
+            # Server may disable AI summarize (history_settings.json) — force it on.
+            mock_cfg.return_value = (8_000, "fake-summarizer", 8_000, 4_000)
+            # Hermetic AI summarizer: canned short summary, no network/API key needed.
+            class _Resp:
+                content = "AI summary of tool output"
+                usage = {"prompt_tokens": 10, "completion_tokens": 5}
+            fake_llm = AsyncMock()
+            fake_llm.chat = AsyncMock(return_value=_Resp())
+            mock_prov.return_value = fake_llm
             yield
 
     @pytest.mark.asyncio

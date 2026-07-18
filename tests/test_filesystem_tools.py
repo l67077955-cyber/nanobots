@@ -7,6 +7,7 @@ from nanobot.tools.filesystem import (
     ListDirTool,
     ReadFileTool,
     _find_match,
+    _record_read,
     _strip_read_file_prefixes,
 )
 
@@ -161,10 +162,25 @@ class TestEditFileTool:
     def tool(self, tmp_path):
         return EditFileTool(workspace=tmp_path)
 
+    @staticmethod
+    def _mark_read(f):
+        """Satisfy EditFileTool's read-before-edit stale guard."""
+        _record_read(f)
+
+    @pytest.mark.asyncio
+    async def test_stale_guard_requires_read_first(self, tool, tmp_path):
+        """Editing without a prior read_file must be rejected."""
+        f = tmp_path / "unread.py"
+        f.write_text("hello world", encoding="utf-8")
+        result = await tool.execute(path=str(f), old_text="world", new_text="earth")
+        assert "stale or unread" in result
+        assert f.read_text() == "hello world"  # untouched
+
     @pytest.mark.asyncio
     async def test_exact_match(self, tool, tmp_path):
         f = tmp_path / "a.py"
         f.write_text("hello world", encoding="utf-8")
+        self._mark_read(f)
         result = await tool.execute(path=str(f), old_text="world", new_text="earth")
         assert "Successfully" in result
         assert f.read_text() == "hello earth"
@@ -173,6 +189,7 @@ class TestEditFileTool:
     async def test_crlf_normalisation(self, tool, tmp_path):
         f = tmp_path / "crlf.py"
         f.write_bytes(b"line1\r\nline2\r\nline3")
+        self._mark_read(f)
         result = await tool.execute(
             path=str(f), old_text="line1\nline2", new_text="LINE1\nLINE2",
         )
@@ -186,6 +203,7 @@ class TestEditFileTool:
     async def test_trim_fallback(self, tool, tmp_path):
         f = tmp_path / "indent.py"
         f.write_text("    def foo():\n        pass\n", encoding="utf-8")
+        self._mark_read(f)
         result = await tool.execute(
             path=str(f), old_text="def foo():\n    pass", new_text="def bar():\n    return 1",
         )
@@ -202,6 +220,7 @@ class TestEditFileTool:
         f = tmp_path / "prefixed.py"
         original = "def greet():\n    print('hi')\n    return 42\n"
         f.write_text(original, encoding="utf-8")
+        self._mark_read(f)
 
         # Simulate exact output from ReadFileTool
         numbered_old = "1| def greet():\n2|     print('hi')\n3|     return 42\n"
@@ -217,6 +236,7 @@ class TestEditFileTool:
     async def test_ambiguous_match(self, tool, tmp_path):
         f = tmp_path / "dup.py"
         f.write_text("aaa\nbbb\naaa\nbbb\n", encoding="utf-8")
+        self._mark_read(f)
         result = await tool.execute(path=str(f), old_text="aaa\nbbb", new_text="xxx")
         assert "appears" in result.lower() or "Warning" in result
 
@@ -224,6 +244,7 @@ class TestEditFileTool:
     async def test_replace_all(self, tool, tmp_path):
         f = tmp_path / "multi.py"
         f.write_text("foo bar foo bar foo", encoding="utf-8")
+        self._mark_read(f)
         result = await tool.execute(
             path=str(f), old_text="foo", new_text="baz", replace_all=True,
         )
@@ -234,6 +255,7 @@ class TestEditFileTool:
     async def test_not_found(self, tool, tmp_path):
         f = tmp_path / "nf.py"
         f.write_text("hello", encoding="utf-8")
+        self._mark_read(f)
         result = await tool.execute(path=str(f), old_text="xyz", new_text="abc")
         assert "Error" in result
         assert "not found" in result

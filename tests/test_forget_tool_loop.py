@@ -29,6 +29,7 @@ class _FakeProvider(LLMProvider):
         reasoning_effort: str | None = None,
         metadata: dict[str, Any] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        sampling_params: dict[str, Any] | None = None,
     ) -> LLMResponse:
         return self.responses.pop(0)
 

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from nanobot.core.history import History
 from nanobot.groupchat.config import GroupChatConfig
-from nanobot.groupchat.context.prompt_builder import PromptBuilder
+from nanobot.groupchat.context.prompt_builder import TEMPLATES, PromptBuilder
 from nanobot.utils.helpers import RUNTIME_CONTEXT_TAG
 
 
@@ -23,11 +24,11 @@ def test_system_prompt_stays_stable_when_clock_changes(tmp_path) -> None:
 
     prompt1 = builder.build_agent_prompt(
         "Nanobot", registry=registry, active_agents=["Nanobot"],
-        history=[], leader=None, round_num=0,
+        history=History(), leader=None, round_num=0,
     )
     prompt2 = builder.build_agent_prompt(
         "Nanobot", registry=registry, active_agents=["Nanobot"],
-        history=[], leader=None, round_num=0,
+        history=History(), leader=None, round_num=0,
     )
 
     # System components (excluding volatile datetime) should be stable
@@ -45,7 +46,7 @@ def test_runtime_context_is_merged_with_user_message(tmp_path) -> None:
     messages = builder.build_single_agent_messages(
         "Nanobot",
         registry=registry,
-        history=[],
+        history=History(),
         current_message="Return exactly: OK",
         channel="cli",
         chat_id="direct",
@@ -62,9 +63,15 @@ def test_runtime_context_is_merged_with_user_message(tmp_path) -> None:
     assert "Return exactly: OK" in user_content
 
 
-def test_direct_mode_uses_same_system_prompt_components_as_group(tmp_path) -> None:
+def test_direct_mode_uses_same_system_prompt_components_as_group(tmp_path, monkeypatch) -> None:
     """1-on-1 prompts should keep the shared prompt component system."""
     workspace = _make_workspace(tmp_path)
+    # Hermetic: use hardcoded default templates, not server-customized prompt files
+    # (e.g. ~/.nanobot/prompts/broadcast_hint.md may rename "[广播模式]").
+    monkeypatch.setattr(
+        PromptBuilder, "get_component_template",
+        lambda self, key: TEMPLATES.get(key, ""),
+    )
     builder = PromptBuilder(config=GroupChatConfig(), workspace=workspace)
     registry = {"Nanobot": {"model": "test", "prompt": "I am nanobot."}}
 
@@ -72,7 +79,7 @@ def test_direct_mode_uses_same_system_prompt_components_as_group(tmp_path) -> No
         "Nanobot",
         registry=registry,
         active_agents=["Nanobot"],
-        history=[],
+        history=History(),
         leader=None,
         round_num=0,
     )
@@ -80,7 +87,7 @@ def test_direct_mode_uses_same_system_prompt_components_as_group(tmp_path) -> No
         "Nanobot",
         registry=registry,
         active_agents=["Nanobot", "Grok"],
-        history=[],
+        history=History(),
         leader=None,
         round_num=0,
         teammates=["Grok"],

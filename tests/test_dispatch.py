@@ -5,12 +5,46 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-from nanobot.channels.web import WebChannel, WebConfig
+from nanobot.channels.commands_core import CoreCommandsMixin
 from nanobot.gateway.dispatch import SLASH_COMMANDS, InboundDispatcher, parse_slash_command
+
+
+class _FakeWebHost(CoreCommandsMixin):
+    """Minimal CommandHost stand-in for the removed WebChannel.
+
+    Satisfies the dispatch.CommandHost protocol and reuses the real
+    CoreCommandsMixin so /new /clear /stop behavior stays under test.
+    """
+
+    name = "web"
+
+    def __init__(self, bus) -> None:
+        self.bus = bus
+        self._edit_state: dict[str, dict] = {}
+        self._groupchat_engine = None
+
+    # CommandHost protocol -------------------------------------------------
+    def is_allowed(self, sender_id: str) -> bool:
+        return True
+
+    def _ensure_gc_send(self, chat_id: str) -> None:
+        pass
+
+    async def _handle_edit_input(self, chat_id: str, content: str) -> None:
+        pass
+
+    # Channel API ----------------------------------------------------------
+    def set_groupchat_engine(self, engine) -> None:
+        self._groupchat_engine = engine
 
 
 def test_slash_command_map_has_core_commands() -> None:
     for cmd in ("new", "clear", "stop", "agents", "help", "groupchat"):
+        assert cmd in SLASH_COMMANDS
+
+
+def test_runtime_command_map_has_extended_commands() -> None:
+    for cmd in ("new", "clear", "stop", "agents", "addagent", "help", "log", "groupchat"):
         assert cmd in SLASH_COMMANDS
 
 
@@ -23,7 +57,7 @@ def test_dispatcher_new_clears_history() -> None:
     bus.publish_outbound = AsyncMock()
     bus.publish_inbound = AsyncMock()
 
-    ch = WebChannel({"enabled": True, "allowFrom": ["*"]}, bus)
+    ch = _FakeWebHost(bus)
     engine = MagicMock()
     engine._running = False
     engine.clear_history = MagicMock()
@@ -43,7 +77,7 @@ def test_dispatcher_plain_text_goes_to_bus() -> None:
     bus.publish_outbound = AsyncMock()
     bus.publish_inbound = AsyncMock()
 
-    ch = WebChannel(WebConfig(), bus)
+    ch = _FakeWebHost(bus)
     ch.set_groupchat_engine(MagicMock())
 
     dispatcher = InboundDispatcher()
@@ -108,7 +142,7 @@ def test_dispatcher_unknown_command_does_not_hit_bus() -> None:
     bus.publish_outbound = AsyncMock()
     bus.publish_inbound = AsyncMock()
 
-    ch = WebChannel({"enabled": True, "allowFrom": ["*"]}, bus)
+    ch = _FakeWebHost(bus)
     ch.set_groupchat_engine(MagicMock())
 
     dispatcher = InboundDispatcher()

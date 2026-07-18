@@ -6,6 +6,7 @@ import pytest
 from nanobot.channels.telegram.callbacks.edit import EditCallbackMixin
 from nanobot.channels.telegram.callbacks.helpers import CallbackHelpersMixin
 from nanobot.channels.telegram.commands.settings import SettingsCommandsMixin
+from nanobot.providers.base import RECOMMENDED_AGENT_SAMPLING
 
 
 class _DummySettings(EditCallbackMixin, SettingsCommandsMixin, CallbackHelpersMixin):
@@ -34,7 +35,11 @@ def test_sync_global_hyperparams_filters_invalid_keys(tmp_path, monkeypatch):
     synced = dummy._sync_global_hyperparams_from_disk()
 
     assert synced == {"temperature": 0.2}
-    assert dummy._groupchat_engine.provider.sampling_params == {"temperature": 0.2}
+    # Sync merges saved values over RECOMMENDED_AGENT_SAMPLING defaults so
+    # partial files don't silently wipe other defaults.
+    expected = {**RECOMMENDED_AGENT_SAMPLING, "temperature": 0.2}
+    assert dummy._groupchat_engine.provider.sampling_params == expected
+    assert "trump" not in dummy._groupchat_engine.provider.sampling_params
 
 
 @pytest.mark.asyncio
