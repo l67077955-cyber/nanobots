@@ -508,6 +508,35 @@ def gateway(
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()
     provider = _make_provider(config)
+
+    # ── Hot-reload (方案甲: 按需检查) ──
+    # Before every LLM call, stat config.json / agents\/*/config.json and
+    # re-apply providers + agents.defaults in place when they changed.
+    from nanobot.config.hotreload import (
+        ConfigReloader,
+        HotReloadProviderProxy,
+        apply_runtime_config,
+        reload_groupchat_registry,
+    )
+
+    _hr_state: dict = {"agent": None, "gc_engine": None, "preserved": {}}
+    _hr_provider = provider  # inner provider; the proxy wraps it below
+
+    def _apply_hot_reload(new_config, agents_changed: bool) -> None:
+        changes = apply_runtime_config(new_config, _hr_provider, agent=_hr_state["agent"])
+        engine = _hr_state.get("gc_engine")
+        if engine is not None and agents_changed:
+            reload_groupchat_registry(engine, preserved=_hr_state["preserved"])
+        if changes:
+            logger.info("Hot-reload applied: {}", ", ".join(changes))
+
+    _hr_agents_dir = None
+    if config.groupchat.enabled and config.groupchat.agents_dir:
+        _ad = Path(config.groupchat.agents_dir).expanduser()
+        _hr_agents_dir = _ad if _ad.is_absolute() else config.workspace_path / config.groupchat.agents_dir
+    _hr_reloader = ConfigReloader(config, on_reload=_apply_hot_reload, agents_dir=_hr_agents_dir)
+    provider = HotReloadProviderProxy(provider, _hr_reloader)
+
     session_manager = SessionManager(config.workspace_path)
 
     # Create cron service first (callback set after agent creation)
@@ -531,6 +560,7 @@ def gateway(
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
     )
+    _hr_state["agent"] = agent
 
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
@@ -602,6 +632,8 @@ def gateway(
             pass
         gc_engine.registry["Nanobot"] = nanobot_entry
         gc_engine._active_agents.append("Nanobot")
+        _hr_state["gc_engine"] = gc_engine
+        _hr_state["preserved"] = {"Nanobot": nanobot_entry}
         logger.info("Registered base model '{}' as Nanobot agent (auto-active)", base_model)
 
         tg_channel = channels.get_channel("telegram")
