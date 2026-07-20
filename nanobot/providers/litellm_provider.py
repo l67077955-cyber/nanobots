@@ -140,6 +140,37 @@ class LiteLLMProvider(LLMProvider):
             resolved = resolved.replace("{api_base}", effective_base)
             os.environ.setdefault(env_name, resolved)
 
+    def update_credentials(
+        self,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
+        """Hot-reload entry point: update credentials in place.
+
+        Unlike __init__/_setup_env (which use ``os.environ.setdefault``),
+        this force-overwrites env vars so a rotated key actually takes
+        effect in the running process.
+        """
+        if api_key is not None:
+            self.api_key = api_key
+        if api_base is not None:
+            self.api_base = api_base
+        if extra_headers is not None:
+            self.extra_headers = extra_headers
+
+        spec = self._gateway or find_by_model(self.default_model)
+        if self.api_key and spec and spec.env_key:
+            os.environ[spec.env_key] = self.api_key
+        if spec:
+            effective_base = self.api_base or spec.default_api_base or ""
+            for env_name, env_val in spec.env_extras:
+                os.environ[env_name] = env_val.replace("{api_key}", self.api_key or "").replace(
+                    "{api_base}", effective_base
+                )
+        if self.api_base:
+            litellm.api_base = self.api_base
+
     def _resolve_model(self, model: str) -> str:
         """Resolve model name by applying provider/gateway prefixes."""
         if self._gateway:
