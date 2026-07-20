@@ -31,35 +31,36 @@ def _parse_bool(value) -> bool:
     return bool(value)
 
 
-def build_skills_section(workspace: Path) -> str:
-    """Build the skills section for prompt injection (shared logic).
+def build_skills_section(workspace: Path) -> tuple[str, str]:
+    """Build skills sections for prompt injection (shared logic).
 
-    Always-on skills are injected up to MAX_ALWAYS_SKILL_INLINE chars each
-    (with a read_file pointer for the rest); other skills are listed compactly.
+    Returns ``(static, dynamic)``:
+    - static: always-on skills inlined (up to MAX_ALWAYS_SKILL_INLINE chars
+      each, with a read_file pointer for the rest)
+    - dynamic: compact summary of other skills + auto-discovered scripts
     """
     loader = SkillsLoader(workspace)
-    parts: list[str] = []
 
+    static = ""
     always_skills = loader.get_always_skills()
     if always_skills:
-        content = loader.load_skills_for_context(
+        static = loader.load_skills_for_context(
             always_skills,
             max_chars_per_skill=MAX_ALWAYS_SKILL_INLINE,
             max_total_chars=MAX_ALWAYS_SKILLS_CHARS,
-        )
-        if content:
-            parts.append(content)
+        ) or ""
 
+    dynamic_parts: list[str] = []
     summary = loader.build_skills_summary(exclude=set(always_skills) if always_skills else None)
     if summary:
-        parts.append("Other skills (read SKILL.md to use):\n" + summary)
+        dynamic_parts.append("Other skills (read SKILL.md to use):\n" + summary)
 
     # Auto-discover scripts not documented in SKILL.md
     undocumented = loader._discover_undocumented_scripts()
     if undocumented:
-        parts.append("Undocumented scripts (auto-discovered from scripts/ dirs):\n" + "\n".join(undocumented))
+        dynamic_parts.append("Undocumented scripts (auto-discovered from scripts/ dirs):\n" + "\n".join(undocumented))
 
-    return "\n\n".join(parts)
+    return static, "\n\n".join(dynamic_parts)
 
 
 class SkillsLoader:
