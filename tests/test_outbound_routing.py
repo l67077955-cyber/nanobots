@@ -92,3 +92,41 @@ async def test_send_falls_back_to_legacy_send_fn():
         await engine._send("legacy")
 
     engine._send_fn.assert_awaited_once_with("legacy")
+
+
+@pytest.mark.asyncio
+async def test_send_prefers_direct_send_fn_over_bus():
+    """Awaited direct send keeps order vs streaming sends (which bypass the bus)."""
+    engine = _minimal_engine()
+    engine._send_fn = AsyncMock()
+    engine.stream_replies = True
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "nanobot.groupchat.runtime.room_observability.emit_room_event",
+            lambda **kwargs: None,
+        )
+        await engine._send("banner")
+        await engine._send("pool update", progress=True)
+
+    assert engine._send_fn.await_count == 2
+    engine._send_fn.assert_any_await("banner")
+    engine._send_fn.assert_any_await("pool update")
+    engine._send_outbound_fn.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_progress_gated_when_stream_replies_off():
+    """Direct path mirrors the bus dispatcher's send_progress gate."""
+    engine = _minimal_engine()
+    engine._send_fn = AsyncMock()
+    engine.stream_replies = False
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "nanobot.groupchat.runtime.room_observability.emit_room_event",
+            lambda **kwargs: None,
+        )
+        await engine._send("pool update", progress=True)
+        await engine._send("banner")
+
+    engine._send_fn.assert_awaited_once_with("banner")
+    engine._send_outbound_fn.assert_not_awaited()

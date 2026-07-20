@@ -23,12 +23,26 @@ class AgentCommandsMixin:
         if not self._groupchat_engine:
             return
 
-        # Route plain sends via MessageBus; wire channel/chat for tools + outbound.
+        # Wire channel/chat for tools + outbound route; plain sends use the
+        # direct send_fn below (awaited → chronological order vs streaming).
         self._groupchat_engine.set_tool_context("telegram", chat_id)
 
-        need_stream_bind = self._groupchat_engine._stream_chat_id != chat_id
-        if need_stream_bind and chat_id.isdigit():
+        need_bind = self._groupchat_engine._stream_chat_id != chat_id
+        if need_bind and chat_id.isdigit():
             int_chat_id = int(chat_id)
+
+            async def send_fn(text: str) -> None:
+                """Direct awaited send for groupchat UI messages.
+
+                Streaming sends (send_and_get_id_fn/edit_fn) bypass the
+                outbound bus by design; sending banner/pool/thinking headers
+                through the bus queue let streamed content overtake them in
+                the chat history. A direct awaited send keeps strict
+                chronological order.
+                """
+                await self._gc_send(chat_id, text)
+
+            self._groupchat_engine.set_send_fn(send_fn)
 
             async def send_and_get_id_fn(text: str) -> int | None:
                 """Send a message and return its message_id for later editing."""

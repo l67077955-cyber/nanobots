@@ -39,7 +39,14 @@ def commit_agent_turn(
     Tool-log text is pure formatting for storage; the durable write is
     ``History.commit_turn``. Engine persistence is an I/O hook only.
     """
-    history_content = (content or "") + build_tool_log(tool_calls_detail or [])
+    # Normalize before the durable write: stripped content + exactly one
+    # blank-line separator before the tool log. History entries must be
+    # byte-stable — rebuilds re-render these bytes to the LLM, and any
+    # drift (e.g. a leading "\n\n" later stripped by a merge) busts the
+    # provider's prefix cache.
+    text = (content or "").strip()
+    tool_log = build_tool_log(tool_calls_detail or [])
+    history_content = f"{text}\n\n{tool_log}" if text and tool_log else (text or tool_log)
     if not history_content:
         return ""
 

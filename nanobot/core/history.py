@@ -183,7 +183,11 @@ def _merge_consecutive_assistant(messages: list[dict[str, Any]]) -> list[dict[st
             prev = out[-1]
             prev_text = prev.get("content") or ""
             cur_text = msg.get("content") or ""
-            prev["content"] = f"{prev_text}\n\n{cur_text}".strip()
+            # Byte-stable merge: keep prev bytes verbatim (no .strip()).
+            # A previously-rendered message must stay a pure prefix of the
+            # merged one; stripping here rewrote already-sent bytes and
+            # busted the provider prefix cache on the next rebuild.
+            prev["content"] = f"{prev_text}\n\n{cur_text}" if prev_text else cur_text
         else:
             out.append(msg)
     return out
@@ -598,12 +602,18 @@ class History:
     - is_compact_summary: 是否为压缩摘要块
     """
 
-    __slots__ = ("_fragments", "_lock", "_compress_active")
+    __slots__ = ("_fragments", "_lock", "_compress_active", "_aged_upto")
 
     def __init__(self, fragments: list[Fragment] | None = None) -> None:
         self._fragments: list[Fragment] = list(fragments) if fragments else []
         self._lock = asyncio.Lock()
         self._compress_active: bool = False
+        # age_tools batch watermark: fragments below this index were already
+        # aged. Batching keeps old fragments byte-stable across cycles (a
+        # moving one-by-one aging front rewrote a mid-history message every
+        # cycle, busting the provider prefix cache). Not persisted — on
+        # reload it simply re-evaluates from 0 (age_tool_log is idempotent).
+        self._aged_upto: int = 0
 
     # ── 基本信息量 ──────────────────────────────────────────────────────
 
@@ -877,6 +887,7 @@ class History:
     def clear(self) -> None:
         """清空所有 fragment。"""
         self._fragments.clear()
+        self._aged_upto = 0
 
     # ── 修改（就地，返回 bool 表示命中） ────────────────────────────────
 
@@ -1394,29 +1405,40 @@ class History:
                     rebuilt.extend(current[total_len:])
 
                 self._fragments = rebuilt
+                # Compression rewrote the middle anyway (cache already
+                # busted) — reset the aging watermark so the next age_tools
+                # call re-evaluates the new layout in one bulk pass.
+                self._aged_upto = 0
                 return True
             finally:
                 self._compress_active = False
 
     def age_tools(self, keep_recent: int = 6) -> int:
-        """老化旧工具日志（缩短 content 内文本块预览，幂等）。
+        """老化旧工具日志（缩短 content 内文本块预览，幂等 + 批量水位线）。
 
         - keep_recent：保留最近 N 个 fragment 不动（**fragment 计**，should 审视 #7）。
         - eligible = fragments[:max(0, total-keep_recent)]。
         - 跳过 meta.role in {system,user} 与 index 0（head 保护）。
         - _compress_active 时 no-op（must 集成审视）。
         - 操作对象是 Fragment.content 内的文本块，不是独立 tool Fragment。
+
+        批量水位线（_aged_upto）：只有待老化区间增长满 keep_recent 个才统一
+        老化一批，否则 no-op。逐个前移的老化前沿会每 cycle 改写一条历史消息
+        的字节，把 provider 前缀缓存从该位置起全部打断；批量化把改写集中在
+        少数几次调用里（压缩后也会重置水位线，借压缩本身的改写顺带重老化）。
+        代价是最多约 2*keep_recent-1 个较新 fragment 暂不老。
         """
         if self._compress_active:
             return 0
         total = len(self._fragments)
         if total == 0:
             return 0
+        self._aged_upto = min(self._aged_upto, total)
         eligible_end = max(0, total - keep_recent)
-        if eligible_end == 0:
+        if eligible_end - self._aged_upto < max(1, keep_recent):
             return 0
         changed = 0
-        for i in range(eligible_end):
+        for i in range(self._aged_upto, eligible_end):
             f = self._fragments[i]
             if i == 0:
                 continue
@@ -1428,6 +1450,7 @@ class History:
                 if new_content != f.content:
                     f.content = new_content
                     changed += 1
+        self._aged_upto = eligible_end
         return changed
 
     # ── 序列化 ──────────────────────────────────────────────────────────

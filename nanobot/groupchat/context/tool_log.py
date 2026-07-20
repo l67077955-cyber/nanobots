@@ -122,4 +122,9 @@ def build_tool_log(tool_calls_detail: list[dict[str, Any]]) -> str:
     if not lines:
         return ""
 
-    return "\n\n<previous_tool_calls>\n" + "\n".join(lines) + "\n</previous_tool_calls>\n"
+    # No leading/trailing whitespace here: the caller (commit_agent_turn)
+    # owns the separator. Unconditionally prepending "\n\n" used to leak
+    # leading whitespace into History when content was empty, which later
+    # got stripped by _merge_consecutive_assistant — rewriting bytes that
+    # had already been sent to the LLM and busting the prefix cache.
+    return "<previous_tool_calls>\n" + "\n".join(lines) + "\n</previous_tool_calls>"

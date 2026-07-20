@@ -278,3 +278,47 @@ async def test_cycle_gate_max_cycles_forces_exit():
 
     decision = ctrl.decide_cycle_gate(ctx)
     assert decision.action is CycleAction.EXIT_MAX_CYCLES_FORCE_SYNTHESIS
+
+
+# ── C1 retry payload: _timeout_retry_messages ────────────────────────────────
+
+
+def test_timeout_retry_messages_trims_to_system_plus_note():
+    """The timeout retry must not re-send the oversized working memory.
+
+    Contract: only system messages survive, plus exactly one synthetic user
+    note; no assistant/tool messages (avoids orphaning tool_call_id pairs).
+    """
+    from nanobot.groupchat.runtime.agent_cycle import _timeout_retry_messages
+
+    messages = [
+        {"role": "system", "content": "persona prompt"},
+        {"role": "user", "content": "task"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "tc1", "function": {"name": "exec", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "tc1", "content": "x" * 100_000},
+        {"role": "assistant", "content": "partial"},
+        {"role": "system", "content": "[ injected warning ]"},
+        {"role": "user", "content": "teammate message"},
+    ]
+
+    out = _timeout_retry_messages(messages)
+
+    roles = [m["role"] for m in out]
+    assert roles == ["system", "system", "user"]
+    assert out[0]["content"] == "persona prompt"
+    assert out[1]["content"] == "[ injected warning ]"
+    assert "超时" in out[2]["content"]
+    # No tool protocol leakage of any kind.
+    assert all("tool_calls" not in m and "tool_call_id" not in m for m in out)
+
+
+def test_timeout_retry_messages_empty_input_yields_note_only():
+    from nanobot.groupchat.runtime.agent_cycle import _timeout_retry_messages
+
+    out = _timeout_retry_messages([])
+    assert len(out) == 1
+    assert out[0]["role"] == "user"

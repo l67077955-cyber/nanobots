@@ -6,10 +6,25 @@ the final message update. Eliminates duplication across direct_chat,"""
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Awaitable, Callable
 
 from loguru import logger
+
+# Leaked text-protocol tool calls: some models (e.g. GLM) emit a raw
+# ``<tool_call>…`` blob as plain content when tool definitions are dropped
+# (tool_loop's last-iteration forced-text path). tool_loop._strip_think
+# cleans this from the *final* content, but streaming deltas reach the
+# screen uncleaned — strip them here for display as well.
+# Keep in sync with tool_loop._TOOL_CALL_TAG_RE (duplicated on purpose:
+# display must not import runtime).
+_LEAKED_TOOL_CALL_RE = re.compile(r"</?tool_call>[\s\S]*?(?:</tool_call>|$)", re.I)
+
+
+def _clean_display(text: str) -> str:
+    """Strip leaked tool-call tags from text about to be shown on screen."""
+    return _LEAKED_TOOL_CALL_RE.sub("", text)
 
 
 class StreamingDisplay:
@@ -31,8 +46,6 @@ class StreamingDisplay:
         send_and_get_id_fn: Callable[[str], Awaitable[int | None]] | None = None,
         edit_fn: Callable[[int, str], Awaitable[None]] | None = None,
         tool_in_progress_text: str | None = None,
-        *,
-        placeholder_on_start: bool = False,
     ) -> None:
         self.header = header
         self._send_and_get_id = send_and_get_id_fn
@@ -45,32 +58,11 @@ class StreamingDisplay:
         # When tools interrupt streaming, we abandon the old message so
         # the final content appears *below* the tool-call messages.
         self._pre_tool_msg_id: int | None = None
-        # Partial text already streamed to the pre-tool message. Preserved so
-        # on_reset / finalize can keep it visible (with a tool marker) rather
-        # than overwriting the in-progress reply with a bare "🔧 ..." icon —
-        # which made the user's streamed text appear to vanish mid-stream.
-        self._pre_tool_partial: str = ""
-        self._placeholder_on_start = placeholder_on_start
-        self._placeholder_active = False
 
     @property
     def enabled(self) -> bool:
         """Whether streaming is possible (both send and edit callbacks set)."""
         return bool(self._send_and_get_id and self._edit)
-
-    async def ensure_started(self) -> None:
-        """Post a TTFT placeholder before first delta (no config)."""
-        if not self._placeholder_on_start:
-            return
-        if self.msg_id is not None or not self._send_and_get_id:
-            return
-        try:
-            text = f"{self.header}▍ …"
-            self.msg_id = await self._send_and_get_id(text)
-            self._placeholder_active = True
-            self._last_edit = time.time()
-        except Exception as e:
-            logger.debug("StreamingDisplay ensure_started failed: {}", e)
 
     @property
     def buffer_text(self) -> str:
@@ -81,75 +73,48 @@ class StreamingDisplay:
         """Content delta callback — accumulate and periodically edit."""
         self._buffer.append(delta)
         now = time.time()
-        body = self.header + "".join(self._buffer) + " ▍"
 
         if self.msg_id is None and self._send_and_get_id:
-            self.msg_id = await self._send_and_get_id(body)
-            self._placeholder_active = False
+            text = self.header + _clean_display("".join(self._buffer)) + " ▍"
+            self.msg_id = await self._send_and_get_id(text)
             self._last_edit = now
-            return
-
-        if self.msg_id and self._edit:
-            if self._placeholder_active:
-                try:
-                    await self._edit(self.msg_id, body)
-                except Exception:
-                    pass
-                self._placeholder_active = False
-                self._last_edit = now
-                return
-            if (now - self._last_edit) >= self.EDIT_INTERVAL:
-                try:
-                    await self._edit(self.msg_id, body)
-                except Exception:
-                    pass
-                self._last_edit = now
-
-    async def on_reset(self) -> None:
-        """Reset callback — tool calls interrupt mid-stream.
-
-        Preserves the partial text already streamed in the current message
-        (appending a tool-in-progress marker) instead of overwriting it with
-        a bare "🔧 ..." placeholder — so the user does not see their
-        in-progress reply vanish when the agent calls a tool. The buffer is
-        cleared so post-tool content creates a NEW message below the
-        tool-call messages, preserving chronological display order.
-
-        (``result.content`` returned by tool_loop holds only the final
-        post-tool text response, not the pre-tool prelude; keeping the
-        prelude visible here is what prevents it being lost from display.)
-        """
-        partial = self.buffer_text
-        self._buffer.clear()
-        if self.msg_id and self._edit:
-            if partial.strip():
-                text = f"{self.header}{partial}\n\n🔧 ⏳"[:4096]
-            else:
-                text = self._tool_in_progress_text
+        elif self.msg_id and self._edit and (now - self._last_edit) >= self.EDIT_INTERVAL:
+            text = self.header + _clean_display("".join(self._buffer)) + " ▍"
             try:
                 await self._edit(self.msg_id, text)
             except Exception:
                 pass
-            # Abandon old message — next delta creates a new one below tools.
+            self._last_edit = now
+
+    async def on_reset(self) -> None:
+        """Reset callback — clear buffer when tool calls interrupt mid-stream.
+
+        The in-progress message collapses to a bare tool-in-progress marker
+        and is abandoned, so the next content delta creates a NEW message
+        below the tool-call messages, preserving chronological display order.
+        (``result.content`` returned by tool_loop holds only the final
+        post-tool text; the pre-tool prelude is intentionally not kept on
+        screen — the collapsed marker keeps the chat clean.)
+        """
+        self._buffer.clear()
+        if self.msg_id and self._edit:
+            try:
+                await self._edit(self.msg_id, self._tool_in_progress_text)
+            except Exception:
+                pass
+            # Abandon old message — next delta creates new one below tools
             self._pre_tool_msg_id = self.msg_id
-            self._pre_tool_partial = partial
             self.msg_id = None
 
     async def abort(self, *, reason: str = "⏹ 已中断") -> None:
         """Clean up an in-progress stream when the task is cancelled (/stop)."""
-        partial = self.buffer_text.strip()
+        partial = _clean_display(self.buffer_text).strip()
         if self._pre_tool_msg_id and self._edit:
             try:
-                marker = (
-                    f"{self.header}{self._pre_tool_partial}\n\n↓"[:4096]
-                    if self._pre_tool_partial.strip()
-                    else f"{self.header}↓"
-                )
-                await self._edit(self._pre_tool_msg_id, marker)
+                await self._edit(self._pre_tool_msg_id, f"{self.header}↓")
             except Exception:
                 pass
             self._pre_tool_msg_id = None
-            self._pre_tool_partial = ""
 
         if self.msg_id and self._edit:
             if partial:
@@ -175,25 +140,18 @@ class StreamingDisplay:
         If content is empty, shows "(空回复)".
         Falls back to ``fallback_send`` if editing fails.
         """
-        # Clean up stale pre-tool message if it exists. Keep the prelude text
-        # visible (with a "continued below" marker) rather than collapsing it
-        # to a bare "↓" — the prelude is not part of result.content, so
-        # hiding it here would lose it from display.
+        # Clean up stale pre-tool message if it exists — collapse to a bare
+        # continued-below marker.
         if self._pre_tool_msg_id and self._edit:
             try:
-                marker = (
-                    f"{self.header}{self._pre_tool_partial}\n\n↓"[:4096]
-                    if self._pre_tool_partial.strip()
-                    else f"{self.header}↓"
-                )
-                await self._edit(self._pre_tool_msg_id, marker)
+                await self._edit(self._pre_tool_msg_id, f"{self.header}↓")
             except Exception:
                 pass
             self._pre_tool_msg_id = None
-            self._pre_tool_partial = ""
 
-        if content:
-            final_text = f"{self.header}{content}"[:max_len]
+        cleaned = _clean_display(content).strip() if content else ""
+        if cleaned:
+            final_text = f"{self.header}{cleaned}"[:max_len]
             if self.msg_id and self._edit:
                 try:
                     await self._edit(self.msg_id, final_text)
@@ -208,4 +166,3 @@ class StreamingDisplay:
                     await self._edit(self.msg_id, f"{self.header}(空回复)")
                 except Exception:
                     pass
-

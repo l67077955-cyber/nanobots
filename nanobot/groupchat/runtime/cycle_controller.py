@@ -30,6 +30,7 @@ class CycleAction(Enum):
     PROCEED_TO_CYCLE = "proceed_to_cycle"                        # neither
 
     # decide_error_recovery
+    TIMEOUT_CIRCUIT_BREAK = "timeout_circuit_break"              # C0 — cumulative timeouts, exit
     TIMEOUT_FIRST_RETRY = "timeout_first_retry"                  # C1 (retry outcome stays body-internal)
     TIMEOUT_REPEATED_FALLTHROUGH = "timeout_repeated_fallthrough"  # C3 — NO continue
     ERROR_MAX_BREAK = "error_max_break"                          # C4
@@ -88,6 +89,15 @@ class CycleContext:
     timeout_recovery_count: int
     consecutive_error_count: int
     max_consecutive_errors: int
+    # Cumulative LLM timeouts since the last fully successful cycle (not
+    # reset by the C2 placeholder path). Drives the C0 circuit breaker.
+    total_timeout_count: int = 0
+    max_timeout_recoveries: int = 3
+    # H1 cap: forced-synthesis cycles already consumed after
+    # ``end_discussion`` produced no text. Once this reaches
+    # ``max_leader_end_synthesis_retries``, H1 stops re-entering and exits.
+    leader_end_no_text_retries: int = 0
+    max_leader_end_synthesis_retries: int = 2
     wait_msg: Any | None = None  # the mailbox.wait() return; sentinel for None
 
 
@@ -177,6 +187,7 @@ class CycleController:
 
         Precedence (mirrors broadcast.py L1013–1140):
           * not error/timeout          → NO_ERROR_RECOVERY
+          * timeout, total >= MAX      → TIMEOUT_CIRCUIT_BREAK (C0; exit)
           * timeout, count == 0        → TIMEOUT_FIRST_RETRY (C1; body runs retry)
           * timeout, count != 0        → TIMEOUT_REPEATED_FALLTHROUGH (C3; no continue)
           * error, count >= MAX        → ERROR_MAX_BREAK (C4)
@@ -186,6 +197,13 @@ class CycleController:
             return CycleDecision(CycleAction.NO_ERROR_RECOVERY)
 
         if self._is_timeout(ctx):
+            # C0: cumulative-timeout circuit breaker. A timeout almost always
+            # means the prompt itself is too large to answer within
+            # call_timeout — retrying the same payload loops forever and
+            # stalls the whole round until global_timeout (observed
+            # 2026-07-18: leader looped every ~2min for 20+ minutes).
+            if ctx.total_timeout_count >= ctx.max_timeout_recoveries:
+                return CycleDecision(CycleAction.TIMEOUT_CIRCUIT_BREAK)
             # C1: first timeout gets one clean retry (body-internal outcome).
             if ctx.timeout_recovery_count == 0:
                 return CycleDecision(CycleAction.TIMEOUT_FIRST_RETRY)
@@ -251,7 +269,8 @@ class CycleController:
 
     def decide_leader_or_single_exit(self, ctx: CycleContext) -> CycleDecision:
         """H: ``is_leader and leader_ended_discussion`` → H1 (no text → force
-        synthesis, continue) or H2 (has text → display + break). I: single
+        synthesis, continue; bounded by ``max_leader_end_synthesis_retries``,
+        cap reached → exit) or H2 (has text → display + break). I: single
         agent → break. Mirrors broadcast.py L1369–1414.
 
         H and I are separate ``if`` statements in the source, but H1 continues
@@ -261,7 +280,12 @@ class CycleController:
         # H — leader called end_discussion this round: validate synthesis.
         if ctx.is_leader and ctx.leader_ended_discussion:
             if not ctx.content:
-                # H1 — no text yet, force ONE synthesis cycle.
+                # H1 — no text yet: force a synthesis cycle, but bounded.
+                # An unbounded H1 let the leader re-run its tool workflow
+                # instead of writing text, stalling end-of-discussion for
+                # minutes (2026-07-19 incident). Cap reached → exit anyway.
+                if ctx.leader_end_no_text_retries >= ctx.max_leader_end_synthesis_retries:
+                    return CycleDecision(CycleAction.LEADER_END_DISPLAY_BREAK)
                 return CycleDecision(
                     CycleAction.LEADER_END_NO_TEXT_CONTINUE,
                     warning_key="leader_end_without_text",

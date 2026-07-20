@@ -47,6 +47,8 @@ def _ctx(**over: Any) -> CycleContext:
         timeout_recovery_count=0,
         consecutive_error_count=0,
         max_consecutive_errors=3,
+        total_timeout_count=0,
+        max_timeout_recoveries=3,
         wait_msg=None,
     )
     base.update(over)
@@ -108,6 +110,28 @@ class TestCycleGate:
 class TestErrorRecovery:
     def test_no_error(self):
         assert _CTRL.decide_error_recovery(_ctx()).action is CycleAction.NO_ERROR_RECOVERY
+
+    def test_c0_circuit_break_at_max(self):
+        # Cumulative timeouts hit the cap → circuit break, even when the
+        # per-streak recovery counter says this is a "first" timeout (the
+        # placeholder path resets it every round).
+        d = _CTRL.decide_error_recovery(
+            _ctx(finish_reason="timeout", timeout_recovery_count=0, total_timeout_count=3)
+        )
+        assert d.action is CycleAction.TIMEOUT_CIRCUIT_BREAK
+        assert d.warning_key is None
+
+    def test_c0_circuit_break_overrides_fallthrough(self):
+        d = _CTRL.decide_error_recovery(
+            _ctx(finish_reason="timeout", timeout_recovery_count=1, total_timeout_count=5)
+        )
+        assert d.action is CycleAction.TIMEOUT_CIRCUIT_BREAK
+
+    def test_c0_not_below_max(self):
+        d = _CTRL.decide_error_recovery(
+            _ctx(finish_reason="timeout", timeout_recovery_count=0, total_timeout_count=2)
+        )
+        assert d.action is CycleAction.TIMEOUT_FIRST_RETRY
 
     def test_c1_first_timeout(self):
         d = _CTRL.decide_error_recovery(_ctx(finish_reason="timeout", timeout_recovery_count=0))
@@ -231,6 +255,25 @@ class TestLeaderOrSingleExit:
     def test_h2_has_text(self):
         d = _CTRL.decide_leader_or_single_exit(
             _ctx(is_leader=True, leader_ended_discussion=True, content="synthesis")
+        )
+        assert d.action is CycleAction.LEADER_END_DISPLAY_BREAK
+        assert d.warning_key is None
+
+    def test_h1_below_cap_still_forces(self):
+        # One retry consumed, cap is 2 → still force a synthesis cycle.
+        d = _CTRL.decide_leader_or_single_exit(
+            _ctx(is_leader=True, leader_ended_discussion=True, content="",
+                 leader_end_no_text_retries=1, max_leader_end_synthesis_retries=2)
+        )
+        assert d.action is CycleAction.LEADER_END_NO_TEXT_CONTINUE
+        assert d.warning_key == "leader_end_without_text"
+
+    def test_h1_capped_after_max_retries(self):
+        # H1 is bounded: retries exhausted → exit instead of looping forever
+        # (2026-07-19 end-of-discussion stall).
+        d = _CTRL.decide_leader_or_single_exit(
+            _ctx(is_leader=True, leader_ended_discussion=True, content="",
+                 leader_end_no_text_retries=2, max_leader_end_synthesis_retries=2)
         )
         assert d.action is CycleAction.LEADER_END_DISPLAY_BREAK
         assert d.warning_key is None

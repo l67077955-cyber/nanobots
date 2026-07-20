@@ -71,6 +71,30 @@ class AgentCycleEnv:
     base_sampling: dict[str, Any]
 
 
+def _timeout_retry_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Small recovery payload for the C1 timeout retry.
+
+    A timeout almost always means the full working memory is too large for
+    the model to answer within call_timeout (prefill alone blows the
+    budget), so retrying the same messages with a hard cap is guaranteed to
+    fail — that produced the 2026-07-18 leader timeout loop (every retry
+    timed out at 10s on the same oversized prompt).
+
+    Keep only the system messages (stable persona/protocol prefix — small,
+    and its prefill re-warms the provider prefix cache for the next full
+    cycle) plus one short synthetic user note. No assistant/tool messages:
+    slicing the conversation arbitrarily could orphan tool_call_id pairs
+    and fail the provider's message validation.
+    """
+    return [m for m in messages if m.get("role") == "system"] + [{
+        "role": "user",
+        "content": (
+            "[系统] 上一次 LLM 调用超时。请基于已知信息用两三句话给出"
+            "当前结论或状态，不要调用工具。"
+        ),
+    }]
+
+
 async def run_agent_cycle(
     env: AgentCycleEnv,
     name: str,
@@ -136,6 +160,9 @@ async def run_agent_cycle(
 
     is_leader = (name == leader_name)
     _leader_ended_discussion = False
+    # H1 cap: forced-synthesis cycles consumed after end_discussion with no
+    # text. Bounded so a tool-happy leader can't stall end-of-discussion.
+    _leader_end_no_text_retries = 0
     # Load from override system (editable via /prompt), fallback to default
     # Removed stale prompt_overrides.json lookup; .md files are the source of truth.
 
@@ -340,10 +367,21 @@ async def run_agent_cycle(
     # Tracks how many timeout-recovery attempts this agent has made.
     # Hard cap at 1 to prevent recovery loops.
     _timeout_recovery_count = 0
+    # Cumulative LLM timeouts since the last fully successful cycle. NOT
+    # reset by the placeholder path — this is the circuit breaker that ends
+    # the timeout → placeholder → same-oversized-prompt → timeout loop
+    # (observed 2026-07-18: leader looped every ~2min for 20+ minutes until
+    # global_timeout, tripping Telegram flood control).
+    _total_timeout_count = 0
+    MAX_TIMEOUT_RECOVERIES = 3
     # Tracks consecutive LLM errors to prevent rapid-fire error loops.
     # After MAX_CONSECUTIVE_ERRORS, the agent exits instead of continuing.
     _consecutive_error_count = 0
     MAX_CONSECUTIVE_ERRORS = 3
+    # Max forced synthesis cycles after end_discussion without text. An
+    # unbounded force let the leader re-run its tool workflow instead of
+    # writing the summary, stalling for minutes (2026-07-19 incident).
+    MAX_LEADER_END_SYNTHESIS_RETRIES = 2
 
     try:
         while True:
@@ -415,18 +453,17 @@ async def run_agent_cycle(
             # Fresh StreamingDisplay per cycle (mirrors direct_chat): a new
             # LLM call starts a new streaming message. Reusing the same
             # instance across cycles would edit the previous cycle's message.
-            # Thinking + TTFT placeholder: avoid long zero-output wait (no config).
+            # The status tracker already shows "Thinking..." while waiting for
+            # the first token; the stream message is created on the first delta.
             await tracker.set_state(name, "thinking", detail=(model.split("/")[-1] if model else ""))
             _stream = StreamingDisplay(
                 _stream_header,
                 engine._send_and_get_id_fn,
                 engine._edit_fn,
-                placeholder_on_start=True,
             )
             _stream_on = getattr(engine, "stream_replies", True) and _stream.enabled
             if _stream_on:
                 engine.register_active_stream(_stream)
-                await _stream.ensure_started()
             _on_content_delta = _stream.on_delta if _stream_on else None
             _on_content_reset = _stream.on_reset if _stream_on else None
 
@@ -544,6 +581,8 @@ async def run_agent_cycle(
             content = result.content or ""
             is_error = result.finish_reason == "error"
             is_timeout = result.finish_reason == "timeout"
+            if is_timeout:
+                _total_timeout_count += 1
             is_interrupted = result.finish_reason == "interrupted"
             latency = result.latency
             total_latency += latency
@@ -571,15 +610,19 @@ async def run_agent_cycle(
                 timeout_recovery_count=_timeout_recovery_count,
                 consecutive_error_count=_consecutive_error_count,
                 max_consecutive_errors=MAX_CONSECUTIVE_ERRORS,
+                total_timeout_count=_total_timeout_count,
+                max_timeout_recoveries=MAX_TIMEOUT_RECOVERIES,
             )
             _shadow_err = _cycle_ctrl.decide_error_recovery(_shadow_err_ctx)
             # Check oracle vs existing logic (nested conditions)
-            _err_should_first_timeout = is_timeout and _timeout_recovery_count == 0
-            _err_should_repeat_fallthrough = is_timeout and _timeout_recovery_count != 0
+            _err_should_circuit_break = is_timeout and _total_timeout_count >= MAX_TIMEOUT_RECOVERIES
+            _err_should_first_timeout = is_timeout and not _err_should_circuit_break and _timeout_recovery_count == 0
+            _err_should_repeat_fallthrough = is_timeout and not _err_should_circuit_break and _timeout_recovery_count != 0
             _err_should_max_break = is_error and _consecutive_error_count >= MAX_CONSECUTIVE_ERRORS
             _err_should_placeholder_continue = is_error and _consecutive_error_count < MAX_CONSECUTIVE_ERRORS
             _err_no_recovery = not (is_error or is_timeout)
             _err_ok = (
+                (_err_should_circuit_break and _shadow_err.action is CycleAction.TIMEOUT_CIRCUIT_BREAK) or
                 (_err_should_first_timeout and _shadow_err.action is CycleAction.TIMEOUT_FIRST_RETRY) or
                 (_err_should_repeat_fallthrough and _shadow_err.action is CycleAction.TIMEOUT_REPEATED_FALLTHROUGH) or
                 (_err_should_max_break and _shadow_err.action is CycleAction.ERROR_MAX_BREAK) or
@@ -602,28 +645,63 @@ async def run_agent_cycle(
                     )
                     err_short = f"LLM 超时 ({_base_timeout}s)"
 
+                    # ── Circuit breaker on cumulative timeouts ──
+                    # Retrying the same oversized payload loops forever: the
+                    # prompt is the bottleneck, so every cycle times out again.
+                    # Mirror C4 (consecutive errors): leader exit ends the
+                    # group chat instead of stalling until global_timeout.
+                    if _total_timeout_count >= MAX_TIMEOUT_RECOVERIES:
+                        logger.error(
+                            "Broadcast: {} hit {} cumulative LLM timeouts, forcing exit",
+                            name, _total_timeout_count,
+                        )
+                        await tracker.set_state(name, "error", reason=err_short[:40])
+                        await engine._send(
+                            f"  ✗ {name} 连续 {_total_timeout_count} 次 LLM 超时，强制退出"
+                        )
+                        if is_leader:
+                            _reason = f"Leader {name} 连续 {_total_timeout_count} 次 LLM 超时"
+                            engine._leader_end_reason = _reason
+                            engine._running = False
+                            leader_end_event.set()
+                            logger.warning(
+                                "Broadcast: leader %s force-exited on repeated timeouts, ending group chat: %s",
+                                name, _reason,
+                            )
+                        elif leader_name:
+                            # Tell the leader once that this teammate is gone —
+                            # otherwise it keeps waiting for a result that will
+                            # never arrive.
+                            deliver(
+                                bus, name, [leader_name],
+                                f"[系统] {name} 连续 {_total_timeout_count} 次 LLM 超时，已退出本轮。",
+                            )
+                        break
+
                     # ── Clean retry on first timeout ──
-                    # Re-use the same messages context (no injection) so history
-                    # stays clean. Run one short no-tool call to get at least a
-                    # brief output rather than abandoning the turn entirely.
+                    # Retry with a TRIMMED payload (system head + short
+                    # synthetic note): the full working memory is usually what
+                    # blew the timeout budget, so re-sending it with a small
+                    # cap can never succeed. History stays clean — the
+                    # synthetic note is not persisted, only the reply is.
                     if _timeout_recovery_count == 0:
                         _timeout_recovery_count += 1
                         await tracker.set_state(name, "thinking", detail="retry...")
                         await engine._send(f"⏰ {name} 超时，重试中...")
                         logger.warning(
-                            "Broadcast: {} LLM timeout ({:.1f}s), retrying once (no tools)",
+                            "Broadcast: {} LLM timeout ({:.1f}s), retrying once (no tools, trimmed prompt)",
                             name, latency,
                         )
                         try:
                             _r = await tool_loop(
                                 provider=engine.provider,
-                                messages=messages,          # unchanged — no injection
+                                messages=_timeout_retry_messages(messages),
                                 tool_registry=reg,
                                 model=model,
-                                max_tokens=600,             # short answer only
+                                max_tokens=300,             # brief status only
                                 max_iterations=1,
                                 tool_defs=None,             # text-only, no tools
-                                call_timeout=10.0,          # hard cap for retry (single-call budget 10s)
+                                call_timeout=20.0,          # small-prompt budget (prefill + ~300 tok)
                             )
                             if _r.content:
                                 content = _r.content
@@ -655,7 +733,13 @@ async def run_agent_cycle(
                         )
                         content = _placeholder
                         # [fix-B] placeholder NOT committed to History (avoids pollution/imitation loop)
-                        deliver(bus, name, ["All"], _placeholder)
+                        # [fix-D] placeholder NOT delivered to teammates either:
+                        # broadcasting it to "All" wakes waiting agents, whose
+                        # replies re-wake this agent with the same oversized
+                        # prompt → another timeout → another placeholder. That
+                        # ping-pong looped every ~2min on 2026-07-18 until
+                        # global_timeout and tripped Telegram flood control.
+                        # UI display only; the tracker shows the degraded state.
                         await engine._send(
                             _d.chatroom_send_msg(
                                 name, "超时占位", _placeholder, max_len=1000, leader=leader_name
@@ -726,8 +810,11 @@ async def run_agent_cycle(
 
             _used_chatroom_send = result.tools_used and "chatroom_send" in result.tools_used
 
-            # Reset consecutive error counter on successful cycle
+            # Reset consecutive error/timeout counters on a fully successful
+            # cycle (a C1 retry success does NOT clear the cumulative timeout
+            # count — the oversized-prompt cause persists across it).
             _consecutive_error_count = 0
+            _total_timeout_count = 0
 
             # Record final text or tool calls in history
             if content or result.tool_calls_detail:
@@ -826,6 +913,23 @@ async def run_agent_cycle(
                 # become background context.
                 _intr_msg = _intr_all[-1] if _intr_all else None
                 _intr_earlier = _intr_all[:-1] if len(_intr_all) > 1 else []
+
+                # ── Discussion already ended → exit, don't re-enter ──
+                # end_discussion wakes every mid-turn agent via interrupt
+                # events, and a late teammate report can interrupt the
+                # leader's post-end synthesis. Re-entering tool_loop here
+                # re-ran the whole workflow (verify → store → end_discussion)
+                # and stalled end-of-discussion for minutes (2026-07-19).
+                # (Partial content was already committed by the record step
+                # above — no second commit here.)
+                if not engine._running or (
+                    mailbox and getattr(mailbox, "is_discussion_ended", lambda: False)()
+                ):
+                    logger.info(
+                        "Broadcast: {} interrupted after discussion ended — exiting cycle loop",
+                        name,
+                    )
+                    break
 
                 # UI: show who interrupted whom, with distinct label for user vs agent
                 # Fallback to mailbox._last_interrupt_sender because the actual message
@@ -966,10 +1070,19 @@ async def run_agent_cycle(
             # Display the agent's final text for this cycle.
             # If chatroom_send was used, the content was already shown at tool-call
             # time (line 612) — skip the duplicate "Output" display.
+            # EXCEPTION: if a streaming draft is still live (msg_id set), the model
+            # streamed text AFTER the chatroom_send call (e.g. a raw <tool_call>
+            # hallucination on the tools-dropped last iteration). That draft holds
+            # raw, uncleaned deltas and must be finalized in place — finalize()
+            # edits the same message, so there is no duplicate.
             # Defer display when leader is in synthesis validation — only show
             # output that passes the quality gate (prevents spamming failed retries).
-            if content and not (is_leader and _leader_ended_discussion):
-                if not _used_chatroom_send:
+            _stream_draft_live = _stream is not None and _stream.msg_id is not None
+            # Note: also enter when content is empty but a draft is live —
+            # finalize() will collapse the raw draft to "(空回复)" instead of
+            # leaving an uncleaned hallucination on screen.
+            if (content or _stream_draft_live) and not (is_leader and _leader_ended_discussion):
+                if not _used_chatroom_send or _stream_draft_live:
                     # Token + latency suffix
                     tok = result.token_usage
                     total_tok = tok.get("total", 0)
@@ -996,7 +1109,8 @@ async def run_agent_cycle(
                     # of later deltas; finalize caps at 4096 once, cleanly).
                     await _stream.finalize(content + tok_suffix, fallback_send=engine._send)
                     logger.info("Broadcast: displayed {} cycle {} output ({} chars) [Local Only]", name, cycle, len(content))
-                # else: chatroom_send already displayed the message — no duplicate needed
+                # else: chatroom_send already displayed the message and no live
+                # stream draft is pending — no duplicate needed
 
             # If leader called end_discussion this cycle, validate synthesis length & quality.
             # When finish_reason is "end_discussion", tool_loop broke before the LLM
@@ -1023,15 +1137,22 @@ async def run_agent_cycle(
                 timeout_recovery_count=_timeout_recovery_count,
                 consecutive_error_count=_consecutive_error_count,
                 max_consecutive_errors=MAX_CONSECUTIVE_ERRORS,
+                leader_end_no_text_retries=_leader_end_no_text_retries,
+                max_leader_end_synthesis_retries=MAX_LEADER_END_SYNTHESIS_RETRIES,
             )
             _shadow_exit = _cycle_ctrl.decide_leader_or_single_exit(_shadow_exit_ctx)
             # Check oracle vs existing logic
             _exit_is_leader_ended = is_leader and _leader_ended_discussion
             _exit_leader_no_text = _exit_is_leader_ended and not content
+            _exit_leader_no_text_capped = (
+                _exit_leader_no_text
+                and _leader_end_no_text_retries >= MAX_LEADER_END_SYNTHESIS_RETRIES
+            )
             _exit_leader_has_text = _exit_is_leader_ended and bool(content)
             _exit_single_agent = total == 1
             _exit_ok = (
-                (_exit_leader_no_text and _shadow_exit.action is CycleAction.LEADER_END_NO_TEXT_CONTINUE) or
+                (_exit_leader_no_text and not _exit_leader_no_text_capped and _shadow_exit.action is CycleAction.LEADER_END_NO_TEXT_CONTINUE) or
+                (_exit_leader_no_text_capped and _shadow_exit.action is CycleAction.LEADER_END_DISPLAY_BREAK) or
                 (_exit_leader_has_text and _shadow_exit.action is CycleAction.LEADER_END_DISPLAY_BREAK) or
                 (not _exit_is_leader_ended and _exit_single_agent and _shadow_exit.action is CycleAction.SINGLE_AGENT_BREAK) or
                 (not _exit_is_leader_ended and not _exit_single_agent and _shadow_exit.action is CycleAction.PROCEED_TO_AUTO_WAIT)
@@ -1044,12 +1165,21 @@ async def run_agent_cycle(
             # ── End shadow: leader_or_single_exit ──
 
             if is_leader and _leader_ended_discussion:
-                # Stable behavior: if end_discussion produced no text, force ONE
-                # synthesis cycle; otherwise display whatever was produced and exit.
-                # The previous length-gated + quality-gated retry loop (up to 3 full
-                # tool_loop calls) caused severe end-of-discussion stalls; the
-                # max_cycles cap is the only backstop needed.
+                # Stable behavior: if end_discussion produced no text, force a
+                # synthesis cycle (bounded); otherwise display whatever was
+                # produced and exit. The previous length-gated + quality-gated
+                # retry loop (up to 3 full tool_loop calls) caused severe
+                # end-of-discussion stalls. An *unbounded* force is equally
+                # bad: the model can keep re-running its tool workflow instead
+                # of writing text, looping for minutes (2026-07-19 incident).
                 if not content:
+                    _leader_end_no_text_retries += 1
+                    if _leader_end_no_text_retries > MAX_LEADER_END_SYNTHESIS_RETRIES:
+                        logger.warning(
+                            "Broadcast: leader {} produced no synthesis text after {} forced cycles — exiting",
+                            name, _leader_end_no_text_retries,
+                        )
+                        break
                     logger.warning(
                         "Broadcast: leader {} called end_discussion without text (cycle {}), forcing synthesis",
                         name, cycle,

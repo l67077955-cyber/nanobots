@@ -1162,10 +1162,16 @@ class EndDiscussionTool(Tool):
         # Idempotency + final state lock (P2 hardening)
         if self._mailbox is not None:
             if getattr(self._mailbox, "is_discussion_ended", lambda: False)():
-                return "✅ 讨论已经结束（重复调用已忽略），即将/已在总结阶段。"
+                return (
+                    "✅ 讨论已经结束（重复调用已忽略）。"
+                    "不要再调用任何工具——立即输出最终总结文本作为你的回复。"
+                )
             if not getattr(self._engine, "_running", True):
                 self._mailbox.mark_discussion_ended()
-                return "✅ 讨论已经结束（引擎已停止）。"
+                return (
+                    "✅ 讨论已经结束（引擎已停止）。"
+                    "不要再调用任何工具——立即输出最终总结文本作为你的回复。"
+                )
 
         # ── Guard: reject if any non-leader agent is *still producing output* (busy in tool_loop).
         # Relaxed from strict "all in _waiting" (which happens *after* the cycle) to "no one actively executing".

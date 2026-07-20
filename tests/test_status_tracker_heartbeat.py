@@ -9,7 +9,6 @@ import time
 import pytest
 
 from nanobot.groupchat.display.status_tracker import AgentStatusTracker
-from nanobot.groupchat.display.streaming import StreamingDisplay
 
 
 @pytest.mark.asyncio
@@ -53,7 +52,8 @@ async def test_render_does_not_crash():
 
 
 @pytest.mark.asyncio
-async def test_streaming_placeholder_before_delta():
+async def test_streaming_message_created_on_first_delta():
+    """No pre-token placeholder: the stream message appears on first delta."""
     sent: list[str] = []
 
     async def send_and_get_id(text: str) -> int:
@@ -63,14 +63,14 @@ async def test_streaming_placeholder_before_delta():
     async def edit_fn(msg_id: int, text: str) -> None:
         sent.append("edit:" + text)
 
+    from nanobot.groupchat.display.streaming import StreamingDisplay
+
     stream = StreamingDisplay(
         "Kirk\n\n",
         send_and_get_id_fn=send_and_get_id,
         edit_fn=edit_fn,
-        placeholder_on_start=True,
     )
-    await stream.ensure_started()
-    assert stream.msg_id == 9
-    assert sent and "▍" in sent[0]
+    assert stream.msg_id is None
     await stream.on_delta("hi")
-    assert any("hi" in s for s in sent)
+    assert stream.msg_id == 9
+    assert sent and "hi" in sent[0] and "▍" in sent[0]

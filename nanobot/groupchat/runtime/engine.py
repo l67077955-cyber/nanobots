@@ -1151,6 +1151,19 @@ class GroupChatEngine:
             extra={"chars": len(text)},
         )
         try:
+            # Direct awaited send takes priority when wired (telegram groupchat
+            # view): streaming sends (send_and_get_id_fn/edit_fn) bypass the bus
+            # by design (they need message ids), so routing banner/pool/thinking
+            # through the bus queue let streamed content overtake them in the
+            # chat history. Awaiting delivery inline preserves strict
+            # chronological order (pre-bus behaviour).
+            if self._send_fn:
+                # Mirror the bus dispatcher's send_progress gate so progress
+                # chatter is still suppressed when the config disables it.
+                if progress and not self.stream_replies:
+                    return
+                await self._send_fn(text)
+                return
             channel = self._reply_channel or self._view_channel
             chat_id = self._reply_chat_id or self._view_chat_id
             if channel and chat_id and self._send_outbound_fn:
@@ -1160,8 +1173,6 @@ class GroupChatEngine:
                     content=text,
                     metadata={"_progress": progress} if progress else {},
                 ))
-            elif self._send_fn:
-                await self._send_fn(text)
         except Exception as e:
             logger.error("Groupchat send failed: {}", e)
 

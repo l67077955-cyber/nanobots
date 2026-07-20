@@ -104,6 +104,7 @@
 | `_all_waiting` | `mailbox.py:308` | 纯派生（`_waiting ≥ _active_agents`）却以 Event 存、三处命令式 set，历史漏过一处 | 改派生查询 |
 | **`_leader_disabled_agent`** | `broadcast.py:621` | **写了从不读**——disable/restart 路径**并不**强制合成重试（`L1369` 守卫只查 `_leader_ended_discussion`+`not content`，注释撒谎，潜在 bug）| 删，或接进 L1369 条件 |
 | `_timeout_recovery_count` | `broadcast.py:818` | 名为 count 实为 0/1 latch（成功/失败都清零，`L1059`/`L1086`）→ "repeated timeout" else 分支（`L1089`）**实际不可达** | 重命名/改语义，或删不可达分支 |
+| `_total_timeout_count` | `agent_cycle.py` | 真·累计计数（仅成功 cycle 清零），驱动 C0 熔断 `TIMEOUT_CIRCUIT_BREAK`（≥3 次超时强退，leader 连带结束群聊） | 保留——2026-07-18 超时乒乓循环的修复 |
 | `SpeakQueue` alias | `mailbox.py:276` | 向后兼容别名 = ConversationPool | 评估后删 |
 
 ---

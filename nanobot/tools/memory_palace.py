@@ -33,13 +33,25 @@ Actions
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import threading
 from typing import Any
 
 from loguru import logger
 
 from nanobot.tools.base import Tool
+
+# Serialise mempalace library calls (ChromaDB client cache is not built for
+# concurrent construction) while keeping the asyncio event loop free — every
+# sync library call is dispatched via asyncio.to_thread(_locked, ...).
+_MP_LOCK = threading.Lock()
+
+
+def _locked(fn, *args, **kwargs):
+    with _MP_LOCK:
+        return fn(*args, **kwargs)
 
 
 # ── Palace path: use nanobot storage area by default ──────────────────────────
@@ -349,18 +361,20 @@ class MemoryPalaceTool(Tool):
         **_: Any,
     ) -> str:
         try:
-            mp = _import_official()
+            mp = await asyncio.to_thread(_locked, _import_official)
 
             # ── Wake-up: L0 + L1 ──────────────────────────────────────────────
             if action == "wake_up":
-                stack = mp["MemoryStack"](palace_path=_PALACE_PATH)
-                text = stack.wake_up(wing=wake_wing or None)
+                stack = await asyncio.to_thread(_locked, mp["MemoryStack"], palace_path=_PALACE_PATH)
+                text = await asyncio.to_thread(_locked, stack.wake_up, wing=wake_wing or None)
                 return text
 
             # ── Recall: L2 on-demand ──────────────────────────────────────────
             elif action == "recall":
-                stack = mp["MemoryStack"](palace_path=_PALACE_PATH)
-                return stack.recall(wing=wing or None, room=room or None, n_results=limit)
+                stack = await asyncio.to_thread(_locked, mp["MemoryStack"], palace_path=_PALACE_PATH)
+                return await asyncio.to_thread(
+                    _locked, stack.recall, wing=wing or None, room=room or None, n_results=limit,
+                )
 
             # ── Store: add_drawer ─────────────────────────────────────────────
             elif action == "store":
@@ -371,7 +385,7 @@ class MemoryPalaceTool(Tool):
                 if not room:
                     return "❌ Error: 'room' is required for store (e.g. 'api-design')."
                 # visible is already a named parameter
-                result = mp["add_drawer"](
+                result = await asyncio.to_thread(_locked, mp["add_drawer"],
                     wing=wing,
                     room=room,
                     content=content,
@@ -400,7 +414,8 @@ class MemoryPalaceTool(Tool):
             elif action == "search":
                 if not query:
                     return "❌ Error: 'query' is required for search."
-                result = mp["search"](
+                result = await asyncio.to_thread(
+                    _locked, mp["search"],
                     query=query,
                     limit=limit,
                     wing=wing or None,
@@ -425,7 +440,7 @@ class MemoryPalaceTool(Tool):
 
             # ── Status ────────────────────────────────────────────────────────
             elif action == "status":
-                result = mp["status"]()
+                result = await asyncio.to_thread(_locked, mp["status"])
                 if isinstance(result, dict):
                     total = result.get("total_drawers", 0)
                     wings = result.get("wings", {})
@@ -443,7 +458,7 @@ class MemoryPalaceTool(Tool):
 
             # ── List Wings ────────────────────────────────────────────────────
             elif action == "list_wings":
-                result = mp["list_wings"]()
+                result = await asyncio.to_thread(_locked, mp["list_wings"])
                 if isinstance(result, dict):
                     wings = result.get("wings", {})
                     if not wings:
@@ -456,7 +471,7 @@ class MemoryPalaceTool(Tool):
 
             # ── List Rooms ────────────────────────────────────────────────────
             elif action == "list_rooms":
-                result = mp["list_rooms"](wing=wing or None)
+                result = await asyncio.to_thread(_locked, mp["list_rooms"], wing=wing or None)
                 if isinstance(result, dict):
                     rooms = result.get("rooms", {})
                     w_label = wing or "all wings"
@@ -470,7 +485,7 @@ class MemoryPalaceTool(Tool):
 
             # ── Taxonomy ──────────────────────────────────────────────────────
             elif action == "taxonomy":
-                result = mp["taxonomy"]()
+                result = await asyncio.to_thread(_locked, mp["taxonomy"])
                 if isinstance(result, dict):
                     tax = result.get("taxonomy", {})
                     if not tax:
@@ -488,7 +503,7 @@ class MemoryPalaceTool(Tool):
             elif action == "delete_drawer":
                 if not drawer_id:
                     return "❌ Error: 'drawer_id' is required for delete_drawer."
-                result = mp["delete_drawer"](drawer_id=drawer_id)
+                result = await asyncio.to_thread(_locked, mp["delete_drawer"], drawer_id=drawer_id)
                 if isinstance(result, dict) and result.get("success"):
                     return f"🗑️ Deleted drawer: {drawer_id}"
                 return _fmt(result)
@@ -497,12 +512,12 @@ class MemoryPalaceTool(Tool):
             elif action == "traverse":
                 if not start_room:
                     return "❌ Error: 'start_room' is required for traverse."
-                result = mp["traverse"](start_room=start_room, max_hops=max_hops)
+                result = await asyncio.to_thread(_locked, mp["traverse"], start_room=start_room, max_hops=max_hops)
                 return _fmt(result)
 
             # ── Find Tunnels ──────────────────────────────────────────────────
             elif action == "find_tunnels":
-                result = mp["find_tunnels"](
+                result = await asyncio.to_thread(_locked, mp["find_tunnels"],
                     wing_a=wing_a or None,
                     wing_b=wing_b or None,
                 )
@@ -512,7 +527,7 @@ class MemoryPalaceTool(Tool):
             elif action == "kg_query":
                 if not entity:
                     return "❌ Error: 'entity' is required for kg_query."
-                result = mp["kg_query"](entity=entity, as_of=as_of or None, direction=direction)
+                result = await asyncio.to_thread(_locked, mp["kg_query"], entity=entity, as_of=as_of or None, direction=direction)
                 if isinstance(result, dict):
                     facts = result.get("facts", [])
                     lines = [f"🔗 KG: {entity} ({len(facts)} facts)"]
@@ -524,7 +539,7 @@ class MemoryPalaceTool(Tool):
             elif action == "kg_add":
                 if not (subject and predicate and object):
                     return "❌ Error: 'subject', 'predicate', 'object' are required for kg_add."
-                result = mp["kg_add"](
+                result = await asyncio.to_thread(_locked, mp["kg_add"],
                     subject=subject,
                     predicate=predicate,
                     object=object,
@@ -537,7 +552,7 @@ class MemoryPalaceTool(Tool):
             elif action == "kg_invalidate":
                 if not (subject and predicate and object):
                     return "❌ Error: 'subject', 'predicate', 'object' are required for kg_invalidate."
-                result = mp["kg_invalidate"](
+                result = await asyncio.to_thread(_locked, mp["kg_invalidate"],
                     subject=subject,
                     predicate=predicate,
                     object=object,
@@ -548,7 +563,7 @@ class MemoryPalaceTool(Tool):
                 return _fmt(result)
 
             elif action == "kg_timeline":
-                result = mp["kg_timeline"](entity=entity or None)
+                result = await asyncio.to_thread(_locked, mp["kg_timeline"], entity=entity or None)
                 return _fmt(result)
 
             # ── Diary ─────────────────────────────────────────────────────────
@@ -557,7 +572,7 @@ class MemoryPalaceTool(Tool):
                     return "❌ Error: 'agent_name' is required for diary_write."
                 if not content:
                     return "❌ Error: 'content' is required for diary_write."
-                result = mp["diary_write"](agent_name=agent_name, entry=content, topic=topic)
+                result = await asyncio.to_thread(_locked, mp["diary_write"], agent_name=agent_name, entry=content, topic=topic)
                 if isinstance(result, dict) and result.get("success"):
                     return (
                         f"📓 Diary entry written for {agent_name}\n"
@@ -570,7 +585,7 @@ class MemoryPalaceTool(Tool):
             elif action == "diary_read":
                 if not agent_name:
                     return "❌ Error: 'agent_name' is required for diary_read."
-                result = mp["diary_read"](agent_name=agent_name, last_n=last_n)
+                result = await asyncio.to_thread(_locked, mp["diary_read"], agent_name=agent_name, last_n=last_n)
                 if isinstance(result, dict):
                     entries = result.get("entries", [])
                     if not entries:
