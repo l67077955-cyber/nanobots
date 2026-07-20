@@ -106,10 +106,19 @@ class _StubMailbox:
         return delivered
 
     async def wait(self, name: str, timeout: float = 600, from_agent: str = "") -> _Msg | None:
-        try:
-            return await asyncio.wait_for(self._queues[name].get(), timeout=timeout)
-        except asyncio.TimeoutError:
-            return None
+        # Mirror production MailboxHub.wait: poll and bail out on interrupt/discussion end.
+        q = self._queues[name]
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            if self._discussion_ended or self._interrupt_events.get(name, asyncio.Event()).is_set():
+                return None
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                return None
+            try:
+                return await asyncio.wait_for(q.get(), timeout=min(remaining, 0.05))
+            except asyncio.TimeoutError:
+                continue
 
     def mark_agent_done(self, name: str) -> None:
         pass
