@@ -100,66 +100,8 @@ class CallbacksMixin:
             data = query.data
             chat_id = str(query.message.chat_id)
 
-            if data.startswith("add:"):
-                name = data[4:]
-                self._ensure_gc_send(chat_id)
-                result = self._groupchat_engine.add_agent(name)
-                await query.edit_message_text(result)
-
-            elif data.startswith("rm:"):
-                name = data[3:]
-                result = self._groupchat_engine.remove_agent(name)
-                await query.edit_message_text(result)
-
-            elif data.startswith("edit:"):
-                name = data[5:]
-                agent = self._groupchat_engine.registry.get(name)
-                if not agent:
-                    await query.edit_message_text(f"❌ Agent '{name}' 不存在")
-                    return
-                await query.edit_message_text(
-                    self._edit_menu_text(name),
-                    reply_markup=self._edit_menu_buttons(name),
-                )
-
-            elif data.startswith("da:"):
-                # da:AgentName — show delete confirmation
-                name = data[3:]
-                agent = self._groupchat_engine.registry.get(name)
-                if not agent:
-                    await query.edit_message_text(f"❌ Agent '{name}' 不存在")
-                    return
-                await query.edit_message_text(
-                    f"🗑️ 删除 Agent: {name}\n\n"
-                    f"模型: {agent.get('model', '?')}\n\n"
-                    "⚠️ 此操作将永久删除该 agent 的配置文件，无法恢复！\n"
-                    "确认删除吗？",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✅ 确认删除", callback_data=f"dac:{name}:yes")],
-                        [InlineKeyboardButton("❌ 取消", callback_data=f"edit:{name}")],
-                    ]),
-                )
-
-            elif data.startswith("dac:"):
-                # dac:AgentName:yes/no — confirm or cancel delete
-                parts = data.split(":", 2)
-                if len(parts) < 3:
-                    return
-                name, confirm = parts[1], parts[2]
-                if confirm != "yes":
-                    await query.edit_message_text("❌ 已取消")
-                    return
-                engine = self._groupchat_engine
-                if not engine or name not in engine.registry:
-                    await query.edit_message_text(f"❌ Agent '{name}' 不存在")
-                    return
-            
-                deleted_dir = engine.delete_agent(name)
-            
-                msg = f"🗑️ Agent '{name}' 已删除"
-                if deleted_dir:
-                    msg += f"\n📁 配置目录已删除"
-                await query.edit_message_text(msg)
+            if data.startswith("add:") or data.startswith("rm:") or data.startswith("edit:") or data.startswith("da:") or data.startswith("dac:"):
+                await self._handle_agent_ops(query, data, chat_id)
 
             elif data.startswith("ef:"):
                 # ef:AgentName:field
@@ -1140,43 +1082,8 @@ class CallbacksMixin:
                 await query.edit_message_text("⚙️ 返回...")
                 await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
 
-            elif data.startswith("gc:"):
-                key = data[3:]
-                settings = self._load_gc_settings()
-                label = self.GC_SETTINGS_LABELS.get(key, key)
-                val = settings.get(key, self.GC_SETTINGS_DEFAULTS.get(key, "?"))
-                self._edit_state[chat_id] = {"field": "gc_value", "gc_key": key}
-                await query.edit_message_text(
-                    f"✏️ 修改 {label}\n"
-                    f"当前值: {val}\n\n"
-                    f"请输入新值 (整数):"
-                )
-
-            elif data.startswith("ord:"):
-                val = data[4:]
-                if val == "done":
-                    agents = self._groupchat_engine.active_agents
-                    # Persist final order
-                    self._groupchat_engine.save_active()
-                    # Auto-update saved group
-                    gname = getattr(self._groupchat_engine, '_current_group_name', None)
-                    if gname:
-                        groups = self._groupchat_engine.load_groups()
-                        if gname in groups:
-                            groups[gname] = list(agents)
-                            self._groupchat_engine.save_groups(groups)
-                    order_str = " → ".join(agents)
-                    await query.edit_message_text(f"📢 发言顺序:\n{order_str}")
-                else:
-                    idx = int(val)
-                    agents = self._groupchat_engine.active_agents
-                    if 0 < idx < len(agents):
-                        # Swap with previous
-                        agents[idx], agents[idx-1] = agents[idx-1], agents[idx]
-                        self._groupchat_engine.reorder_agents(list(agents))
-                    # Refresh keyboard
-                    await query.edit_message_text("📢 更新中...")
-                    await self._send_order_keyboard(chat_id, self._groupchat_engine.active_agents)
+            elif data.startswith("gc:") or data.startswith("ord:"):
+                await self._handle_agent_ops(query, data, chat_id)
 
             # ── Prompt orchestration callbacks ──
             elif data in ("pr:refresh", "pr:"):
@@ -2909,4 +2816,99 @@ class CallbacksMixin:
             name = data[3:]
             result = self._groupchat_engine.delete_group(name)
             await query.edit_message_text(result)
+
+    async def _handle_agent_ops(self, query, data: str, chat_id: str) -> None:
+        """Handle agent add/remove/edit/delete + groupchat-settings/order callbacks."""
+        if data.startswith("add:"):
+            name = data[4:]
+            self._ensure_gc_send(chat_id)
+            result = self._groupchat_engine.add_agent(name)
+            await query.edit_message_text(result)
+        elif data.startswith("rm:"):
+            name = data[3:]
+            result = self._groupchat_engine.remove_agent(name)
+            await query.edit_message_text(result)
+        elif data.startswith("edit:"):
+            name = data[5:]
+            agent = self._groupchat_engine.registry.get(name)
+            if not agent:
+                await query.edit_message_text(f"❌ Agent '{name}' 不存在")
+                return
+            await query.edit_message_text(
+                self._edit_menu_text(name),
+                reply_markup=self._edit_menu_buttons(name),
+            )
+        elif data.startswith("da:"):
+            # da:AgentName — show delete confirmation
+            name = data[3:]
+            agent = self._groupchat_engine.registry.get(name)
+            if not agent:
+                await query.edit_message_text(f"❌ Agent '{name}' 不存在")
+                return
+            await query.edit_message_text(
+                f"🗑️ 删除 Agent: {name}\n\n"
+                f"模型: {agent.get('model', '?')}\n\n"
+                "⚠️ 此操作将永久删除该 agent 的配置文件，无法恢复！\n"
+                "确认删除吗？",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✅ 确认删除", callback_data=f"dac:{name}:yes")],
+                    [InlineKeyboardButton("❌ 取消", callback_data=f"edit:{name}")],
+                ]),
+            )
+        elif data.startswith("dac:"):
+            # dac:AgentName:yes/no — confirm or cancel delete
+            parts = data.split(":", 2)
+            if len(parts) < 3:
+                return
+            name, confirm = parts[1], parts[2]
+            if confirm != "yes":
+                await query.edit_message_text("❌ 已取消")
+                return
+            engine = self._groupchat_engine
+            if not engine or name not in engine.registry:
+                await query.edit_message_text(f"❌ Agent '{name}' 不存在")
+                return
+        
+            deleted_dir = engine.delete_agent(name)
+        
+            msg = f"🗑️ Agent '{name}' 已删除"
+            if deleted_dir:
+                msg += f"\n📁 配置目录已删除"
+            await query.edit_message_text(msg)
+        elif data.startswith("gc:"):
+            key = data[3:]
+            settings = self._load_gc_settings()
+            label = self.GC_SETTINGS_LABELS.get(key, key)
+            val = settings.get(key, self.GC_SETTINGS_DEFAULTS.get(key, "?"))
+            self._edit_state[chat_id] = {"field": "gc_value", "gc_key": key}
+            await query.edit_message_text(
+                f"✏️ 修改 {label}\n"
+                f"当前值: {val}\n\n"
+                f"请输入新值 (整数):"
+            )
+        elif data.startswith("ord:"):
+            val = data[4:]
+            if val == "done":
+                agents = self._groupchat_engine.active_agents
+                # Persist final order
+                self._groupchat_engine.save_active()
+                # Auto-update saved group
+                gname = getattr(self._groupchat_engine, '_current_group_name', None)
+                if gname:
+                    groups = self._groupchat_engine.load_groups()
+                    if gname in groups:
+                        groups[gname] = list(agents)
+                        self._groupchat_engine.save_groups(groups)
+                order_str = " → ".join(agents)
+                await query.edit_message_text(f"📢 发言顺序:\n{order_str}")
+            else:
+                idx = int(val)
+                agents = self._groupchat_engine.active_agents
+                if 0 < idx < len(agents):
+                    # Swap with previous
+                    agents[idx], agents[idx-1] = agents[idx-1], agents[idx]
+                    self._groupchat_engine.reorder_agents(list(agents))
+                # Refresh keyboard
+                await query.edit_message_text("📢 更新中...")
+                await self._send_order_keyboard(chat_id, self._groupchat_engine.active_agents)
 
