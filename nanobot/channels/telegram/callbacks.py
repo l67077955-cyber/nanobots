@@ -957,21 +957,8 @@ class CallbacksMixin:
                     reply_markup=InlineKeyboardMarkup(buttons)
                 )
 
-            elif data.startswith("sl:"):
-                name = data[3:]
-                result = self._groupchat_engine.set_leader(name)
-                await query.edit_message_text(result)
-
-            elif data.startswith("lg:"):
-                name = data[3:]
-                self._ensure_gc_send(chat_id)
-                result = self._groupchat_engine.load_group(name)
-                await query.edit_message_text(result)
-
-            elif data.startswith("dg:"):
-                name = data[3:]
-                result = self._groupchat_engine.delete_group(name)
-                await query.edit_message_text(result)
+            elif data.startswith("sl:") or data.startswith("lg:") or data.startswith("dg:"):
+                await self._handle_group_ops(query, data, chat_id)
 
             elif data.startswith("hp:"):
                 key = data[3:]
@@ -2906,4 +2893,20 @@ class CallbacksMixin:
             await query.edit_message_text(
                 text, reply_markup=InlineKeyboardMarkup(buttons)
             )
+
+    async def _handle_group_ops(self, query, data: str, chat_id: str) -> None:
+        """Handle group leader/load/delete callbacks (sl:/lg:/dg:)."""
+        if data.startswith("sl:"):
+            name = data[3:]
+            result = self._groupchat_engine.set_leader(name)
+            await query.edit_message_text(result)
+        elif data.startswith("lg:"):
+            name = data[3:]
+            self._ensure_gc_send(chat_id)
+            result = self._groupchat_engine.load_group(name)
+            await query.edit_message_text(result)
+        elif data.startswith("dg:"):
+            name = data[3:]
+            result = self._groupchat_engine.delete_group(name)
+            await query.edit_message_text(result)
 
