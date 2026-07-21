@@ -909,170 +909,9 @@ class CallbacksMixin:
                 await self._handle_agent_ops(query, data, chat_id)
 
             # ── Prompt orchestration callbacks ──
-            elif data in ("pr:refresh", "pr:"):
-                # Refresh global prompt order view
-                await self._prompt_show_components(query)
+            elif data in ("pr:refresh", "pr:") or data.startswith("pre:") or data == "prcan" or data.startswith("pru:") or data.startswith("prd:") or data.startswith("pviz:") or data.startswith("prdel:") or data == "pradd" or data.startswith("pradd:") or data == "pradd_custom" or data.startswith("prv:"):
+                await self._handle_prompt_edit(query, data, chat_id)
 
-            elif data.startswith("pre:"):
-                # Edit global template: pre:__global__:component_key
-                parts = data[4:].split(":", 1)
-                if len(parts) == 2:
-                    _, key = parts
-                    engine = self._groupchat_engine
-                    content = PromptBuilder.get_component_template(key)
-                    label = _COMPONENT_LABELS.get(key, key)
-                    self._edit_state[chat_id] = {"field": "prompt_edit", "agent": "__global__", "key": key}
-                    preview = (content[:3500] + "…") if len(content) > 3500 else (content or "(空)")
-                    await query.edit_message_text(
-                        f"✏️ 编辑全局模板 - {label}\n\n"
-                        f"当前内容 ({len(content or '')}字):\n"
-                        f"{preview}\n\n"
-                        f"💡 模板变量: {{{{agent}}}} {{{{members}}}} {{{{datetime}}}} {{{{round}}}} {{{{tools}}}} {{{{others}}}}\n"
-                        f"请回复新内容 (完整替换):",
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("❌ 取消", callback_data="prcan")]
-                        ]),
-                    )
-
-            elif data == "prcan":
-                # Cancel edit
-                self._edit_state.pop(chat_id, None)
-                await self._prompt_show_components(query)
-
-            elif data.startswith("pru:") or data.startswith("prd:"):
-                # Move component up/down: pru:<idx> or prd:<idx>
-                direction = -1 if data.startswith("pru:") else 1
-                idx = int(data[4:])
-                engine = self._groupchat_engine
-                order = engine.prompt_builder.get_agent_prompt_order()
-                new_idx = idx + direction
-                if 0 <= new_idx < len(order):
-                    order[idx], order[new_idx] = order[new_idx], order[idx]
-                    engine.prompt_builder.set_default_prompt_order(order)
-                await self._prompt_show_components(query)
-
-            elif data.startswith("pviz:"):
-                # Toggle visibility: pviz:<idx>
-                # Note: query.answer() has already been called globally above.
-                idx = int(data[5:])
-                engine = self._groupchat_engine
-                order = engine.prompt_builder.get_agent_prompt_order()
-                if 0 <= idx < len(order):
-                    key = order[idx]
-                    result = engine.prompt_builder.toggle_component_visibility(key)
-                    vis = engine.prompt_builder.get_component_visibility(key)
-                    vis_label = "全体可见 👁" if vis == "all" else "仅Leader可见 👑"
-                    logger.debug("pviz toggle: {} → {}", key, vis_label)
-                await self._prompt_show_components(query)
-
-            elif data.startswith("prdel:"):
-                # Delete component: prdel:<idx>
-                idx = int(data[6:])
-                engine = self._groupchat_engine
-                result = engine.prompt_builder.remove_prompt_component(idx)
-                await query.answer(result, show_alert=True)
-                await self._prompt_show_components(query)
-
-            elif data == "pradd":
-                # Show available components to add back
-                engine = self._groupchat_engine
-                available = engine.prompt_builder.get_available_components()
-                buttons = []
-                labels = _COMPONENT_LABELS
-                for key in available:
-                    buttons.append([InlineKeyboardButton(
-                        f"➕ {labels.get(key, key)}",
-                        callback_data=f"pradd:{key}"
-                    )])
-                buttons.append([InlineKeyboardButton(
-                    "✏️ 自定义组件名", callback_data="pradd_custom"
-                )])
-                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="pr:refresh")])
-                await query.edit_message_text(
-                    "➕ 选择要添加的组件:\n\n💡 点击 \"✏️ 自定义组件名\" 创建全新组件",
-                    reply_markup=InlineKeyboardMarkup(buttons),
-                )
-
-            elif data.startswith("pradd:"):
-                # Add component back: pradd:<key>
-                key = data[6:]
-                engine = self._groupchat_engine
-                order = engine.prompt_builder.get_agent_prompt_order()
-                if key not in order:
-                    order.append(key)
-                    engine.prompt_builder.set_default_prompt_order(order)
-                await self._prompt_show_components(query)
-
-            elif data == "pradd_custom":
-                # Enter edit state for user to type a custom component name
-                chat_id = str(query.message.chat_id)
-                self._edit_state[chat_id] = {"field": "pradd_custom_name"}
-                await query.edit_message_text(
-                    "✏️ 创建自定义提示词组件\n\n"
-                    "请输入组件名称（如: 角色背景、安全规则、写作风格 等）:\n\n"
-                    "💡 名称会显示在组件列表中，创建后可编辑内容",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("❌ 取消", callback_data="prcan")]
-                    ]),
-                )
-
-            elif data.startswith("prv:"):
-                # Preview full template: prv:<page>
-                page = int(data[4:])
-                engine = self._groupchat_engine
-                order = engine.prompt_builder.get_agent_prompt_order()
-                labels = _COMPONENT_LABELS
-
-                lines: list[str] = []
-                display_num = 0
-                for i, key in enumerate(order):
-                    label = labels.get(key, key)
-                    if key == "history":
-                        lines.append("━━━━━━━━━━━━━━━━━━━━━━")
-                        lines.append("  💬 聊天记录（运行时自动插入）")
-                        lines.append("━━━━━━━━━━━━━━━━━━━━━━")
-                        lines.append("")
-                        continue
-                    display_num += 1
-                    if key == "persona":
-                        lines.append(f"─── [{display_num}] {label} ───")
-                        lines.append("(→ 运行时加载每个 agent 的 SOUL.md)")
-                        lines.append("")
-                        continue
-                    tpl = PromptBuilder.get_component_template(key)
-                    if not tpl:
-                        lines.append(f"─── [{display_num}] {label} ─── ○ 空 (跳过注入)")
-                        lines.append("")
-                        continue
-                    lines.append(f"─── [{display_num}] {label} ({len(tpl):,}字) ───")
-                    preview = tpl[:400]
-                    if len(tpl) > 400:
-                        preview += "…"
-                    lines.append(preview)
-                    lines.append("")
-
-                full_text = "\n".join(lines)
-                page_size = 3500
-                total_pages = max(1, (len(full_text) + page_size - 1) // page_size)
-                start = page * page_size
-                end = min(start + page_size, len(full_text))
-                page_text = f"🔍 全局 Prompt 模板预览 (第{page+1}/{total_pages}页)\n\n" + full_text[start:end]
-
-                nav = []
-                if page > 0:
-                    nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"prv:{page-1}"))
-                if page < total_pages - 1:
-                    nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"prv:{page+1}"))
-                buttons = []
-                if nav:
-                    buttons.append(nav)
-                buttons.append([InlineKeyboardButton("⬅️ 返回组件列表", callback_data="pr:refresh")])
-                await query.edit_message_text(
-                    page_text[:4096],
-                    reply_markup=InlineKeyboardMarkup(buttons),
-                )
-
-            # ── Provider/Model management callbacks ──
             elif data == "pm_cancel":
                 self._edit_state.pop(chat_id, None)
                 await query.edit_message_text("❌ 已取消")
@@ -2892,4 +2731,169 @@ class CallbacksMixin:
             agent_hp = agent.get("hyperparams") or {}
             await query.edit_message_text("⚙️ 返回...")
             await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
+    async def _handle_prompt_edit(self, query, data: str, chat_id: str) -> None:
+        """Handle prompt orchestration callbacks (pr:/pre:/prcan/pru/prd/pviz/prdel/pradd/prv)."""
+        if data in ("pr:refresh", "pr:"):
+            # Refresh global prompt order view
+            await self._prompt_show_components(query)
 
+        elif data.startswith("pre:"):
+            # Edit global template: pre:__global__:component_key
+            parts = data[4:].split(":", 1)
+            if len(parts) == 2:
+                _, key = parts
+                engine = self._groupchat_engine
+                content = PromptBuilder.get_component_template(key)
+                label = _COMPONENT_LABELS.get(key, key)
+                self._edit_state[chat_id] = {"field": "prompt_edit", "agent": "__global__", "key": key}
+                preview = (content[:3500] + "…") if len(content) > 3500 else (content or "(空)")
+                await query.edit_message_text(
+                    f"✏️ 编辑全局模板 - {label}\n\n"
+                    f"当前内容 ({len(content or '')}字):\n"
+                    f"{preview}\n\n"
+                    f"💡 模板变量: {{{{agent}}}} {{{{members}}}} {{{{datetime}}}} {{{{round}}}} {{{{tools}}}} {{{{others}}}}\n"
+                    f"请回复新内容 (完整替换):",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("❌ 取消", callback_data="prcan")]
+                    ]),
+                )
+
+        elif data == "prcan":
+            # Cancel edit
+            self._edit_state.pop(chat_id, None)
+            await self._prompt_show_components(query)
+
+        elif data.startswith("pru:") or data.startswith("prd:"):
+            # Move component up/down: pru:<idx> or prd:<idx>
+            direction = -1 if data.startswith("pru:") else 1
+            idx = int(data[4:])
+            engine = self._groupchat_engine
+            order = engine.prompt_builder.get_agent_prompt_order()
+            new_idx = idx + direction
+            if 0 <= new_idx < len(order):
+                order[idx], order[new_idx] = order[new_idx], order[idx]
+                engine.prompt_builder.set_default_prompt_order(order)
+            await self._prompt_show_components(query)
+
+        elif data.startswith("pviz:"):
+            # Toggle visibility: pviz:<idx>
+            # Note: query.answer() has already been called globally above.
+            idx = int(data[5:])
+            engine = self._groupchat_engine
+            order = engine.prompt_builder.get_agent_prompt_order()
+            if 0 <= idx < len(order):
+                key = order[idx]
+                result = engine.prompt_builder.toggle_component_visibility(key)
+                vis = engine.prompt_builder.get_component_visibility(key)
+                vis_label = "全体可见 👁" if vis == "all" else "仅Leader可见 👑"
+                logger.debug("pviz toggle: {} → {}", key, vis_label)
+            await self._prompt_show_components(query)
+
+        elif data.startswith("prdel:"):
+            # Delete component: prdel:<idx>
+            idx = int(data[6:])
+            engine = self._groupchat_engine
+            result = engine.prompt_builder.remove_prompt_component(idx)
+            await query.answer(result, show_alert=True)
+            await self._prompt_show_components(query)
+
+        elif data == "pradd":
+            # Show available components to add back
+            engine = self._groupchat_engine
+            available = engine.prompt_builder.get_available_components()
+            buttons = []
+            labels = _COMPONENT_LABELS
+            for key in available:
+                buttons.append([InlineKeyboardButton(
+                    f"➕ {labels.get(key, key)}",
+                    callback_data=f"pradd:{key}"
+                )])
+            buttons.append([InlineKeyboardButton(
+                "✏️ 自定义组件名", callback_data="pradd_custom"
+            )])
+            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="pr:refresh")])
+            await query.edit_message_text(
+                "➕ 选择要添加的组件:\n\n💡 点击 \"✏️ 自定义组件名\" 创建全新组件",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+
+        elif data.startswith("pradd:"):
+            # Add component back: pradd:<key>
+            key = data[6:]
+            engine = self._groupchat_engine
+            order = engine.prompt_builder.get_agent_prompt_order()
+            if key not in order:
+                order.append(key)
+                engine.prompt_builder.set_default_prompt_order(order)
+            await self._prompt_show_components(query)
+
+        elif data == "pradd_custom":
+            # Enter edit state for user to type a custom component name
+            chat_id = str(query.message.chat_id)
+            self._edit_state[chat_id] = {"field": "pradd_custom_name"}
+            await query.edit_message_text(
+                "✏️ 创建自定义提示词组件\n\n"
+                "请输入组件名称（如: 角色背景、安全规则、写作风格 等）:\n\n"
+                "💡 名称会显示在组件列表中，创建后可编辑内容",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("❌ 取消", callback_data="prcan")]
+                ]),
+            )
+
+        elif data.startswith("prv:"):
+            # Preview full template: prv:<page>
+            page = int(data[4:])
+            engine = self._groupchat_engine
+            order = engine.prompt_builder.get_agent_prompt_order()
+            labels = _COMPONENT_LABELS
+
+            lines: list[str] = []
+            display_num = 0
+            for i, key in enumerate(order):
+                label = labels.get(key, key)
+                if key == "history":
+                    lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+                    lines.append("  💬 聊天记录（运行时自动插入）")
+                    lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+                    lines.append("")
+                    continue
+                display_num += 1
+                if key == "persona":
+                    lines.append(f"─── [{display_num}] {label} ───")
+                    lines.append("(→ 运行时加载每个 agent 的 SOUL.md)")
+                    lines.append("")
+                    continue
+                tpl = PromptBuilder.get_component_template(key)
+                if not tpl:
+                    lines.append(f"─── [{display_num}] {label} ─── ○ 空 (跳过注入)")
+                    lines.append("")
+                    continue
+                lines.append(f"─── [{display_num}] {label} ({len(tpl):,}字) ───")
+                preview = tpl[:400]
+                if len(tpl) > 400:
+                    preview += "…"
+                lines.append(preview)
+                lines.append("")
+
+            full_text = "\n".join(lines)
+            page_size = 3500
+            total_pages = max(1, (len(full_text) + page_size - 1) // page_size)
+            start = page * page_size
+            end = min(start + page_size, len(full_text))
+            page_text = f"🔍 全局 Prompt 模板预览 (第{page+1}/{total_pages}页)\n\n" + full_text[start:end]
+
+            nav = []
+            if page > 0:
+                nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"prv:{page-1}"))
+            if page < total_pages - 1:
+                nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"prv:{page+1}"))
+            buttons = []
+            if nav:
+                buttons.append(nav)
+            buttons.append([InlineKeyboardButton("⬅️ 返回组件列表", callback_data="pr:refresh")])
+            await query.edit_message_text(
+                page_text[:4096],
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+
+        # ── Provider/Model management callbacks ──
