@@ -1,3 +1,11 @@
+"""Manual litellm smoke-test (429 handling).
+
+Run directly:  python -m nanobot.test_litellm
+
+NOTE: guarded by __main__ so importing this module has no side effects
+(no live API call, no env mutation).
+"""
+
 import asyncio
 import litellm
 import os
@@ -14,4 +22,5 @@ async def main():
     except Exception as e:
         print(f"Exception: {type(e).__name__}: {e}")
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

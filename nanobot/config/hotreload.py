@@ -228,19 +228,18 @@ def apply_runtime_config(
 def reload_groupchat_registry(engine: Any, preserved: dict[str, dict] | None = None) -> None:
     """Re-scan ``~/.nanobot/agents`` and refresh the groupchat agent registry.
 
-    ``preserved`` holds runtime-injected entries (e.g. the base model as
-    "Nanobot") that must survive the re-scan.
+    ``preserved`` may carry runtime-injected entries that must survive the
+    re-scan. It is currently always empty (no call site populates it), so this
+    effectively just re-runs ``load_agents`` and swaps ``engine.registry``.
     """
-    try:
-        from nanobot.groupchat.history.agent_loader import load_agents
-    except ImportError:
-        from nanobot.groupchat.agents import load_agents
+    from nanobot.groupchat.history.agent_loader import load_agents
 
     new_registry = load_agents(engine.config, engine.workspace)
-    for name, entry in (preserved or {}).items():
-        new_registry[name] = entry
+    if preserved:
         active = getattr(engine, "_active_agents", None)
-        if isinstance(active, list) and name not in active:
-            active.append(name)
+        for name, entry in preserved.items():
+            new_registry[name] = entry
+            if isinstance(active, list) and name not in active:
+                active.append(name)
     engine.registry = new_registry
     logger.info("Hot-reload: groupchat registry refreshed ({} agents)", len(new_registry))
