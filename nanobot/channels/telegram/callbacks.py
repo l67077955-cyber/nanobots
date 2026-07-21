@@ -902,185 +902,8 @@ class CallbacksMixin:
             elif data.startswith("sl:") or data.startswith("lg:") or data.startswith("dg:"):
                 await self._handle_group_ops(query, data, chat_id)
 
-            elif data.startswith("hp:"):
-                key = data[3:]
-                provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
-                params = getattr(provider, 'sampling_params', None) if provider else None
-                if params and key in params:
-                    self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key}
-                    await query.edit_message_text(
-                        f"✏️ 修改 {key}\n"
-                        f"当前值: {params[key]}\n\n"
-                        f"请输入新值 (数字):"
-                    )
-
-            elif data.startswith("hp_del:"):
-                key = data[7:]
-                provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
-                params = getattr(provider, 'sampling_params', None) if provider else None
-                if params and key in params:
-                    del params[key]
-                    # Persist
-                    hp_path = Path.home() / ".nanobot" / "hyperparams.json"
-                    try:
-                        hp_path.write_text(json.dumps(params, indent=2))
-                        logger.info("Persisted hyperparams (del {}) to {}", key, hp_path)
-                    except Exception as e:
-                        logger.error("Failed to persist hyperparams: {}", e)
-                        await self._gc_send(chat_id, f"⚠️ 参数已生效但持久化失败: {e}")
-                    await query.edit_message_text(f"🗑 已删除 {key}")
-                    await self._send_hyperparams_keyboard(chat_id, params)
-
-            elif data == "hp_add":
-                # Show common params to add
-                provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
-                params = getattr(provider, 'sampling_params', None) if provider else {}
-                common = ["temperature", "top_p", "top_k", "min_p", "top_a",
-                          "frequency_penalty", "presence_penalty", "repetition_penalty"]
-                available = [p for p in common if p not in params]
-                buttons = []
-                for p in available:
-                    buttons.append([InlineKeyboardButton(f"➕ {p}", callback_data=f"hp_new:{p}")])
-                buttons.append([InlineKeyboardButton("✏️ 自定义参数名", callback_data="hp_custom")])
-                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="hp_back")])
-                await query.edit_message_text(
-                    "➕ 选择要添加的参数:",
-                    reply_markup=InlineKeyboardMarkup(buttons)
-                )
-
-            elif data.startswith("hp_new:"):
-                key = data[7:]
-                self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key, "hp_is_new": True}
-                await query.edit_message_text(f"➕ 添加 {key}\n\n请输入值 (数字):")
-
-            elif data == "hp_custom":
-                self._edit_state[chat_id] = {"field": "hp_add_custom"}
-                await query.edit_message_text("✏️ 请输入参数名:")
-
-            elif data == "hp_back":
-                provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
-                params = getattr(provider, 'sampling_params', None) if provider else {}
-                await query.edit_message_text("⚙️ 返回...")
-                await self._send_hyperparams_keyboard(chat_id, params)
-
-            # ── Agent Hyperparams (ahp:) ──────────────────────────
-            elif data.startswith("ahp:"):
-                # ahp:AgentName:key
-                parts = data.split(":", 2)
-                if len(parts) < 3:
-                    return
-                a_name, key = parts[1], parts[2]
-                agent = self._groupchat_engine.registry.get(a_name, {}) if self._groupchat_engine else {}
-                agent_hp = agent.get("hyperparams") or {}
-                if key in agent_hp:
-                    self._edit_state[chat_id] = {"field": "ahp_value", "agent": a_name, "hp_key": key}
-                    await query.edit_message_text(
-                        f"✏️ 修改 {a_name} 的 {key}\n"
-                        f"当前值: {agent_hp[key]}\n\n"
-                        f"请输入新值 (数字):"
-                    )
-
-            elif data.startswith("ahp_del:"):
-                # ahp_del:AgentName:key
-                parts = data.split(":", 2)
-                if len(parts) < 3:
-                    return
-                a_name, key = parts[1], parts[2]
-                if self._groupchat_engine and a_name in self._groupchat_engine.registry:
-                    agent = self._groupchat_engine.registry[a_name]
-                    agent_hp = agent.get("hyperparams") or {}
-                    if key in agent_hp:
-                        del agent_hp[key]
-                        agent["hyperparams"] = agent_hp
-                        # Persist to config.json
-                        cfg_path = Path.home() / ".nanobot" / "agents" / a_name.lower() / "config.json"
-                        if cfg_path.exists():
-                            try:
-                                cfg = json.loads(cfg_path.read_text())
-                                cfg.setdefault("hyperparams", {})
-                                cfg["hyperparams"].pop(key, None)
-                                cfg_path.write_text(json.dumps(cfg, indent=2))
-                            except Exception as e:
-                                logger.error("Failed to persist agent hyperparams: {}", e)
-                        await query.edit_message_text(f"🗑 已删除 {a_name} 的 {key}")
-                        await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
-
-            elif data.startswith("ahp_sync:"):
-                # ahp_sync:AgentName
-                a_name = data[9:]
-                if self._groupchat_engine and a_name in self._groupchat_engine.registry:
-                    global_hp = {}
-                    hp_path = Path.home() / ".nanobot" / "hyperparams.json"
-                    if hp_path.exists():
-                        try:
-                            saved = json.loads(hp_path.read_text())
-                            if isinstance(saved, dict):
-                                global_hp = saved
-                        except Exception:
-                            pass
-                    if not global_hp:
-                        provider = getattr(self._groupchat_engine, 'provider', None)
-                        if provider and hasattr(provider, 'sampling_params'):
-                            global_hp = dict(provider.sampling_params)
-
-                    if global_hp:
-                        agent = self._groupchat_engine.registry[a_name]
-                        agent_hp = agent.get("hyperparams") or {}
-                        agent_hp.update(global_hp)
-                        agent["hyperparams"] = agent_hp
-                        cfg_path = Path.home() / ".nanobot" / "agents" / a_name.lower() / "config.json"
-                        if cfg_path.exists():
-                            try:
-                                cfg = json.loads(cfg_path.read_text())
-                                cfg["hyperparams"] = agent_hp
-                                cfg_path.write_text(json.dumps(cfg, indent=2))
-                            except Exception as e:
-                                logger.error("Failed to persist agent hyperparams: {}", e)
-                        await query.answer("✅ 已复制全局超参数")
-                        await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
-                    else:
-                        await query.answer("⚠️ 全局超参数为空", show_alert=True)
-
-            elif data.startswith("ahp_add:"):
-                # ahp_add:AgentName
-                a_name = data[8:]
-                agent = self._groupchat_engine.registry.get(a_name, {}) if self._groupchat_engine else {}
-                agent_hp = agent.get("hyperparams") or {}
-                common = ["temperature", "top_p", "top_k", "min_p", "top_a",
-                          "frequency_penalty", "presence_penalty", "repetition_penalty"]
-                available = [p for p in common if p not in agent_hp]
-                buttons = []
-                for p in available:
-                    buttons.append([InlineKeyboardButton(f"➕ {p}", callback_data=f"ahp_new:{a_name}:{p}")])
-                buttons.append([InlineKeyboardButton("✏️ 自定义参数名", callback_data=f"ahp_custom:{a_name}")])
-                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ahp_back:{a_name}")])
-                await query.edit_message_text(
-                    f"➕ 为 {a_name} 添加参数:",
-                    reply_markup=InlineKeyboardMarkup(buttons)
-                )
-
-            elif data.startswith("ahp_new:"):
-                # ahp_new:AgentName:key
-                parts = data.split(":", 2)
-                if len(parts) < 3:
-                    return
-                a_name, key = parts[1], parts[2]
-                self._edit_state[chat_id] = {"field": "ahp_value", "agent": a_name, "hp_key": key, "hp_is_new": True}
-                await query.edit_message_text(f"➕ 为 {a_name} 添加 {key}\n\n请输入值 (数字):")
-
-            elif data.startswith("ahp_custom:"):
-                # ahp_custom:AgentName
-                a_name = data[11:]
-                self._edit_state[chat_id] = {"field": "ahp_add_custom", "agent": a_name}
-                await query.edit_message_text("✏️ 请输入参数名:")
-
-            elif data.startswith("ahp_back:"):
-                # ahp_back:AgentName
-                a_name = data[9:]
-                agent = self._groupchat_engine.registry.get(a_name, {}) if self._groupchat_engine else {}
-                agent_hp = agent.get("hyperparams") or {}
-                await query.edit_message_text("⚙️ 返回...")
-                await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
+            elif data.startswith("hp:") or data.startswith("hp_del:") or data == "hp_add" or data.startswith("hp_new:") or data == "hp_custom" or data == "hp_back" or data.startswith("ahp:") or data.startswith("ahp_del:") or data.startswith("ahp_sync:") or data.startswith("ahp_add:") or data.startswith("ahp_new:") or data.startswith("ahp_custom:") or data.startswith("ahp_back:"):
+                await self._handle_hyperparams(query, data, chat_id)
 
             elif data.startswith("gc:") or data.startswith("ord:"):
                 await self._handle_agent_ops(query, data, chat_id)
@@ -2911,4 +2734,162 @@ class CallbacksMixin:
                 # Refresh keyboard
                 await query.edit_message_text("📢 更新中...")
                 await self._send_order_keyboard(chat_id, self._groupchat_engine.active_agents)
+
+    async def _handle_hyperparams(self, query, data: str, chat_id: str) -> None:
+        """Handle global (hp:*) and per-agent (ahp:*) hyperparam callbacks."""
+        if data.startswith("hp:"):
+            key = data[3:]
+            provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
+            params = getattr(provider, 'sampling_params', None) if provider else None
+            if params and key in params:
+                self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key}
+                await query.edit_message_text(
+                    f"✏️ 修改 {key}\n"
+                    f"当前值: {params[key]}\n\n"
+                    f"请输入新值 (数字):"
+                )
+        elif data.startswith("hp_del:"):
+            key = data[7:]
+            provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
+            params = getattr(provider, 'sampling_params', None) if provider else None
+            if params and key in params:
+                del params[key]
+                hp_path = Path.home() / ".nanobot" / "hyperparams.json"
+                try:
+                    hp_path.write_text(json.dumps(params, indent=2))
+                    logger.info("Persisted hyperparams (del {}) to {}", key, hp_path)
+                except Exception as e:
+                    logger.error("Failed to persist hyperparams: {}", e)
+                    await self._gc_send(chat_id, f"⚠️ 参数已生效但持久化失败: {e}")
+                await query.edit_message_text(f"🗑 已删除 {key}")
+                await self._send_hyperparams_keyboard(chat_id, params)
+        elif data == "hp_add":
+            provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
+            params = getattr(provider, 'sampling_params', None) if provider else {}
+            common = ["temperature", "top_p", "top_k", "min_p", "top_a",
+                      "frequency_penalty", "presence_penalty", "repetition_penalty"]
+            available = [p for p in common if p not in params]
+            buttons = []
+            for p in available:
+                buttons.append([InlineKeyboardButton(f"➕ {p}", callback_data=f"hp_new:{p}")])
+            buttons.append([InlineKeyboardButton("✏️ 自定义参数名", callback_data="hp_custom")])
+            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="hp_back")])
+            await query.edit_message_text(
+                "➕ 选择要添加的参数:",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
+        elif data.startswith("hp_new:"):
+            key = data[7:]
+            self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key, "hp_is_new": True}
+            await query.edit_message_text(f"➕ 添加 {key}\n\n请输入值 (数字):")
+        elif data == "hp_custom":
+            self._edit_state[chat_id] = {"field": "hp_add_custom"}
+            await query.edit_message_text("✏️ 请输入参数名:")
+        elif data == "hp_back":
+            provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
+            params = getattr(provider, 'sampling_params', None) if provider else {}
+            await query.edit_message_text("⚙️ 返回...")
+            await self._send_hyperparams_keyboard(chat_id, params)
+        elif data.startswith("ahp:"):
+            parts = data.split(":", 2)
+            if len(parts) < 3:
+                return
+            a_name, key = parts[1], parts[2]
+            agent = self._groupchat_engine.registry.get(a_name, {}) if self._groupchat_engine else {}
+            agent_hp = agent.get("hyperparams") or {}
+            if key in agent_hp:
+                self._edit_state[chat_id] = {"field": "ahp_value", "agent": a_name, "hp_key": key}
+                await query.edit_message_text(
+                    f"✏️ 修改 {a_name} 的 {key}\n"
+                    f"当前值: {agent_hp[key]}\n\n"
+                    f"请输入新值 (数字):"
+                )
+        elif data.startswith("ahp_del:"):
+            parts = data.split(":", 2)
+            if len(parts) < 3:
+                return
+            a_name, key = parts[1], parts[2]
+            if self._groupchat_engine and a_name in self._groupchat_engine.registry:
+                agent = self._groupchat_engine.registry[a_name]
+                agent_hp = agent.get("hyperparams") or {}
+                if key in agent_hp:
+                    del agent_hp[key]
+                    agent["hyperparams"] = agent_hp
+                    cfg_path = Path.home() / ".nanobot" / "agents" / a_name.lower() / "config.json"
+                    if cfg_path.exists():
+                        try:
+                            cfg = json.loads(cfg_path.read_text())
+                            cfg.setdefault("hyperparams", {})
+                            cfg["hyperparams"].pop(key, None)
+                            cfg_path.write_text(json.dumps(cfg, indent=2))
+                        except Exception as e:
+                            logger.error("Failed to persist agent hyperparams: {}", e)
+                    await query.edit_message_text(f"🗑 已删除 {a_name} 的 {key}")
+                    await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
+        elif data.startswith("ahp_sync:"):
+            a_name = data[9:]
+            if self._groupchat_engine and a_name in self._groupchat_engine.registry:
+                global_hp = {}
+                hp_path = Path.home() / ".nanobot" / "hyperparams.json"
+                if hp_path.exists():
+                    try:
+                        saved = json.loads(hp_path.read_text())
+                        if isinstance(saved, dict):
+                            global_hp = saved
+                    except Exception:
+                        pass
+                if not global_hp:
+                    provider = getattr(self._groupchat_engine, 'provider', None)
+                    if provider and hasattr(provider, 'sampling_params'):
+                        global_hp = dict(provider.sampling_params)
+                if global_hp:
+                    agent = self._groupchat_engine.registry[a_name]
+                    agent_hp = agent.get("hyperparams") or {}
+                    agent_hp.update(global_hp)
+                    agent["hyperparams"] = agent_hp
+                    cfg_path = Path.home() / ".nanobot" / "agents" / a_name.lower() / "config.json"
+                    if cfg_path.exists():
+                        try:
+                            cfg = json.loads(cfg_path.read_text())
+                            cfg["hyperparams"] = agent_hp
+                            cfg_path.write_text(json.dumps(cfg, indent=2))
+                        except Exception as e:
+                            logger.error("Failed to persist agent hyperparams: {}", e)
+                    await query.answer("✅ 已复制全局超参数")
+                    await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
+                else:
+                    await query.answer("⚠️ 全局超参数为空", show_alert=True)
+        elif data.startswith("ahp_add:"):
+            a_name = data[8:]
+            agent = self._groupchat_engine.registry.get(a_name, {}) if self._groupchat_engine else {}
+            agent_hp = agent.get("hyperparams") or {}
+            common = ["temperature", "top_p", "top_k", "min_p", "top_a",
+                      "frequency_penalty", "presence_penalty", "repetition_penalty"]
+            available = [p for p in common if p not in agent_hp]
+            buttons = []
+            for p in available:
+                buttons.append([InlineKeyboardButton(f"➕ {p}", callback_data=f"ahp_new:{a_name}:{p}")])
+            buttons.append([InlineKeyboardButton("✏️ 自定义参数名", callback_data=f"ahp_custom:{a_name}")])
+            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ahp_back:{a_name}")])
+            await query.edit_message_text(
+                f"➕ 为 {a_name} 添加参数:",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
+        elif data.startswith("ahp_new:"):
+            parts = data.split(":", 2)
+            if len(parts) < 3:
+                return
+            a_name, key = parts[1], parts[2]
+            self._edit_state[chat_id] = {"field": "ahp_value", "agent": a_name, "hp_key": key, "hp_is_new": True}
+            await query.edit_message_text(f"➕ 为 {a_name} 添加 {key}\n\n请输入值 (数字):")
+        elif data.startswith("ahp_custom:"):
+            a_name = data[11:]
+            self._edit_state[chat_id] = {"field": "ahp_add_custom", "agent": a_name}
+            await query.edit_message_text("✏️ 请输入参数名:")
+        elif data.startswith("ahp_back:"):
+            a_name = data[9:]
+            agent = self._groupchat_engine.registry.get(a_name, {}) if self._groupchat_engine else {}
+            agent_hp = agent.get("hyperparams") or {}
+            await query.edit_message_text("⚙️ 返回...")
+            await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
 
