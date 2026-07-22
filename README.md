@@ -117,10 +117,10 @@
     <th><p align="center">📚 Personal Knowledge Assistant</p></th>
   </tr>
   <tr>
-    <td align="center"><p align="center"><img src="case/search.gif" width="180" height="400"></p></td>
-    <td align="center"><p align="center"><img src="case/code.gif" width="180" height="400"></p></td>
-    <td align="center"><p align="center"><img src="case/scedule.gif" width="180" height="400"></p></td>
-    <td align="center"><p align="center"><img src="case/memory.gif" width="180" height="400"></p></td>
+    <td align="center"><p align="center"><img src="docs/case/search.gif" width="180" height="400"></p></td>
+    <td align="center"><p align="center"><img src="docs/case/code.gif" width="180" height="400"></p></td>
+    <td align="center"><p align="center"><img src="docs/case/scedule.gif" width="180" height="400"></p></td>
+    <td align="center"><p align="center"><img src="docs/case/memory.gif" width="180" height="400"></p></td>
   </tr>
   <tr>
     <td align="center">Discovery • Insights • Trends</td>
