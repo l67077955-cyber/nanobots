@@ -1,6 +1,6 @@
 """Manual litellm smoke-test (429 handling).
 
-Run directly:  python -m nanobot.test_litellm
+Run directly:  python scripts/test_litellm.py
 
 NOTE: guarded by __main__ so importing this module has no side effects
 (no live API call, no env mutation).
