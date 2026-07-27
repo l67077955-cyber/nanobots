@@ -260,6 +260,21 @@ class ConversationPool:
         """Used slots for a specific agent."""
         return max(0, self.agent_capacity(agent) - self.agent_available(agent))
 
+    def reset(self) -> None:
+        """Reset all agent budgets to their per-round capacity.
+
+        Called at the start of each broadcast round.
+        """
+        for a in self._agents:
+            cap = self._per_cap.get(a, 0)
+            self._sems[a] = asyncio.Semaphore(cap)
+            self._available[a] = cap
+            self._pending[a] = []
+        logger.debug(
+            "ConversationPool: reset — {} agents, total capacity {}",
+            len(self._agents), self.capacity,
+        )
+
     def status(self) -> str:
         """Per-agent pool breakdown: 'Kirk ▰▰▱▱▱ 2/5 · Harper ▰▱▱ 1/3'."""
         parts = []
