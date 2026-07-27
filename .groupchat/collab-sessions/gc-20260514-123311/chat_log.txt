@@ -1,0 +1,79 @@
+[用户]: 完成了吗，检测一下，lucas负责
+---
+[Lucas]: 
+
+[工具调用记录]
+• exec() → === $ cd /root/nanobot-src && git log --oneline -3 && echo "---" && git branch --show-current ===
+f6310c0 fix(prompt_builder): add_custom_component now writes editable_by=global to manifest
+33a9dc6 refactor(prompt_builder): manifest is now single source of truth for module-level constants
+dee0903 merge: broadcast_hint refactor + synthesis retry guard
+---
+dev
+
+
+Exit code: 0
+
+=== $ cd /root/.nanobot && git log --oneline -3 && echo "---" && git branch --show-current ===
+041f357 feat: add prompt_man… (1,024字)
+• exec() → === $ python3 -c "
+import json
+with open('/root/.nanobot/prompt_manifest.json') as f:
+    m = json.load(f)
+c = m['components']
+print(f'version={m[\"version\"]}')
+print(f'components={len(c)}')
+missing = []
+for k,v in c.items():
+    for fld in ['order','visibility','label','editable_by']:
+        if fld not in v:
+            missing.append((k,fld))
+if missing:
+    print('MISSING:', missing)
+else:
+    print('✅ all fields present')
+orders = sorted([(v['order'],k) for k,v in c.items()])
+dups = [o for… (2,179字)
+---
+[Lucas]: 检测结果如下：
+
+| 检查项 | 结果 |
+|---|---|
+| ① 代码仓库最新 commit | ✅ `f6310c0`，dev 分支 |
+| ② 配置仓库最新 commit | ✅ `041f357`，detached HEAD |
+| ③ 运行时导入常量 | ✅ Order=18, Labels=18, Editable=11 (Global=10+Agent=1) |
+| ④ manifest 字段完整性 | ✅ 18 components，`visibility`/`editable_by` 无缺失 |
+| ⑤ legacy 双向一致性 | ✅ manifest ↔ prompt_order.json 零差异 |
+
+**结论：全部通过。** Config rework manifest 阶段确实已完成，两个仓库 commit 对齐，运行时加载正常，legacy 文件与 manifest 完全一致。
+
+[工具调用记录]
+• exec() → === $ cd /root/nanobot-src && git log --oneline -3 && echo "BRANCH:" && git branch --show-current ===
+f6310c0 fix(prompt_builder): add_custom_component now writes editable_by=global to manifest
+33a9dc6 refactor(prompt_builder): manifest is now single source of truth for module-level constants
+dee0903 merge: broadcast_hint refactor + synthesis retry guard
+BRANCH:
+dev
+
+
+Exit code: 0
+
+=== $ cd /root/.nanobot && git log --oneline -3 && echo "BRANCH:" && git branch --show-current ===
+041f357 feat: ad… (2,080字)
+---
+[Kirk]: ## 结论
+
+Config rework manifest 阶段已完成，5 项验证全部通过。代码仓库 `f6310c0`、配置仓库 `041f357`，运行时 18 components / 18 labels / 11 editable，manifest 与 legacy 文件零差异。
+
+## 关键发现
+
+- ✅ 代码 commit `f6310c0`：manifest 为模块级常量唯一真相源 + `add_custom_component` editable_by 修复
+- ✅ 配置 commit `041f357`：`prompt_manifest.json` 18 components 完整 + legacy 文件同步
+- ✅ 运行时导入正常，无报错
+- ✅ manifest 每条均有 `visibility` + `editable_by` 字段
+- ✅ `prompt_order.json` 与 manifest 组件列表完全一致，无多余/缺失
+
+[工具调用记录]
+• chatroom_send() → (48字)
+• wait() → (420字)
+• end_discussion() → ✅ 讨论已结束（原因: 验证完成，5/5 全部通过。Config rework manifest 阶段确认完成。），即将进入总结阶段 (66字)
+---

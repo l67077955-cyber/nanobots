@@ -1,0 +1,176 @@
+[用户]: 提交一下修改
+---
+[用户]: 但是不是现在有设置等级的配置吗
+---
+[Kirk]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git status --short) → M nanobot/groupchat/history/message_converter.py
+ M nanobot/groupchat/history/prompt_builder.py
+ M nanobot/groupchat/orchestra/broadcast.py
+ M nanobot/groupchat/orchestra/engine.py
+
+
+Exit code: 0 (196字)
+• exec(cd /root/nanobot-src && git diff --stat) → nanobot/groupchat/history/message_converter.py | 28 ++++++++++++++++++++++++++
+ nanobot/groupchat/history/prompt_builder.py    |  4 ++++
+ nanobot/groupchat/orchestra/broadcast.py       | 22 ++++++++++++++++++++
+ nanobot/groupchat/orchestra/engine.py          |  2 ++
+ 4 files changed, 56 insertions(+)
+
+
+Exit code: 0 (317字)
+• exec(cd /root/nanobot-src && git diff) → diff --git a/nanobot/groupchat/history/message_converter.py b/nanobot/groupchat/history/message_converter.py
+index 32898f1..76d859c 100644
+--- a/nanobot/groupchat/history/message_converter.py
++++ b/nanobot/groupchat/history/message_converter.py
+@@ -19,6 +19,12 @@ _TOOL_LOG_RE = re.compile(
+     re.DOTALL,
+ )
+ 
++# Matches the entire [工具调用记录]... block at the end of a message
++_TOOL_LOG_BLOCK_RE = re.compile(
++    r"\n*\[工具调用记录\].*$",
++    re.DOTALL,
++)
++
+ 
+ def age_tool_log(content: str) -> str:
+ … (7,036字)
+---
+[用户]: 看看创建agent时是否有默认指定并保存该字段
+---
+[Kirk]: 
+
+[工具调用记录]
+• exec(find /root/nanobot-src -name "config.json" -path "*/agents/*" | head -20) → /root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/agents/kirk/config.json
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/agents/harper/config.json
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/agents/verifier/config.json
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/agents/retriever/config.json
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/agents/scholar/config.json
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/agents/behol… (1,410字)
+• exec(grep -rn '"rank"' /root/nanobot-src --include="config.json" 2>/dev/null) → /root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/agents/kirk/config.json:25:  "rank": "bishop"
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/agents/harper/config.json:60:  "rank": "knight"
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/agents/verifier/config.json:13:  "rank": "knight"
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/agents/retriever/config.json:37:  "rank": "pawn"
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/agents/schol… (1,602字)
+• exec(find /root/nanobot-src -name "config.json" -path "*/agents/*" -not -path "*/....) → Exit code: 0 (13字)
+• exec(find /root/nanobot-src -name "config.json" -not -path "*/.git/*" -not -path "...) → Exit code: 0 (13字)
+• exec(ls /root/nanobot-src/agents/ 2>/dev/null || echo "no agents dir") → no agents dir
+
+
+Exit code: 0 (28字)
+• exec() → /root/nanobot-src/nanobot/groupchat/history/agent_loader.py:51:                        if _cfg.get("rank"):
+/root/nanobot-src/nanobot/groupchat/history/agent_loader.py:52:                            agent_data["rank"] = _cfg["rank"]
+/root/nanobot-src/nanobot/groupchat/history/agent_loader.py:170:                    rank = _cfg.get("rank", "pawn")
+/root/nanobot-src/nanobot/groupchat/history/agent_loader.py:175:                        "rank": rank,
+/root/nanobot-src/nanobot/groupchat/history/agent… (919字)
+• exec(grep -rn "rank" /root/nanobot-src/nanobot/groupchat/history/agent_loader.py) → 37:            # Supplement with per-agent config.json from agents_dir (hyperparams, tools, rank, etc.)
+51:                        if _cfg.get("rank"):
+52:                            agent_data["rank"] = _cfg["rank"]
+170:                    rank = _cfg.get("rank", "pawn")
+175:                        "rank": rank,
+232:        rank = acfg.get("rank", "pawn") if config_file.exists() else "pawn"
+234:        agent_data: dict[str, Any] = {"model": model, "prompt": prompt, "tools_enabled": tools_enable… (531字)
+• exec(grep -rn "agents_dir\|AGENTS_DIR\|agents/" /root/nanobot-src/nanobot/groupcha...) → 5:2. Directory scan (agents/<name>/workspace/SOUL.md or character.json)
+37:            # Supplement with per-agent config.json from agents_dir (hyperparams, tools, rank, etc.)
+38:            if config.agents_dir:
+39:                agents_dir = Path(config.agents_dir).expanduser()
+40:                if not agents_dir.is_absolute():
+41:                    agents_dir = workspace / config.agents_dir
+42:                agent_subdir = agents_dir / name.lower()
+69:    # 2. Scan agents_dir for auto-dis… (611字)
+• exec(grep -rn "rank" /root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py | ...) → 300:        # Build per-agent capacity from ranks
+301:        rank_cap = {"pawn": 2, "knight": 3, "bishop": 4, "queen": 5}
+305:            rank = cfg.get("rank", "pawn")
+306:            cap = rank_cap.get(rank, 3)
+311:        # ConversationPool: rank-based per-agent, with settings fallback
+418:    # Clear stale rank cache from previous round
+419:    if hasattr(broadcast_round, "_agent_ranks_cache"):
+420:        del broadcast_round._agent_ranks_cache
+439:    # Push agent ranks into mailbox for in… (571字)
+• exec(grep -n "agents_dir" /root/nanobot-src/nanobot/groupchat/history/agent_loader...) → 37:            # Supplement with per-agent config.json from agents_dir (hyperparams, tools, rank, etc.)
+38:            if config.agents_dir:
+39:                agents_dir = Path… (342字)
+  (还有 3 个工具调用，已省略)
+---
+[Kirk]: 已提交 `f0a51db`。
+
+**发现的问题**：创建 agent 时 `config.json` 没有显式保存 `rank` 字段（只有 `model` 和 `hyperparams`）。虽然 `agent_loader` 读取时有 `default="pawn"` 兜底，功能不受影响，但 config 文件里缺少这个字段不够明确。
+
+**已修复**：`callbacks.py:2809` 创建 agent 时加上 `"rank": "pawn"` 默认值。
+
+[工具调用记录]
+• exec(grep -n "rank" /root/nanobot-src/nanobot/channels/telegram/callbacks.py | hea...) → 212:                elif field == "rank":
+214:                    current = agent.get("rank", "pawn")
+215:                    rank_icons = {"pawn": "♟ 兵", "knight": "♞ 马", "bishop": "♝ 象", "queen": "♛ 后"}
+220:                            f"{icon}{rank_icons[r]}", callback_data=f"srr:{name}:{r}"
+224:                        f"🎖️ {name} 等级设置 (当前: {rank_icons.get(current, current)}):",
+416:                # srr:AgentName:rank — set agent rank
+420:                name, rank_val = parts[1], parts[2]
+42… (993字)
+• exec(grep -n "def.*create\|def.*add_agent\|def.*new_agent\|def.*register" /root/na...) → Exit code: 0 (13字)
+• exec() → 31:    def _sort_models_newest_first(model_ids: list[str]) -> list[str]:
+324:                        cfg_path.write_text(json.dumps(file_cfg, indent=2, ensure_ascii=False))
+374:                        tools_path.write_text(json.dumps(tools_cfg, indent=2, ensure_ascii=False))
+388:                        cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+436:                    cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+607:                content = json.dum… (1,716字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 2790|                     await self._gc_send(chat_id,
+2791|                         f"❌ 模型 {model_name} 不可用: {e}\n\n"
+2792|                         f"请重新输入模型名，或发 0 取消:"
+2793|                     )
+2794|                 return
+2795|             elif field == "create_persona":
+2796|                 name = agent_name
+2797|                 model = state["model"]
+2798|                 prompt = content
+2799|                 # Copy global hyperparams as defaults for new agent
+2800|                 global_hp = getattr(engine.provider, 'sampling_params', None)
+2801|                 agent_hp = dict(global_hp) if global_hp else {}
+2802|                 engine.registry[name] = {"model": model, "prompt": prompt, "hyperparams": agent_hp}
+2803|                 # Save to disk
+2804|                 from p… (2,327字)
+• edit_file() → (76字)
+• exec(cd /root/nanobot-src && git diff --stat) → nanobot/channels/telegram/callbacks.py         |  2 +-
+ nanobot/groupchat/history/message_converter.py | 28 ++++++++++++++++++++++++++
+ nanobot/groupchat/history/prompt_builder.py    |  4 ++++
+ nanobot/groupchat/orchestra/broadcast.py       | 22 ++++++++++++++++++++
+ nanobot/groupchat/orchestra/engine.py          |  2 ++
+ 5 files changed, 57 insertions(+), 1 deletion(-)
+
+
+Exit code: 0 (388字)
+• exec() → [dev f0a51db] feat(rank): rank-based tool call isolation for multi-agent context
+ 5 files changed, 57 insertions(+), 1 deletion(-)
+
+
+Exit code: 0 (145字)
+---
+[Kirk]: 已提交 `f0a51db`，5 个文件，+57/-1 行。
+
+额外修复：创建 agent 时 `config.json` 现在显式写入 `"rank": "pawn"`，之前缺失这个字段。
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/rank-based-tool-call-isolation (hidden)
+  Drawer ID: drawer_wing_code_rank-based-tool-call-isolation_ee11a21cf07203c7d73b7667 (147字)
+• end_discussion() → ✅ 讨论已结束（原因: 提交完成 f0a51db，含 rank-based 工具调用隔离 + 创建 agent 时默认 rank 修复），即将进入总结阶段 (77字)
+---
+[Kirk]: 已提交 `f0a51db`。
+
+## 改动汇总（5 files, +57/-1）
+
+| 文件 | 改动 |
+|---|---|
+| `message_converter.py` | `strip_tool_log()` 正则剥离 + rank 比较逻辑 |
+| `prompt_builder.py` | 透传 `agent_ranks` 参数 |
+| `engine.py` | 透传 `agent_ranks` 参数 |
+| `broadcast.py` | 计算 agent_ranks 字典，Leader 自动 max+1 |
+| `callbacks.py` | 创建 agent 时 config.json 显式写 `"rank": "pawn"` |
+
+额外修复：之前创建 agent 时 `config.json` 没有保存 `rank` 字段，现在补上了默认值。
+---
+[Kirk]: 已提交 `f0a51db`，5 个文件，+57/-1 行。
+
+额外修复：创建 agent 时 `config.json` 现在显式写入 `"rank": "pawn"`，之前缺失这个字段。
+---

@@ -1,0 +1,53 @@
+[用户]: 改了什么
+---
+[Harper]: **你问的3个问题的答案：**
+
+## 18-19号改了什么
+
+引入 **Prompt Phase System**（11 commits）：
+- **组件分阶段**：19个组件分 static（history前，稳定）和 dynamic（history后，可用 volatile 变量）
+- **技能压缩**：compact 模式，技能段描述+read_file指针替代全量内容
+- **per-skill type**：每个技能可声明 static/dynamic
+
+## 有没有上下文膨胀
+
+**没有。** 方向是反膨胀的。static 前缀~9K chars合理，5个新增组件全在 dynamic 段，不影响 prefix cache。
+
+## 发现并修复了一个浪费
+
+static 段4个 always-on 技能用了暴力截断（2800 chars），改成 compact 模式（673 chars），**省 2148 chars/约1000 tokens**。1行修复。
+---
+[Kirk]: 结果已给出。核心：11 commits，架构从扁平→static/dynamic分层，skills压缩77%，不存在膨胀问题。
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/context-optimization (hidden)
+  Drawer ID: drawer_wing_code_context-optimization_1cf73768a21fb98591c5db99 (127字)
+• end_discussion() → ✅ 讨论已结束（原因: 问题已完整回答，数据已验证，记忆已归档），即将进入总结阶段 (41字)
+---
+[Kirk]: ## 改了什么
+
+5/18-5/19 共 **11 commits**，改了两件事：
+
+### 1. Prompt Phase System（5/18，9 commits）
+
+把 19 个 prompt 组件从扁平结构改为 **static/dynamic 分层**：
+
+- **static（11个，history 之前）**：main_prompt, persona, hard_rules, tool_instructions, skills, user_context, broadcast_hint, group_context, memory, output_efficiency, instructions
+- **dynamic（6个，history 之后）**：leader_prompt, history, skills_overview, examples, group_nudge, coding_principle, 记忆补充
+
+核心 commit `2363adb`：`COMPONENT_PHASES` 字典替代隐式 `past_history` 标志。效果是 history 之前的 static 前缀稳定不变，**prefix caching 可用**。
+
+### 2. Skill 上下文压缩（5/19，2 commits）
+
+- compact 模式：大技能只发 description + `read_file` 指针
+- 行边界截断：不在词中断开
+- docless skill 发现：无 SKILL.md 但有 scripts/ 的目录也被识别
+
+### 3. 本轮额外修复
+
+`loader.py:60` 加 `compact=True`，4 个 always-on 技能从 2800→673 chars，**省 2148 chars**。
+
+### 结论
+
+**不存在膨胀问题。** 改动方向是反膨胀。唯一膨胀源是 history 线性增长，由 `maybe_compress` 控制，与这两天改动无关。
+---

@@ -1,0 +1,64 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 比如kirk打断harper之前，kirk之前的工具调用记录不会进入harper的上下文直到kirk打断harper
+---
+[Kirk]: ## 结论
+你的观察准确：agent的工具调用记录不会自动进入其他agent的上下文。上下文共享是**消息驱动**的 — 只有通过`chatroom_send`发出的内容才会进入共享历史，其他agent在被打断/唤醒时才会拉取到这些消息。
+
+## 关键发现
+- 工具调用结果只存在于执行agent的本地上下文中
+- `chatroom_send`是唯一的跨agent信息传递通道
+- 这也是协作协议强制要求"搜索后立即分享结果"的根本原因
+
+## 备注
+这意味着如果某个agent做了大量工作但没发消息就结束，对其他agent来说等于没发生。Leader的最终总结是唯一保证所有信息汇聚的地方。
+
+[工具调用记录]
+• end_discussion() → ✅ 讨论已结束（原因: 用户提出的是关于系统架构的观察/讨论，已直接回应，无需进一步搜索或协作。），即将进入总结阶段 (58字)
+---
+[Kirk]: ## 结论
+你的观察准确：agent的工具调用记录不会自动进入其他agent的上下文。上下文共享是**消息驱动**的 — 只有通过`chatroom_send`发出的内容才会进入共享历史，其他agent在被打断/唤醒时才会拉取到这些消息。
+
+## 关键发现
+- 工具调用结果只存在于执行agent的本地上下文中
+- `chatroom_send`是唯一的跨agent信息传递通道
+- 这也是协作协议强制要求"搜索后立即分享结果"的根本原因
+
+## 备注
+这意味着如果某个agent做了大量工作但没发消息就结束，对其他agent来说等于没发生。Leader的最终总结是唯一保证所有信息汇聚的地方。
+---
+[Kirk]: 以上就是完整回复。用户提出的是系统架构层面的观察，已直接确认并解释了机制原理，无需额外搜索。
+---
+[用户]: 另外我想只有所有agent都发言过（至少发言1次，报错后自动退出是例外），leader才能结束群聊
+---
+[Kirk]: 记忆写入失败（只读），不影响结论。
+
+**总结**：需求合理，建议在`EndDiscussionTool.execute()`中追加发言计数检查，用已有的`disable`机制作为escape hatch。需要你确认是否要我直接改代码实现？
+
+[工具调用记录]
+• memory_palace(end_discussion 群聊规则 agent发言 leader结束) → 🔍 5 result(s) for 'end_discussion 群聊规则 agent发言 leader结束':
+
+[1] wing_code/leader-end-discussion-guard (sim=0.509)
+  2026-05-13: 用户要求 leader 在调用 end_discussion 前必须确认所有活跃 agent 处于 waiting 状态。已在 leader_prompt.md 第21-25行添加 "Agent 状态前置检查" 硬性规则。例外：agent 已被 disable 或明确标记为完成。
+
+[2] wing_code/leader-autowait-on-end (sim=0.496)
+  用户要求：当 leader 调用 end_discussion 但有 agent 仍在执行时，leader 应进入 autowait 模式（自动等待），而不是被拒绝或 disable agent。等待 agent 完成后自动继续结束流程。当前行为是拒绝 end_discussion 并报错，导致 leader 陷入死循环（每次调用 end_discussio… (1,393字)
+• memory_palace() → ❌ Error: attempt to write a readonly database (45字)
+---
+[Kirk]: ## 结论
+
+在`EndDiscussionTool.execute()`中追加**发言计数检查**：遍历所有非disable/非error退出的agent，确认共享历史中每人≥1条`chatroom_send`消息，不满足则拒绝并提示哪些agent未发言。用已有的`disable`机制作为escape hatch。
+
+## 关键发现
+- 当前已有waiting状态检查（`wing_code/leader-end-discussion-guard`）
+- 新约束与现有检查合并为一个gate，不新增接口参数
+- "发言"定义：共享历史中有`chatroom_send`记录（工具调用不算）
+- 例外：报错自动退出的agent跳过检查
+
+## 备注
+- 本质上是把协作协议"先干活再发言"从软约束升级为硬约束
+- 实现位置：`chatroom_tools.py` → `EndDiscussionTool.execute()`，在waiting检查之后追加
+
+[工具调用记录]
+• end_discussion() → ✅ 讨论已结束（原因: 用户需求已完整分析并给出实现方案，无其他agent需等待。），即将进入总结阶段 (51字)
+---

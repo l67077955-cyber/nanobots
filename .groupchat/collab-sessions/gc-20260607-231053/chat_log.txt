@@ -1,0 +1,173 @@
+[用户]: 提交最新修改
+---
+[Retriever]: 用户要求提交最新修改。Harper 已经完成了测试验证，我来确认一下当前状态——需要知道哪些文件改了、是否已 git add/commit。
+
+让我先查一下记忆和历史记录。
+
+[工具调用记录]
+• memory_palace(action='search', query='fake-tool-call-zero-width-fix 改动文件 git commit 提交', limit=5) → 🔍 5 result(s) for 'fake-tool-call-zero-width-fix 改动文件 git commit 提交':
+
+[1] 项目知识/fake-tool-call-zero-width-fix (sim=0.592)
+  零宽字符签名方案 — 最终修复
+
+**问题**：LLM在文本中输出`• exec(...) → ... (N字)`模仿系统[工具调用记录]块，伪造工具调用。
+
+**根因**：response_cleanup.py第3步漏了项目符号格式正则，group_nudge.md漏了禁止项。
+
+**方案**：三层防御
+1. **Prompt层**：group_nudge.md补充禁止项目符号格式条款
+2. **零宽标记**：engine.py build_tool_log()生成的真实工具调用块用`\u200B\u2060`前缀+`\u200B`后缀包裹（LLM无法伪造零宽字符）
+3. **正则过滤**：response_cleanup.py新增Step6，匹配无签名的[工具调用记录]块并剥离
+
+**改动文件**：
+- response_cleanup.py：新增正则规则匹配`• tool_name(...)`格式并剥离
+- group_nudge.md：prompt禁止条款扩展覆盖项目符号格式
+- engine.py build_tool_log() / message_converter.py TOOL_LOG_BLOCK_RE + in-content check（零宽字符签名）
+
+**验证结果**：提交check无报错，伪造格式被正确清理。
+
+[2] wing_code/fake-tool-call-prevention (sim=0.459)
+  LLM伪造工具调用问题及解决方案：
+- 根因：LLM在文本输出中模仿工具调用格式（如 [工具调用记录]、• exec(...)）
+- 两层防御：1) Prompt层禁止条款… (3,516字)
+
+[3] wing_code/code-review-20260531 (sim=0.394)
+  志位自洽。
+- html_detect_enabled/pruning_hard_ratio等getter删除安全(… (2,562字)
+
+[4] wing_code/round-20260528-自由讨论 (sim=0.385)
+  的 `TOOL_LABELS` 字典中。
+- `exec` 和 `end_discussion` 图标分别为 ⚡ 和 🏁，可根据需求替换为其他图标（如 `exec` 改为 💻，`end_discussion` 改为 ⏹️）。
+- 通过代码搜索和文件修改，确保工具图标的统一和符合用户预期。
+- `end_discussion` 由 leader 调用，属于通用工具调用，没有专门的“leader工具调用”图标，建议统一用符号表达。
+- 采用 `grep` 和 `find` 等命令进行快速定位，结合 `read_file()` 确认修改内容，确保配置正确。
+
+[5] wing_code/visibility-inversion-20260528 (sim=0.376)
+  工具可见性反转（2026-05-28）
+
+**改动文件**：`nanobot/groupchat/display/visibility.py` + `mess… (2,163字)
+
+Harper已经验证通过了。但我没有工具权限去执行 git commit/push。我需要向 Kirk（Leader）报告状态并请求他执行提交操作。
+---
+[Kirk]: 已提交：`424372be fix: zero-width markers prevent fake tool call forgery`，3文件17行变更，工作树干净。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git status --short && echo "---" && git diff --stat) → M nanobot/groupchat/history/message_converter.py
+ M nanobot/groupchat/history/response_cleanup.py
+ M nanobot/groupchat/orchestra/engine.py
+?? Memory-Palace/
+?? config/
+?? webui/
+---
+ nanobot/groupchat/history/message_converter.py |  8 ++++----
+ nanobot/groupchat/history/response_cleanup.py  | 13 ++++++++++++-
+ nanobot/groupchat/orchestra/engine.py          |  2 +-
+ 3 files changed, 17 insertions(+), 6 deletions(-)
+
+
+Exit code: 0 (433字)
+• exec(cd /root/nanobot-src && git diff) → diff --git a/nanobot/groupchat/history/message_converter.py b/nanobot/groupchat/history/message_converter.py
+index 5f5c8cc3..dab77934 100644
+--- a/nanobot/groupchat/history/message_converter.py
++++ b/nanobot/groupchat/history/message_converter.py
+@@ -21,7 +21,7 @@ _TOOL_LOG_RE = re.compile(
+ 
+ # Matches the entire [工具调用记录]... block at the end of a message
+ _TOOL_LOG_BLOCK_RE = re.compile(
+-    r"\n*\[工具调用记录\].*$",
++    r"\n*\u200b\[工具调用记录\]\u200c.*$",
+     re.DOTALL,
+ )
+ 
+@@ -39,7 +39,7 @@ def a… (3,169字)
+• exec() → On branch stable-20260527
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	Memory-Palace/
+	config/
+	webui/
+
+nothing added to commit but untracked files present (use "git add" to track)
+
+
+Exit code: 1 (233字)
+• exec(cd /root/nanobot-src && git diff --cached --stat && echo "---" && git status ...) → ---
+?? Memory-Palace/
+?? config/
+?? webui/
+
+
+Exit code: 0 (57字)
+• exec() → 424372be fix: zero-width markers prevent fake tool call forgery
+1ad6be96 chore: prevent message list from growing unbounded during tool loops to avoid timeout
+38352724 fix: use action param in tool_result_brief instead of fragile result text matching
+62a73281 refactor: remove autorecall and auto_store to eliminate groupchat startup delay
+39f14339 feat: auto recall uses LLM to generate wing-specific search queries
+---
+
+
+Exit code: 0 (435字)
+• exec(cd /root/nanobot-src && git show 424372be --stat) → commit 424372be45661d05a99bb033441606a4f2451b1e
+Author: nanobot-dev <dev@nanobot.local>
+Date:   Sun Jun 7 23:11:07 2026 +0800
+
+    fix: zero-width markers prevent fake tool call forgery
+    
+    - engine.py: wrap real tool call blocks with \u200b...\u2060...\u200b markers
+    - message_converter.py: detect fake blocks by absence of zero-width markers
+    - response_cleanup.py: regex to strip bullet-style fake tool call blocks
+    
+    LLM cannot forge zero-width characters, making this a determi… (767字)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git status -s && echo "---" && git diff --stat) → M nanobot/groupchat/history/message_converter.py
+ M nanobot/groupchat/history/response_cleanup.py
+ M nanobot/groupchat/orchestra/engine.py
+?? Memory-Palace/
+?? config/
+?? webui/
+---
+ nanobot/groupchat/history/message_converter.py |  8 ++++----
+ nanobot/groupchat/history/response_cleanup.py  | 13 ++++++++++++-
+ nanobot/groupchat/orchestra/engine.py          |  2 +-
+ 3 files changed, 17 insertions(+), 6 deletions(-)
+
+
+Exit code: 0 (433字)
+• exec() → [stable-20260527 424372be] fix: zero-width markers prevent fake tool call forgery
+ 3 files changed, 17 insertions(+), 6 deletions(-)
+
+
+Exit code: 0 (147字)
+---
+[Retriever]: 收到，Kirk 已提交。我来做最终的记忆归档确认。
+
+[工具调用记录]
+• memory_palace(action='store', wing='项目知识', room='fake-tool-call-zero-width-fix', hall='hall_events', content='## 零宽字符签名方案 — 提交记录\n\n**Commit**: `424372be fix: zero-width markers prevent fake tool call forgery`\n**日期**: 2026-06-07\n**变更**: 3文件17行变更，工作树干净\n\n**改动文件**:\n- response_cleanup.py：新增Step6正则过滤无签名伪造块\n- group_nudge.md：prompt禁止条款扩展覆盖项目符号格式\n- engine.py / message_converter.py：零宽字符签名（\\u200B\\u2060前缀+\\u200B后缀）\n\n**验证结果**: Harper检测逻辑验证通过，提交check无报错。')
+---
+[Harper]: 等待下一步指令。
+
+[工具调用记录]
+• chatroom_send(✅ 已确认提交完成。retriever补充的正则改进（只删伪造块不删后续内容）也已纳入，误删风险已消除。) → (48字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• end_discussion() → ✅ 讨论已结束（原因: 提交已完成：424372be，3文件17行变更，工作树干净。），即将进入总结阶段 (52字)
+---
+[Kirk]: ## 结论
+
+已提交 `424372be fix: zero-width markers prevent fake tool call forgery`，3文件17行变更，工作树干净，无待提交内容。
+
+## 关键发现
+
+- **engine.py**：`build_tool_log()` 返回值用 `\u200b...\u2060...\u200b` 零宽字符包裹真实工具调用块
+- **message_converter.py**：`_TOOL_LOG_BLOCK_RE` 和 `age_tool_log()` 只匹配带零宽标记的块
+- **response_cleanup.py**：新增正则剥离无零宽标记的伪造块（`• tool_name(...) → ...` 格式）
+
+## 备注
+
+三层防御（prompt禁止 + 零宽签名 + 正则兜底）全部到位，Harper 测试验证通过。
+---

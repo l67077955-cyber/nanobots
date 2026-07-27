@@ -1,0 +1,126 @@
+[用户]: 改进算法
+---
+[Kirk]: 写入记忆：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 440|             "iter": iteration,
+441|             "latency": round(latency, 2),
+442|             "tokens": dict(usage),
+443|             "finish": response.finish_reason,
+444|             "retry_log": response.retry_log,
+445|             "tools": (
+446|                 [tc.name for tc in response.tool_calls]
+447|                 if response.has_tool_calls else []
+448|             ),
+449|         })
+450| 
+451|         raw_content = response.content or ""
+452|         logger.info(
+453|             "tool_loop iter {}: finish={} tools={} content='{}'",
+454|             iteration, response.finish_reason,
+455|             bool(response.has_tool_calls), raw_content,
+456|         )
+457| 
+458|         # ── Degenerate repetition guard ──────────────────────────────────
+459|         # Detect when … (2,545字)
+• memory_palace(tool_loop 重复消息检测 _has_contiguous_repeat 退化检测) → 🔍 5 result(s) for 'tool_loop 重复消息检测 _has_contiguous_repeat 退化检测':
+
+[1] wing_code/tool-loop-dedup-bug (sim=0.279)
+  ## tool_loop.py 重复消息检测缺陷分析（2026-05-24）
+
+### 文件位置
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py (855行)
+
+### 两层重复检测机制
+
+**层1：工具调用去重（L519-561）**
+- `_DEDUP_TOOLS` = {web_search, web_fetch, chatroom_send, exec, list_dir, read_file}
+- `_seen_calls` dict 缓存 name:args_json → result
+- 同 iteration 内 `_batch_dedup_keys` 防批量重复
+- 只防工具重复调用，不防文本重复
+
+**层2：退化重复检测（L458-477）**
+- `_has… (2,235字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 1| """Shared LLM + tool-calling loop.
+2| 
+3| Provides a single ``tool_loop()`` coroutine that both ``AgentLoop`` (core)
+4| and ``GroupChatEngine`` (group chat) delegate to for the iterative
+5| call-LLM → execute-tools → append-messages cycle.
+6| 
+7| Callers customise behaviour through optional callbacks rather than
+8| subclassing, keeping the core loop logic in one place.
+9| """
+10| 
+11| from __future__ import annotations
+12| 
+13| import asyncio
+14| import json
+15| import re
+16| import time as _time
+17| from dataclasses import dataclass, field
+18| from typing import Any, Awaitable, Callable
+19| 
+20| from loguru import logger
+21| 
+22| from nanobot.tools.registry import ToolRegistry
+23| from nanobot.groupchat.history.result_processor import process_tool_result
+24| from nanobot.providers.base… (3,064字)
+• exec(grep -n "_has_contiguous_repeat\|_truncate_repeated_tail\|_DEDUP_TOOLS\|_seen...) → 96:_DEDUP_TOOLS = frozenset({
+103:def _has_contiguous_repeat(text: str, min_repeat: int = 3) -> bool:
+128:def _truncate_repeated_tail(text: str, min_repeat: int = 3) -> str:
+262:    _seen_calls: dict[str, str] = {}  # "name:args_json" -> cached result
+466:        if _has_contiguous_repeat(_check_text):
+472:            _non_repeated = _truncate_repeated_tail(raw_content)
+521:            _batch_dedup_keys: set[str] = set()  # track dedup keys within this batch
+530:                if tc.name in _DE… (956字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 96| _DEDUP_TOOLS = frozenset({
+97|     "web_search", "web_fetch", "chatroom_send",
+98|     "exec", "list_dir", "read_file",
+99| })
+100| 
+101| # ── Degenerate repetition detection ────────────────────────────────────────
+102| 
+103| def _has_contiguous_repeat(text: str, min_repeat: int = 3) -> bool:
+104|     """Detect if the same sentence/segment appears consecutively ≥ *min_repeat* times.
+105| 
+106|     Splits on sentence-ending punctuation or newlines, then checks for runs
+107|     of identical (whitespace-normalised) segments.  O(n) — suitable for
+108|     calling on every iteration without measurable overhead.
+109|     """
+110|     if not text:
+111|         return False
+112|     segments = re.split(r'[\n。！？.!?\u3002]', text)
+113|     # Normalise and filter empty
+114|     segs = [s.strip(… (3,087字)
+• edit_file() → (84字)
+• edit_file() → (84字)
+• exec() → STDERR:
+/bin/bash: line 1: python: command not found
+
+
+Exit code: 127 (69字)
+• exec() → (313字)
+• exec() → (193字)
+  (还有 2 个工具调用，已省略)
+---
+[Kirk]: ## 结论
+
+在 `tool_loop.py` 中新增了 `_has_ngram_repeat()` 滑动窗口字符级 n-gram 检测函数，与原有的标点分割检测组合为 `_has_degenerate_repeat()`，彻底修复了无标点大段重复文本无法被捕获的核心缺陷。
+
+## 关键发现
+
+- **根因**：原 `_has_contiguous_repeat()` 依赖 `[\n。！？.!?\u3002]` 分割，无标点的大段重复被当作单个 segment，检测完全失效
+- **修复**：新增 `_has_ngram_repeat()`，对 40-20 字符的滑动窗口构建 n-gram→位置映射，检测 ≥3 次非重叠出现
+- **覆盖场景**：连续重复、间隔重复（A-B-A-B）、跨标点重复、微小空格差异
+- **性能**：100 次调用 ≈ 0.013s，零感知开销
+- **测试**：10 个用例全部通过，包括用户报告的精确 bug case
+
+## 备注
+
+改动文件：`/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py` L101-186。原有 `_truncate_repeated_tail()` 的 `\n` 分隔交替 pair 限制是既有行为，未引入回归。
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/repeat-detection-algorithm (hidden)
+  Drawer ID: drawer_wing_code_repeat-detection-algorithm_9c7945b6c5c8b54ff29e749a (139字)
+• end_discussion() → ✅ 讨论已结束（原因: 算法改进完成，测试全部通过），即将进入总结阶段 (35字)
+---

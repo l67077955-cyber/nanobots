@@ -1,0 +1,85 @@
+[用户]: 什么
+---
+[Harper]: 你说"什么"——是对我上一轮分析（auto-wait 方案）的回应吗？
+
+那我就顺着你原来的问题直接提炼结论：
+
+**"额度满后自动让 agent wait 是不是正确的做法"**
+
+我的回答：**不应该是 pool 层自动 wait，应该在 broadcast `_tool_loop` 层做一次自动重试。**
+
+原因就两个事实：
+
+| 层 | 能不能自动等 | 为什么 |
+|---|---|---|
+| **pool/allocate** | ❌ 不行 | 这是底层资源分配器，不应该了解业务流程。agent 可能想发更少人/直接放弃，不等 |
+| **broadcast `_tool_loop`** | ✅ 可以 | 检测 `BLOCKED` → 自动 `release_unread + wait(50ms) + retry` → 拥塞自己消化，agent 感知不到 |
+
+当前代码路径（已确认）：
+- `chatroom_send` 满 → 返回 `BLOCKED` → 只在 state tracker 标记 `blocked`，没有重试
+- wait 前调用 `release_unread` 释放槽
+
+所以如果现在遇到池满卡住，是要patch broadcast 加一次重试（2行改动的量），还是要保持现状让 agent 自己处理 `BLOCKED`？
+
+需要我写这个 patch 吗？
+---
+[Kirk]: 验证已完成，结果：
+
+**对话池独立改造 ✅ 正确**
+- 58/58 测试全绿
+- 每个 agent 独立信号量，发消息只扣自己的额度，互不影响
+- `mark_replied` 在 WaitTool 里正确调用，释放发送方槽位
+
+**Harper 提了一个改进方案**：当 `chatroom_send` 返回 BLOCKED 时，在 broadcast 层自动做一次 `release_unread + wait + retry`，而不是直接把 BLOCKED 扔回给 agent。理由是短暂拥塞可以自动消化，agent 不需要处理这个边缘情况。
+
+你觉得这个 auto-retry 要做吗？还是当前 BLOCKED 直接返回就够了？
+---
+[Harper]: **不做。当前行为够用，auto-retry 会引入不必要的复杂度。**
+
+理由基于当前代码的实际流程：
+
+```
+agent 循环:
+  1. chatroom_send → BLOCKED (池满)
+  2. 下一个 tool_call = wait()
+  3. wait() 内部 → release_unread → 释放槽
+  4. agent 醒了，下一个循环再 chatroom_send → 成功
+```
+
+**这是自愈的** — 不需要 broadcast 层介入。BLOCKED 返回给 agent 后，agent 的 `_tool_loop` 会自然走到 wait 释放槽，再下一轮就能发出去了。
+
+加入 auto-retry 反而引入三个问题：
+
+1. **retry 时机不可控** — 等 50ms 不一定够（别人还没 wait），等 15s 又太长
+2. **隐藏信息** — 现在 BLOCKED 会记录 `state=blocked`，运维可见。auto-retry 消化掉了，你不知道池曾经满过
+3. **边缘情况复杂** — retry 几次？还满要不要退回 BLOCKED？递归调用会不会死循环？
+
+**结论：保持现状。** 当前流程 agent 只需多走一个 tool 循环就能自愈，这是已经实现且正确的行为。
+---
+[Harper]: **+1。** 共识达成。
+
+总结这个决策：对话池独立改造 ✅ 正确，满额发不出去时返回 BLOCKED ✅ 正确设计，不引入 auto-retry。
+---
+[Kirk]: ## 结论
+
+**对话池独立改造 ✅ 正确，不需要额外改动。**
+
+额度满后 BLOCKED 直接返回给 agent 就是正确做法，不应该自动 wait 或 auto-retry。
+
+## 关键发现
+
+- 58/58 测试全绿，per-agent 独立信号量工作正常
+- 每个 agent 独立容量，发消息只扣发送方额度，互不影响
+- `mark_replied` 在 WaitTool 里正确调用，释放发送方槽位
+- BLOCKED 返回值给 agent 完整信息（池满、已用/总容量、建议操作），agent 能自主决定下一步
+
+## 备注
+
+Harper 提议在 broadcast 层加 `release_unread + wait(50ms) + retry`，被我否决。原因：隐藏真实状态、50ms 是 magic number、长任务场景不够、实际极少触发。BLOCKED 是特性不是 bug。
+
+[工具调用记录]
+• chatroom_send() → (49字)
+• memory_palace() → ✅ Stored in wing_code/conversation-pool-independent (hidden)
+  Drawer ID: drawer_wing_code_conversation-pool-independent_b66837a9f9279084d69ea701 (145字)
+• end_discussion() → ✅ 讨论已结束（原因: 验证完成，结论已给出：BLOCKED 直接返回是正确设计，不需要 auto-retry patch。），即将进入总结阶段 (72字)
+---

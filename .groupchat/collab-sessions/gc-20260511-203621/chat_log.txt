@@ -1,0 +1,347 @@
+[用户]: 继续修改
+---
+[Lucas]: 我已完成对 `nanobot/skills/` 目录下脚本的死代码扫描。
+
+## [死代码扫描] 来源: vulture (nanobot/skills/scripts)
+- **cron/scripts/cron_cli.py**: 第 182 行存在未使用变量 `msg`。
+- **其他脚本**: `debug`, `settings`, `skill-creator` 目录下的脚本未发现明显的死代码（函数、类或变量定义未被引用）。
+
+备注：`vulture` 扫描结果显示这些脚本的结构非常精简，除了 `cron_cli.py` 中的一个局部变量外，没有发现冗余的函数定义。
+
+任务已完成。
+---
+[Kirk]: 现在处理 `chatroom_tools.py`：
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git log --oneline -3 && echo "---" && git status --short) → d452714 chore: remove dead code (-8923 lines)
+7c220bd chore: checkpoint before dead code cleanup
+206ceca feat: wire AI summarization into tool result pipeline
+---
+
+
+Exit code: 0 (177字)
+• exec(cd /root/nanobot-src/nanobot && grep -n "def _has_search_intent\|def _pick_ne...) → 675:    def _has_search_intent(messages: list[dict[str, Any]]) -> bool:
+961:    def _pick_next_speaker(self, last_content: str = "") -> str:
+1000:    async def _generate_summary(self) -> None:
+
+
+Exit code: 0 (207字)
+• exec(cd /root/nanobot-src/nanobot && grep -n "def agent_searches\|def try_send\|de...) → 104:    def agent_searches(self, agent: str) -> int:
+576:    def try_send(self, agent_name: str) -> bool:
+582:    def record_send(self, agent_name: str) -> None:
+
+
+Exit code: 0 (176字)
+• exec(cd /root/nanobot-src/nanobot && grep -n "def get_or_create\|def invalidate" s...) → 125:    def get_or_create(self, key: str) -> Session:
+211:    def invalidate(self, key: str) -> None:
+
+
+Exit code: 0 (116字)
+• exec(cd /root/nanobot-src/nanobot && grep -n "def trigger_now" heartbeat/service.py) → 177:    async def trigger_now(self) -> str | None:
+
+
+Exit code: 0 (65字)
+• exec(cd /root/nanobot-src/nanobot && grep -n "def estimate_message_tokens\|def est...) → 194:def estimate_message_tokens(message: dict[str, Any]) -> int:
+232:def estimate_prompt_tokens_chain(
+
+
+Exit code: 0 (117字)
+• exec(cd /root/nanobot-src/nanobot && grep -n "def consume_inbound\|def inbound_siz...) → 24:    async def consume_inbound(self) -> InboundMessage:
+37:    def inbound_size(self) -> int:
+42:    def outbound_size(self) -> int:
+
+
+Exit code: 0 (149字)
+• exec(cd /root/nanobot-src/nanobot && grep -n "class BroadcastOrchestrator" groupch...) → 248:class BroadcastOrchestrator:
+
+
+Exit code: 0 (47字)
+• exec() → _has_search_intent: 0
+_pick_next_speaker: 0
+_generate_summary: 0
+
+
+Exit code: 0 (79字)
+• exec() → agent_searches: 0
+try_send: 0
+record_send: 0
+
+
+Exit code: 0 (59字)
+• exec() → get_or_create: 0
+invalidate: 0
+trigger_now: 0
+estimate_message_tokens: 0
+estimate_prompt_tokens_chain: 0
+consume_inbound: 0
+inbound_size: 0
+outbound_size: 0
+
+
+Exit code: 0 (171字)
+• exec(cd /root/nanobot-src/nanobot && grep -rn "BroadcastOrchestrator" --include="*...) → groupchat/orchestra/broadcast.py:436:    orch = BroadcastOrchestrator(agents, engine, mailbox)
+
+
+Exit code: 0 (109字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 675|     def _has_search_intent(messages: list[dict[str, Any]]) -> bool:
+676|         """Check if the latest user message has search intent."""
+677|         # Find the last user message
+678|         for msg in reversed(messages):
+679|             if msg.get("role") == "user":
+680|                 text = msg.get("content", "").lower()
+681|                 for kw in GroupChatEngine._SEARCH_KEYWORDS:
+682|                     if kw in text:
+683|                         return True
+684|                 return False
+685|         return False
+686| 
+687|     def get_agent_enabled_tool_names(self, agent_name: str) -> list[str]:
+688|         """Get the names of tools currently enabled for an agent."""
+689|         agent_cfg = self.registry.get(agent_name, {})
+690|         # Session override takes pr… (2,527字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 961|     def _pick_next_speaker(self, last_content: str = "") -> str:
+962|         names = self._active_agents
+963|         # @mentions
+964|         for name in names:
+965|             if f"@{name}" in last_content or f"@{name.lower()}" in last_content:
+966|                 return name
+967|         # Implicit mentions
+968|         mentioned = [n for n in names if n.lower() in last_content.lower()
+969|                      and (not self._history or self._history[-1]["sender"] != n)]
+970|         if mentioned:
+971|             return random.choice(mentioned)
+972|         # Avoid repeat
+973|         candidates = list(names)
+974|         if self._history:
+975|             last_speaker = self._history[-1]["sender… (3,490字)
+  (还有 21 个工具调用，已省略)
+---
+[Kirk]: `tiktoken` 仍被 `estimate_prompt_tokens` 使用，保留。提交：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 95|     def agent_credits(self, agent: str) -> int:
+96|         """Remaining whole credits for this agent."""
+97|         return int(self._credits.get(agent, 0.0))
+98| 
+99|     def agent_tool_calls(self, agent: str) -> int:
+100|         """How many tool calls this agent has made."""
+101|         return self._tool_calls.get(agent, 0)
+102| 
+103|     # backward-compat alias
+104|     def agent_searches(self, agent: str) -> int:
+105|         return self.agent_tool_calls(agent)
+106| 
+107|     def status(self) -> str:
+108|         """Return pool status string with per-agent breakdown."""
+109|         parts = []
+110|         for a in self._agents:
+111|             c = int(self._credits.get(a, 0))
+112|             t = self._tool_calls.get(a, 0)
+113|             parts.append(f"{a}:{c}💰({t}用)")
+114| … (893字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 570| 
+571|     def __init__(self, leader_name: str) -> None:
+572|         self._leader = leader_name
+573|         # {agent_name: sends_since_leader_spoke}
+574|         self._counts: dict[str, int] = {}
+575| 
+576|     def try_send(self, agent_name: str) -> bool:
+577|         """Return True if the agent is allowed to send."""
+578|         if agent_name == self._leader:
+579|             return True
+580|         return self._counts.get(agent_name, 0) < 1
+581| 
+582|     def record_send(self, agent_name: str) -> None:
+583|         """Record that agent sent a message."""
+584|         if agent_name == self._leader:
+585|             # Leader spoke — reset everyone's counter
+586|             for k in self._counts:
+587|                 self._counts[k] = 0
+588|         else:
+589|             self._cou… (1,256字)
+• edit_file() → (89字)
+• edit_file() → (89字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 670|         "search", "look up", "find", "google", "news",
+671|         "latest", "recent", "today", "current",
+672|     }
+673| 
+674|     @staticmethod
+675|     def _has_search_intent(messages: list[dict[str, Any]]) -> bool:
+676|         """Check if the latest user message has search intent."""
+677|         # Find the last user message
+678|         for msg in reversed(messages):
+679|             if msg.get("role") == "user":
+680|                 text = msg.get("content", "").lower()
+681|                 for kw in GroupChatEngine._SEARCH_KEYWORDS:
+682|                     if kw in text:
+683|                         return True
+684|                 return False
+685|         return False
+686| 
+687|     def get_agent_enabled_tool_names(self, agent_name: str) -> list[str]:
+688|         """Get … (974字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 955| 
+956|     def _format_history(self) -> str:
+957|         """Format history as string — delegates to HistoryContext."""
+958|         return self.history.format()
+959| 
+960| 
+961|     def _pick_next_speaker(self, last_content: str = "") -> str:
+962|         names = self._active_agents
+963|         # @mentions
+964|         for name in names:
+965|             if f"@{name}" in last_content or f"@{name.lower()}" in last_content:
+966|                 return name
+967|         # Implicit mentions
+968|         mentioned = [n for n in names if n.lower() in last_content.lower()
+969|                      and (not self._history or self._history[-1]["sender"] != n)]
+970|         if mentioned:
+971|             return random.choice(mentioned)
+972|         # Avoid repeat
+973|         candidates = list(… (1,160字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 990|             leader=self._leader,
+991|             round_num=self._round,
+992|             relevant_agents=relevant_agents,
+993|         )
+994| 
+995|         # Skills are now built by PromptBuilder._build_skills_content()
+996|         # (included in DEFAULT_PROMPT_ORDER as "skills" component).
+997| 
+998|         return messages
+999| 
+1000|     async def _generate_summary(self) -> None:
+1001|         """… (666字)
+  (还有 10 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• wait() → (18字)
+• wait() → (18字)
+• exec(cd /root/nanobot-src && grep -rn "_has_search_intent\|_pick_next_speaker\|_ge...) → nanobot/groupchat/orchestra/engine.py:675:    def _has_search_intent(messages: list[dict[str, Any]]) -> bool:
+nanobot/groupchat/orchestra/engine.py:961:    def _pick_next_speaker(self, last_content: str = "") -> str:
+nanobot/groupchat/orchestra/engine.py:1000:    async def _generate_summary(self) -> None:
+
+
+Exit code: 0 (321字)
+• exec(cd /root/nanobot-src && grep -rn "agent_searches\|try_send\|record_send" --in...) → nanobot/groupchat/orchestra/tools/chatroom_tools.py:104:    def agent_searches(self, agent: str) -> int:
+nanobot/groupchat/orchestra/tools/chatroom_tools.py:576:    def try_send(self, agent_name: str) -> bool:
+nanobot/groupchat/orchestra/tools/chatroom_tools.py:582:    def record_send(self, agent_name: str) -> None:
+
+
+Exit code: 0 (332字)
+• exec(cd /root/nanobot-src && grep -rn "trigger_now\|get_or_create\|invalidate" --i...) → nanobot/tools/memory_palace.py:136:            "kg_query, kg_add, kg_invalidate, kg_timeline, diary_write, diary_read."
+nanobot/tools/memory_palace.py:160:                        "kg_invalidate",
+nanobot/tools/memory_palace.py:180:                        "'kg_invalidate' — mark a fact as ended. "
+nanobot/tools/memory_palace.py:256:                    "description": "[kg_add/kg_invalidate] Subject entity.",
+nanobot/tools/memory_palace.py:260:                    "description": "[kg_add/kg_invalida… (1,570字)
+• exec(cd /root/nanobot-src && grep -rn "consume_inbound\|\.inbound_size\|\.outbound...) → Exit code: 1 (13字)
+• exec(cd /root/nanobot-src && grep -rn "estimate_message_tokens\|estimate_prompt_to...) → Exit code: 1 (13字)
+• exec(cd /root/nanobot-src && grep -rn "BroadcastOrchestrator" --include="*.py" nan...) → nanobot/groupchat/orchestra/broadcast.py:248:class BroadcastOrchestrator:
+nanobot/groupchat/orchestra/broadcast.py:436:    orch = BroadcastOrchestrator(agents, engine, mailbox)
+
+
+Exit code: 0 (191字)
+• exec() → Exit code: 1 (13字)
+• exec(cd /root/nanobot-src && grep -rn "BroadcastOrchestrator" --include="*.py" nan...) → Exit code: 1 (13字)
+• exec(cd /root/nanobot-src && grep -rn "trigger_now\|\.get_or_create(\|\.invalidate...) → Exit code: 1 (13字)
+• chatroom_send() → (48字)
+• wait() → (56字)
+---
+[Lucas]: 我已完成对 `nanobot/skills/` 目录下脚本的死代码扫描。
+
+## [死代码扫描] 来源: vulture (nanobot/skills/scripts)
+- **cron/scripts/cron_cli.py**: 第 182 行存在未使用变量 `msg`。
+- **其他脚本**: `debug`, `settings`, `skill-creator` 目录下的脚本未发现明显的死代码（函数、类或变量定义未被引用）。
+
+备注：`vulture` 扫描结果显示这些脚本的结构非常精简，除了 `cron_cli.py` 中的一个局部变量外，没有发现冗余的函数定义。
+
+任务已完成。
+---
+[Kirk]: ## Phase 2 完成 — commit `3b630ad`，-319 行
+
+| 文件 | 删除内容 |
+|---|---|
+| `engine.py` | `_has_search_intent`, `_pick_next_speaker`, `_generate_summary`, `_SEARCH_KEYWORDS`, `import random` |
+| `chatroom_tools.py` | `agent_searches`, `try_send`, `record_send` |
+| `session/manager.py` | `get_or_create`, `invalidate` |
+| `heartbeat/service.py` | `trigger_now` |
+| `utils/helpers.py` | `estimate_message_tokens`, `estimate_prompt_tokens_chain` |
+| `bus/queue.py` | `consume_inbound`, `inbound_size`, `outbound_size` |
+| `dead_code_analysis.py` | 临时分析文件 |
+
+**两阶段合计：-9,242 行**，全项目语法验证通过 ✅
+
+**排除项**：`BroadcastOrchestrator` 经复核在 `broadcast_round` 中被大量使用，非死代码。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src/nanobot && grep -n "class BroadcastOrchestrator" groupch...) → 248:class BroadcastOrchestrator:
+
+
+Exit code: 0 (47字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 240|         _recv_str = ", ".join(targets)
+241|         logger.info(
+242|             "Broadcast: {} {} → {} 实时打断 {} 个 busy agent",
+243|             _dir, sender, _recv_str, _interrupted_count,
+244|         )
+245| 
+246| 
+247| 
+248| class BroadcastOrchestrator:
+249|     """State manager for a single broadcast round."""
+250|     
+251|     def __init__(self, agents: list[str], engine: BroadcastContext, mailbox: MailboxHub):
+252|         self.engine = engine
+253|         self.mailbox = mailbox
+254|         
+255|         self.leader_name = engine._leader if hasattr(engine, '_leader') else None
+256|         if self.leader_name and self.leader_name not in agents:
+257|             self.leader_name = None
+258|             
+259|         self.exec_agents = list(agents)
+260|         self.non_leader_a… (14,691字)
+• exec(cd /root/nanobot-src/nanobot && grep -n "orch\." groupchat/orchestra/broadcas...) → 452:        orch.tasks[task] = name
+453:        orch.all_tasks.add(task)
+458:    await orch.setup_tools_and_pools(_spawn_agent_task)
+461:    view = BroadcastView(engine, orch.tracker, mailbox, orch.pool, orch.search_pool, list(agents), leader_name)
+464:    exec_agents = orch.exec_agents
+465:    non_leader_agents = orch.non_leader_agents
+466:    total = orch.total
+467:    gc_settings = orch.gc_settings
+468:    pool = orch.pool
+469:    tracker = orch.tracker
+470:    search_pool = orch.search_pool
+… (821字)
+• exec(cd /root/nanobot-src/nanobot && grep -n 'if __name__' groupchat/orchestra/bro...) → Exit code: 1 (13字)
+• exec(cd /root/nanobot-src && ls dead_code_analysis.py 2>/dev/null && echo "EXISTS"...) → dead_code_analysis.py
+EXISTS
+
+
+Exit code: 0 (43字)
+• exec(cd /root/nanobot-src && rm dead_code_analysis.py && git add -A && git diff --...) → dead_code_analysis.py                              | 150 ---------------------
+ nanobot/bus/queue.py                               |  12 --
+ nanobot/groupchat/orchestra/engine.py              |  47 -------
+ .../groupchat/orchestra/tools/chatroom_tools.py    |  19 ---
+ nanobot/heartbeat/service.py                       |   9 --
+ nanobot/session/manager.py                         |  22 ---
+ nanobot/utils/helpers.py                           |  60 ---------
+ 7 files changed, 319 deletions(-)
+
+
+Exit… (509字)
+• exec() → [detached HEAD 3b630ad] chore: remove dead methods and unused imports (phase 2, -319 lines)
+ 7 files changed, 319 deletions(-)
+ delete mode 100644 dead_code_analysis.py
+
+
+Exit code: 0 (183字)
+• exec() → ✅ All .py files pass syntax check
+
+
+Exit code: 0 (48字)
+• memory_palace() → ✅ Stored in wing_code/nanobot-dead-code-cleanup
+  Drawer ID: drawer_wing_code_nanobot-dead-code-cleanup_f0c3df1f2528268d10f1e6db
+  Chars: 248
+  Hall: hall_events (161字)
+• end_discussion() → ✅ 讨论已结束（原因: Phase 2 死方法清理完成，commit 3b630ad，-319行。全项目语法验证通过。），即将进入总结阶段 (69字)
+---

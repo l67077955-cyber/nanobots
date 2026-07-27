@@ -1,0 +1,470 @@
+[用户]: 逻辑具体
+---
+[Harper]: 当前 prompt 组装的**完整逻辑管线**，三层过滤 + 紧凑截断：
+
+---
+
+### 第1层：always-on 过滤（`get_always_skills()`）
+
+读每个 SKILL.md 的 frontmatter `always` 字段，抽出 `true` 的 skill。
+
+```
+always: true → cron, debug, settings, memory (4个)
+always: false → 其余 8 个
+```
+
+### 第2层：静态紧凑注入（`compact=True` 分支）
+
+`build_skills_section()` 调用 `load_skills_for_context(static_always, compact=True)`：
+
+```python
+# loader.py 第198-207行
+if compact:
+    # 只取 description 行
+    desc = get_skill_description(name)
+    content = f"{desc}\n[read_file skills/{name}/SKILL.md for full doc]"
+    block = f"### Skill: {name}\n{content}"
+else:
+    # 旧逻辑：全文截断（700 chars 硬切，导致中线截断）
+    content = content[:max_chars_per_skill] + "\n\n[…truncated...]"
+    block = f"### Skill: {name}\n\n{content}"
+```
+
+结果：每个 always-on skill 从 **~775 chars** → **~180 chars**，仅保留 description + read_file 指针。
+
+### 第3层：摘要区块（其他 8 个 skill + 未文档化脚本）
+
+`build_skills_summary()` 遍历非 always-on skill，提取 `description` 和 `type`，拼成列表：
+
+```
+- steve-jobs-perspective: Steve Jobs视角... [large: read_file ...]
+- summarize: Summarize or extract text from URLs...
+- clawhub: Search and install skills from ClawHub...
+...
+```
+
+受 `MAX_SKILLS_SUMMARY_CHARS = 8000` 预算限制，超出的 skill 只显示名称 + 提示。
+
+### 总产出
+
+| 区块 | 字符 | 内容 |
+|------|------|------|
+| Static (always-on) | 729 | 4个 skill 的 description + read_file 指针 |
+| Dynamic (summary) | 1114 | 8个 non-always skill 摘要 + 未文档化脚本 |
+| **总计** | **1843** | 比修改前 4265 减少 **57%** |
+
+### 按需加载路径
+
+任何 skill 的完整 SKILL.md 可通过 `read_file skills/<name>/SKILL.md` 实时读取，不受 prompt 预算限制。`{baseDir}` 在加载时替换为绝对路径。
+---
+[Kirk]: 现在让我看看 `load_skills_for_context` 中 `compact=True` 的具体实现：
+
+[工具调用记录]
+• memory_palace(skill prompt loader compact always-on generation logic) → 🔍 5 result(s) for 'skill prompt loader compact always-on generation logic':
+
+[1] wing_code/skill-loader-auto-discovery (sim=-0.048)
+  Skill loader 自动编排分析：loader.py (378行) 纯手动文档驱动，只读 SKILL.md 不扫描 scripts/。上下文预算：always-on 5600字符，summary 8000字符，单技能 700/20000字符。建议方案：在 load_skill() 中自动扫描 scripts/*.{py,sh}，提取 docstring 第一行，对 SKILL.md 中未提及的脚本自动追加简短条目。当前孤儿：skill-creator/quick_validate.py。
+
+[2] wing_code/skill-config-design (sim=-0.128)
+  Skill on/off 配置设计决策 (2026-05-19): 推荐混合方案——SKILL.md frontmatter 声明 … (2,042字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 1| """Skills loader for agent capabilities."""
+2| 
+3| import json
+4| import os
+5| import re
+6| import shutil
+7| from pathlib import Path
+8| 
+9| # Default builtin skills directory (relative to this file)
+10| BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
+11| 
+12| # Budget caps — keep skills section from bloating the prompt.
+13| # Single SKILL.md files larger than this are skipped and only noted in the footer.
+14| MAX_SINGLE_SKILL_CHARS: int = 20_000
+15| # Total character budget for the non-always-on summary block.
+16| MAX_SKILLS_SUMMARY_CHARS: int = 8_000
+17| # Total budget for always-on skills (cumulative, enforced inside load_skills_for_context).
+18| MAX_ALWAYS_SKILLS_CHARS: int = 5600
+19| # Per-skill inline truncation limit for always-on skills.
+20| MAX_ALWAYS_SKILL_INLINE:… (12,840字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 301|             try:
+302|                 skill_size = skill_path.stat().st_size
+303|             except OSError:
+304|                 skill_size = 0
+305|             if skill_size > MAX_SINGLE_SKILL_CHARS:
+306|                 continue  # already handled in pass 1
+307| 
+308|             desc = self._get_skill_description(name)
+309|             skill_meta = self._get_skill_meta(name)
+310|             available = self._check_requirements(skill_meta)
+311|             status = ""
+312|             if not available:
+313|                 missing = self._get_missing_requirements(skill_meta)
+314|                 status = f" [unavailable: {missing}]" if missing else " [unavailable]"
+315|             line = f"- {name}: {desc}{status}"
+316| 
+317|             if total_chars + len(line) + 1 > MAX_SKIL… (8,893字)
+• exec(cd /root/nanobot-src && grep -rn "build_skills_section\|skills_section\|stati...) → nanobot/groupchat/history/prompt_builder.py:616:        from nanobot.skills.loader import build_skills_section
+nanobot/groupchat/history/prompt_builder.py:617:        static, _ = build_skills_section(self._workspace)
+nanobot/groupchat/history/prompt_builder.py:622:        from nanobot.skills.loader import build_skills_section
+nanobot/groupchat/history/prompt_builder.py:623:        _, dynamic = build_skills_section(self._workspace)
+nanobot/skills/loader.py:34:def build_skills_section(workspace: P… (1,111字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 610|             f"- You possess native multimodal perception. When using tools like 'read_file' or 'web_fetch' on images or visual resources, you will directly \"see\" the content. Do not hesitate to read non-text files if visual analysis is needed.\n\n"
+611|             f"Reply directly with text for conversations. Only use the 'message' tool to send to a specific chat channel."
+612|         )
+613| 
+614|     def _build_skills_content(self) -> str:
+615|         """Build the static skills section (always-on skills inlined)."""
+616|         from nanobot.skills.loader import build_skills_section
+617|         static, _ = build_skills_section(self._workspace)
+618|         return static
+619| 
+620|     def _build_skills_overview(self) -> str:
+621|         """Build the dynamic skills overview (su… (1,571字)
+• exec(cd /root/nanobot-src && grep -n "skills\|skills_overview\|order" nanobot/grou...) → 4:- Component ordering and management
+34:    "tool_instructions", "skills", "broadcast_hint", "examples",
+36:    "skills_overview",
+44:    "skills": "技能列表 (skills)",
+51:    "skills_overview":… (1,239字)
+  (还有 6 个工具调用，已省略)
+---
+[Kirk]: 技能提示词组装逻辑已完整梳理并代码验证。三层管线 + 紧凑模式，1843 chars 总量，结构清晰无冗余。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 185|         Returns:
+186|             Formatted skills content.
+187|         """
+188|         parts = []
+189|         total_chars = 0
+190|         skipped: list[str] = []
+191| 
+192|         for name in skill_names:
+193|             # ── Compact mode: description + read_file pointer ──
+194|             if compact:
+195|                 meta = self.get_skill_metadata(name) or {}
+196|                 desc = meta.get("description", "").strip()
+197|                 block = f"### Skill: {name}\n{desc}\n[read_file skills/{name}/SKILL.md for full doc]"
+198|                 if max_total_chars and total_chars + len(block) > max_total_chars:
+199|                     skipped.append(name)
+200|                     continue
+201|                 parts.append(block)
+202|                 total_chars += len(… (1,921字)
+• memory_palace() → ✅ Stored in wing_code/skill-prompt-pipeline (hidden)
+  Drawer ID: drawer_wing_code_skill-prompt-pipeline_6788754b3ce4c562a2e1311d (129字)
+• end_discussion() → ✅ 讨论已结束（原因: 逻辑已完整梳理并验证，代码与描述一致，记忆已存储），即将进入总结阶段 (46字)
+---
+[Kirk]: ## 技能提示词组装逻辑
+
+入口：`build_skills_section(workspace)` → 返回 `(static_content, dynamic_content)`
+
+每次 LLM 调用前执行，无缓存，纯动态。
+
+### 第1层：always-on 过滤
+
+`get_always_skills()` 遍历所有 skill，读 SKILL.md frontmatter 的 `always` 字段：
+
+```
+always: true  → cron, debug, settings, memory（4个）
+always: false → 其余 8 个
+```
+
+### 第2层：按 type 分流
+
+每个 always-on skill 检查 frontmatter `type` 字段（默认 `static`）：
+
+- `type: static` → 注入 **static_content**（放在 history 之前，稳定不变）
+- `type: dynamic` → 注入 **dynamic_content**（放在 history 之后，支持 `{{datetime}}` 等易变变量）
+
+当前 4 个 always-on 全是 static，dynamic 区块为空。
+
+### 第3层：紧凑注入（compact=True）
+
+```python
+# loader.py:194-203
+if compact:
+    meta = self.get_skill_metadata(name) or {}
+    desc = meta.get("description", "").strip()
+    block = f"### Skill: {name}\n{desc}\n[read_file skills/{name}/SKILL.md for full doc]"
+```
+
+每个 always-on skill 只输出 **description 一行 + read_file 指针**，~180 chars/skill。受 `MAX_ALWAYS_SKILLS_CHARS=5600` 总预算，超出则跳过并在末尾提示。
+
+### 第4层：摘要区块（非 always-on skill）
+
+`build_skills_summary(exclude=always_set)` 遍历其余 8 个 skill：
+
+```
+- steve-jobs-perspective: Steve Jobs视角... [large: read_file ...]
+- summarize: Summarize or extract text from URLs...
+- clawhub: Search and install skills from ClawHub...
+...
+```
+
+受 `MAX_SKILLS_SUMMARY_CHARS=8000` 预算。单个 skill 的 description 超长时标记 `[large: read_file ...]`，只显示名称。
+
+### 第5层：未文档化脚本
+
+`_discover_undocumented_scripts()` 自动扫描 `scripts/` 目录，找出无对应 SKILL.md 的 `.py` 文件：
+
+```
+Undocumented scripts (auto-discovered from scripts/ dirs):
+  - `quick_validate.py`
+```
+
+### 按需加载
+
+agent 随时可 `read_file skills/<name>/SKILL.md` 读取完整文档。加载时 `{baseDir}` 替换为绝对路径。非 compact 模式的截断已改为**行边界截断**（`rfind('\n')`），不会在路径/代码中间硬切。
+
+### 最终产出
+
+| 区块 | 位置 | chars | 内容 |
+|------|------|-------|------|
+| static_content | history 前 | 729 | 4 个 always-on description + 指针 |
+| dynamic_content | history 后 | 1114 | 8 个摘要 + undocumented scripts |
+| **总计** | | **1843** | 比 4265 减少 57% |
+---
+[用户]: always on 变量是怎么标注的
+---
+[Harper]: 回答来。`always` 在 SKILL.md **frontmatter** 声明，**YAML 键值对**，`_parse_bool` 解析，`get_always_skills()` 过滤。
+
+### 声明位置（每个 SKILL.md 顶部）
+
+```yaml
+---
+name: cron
+description: Schedule reminders and recurring tasks...
+always: true
+---
+```
+
+### 解析链路
+
+```
+SKILL.md frontmatter
+  → get_skill_metadata(name)  # 读 YAML frontmatter
+    → meta.get("always")       # 取 always 字段
+      → _parse_bool(value)     # 转 boolean
+        → get_always_skills()  # 过滤出 all true
+```
+
+### `_parse_bool` 逻辑（loader:25-32）
+
+```python
+_BOOL_TRUE = frozenset({"true", "yes", "1", "on"})
+
+def _parse_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower().strip() in _BOOL_TRUE
+    return bool(value)
+```
+
+支持：`true` / `True` / `TRUE` / `yes` / `1` / `on`，以及 YAML 原生 `bool` 类型。
+
+### `get_always_skills()` 双重检查（loader:410-418）
+
+```python
+if _parse_bool(skill_meta.get("always")) or _parse_bool(meta.get("always")):
+    result.append(s["name"])
+```
+
+同时检查 `nanobot.metadata.always` 和顶层 `always`，兼容两种 frontmatter 结构。
+
+### 当前分布
+
+| always | skills |
+|--------|--------|
+| **true** | cron, debug, settings, memory |
+| **false** | 其余 8 个 |
+
+**总结：** YAML frontmatter → `_parse_bool` → `get_always_skills()` 过滤，4 行代码。无配置文件，声明在 skill 自身。
+
+[工具调用记录]
+• exec() → === clawhub ===
+name: clawhub
+description: Search and install agent skills from ClawHub, the public skill registry.
+always: false
+---
+=== cron ===
+name: cron
+description: Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.
+always: true
+---
+=== debug ===
+name: debug
+description: "Diagnose system issues: check logs, process status, cron jobs, connectivity. Use when something isn't working or user asks to de… (2,059字)
+• exec(cd /root/nanobot-src/nanobot && grep -n "always" skills/loader.py | head -30) → 15:# Total character budget for the non-always-on summary block.
+17:# Total budget for always-on skills (cumulative, enforced inside load_skills_for_context).
+19:# Per-skill inline truncation limit for always-on skills.
+38:      - static_content: always-on skills with type=static inlined (stable, before history)
+39:      - dynamic_content: always-on skills with type=dynamic inlined + summary + undocumented scripts (volatile, after history)
+46:    # ── Split always-on skills by type ──
+47:    sta… (1,477字)
+• exec() → === get_always_skills() ===
+['cron', 'debug', 'settings', 'memory']
+
+=== 所有 skill 的 always 值 ===
+  clawhub                   → always=false
+  cron                      → always=true
+  debug                     → always=true
+  github                    → always=false
+  memory                    → always=true
+  settings                  → always=true
+  skill-creator             → always=false
+  steve-jobs-perspective    → always=false
+  summarize                 → always=false
+  testing           … (623字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 14| MAX_SINGLE_SKILL_CHARS: int = 20_000
+15| # Total character budget for the non-always-on summary block.
+16| MAX_SKILLS_SUMMARY_CHARS: int = 8_000
+17| # Total budget for always-on skills (cumulative, enforced inside load_skills_for_context).
+18| MAX_ALWAYS_SKILLS_CHARS: int = 5600
+19| # Per-skill inline truncation limit for always-on skills.
+20| MAX_ALWAYS_SKILL_INLINE: int = 700
+21| 
+22| _BOOL_TRUE = frozenset({"true", "yes", "1", "on"})
+23| 
+24| 
+25| def _parse_bool(value) -> bool:
+26|     """Parse a value that may be a string like 'true'/'false' into a real bool."""
+27|     if isinstance(value, bool):
+28|         return value
+
+(Showing lines 14-28 of 490. Use offset=29 to continue.) (696字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 405|         t = skill_meta.get("type") or meta.get("type")
+406|         if isinstance(t, str) and t.strip().lower() == "dynamic":
+407|             return "dynamic"
+408|         return "static"
+409| 
+410|     def get_always_skills(self) -> list[str]:
+411|         """Get skills marked as always=true that meet requirements."""
+412|         result = []
+413|         for s in self.list_skills(filter_unavailable=True):
+414|             meta = self.get_skill_metadata(s["name"]) or {}
+415|             skill_meta = self._parse_nanobot_metadata(meta.get("metadata", ""))
+416|             if _parse_bool(skill_meta.get("always")) or _parse_bool(meta.get("always")):
+417|                 result.append(s["name"])
+418|         return result
+419| 
+420|     def _discover_undocumented_scripts(self) -> list[st… (1,311字)
+• read_file(/root/nanobot-src/nanobot/skills/cron/SKILL.md) → 1| ---
+2| name: cron
+3| description: Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.
+4| always: true
+5| ---
+6| 
+7| # Cron — Scheduled Tasks
+8| 
+9| Use the CLI script to manage scheduled tasks. The background service picks up changes automatically.
+10| 
+11| ## CLI
+12| 
+13| ```bash
+14| python3 {baseDir}/scripts/cron_cli.py <command> [options]
+15| ```
+16| 
+17| ## Add a Job
+18| 
+19| Recurring (every N seconds):
+20| ```bash
+
+(Showing lines 1-20 of 61. Use offset=21 to continue.) (574字)
+---
+[Kirk]: ## 结论
+
+`always` 在 SKILL.md 的 **YAML frontmatter** 顶层标注，值为 `true` 或 `false`。
+
+## 关键发现
+
+**标注位置**：每个 SKILL.md 文件开头的 YAML frontmatter
+```yaml
+---
+name: cron
+description: Schedule reminders and recurring tasks...
+always: true        # ← 这个字段
+---
+```
+
+**读取逻辑**（`loader.py:410-418`）：
+- `get_always_skills()` 遍历所有 skill，检查两个位置（OR 关系）：
+  1. `metadata` JSON 内嵌的 `always`（优先）
+  2. frontmatter 顶层的 `always`
+- 用 `_parse_bool()` 解析，支持 `bool`、`"true"/"false"` 字符串、任意 truthy 值
+- 还会过滤掉 `requires` 不满足的 skill（`filter_unavailable=True`）
+
+**当前分布**：
+- `always: true`（4个）：cron, debug, settings, memory
+- `always: false`（8个）：其余所有 skill
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "always" nanobot/skills/loader.py | head -20) → 15:# Total character budget for the non-always-on summary block.
+17:# Total budget for always-on skills (cumulative, enforced inside load_skills_for_context).
+19:# Per-skill inline truncation limit for always-on skills.
+38:      - static_content: always-on skills with type=static inlined (stable, before history)
+39:      - dynamic_content: always-on skills with type=dynamic inlined + summary + undocumented scripts (volatile, after history)
+46:    # ── Split always-on skills by type ──
+47:    sta… (1,174字)
+• exec(head -10 /root/nanobot-src/nanobot/skills/cron/SKILL.md) → ---
+name: cron
+description: Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.
+always: true
+---
+
+# Cron — Scheduled Tasks
+
+Use the CLI script to manage scheduled tasks. The background service picks up changes automatically.
+
+
+
+Exit code: 0 (332字)
+• exec(head -10 /root/nanobot-src/nanobot/skills/weather/SKILL.md) → ---
+name: weather
+description: Get current weather and forecasts (no API key required).
+always: false
+homepage: https://wttr.in/:help
+metadata: {"nanobot":{"emoji":"🌤️","requires":{"bins":["curl"]}}}
+---
+
+# Weather
+
+
+
+Exit code: 0 (230字)
+• exec(cd /root/nanobot-src && grep -n "get_always_skills\|_parse_bool\|always" nano...) → 25:def _parse_bool(value) -> bool:
+38:      - static_content: always-on skills with type=static inlined (stable, before history)
+39:      - dynamic_content: always-on skills with type=dynamic inlined + summary + undocumented scripts (volatile, after history)
+47:    static_always: list[str] = []
+48:    dynamic_always: list[str] = []
+55:    # ── Static: always-on skills with type=static ──
+67:    # ── Dynamic: always-on type=dynamic inlined + summary + undocumented scripts ──
+78:    all_always = s… (772字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 25| def _parse_bool(value) -> bool:
+26|     """Parse a value that may be a string like 'true'/'false' into a real bool."""
+27|     if isinstance(value, bool):
+28|         return value
+29|     if isinstance(value, str):
+30|         return value.lower().strip() in _BOOL_TRUE
+31|     return bool(value)
+32| 
+
+(Showing lines 25-32 of 490. Use offset=33 to continue.) (363字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 410|     def get_always_skills(self) -> list[str]:
+411|         """Get skills marked as always=true that meet requirements."""
+412|         result = []
+413|         for s in self.list_skills(filter_unavailable=True):
+414|             meta = self.get_skill_metadata(s["name"]) or {}
+415|             skill_meta = self._parse_nanobot_metadata(meta.get("metadata", ""))
+416|             if _parse_bool(skill_meta.get("always")) or _parse_bool(meta.get("always")):
+417|                 result.append(s["name"])
+418|         return result
+419| 
+420|     def _discover_undocumented_scripts(self) -> list[str]:
+421|         """Find scripts in skill dirs not mentioned in their SKILL.md."""
+422|         entries = []
+423|         for s in self.list_skills(filter_unavailable=False):
+424|             name = s… (869字)
+• memory_palace() → ✅ Stored in wing_code/skill-always-annotation (hidden)
+  Drawer ID: drawer_wing_code_skill-always-annotation_313c5baf5b4917c56530d2db (133字)
+• end_discussion() → ✅ 讨论已结束（原因: always 标注方式已完整说明：frontmatter `always: true/false`，读取逻辑已验证，记忆已存储。），即将进入总结阶段 (86字)
+---

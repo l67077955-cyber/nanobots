@@ -1,0 +1,322 @@
+[用户]: 继续，刚刚又触发报错了
+---
+[Kirk]: 让我看看 agent 执行层面的异常处理：
+
+[工具调用记录]
+• exec(grep -rn "✗.*error\|\"error\"\|'error'" /root/nanobot-src/nanobot/groupchat/d...) → 151:        return f"✗ {agent_name} failed ({latency:.1f}s): {error}"
+152:    return f"✗ {agent_name} failed: {error}"
+527:    "error":        ("❌", "Error"),
+560:        if state in ("blocked", "error", "cancelled") and reason:
+
+Exit code: 0 (243字)
+• exec(grep -rn "def tool_result_brief" /root/nanobot-src/nanobot/groupchat/ --inclu...) → /root/nanobot-src/nanobot/groupchat/display/display.py:368:def tool_result_brief(
+/root/nanobot-src/nanobot/groupchat/display/display.py-369-    agent_name: str,
+/root/nanobot-src/nanobot/groupchat/display/display.py-370-    tool_name: str,
+/root/nanobot-src/nanobot/groupchat/display/display.py-371-    result: str,
+/root/nanobot-src/nanobot/groupchat/display/display.py-372-) -> str:
+/root/nanobot-src/nanobot/groupchat/display/display.py-373-    """Format a tool result summary for broadcast displ… (910字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 368| def tool_result_brief(
+369|     agent_name: str,
+370|     tool_name: str,
+371|     result: str,
+372| ) -> str:
+373|     """Format a tool result summary for broadcast display.
+374| 
+375|         └ 5 results
+376|         └ fetched (12,345c)
+377|     """
+378|     rlen = len(result) if result else 0
+379|     if tool_name == "web_search":
+380|         import re
+381|         m = re.search(r'\((\d+) results?\)', result[:100]) if result else None
+382|         count = int(m.group(1)) if m else max(result.count("\n") // 3, 1) if result else 0
+383|         return f"    └ {count} results"
+384|     elif tool_name == "web_fetch":
+385|         return f"    └ fetched ({rlen:,}字)"
+386|     elif tool_name == "exec":
+387|         preview = (result or "").strip().replace("\n", " ")[:55]
+388|         retu… (2,346字)
+• exec(grep -rn "agent.*error\|error_msg\|_error\|✗" /root/nanobot-src/nanobot/group...) → 115:                    f"✗ {name} dropped ── "
+
+Exit code: 0 (62字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 520|     "reading":      ("📖", "Reading"),
+521|     "writing":      ("✏️", "Writing"),
+522|     "sending":      ("🟢", "Sending"),
+523|     "waiting":      ("⚪", "Waiting..."),
+524|     "blocked":      ("🔴", "Blocked"),
+525|     "interrupted":  ("⚡", "Interrupted"),
+526|     "done":         ("✅", "Done"),
+527|     "error":        ("❌", "Error"),
+528|     "cancelled":    ("⬛", "Cancelled"),
+529| }
+530| 
+531| 
+532| def status_panel(
+533|     agents: list[str],
+534|     states: dict[str, str],
+535|     details: dict[str, str],
+536|     reasons: dict[str, str],
+537|     leader: str | None = None,
+538| ) -> str:
+539|     """Render a live status dashboard for all agents.
+540| 
+541|     Example:
+542|         ┏━━ status ━━━━━━━━━━━━━━━━━━━┓
+543|         ┃ 🟡 👑 Kirk      Thinking...  ┃
+544|         ┃… (2,166字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/broadcast_view.py) → 80|             text = f"🟡 {line}"
+81|             msg_id = None
+82|             if self.engine._send_and_get_id_fn:
+83|                 try:
+84|                     msg_id = await self.engine._send_and_get_id_fn(text)
+85|                 except Exception:
+86|                     await self.engine._send(text)
+87|             else:
+88|                 await self.engine._send(text)
+89|             self.pending_tool_msgs[tool_call_id] = (msg_id, text)
+90| 
+91|     async def on_tool_result(
+92|         self,
+93|         name: str,
+94|         tool_name: str,
+95|         tool_call_id: str,
+96|         result: str,
+97|     ) -> None:
+98|         """Render tool result event."""
+99|         await self.tracker.update_from_tool_result(name, tool_name, result)
+100|         
+101|         self.engine._… (2,681字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/broadcast_view.py) → 140|             
+141|         elif tool_name not in ("chatroom_send", "wait") and result:
+142|             brief = _d.tool_result_brief(name, tool_name, result)
+143|             if tool_name == "web_search" and self.search_pool:
+144|                 sel… (1,280字)
+  (还有 7 个工具调用，已省略)
+
+[工具调用记录]
+• memory_palace(name self is not defined error agent group chat) → 🔍 5 result(s) for 'name self is not defined error agent group chat':
+
+[1] wing_code/manage-agent-leader-bug (sim=0.109)
+  manage_agent set_tools 对 Leader 自己操作时显示 🔴 的原因：
+- chatroom_tools.py:956 检查 agent not in self._exec_agents，Leader 不在 _exec_agents 中
+- 返回 "Error: agent 'Kirk' 不在当前轮中..." 以 Error: 开头
+- broadcast_view.py:152 判断 result.startswith("Error:") → success=False → 🔴
+- display.py:407 manage_agent 的 brief 固定返回 "└ ✅ done"，所以看到 🔴 + ✅ done
+- 实际上 set_tools 对 Leader 没有生效，权限修改被 Error 拦截了
+- 修复方向：在… (1,985字)
+• exec(grep -rn "name 'self' is not defined\|'self'.*not defined\|NameError.*self" /...) → Exit code: 0 (13字)
+• exec(grep -rn "error:\|error_msg\|failed.*error\|✗.*error\|NameError\|name.*not de...) → 919:                                f"  ✗ {name} 连续 {_consecutive_error_count} 次 LLM 错误，强制退出"
+1347:            await engine._send(f"  ✗ {name} error: {e}")
+1561:                        logger.error("Broadcast: agent task error: {}", e)
+1562:                        await engine._send(f"\u2717 Agent error: {e}")
+
+
+Exit code: 0 (326字)
+• exec(grep -rn "except.*Exception\|except.*Error\|traceback\|format_exc\|name.*self...) → 170:        except Exception:
+196:    except Exception:
+307:                except asyncio.CancelledError:
+318:                    except (asyncio.CancelledError, Exception):
+342:        except asyncio.TimeoutError:
+507:                except Exception as exc:
+520:                    # Handle unexpected gather exceptions (e.g. BaseException)
+643:                except Exception as retry_err:
+716:    except Exception as e:
+
+
+Exit code: 0 (440字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1330|             log_request(engine, name, model, "broadcast",
+1331|                         reply_len=len(content) if content else 0,
+1332|                         tools=all_tools_used, iterations=total_iterations,
+1333|                         latency=round(total_latency, 1))
+1334|             return (name, content, all_tools_used, {})
+1335| 
+1336|         except asyncio.CancelledError:
+1337|             # Cancelled by leader end_discussion or engine stop
+1338|             await tracker.set_state(name, "cancelled")
+1339|             comp = _d.completion_msg(name, round(total_latency, 1), total_iterations, all_tools_used, leader=leader_name)
+1340|             if comp:
+1341|                 await engine._send(comp)
+1342|             return (name, content, all_tools_used, {})
+1343| 
+1344| … (2,115字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1545|                     for task_obj, task_name in tasks.items():
+1546|                         if not task_obj.done() and task_name != leader_name:
+1547|                             await tracker.set_state(task_name, "cancelled", reason="leader ended")
+1548|                             task_obj.cancel()
+1549|                 elif t in tasks:
+1550|                     try:
+1551|                         name, content, tools_used_list, *_ = t.result()
+1552|                         completed += 1
+1553|                         results.append((name, content, tools_used_list or []))
+1554|                         logger.info(
+1555|                             "Broadcast: {}/{} done — {} ({})",
+1556|                             completed, total, name,
+1557|                             f"{len(con… (1,759字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1240|                 # freed, causing pool exhaustion and blocking other agents' replies.
+1241|                 if pool:
+1242|                     pool.release_unread(name)
+1243|                 msg = await mailbox.wait(name, timeout=600)
+1244| 
+1245|                 if msg is None:
+1246|                     # No message — check if engine stopped, otherwise keep waiting
+1247|                     if not engine._running:
+1248|                         await tracker.set_state(name, "done", reason="engine stopped")
+1249|                         logger.info("Broadcast: {} wait retur… (4,882字)
+  (还有 9 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -rn "error:" nanobot/groupchat/ --include="*.py"...) → nanobot/groupchat/orchestra/broadcast.py:1347:            await engine._send(f"  ✗ {name} error: {e}")
+nanobot/groupchat/orchestra/broadcast.py:1562:                        await engine._send(f"\u2717 Agent error: {e}")
+nanobot/groupchat/display/display.py:149:def error_msg(agent_name: str, error: str, latency: float = 0) -> str:
+
+
+Exit code: 0 (346字)
+• exec(cd /root/nanobot-src && grep -rn "✗.*error\|error.*✗" nanobot/groupchat/ --in...) → nanobot/groupchat/orchestra/broadcast.py:919:                                f"  ✗ {name} 连续 {_consecutive_error_count} 次 LLM 错误，强制退出"
+nanobot/groupchat/orchestra/broadcast.py:1347:            await engine._send(f"  ✗ {name} error: {e}")
+nanobot/groupchat/display/display.py:151:        return f"✗ {agent_name} failed ({latency:.1f}s): {error}"
+nanobot/groupchat/display/display.py:152:    return f"✗ {agent_name} failed: {error}"
+
+
+Exit code: 0 (445字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1320|                     "role": "user",
+1321|                     "content": f"[队友消息] {msg}",
+1322|                 })
+1323| 
+1324|             # ── Final completion ──
+1325|             await tracker.set_state(name, "done")
+1326|             comp = _d.completion_msg(name, round(total_latency, 1), total_iterations, all_tools_used, leader=leader_name)
+1327|             if comp:
+1328|                 await engine._send(comp)
+1329| 
+1330|             log_request(engine, name, model, "broadcast",
+1331|                         reply_len=len(content) if content else 0,
+1332|                         tools=all_tools_used, iterations=total_iterations,
+1333|                         latency=round(total_latency, 1))
+1334|             return (name, content, all_tools_used, {})
+1335| 
+1336|         ex… (3,024字)
+• exec(cd /root/nanobot-src && grep -rn "self" nanobot/groupchat/orchestra/tools/too...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && grep -rn "def _run_one\|async def.*agent.*run\|def.*_...) → 485:    async def _run_one(
+
+
+Exit code: 0 (42字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 485|     async def _run_one(
+486|         name: str,
+487|         agent_idx: int,
+488|     ) -> tuple[str, str | None, list[str], dict]:
+489|         """Run a single agent with streaming display."""
+490|         import time as _t
+491|         _cycle_t0 = _t.time()
+492| 
+493|         if name not in engine.registry:
+494|             return (name, None, [], {})
+495| 
+496|         agent_cfg = engine.registry[name]
+497|         model = agent_cfg["model"]  # initial; re-read each cycle below
+498|         model_short = model.split("/")[-1]
+499| 
+500|         # ── Compute teammates list (must be before _build_agent_prompt call) ──
+501|         teammates = [a for a in agents if a != name]
+502| 
+503|         # In broadcast mode, all agents share the full history (relevant_agents=None).
+504|         … (10,748字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 685|         _sys_msg_count = len(messages)
+686| 
+687|         # ── Forced interrupt: get this agent's interrupt event from mailbox ──
+688|         _interrupt_event = mailbox.get_interrupt_event(name)
+689|         # Tracks how many timeout-recovery attempts this agent has made.
+690|         # Hard cap at 1 to prevent recovery loops.
+691|         _timeout_recovery_count = 0
+692|         # Tracks consecutive LLM errors to prevent rapid-fire error loops.
+693|         # After MAX_CONSECUTIVE_ERRORS, the agent exits instead of continuing.
+694|         _consecutive_error_count = 0
+695|         MAX_CONSECUTIVE_ERRORS = 3
+696| 
+697|         try:
+698|             while True:
+699|                 # Hard cycle cap — prevent runaway agents from draining resources
+700|                 if cycle >= max_c… (11,708字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1300|                     })
+1301|                 # Anti-repeat injection: remind agent not to repeat itself
+1… (4,973字)
+  (还有 2 个工具调用，已省略)
+---
+[Harper]: Now let me look at the LLM call that produces the error — line 918 area:
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 1| """Shared LLM + tool-calling loop.
+2| 
+3| Provides a single ``tool_loop()`` coroutine that both ``AgentLoop`` (core)
+4| and ``GroupChatEngine`` (group chat) delegate to for the iterative
+5| call-LLM → execute-tools → append-messages cycle.
+6| 
+7| Callers customise behaviour through optional callbacks rather than
+8| subclassing, keeping the core loop logic in one place.
+9| """
+10| 
+11| from __future__ import annotations
+12| 
+13| import asyncio
+14| import json
+15| import re
+16| import time as _time
+17| from dataclasses import dataclass, field
+18| from typing import Any, Awaitable, Callable
+19| 
+20| from loguru import logger
+21| 
+22| from nanobot.tools.registry import ToolRegistry
+23| from nanobot.groupchat.history.result_processor import process_tool_result
+24| from nanobot.providers.base… (13,434字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 300|                 
+301|                 try:
+302|                     done, pending = await asyncio.wait(
+303|                         [intr_task, llm_task],
+304|                         return_when=asyncio.FIRST_COMPLETED,
+305|                         timeout=call_timeout
+306|                     )
+307|                 except asyncio.CancelledError:
+308|                     # Clean up tasks if the main loop is cancelled (e.g. Leader end_discussion)
+309|                     intr_task.cancel()
+310|                     llm_task.cancel()
+311|                     raise
+312|                     
+313|                 if intr_task in done:
+314|                     # Interrupted during LLM call!
+315|                     llm_task.cancel()
+316|                     try:
+317|                       … (9,818字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 550|                     result.tool_calls_detail.append({
+551|                         "name": tc.name,
+552|                         "args": args_str[:200],
+553|                         "result_len": len(_result_str),
+554|                         "result_preview": _result_str[:4000],
+555|                         "timestamp": _time.strftime("%H:%M:%S"),
+556|                         "duration": tc_duration,
+557|                         "success": tc_error is None,
+558|                         "error": tc_error[:200] if tc_error else None,
+559|                         "iteration": iteration,
+560|                     })
+561| 
+562|                     if on_tool_result:
+563|                         # Normalize list results to str before passing to callback
+564|                         # (broad… (10,180字)
+• exec(cd /root/nanobot-src && grep -rn "self" nanobot/providers/ --include="*.py" |...) → nanobot/providers/registry.py:72:    def label(self) -> str:
+nanobot/providers/base.py:21:    def to_openai_tool_call(self) -> dict[str, Any]:
+nanobot/providers/base.py:54:    def has_tool_calls(self) -> bool:
+nanobot/providers/base.py:176:        self,
+nanobot/providers/base.py:208:        self,
+nanobot/providers/base.py:341:    async def _safe_chat(self, **kwargs: Any) -> LLMResponse:
+nanobot/providers/base.py:351:        self,
+nanobot/providers/base.py:473:    def get_default_model(self) -> s… (2,532字)
+• exec(cd /root/nanobot-src && grep -rn "name.*self\|self.*name\|'self'" nanobot/ --...) → nanobot/providers/azure_openai_provider.py:50:    def _build_chat_url(self, deployment_name: str) -> str:
+nanobot/groupchat/history/prompt_builder.py:387:    def get_agent_prompt_order(self, agent_name: str = "") -> list[str]:
+nanobot/groupchat/history/prompt_builder.py:468:    def _get_agent_file(self, agent: dict, filename: str) -> str:
+nanobot/groupchat/orchestra/mailbox.py:173:    def release_unread(self, agent_name: str) -> int:
+nanobot/groupchat/orchestra/mailbox.py:192:    def mark_replie… (3,082字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 656|     def _clean_response(self, content: str, agent_name: str) -> str:
+657|         """Clean up model response — delegates … (2,464字)
+  (还有 2 个工具调用，已省略)
+---

@@ -1,0 +1,479 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 帮我看看刚刚出错后频繁调用
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(grep -rn "OpenrouterExc\|APIError\|LLM调用出错\|Error calling LLM" /root/nanobot-...) → /root/nanobot-src/tests/test_memory_consolidation_types.py
+/root/nanobot-src/nanobot/providers/base.py
+/root/nanobot-src/nanobot/providers/litellm_provider.py
+/root/nanobot-src/nanobot/providers/custom_provider.py
+/root/nanobot-src/nanobot/providers/httpx_provider.py
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py
+
+
+Exit code: 0 (406字)
+• exec(grep -rn "LLM调用出错\|Error calling LLM" /root/nanobot-src/ --include="*.py" 2>/...) → /root/nanobot-src/tests/test_memory_consolidation_types.py:383:            content="Error calling LLM: litellm.BadRequestError: "
+/root/nanobot-src/nanobot/providers/base.py:348:            return LLMResponse(content=f"Error calling LLM: {exc}", finish_reason="error")
+/root/nanobot-src/nanobot/providers/base.py:395:                    content=f"Error calling LLM: {exc}",
+/root/nanobot-src/nanobot/providers/base.py:466:                content=f"Error calling LLM: {exc}",
+/root/nanobot-src/nanobot… (1,313字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 880|                             content = _placeholder
+881|                             engine._add_message(name, _placeholder)
+882|                             mailbox.send(name, ["All"], _placeholder)
+883|                             await engine._send(
+884|                                 _d.chatroom_send_msg(
+885|                                     name, "超时占位", _placeholder, max_len=1000, leader=leader_name
+886|                                 )
+887|                                 )
+888|                             await tracker.set_state(name, "waiting", detail="timeout recovery")
+889|                             logger.warning(
+890|                                 "Broadcast: {} timeout recovery failed, injecting placeholder and continuing",
+891|                                 n… (4,930字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 620|                     usage.get("completion_tokens", "?"),
+621|                 )
+622| 
+623|             # Handle error responses — retry once via non-streaming fallback
+624|             if response.finish_reason == "error":
+625|                 logger.error("LLM returned error: {}", (content or "")[:200])
+626|                 # Retry once: same params, non-streaming guaranteed
+627|                 try:
+628|                     retried = await provider.chat_with_retry(
+629|                         messages=messages,
+630|                         tools=tool_defs,
+631|                         model=model,
+632|                         max_tokens=max_tokens,
+633|                         metadata=metadata,
+634|                         reasoning_effort=reasoning_effort,
+635|                   … (3,004字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 780|                         max_iterations=agent_max_iters,
+781|                         tool_defs=tool_defs if tool_defs else None,
+782|                         reasoning_effort=_live_cfg.get("reasoning_effort") or None,
+783|                         metadata={
+784|                             "trace_name": f"broadcast_{name}_c{cycle}",
+785|                             "trace_user_id": "groupchat",
+786|                             "tags": [name, "broadcast"],
+787|                             "generation_name": f"{name}_broadcast",
+788|                             "debug_context": engine._debug_context,
+789|                             "log_agent": name,
+790|                             "log_mode": "broadcast",
+791|                         },
+792|                         on_tool_start=_on_… (6,159字)
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Harper]: <｜DSML｜tool_calls>
+<｜DSML｜invoke name="read_file">
+<｜DSML｜parameter name="limit" string="false">100</｜DSML｜parameter>
+<｜DSML｜parameter name="offset" string="false">680</｜DSML｜parameter>
+<｜DSML｜parameter name="path" string="true">/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 700|                     if not content:
+701|                         messages.append({
+702|                             "role": "system",
+703|                             "content": "[已达到最大轮次限制，请立即输出最终总结，禁止再调用工具。]",
+704|                         })
+705|                         try:
+706|                             from nanobot.groupchat.orchestra.tools.tool_loop import tool_loop as _final_loop
+707|                             _r = await _final_loop(
+708|                                 provider=engine.provider,
+709|                                 messages=messages,
+710|                                 tool_registry=reg,
+711|                                 model=model,
+712|                                 max_tokens=engine.config.max_tokens,
+713|                                 max_iterat… (4,584字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 580|                 f"      （可选：分歧说明、局限、后续建议）\n\n"
+581|                 f"   b. 用 memory_palace(action='store') 将关键结论写入记忆宫殿\n"
+582|                 f"      示例: memory_palace(action='store', content='用户偏好：...', wing='用户', hall='偏好', room='main')\n"
+583|                 f"7. 完成记忆存入后，调用 end_discussion() 结束任务\n\n"
+584|                 f"## 关键规则\n"
+585|                 f"- 发现队友空转或无法完成任务时：果断 end_discussion\n"
+586|                 f"- 可以一次给多个队友同时发任务（并行工作）\n"
+587|                 f"- ⚠️ 如果你打算自己做搜索/验证，必须先完成工具调用，再调用 end_discussion。\n"
+588|                 f"  end_discussion 一旦触发无法撤销，之后再说'我来搜索'只是文字，不会执行。\n"
+589|                 f"- ⚠️ 原假设被否证时，不要立即结束。应转向：'那么最近的可验证链条是什么？'\n"
+590|                 f"  继续搜索直到能给出正面结论（即使度数更高），而不是仅报告'不成立'。\n"
+591|                 f"- ⚠️ 禁止在未存记忆的情况下调用 end_discussion。存记忆 → en… (3,286字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 880|                             content = _placeholder
+881|                             engine._add_message(name, _placeholder)
+882|                             mailbox.send(name, ["All"], _placeholder)
+883|                             await engine._send(
+884|                                 _d.chatroom_send_msg(
+885|                                     name, "超时占位", _placeholder, max_len=1000, leader=leader_name
+886|                                 )
+887|                                 )
+888|                             await tracker.set_state(name, "waiting", detail="timeout recovery")
+889|                             logger.warning(
+890|                                 "Broadcast: {} timeout recovery failed, injecting placeholder and continuing",
+891|                                 n… (4,930字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 460|         return task
+461| 
+462|     await orch.setup_tools_and_pools(_spawn_agent_task)
+463| 
+464|     from nanobot.groupchat.display.broadcast_view import BroadcastView
+465|     view = BroadcastView(engine, orch.tracker, mailbox, orch.pool, orch.search_pool, list(agents), leader_name)
+466| 
+467|     # Map back to local variables to keep downstream code unmodified for now
+468|     exec_agents = orch.exec_agents
+469|     non_leader_agents = orch.non_leader_agents
+470|     total = orch.total
+471|     gc_settings = orch.gc_settings
+472|     pool = orch.pool
+473|     tracker = orch.tracker
+474|     search_pool = orch.search_pool
+475|     leader_gate = orch.leader_gate
+476|     agent_tool_registries = orch.agent_tool_registries
+477|     _search_cache = orch._search_cache
+478|     leader_end… (1,622字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 500|         # ── Compute teammates list (must be before _build_agent_prompt call) ──
+501|         teammates = [a for a in agents if a != name]
+502| 
+503|         # In broadcast mode, all agents share the full history (relevant_agents=None).
+504|         # Each agent sees user messages, system messages, and ALL teammates' final replies.
+505|         # Tool call logs are appended as text inside each agent's message, so teammates
+506|         # can read a concis… (4,593字)
+  (还有 2 个工具调用，已省略)
+---
+[Kirk]: 找到了。继续看后面的逻辑：
+
+[工具调用记录]
+• exec(grep -n "LLM调用出错\|Error calling LLM\|我仍在线" /root/nanobot-src/nanobot/groupcha...) → 645:                    result.content = content or f"Error calling LLM after retry: {retry_err}"
+
+
+Exit code: 0 (112字)
+• exec(grep -n "LLM调用出错\|Error calling LLM\|我仍在线" /root/nanobot-src/nanobot/groupcha...) → 877:                                f"⏳ [{name}] 当前模型响应超时，我仍在线。"
+910:                            f"⚠️ [{name}] LLM调用出错（{err_short[:60]}），我仍在线。"
+
+
+Exit code: 0 (158字)
+• exec(grep -n "LLM调用出错\|Error calling LLM\|我仍在线" /root/nanobot-src/nanobot/provider...) → 786:                content=f"Error calling LLM: {str(e)}",
+853:            yield LLMResponse(content=f"Error calling LLM: {str(e)}", finish_reason="error")
+
+
+Exit code: 0 (171字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → Error: offset 860 is beyond end of file (762 lines)
+
+[Analyze the error above and try a different approach.] (108字)
+• exec(wc -l /root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 762 /root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py
+
+
+Exit code: 0 (83字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → Error: offset 830 is beyond end of file (762 lines)
+
+[Analyze the error above and try a different approach.] (108字)
+• exec() → 129:async def tool_loop(
+154:    """Run the LLM → tool → repeat loop.
+162:        still use ``chat_with_retry()`` (non-streaming).
+170:        except Exception:
+196:    except Exception:
+199:    while iteration < max_iterations:
+207:                "tool_loop: ⚡ interrupt detected before LLM call (iter {})", iteration
+210:            break
+215:        # mutated, so new tool results continue to be appended correctly.
+222:        # ── Context breakdown before LLM call ──
+257:            "tool_loop… (3,752字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 620|                     usage.get("completion_tokens", "?"),
+621|                 )
+622| 
+623|             # Handle error responses — retry once via non-streaming fallback
+624|             if response.finish_reason == "error":
+625|                 logger.error("LLM returned error: {}", (content or "")[:200])
+626|                 # Retry once: same params, non-streaming guaranteed
+627|                 try:
+628|                     retried = await provider.chat_with_retry(
+629|                         messages=messages,
+630|                         tools=tool_defs,
+631|                         model=model,
+632|                         max_tokens=max_tokens,
+633|                         metadata=metadata,
+634|                         reasoning_effort=reasoning_effort,
+635|                   … (2,622字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 860|                                             name, "重试输出", content, max_len=1000, leader=leader_name
+861|                                         )
+862|                                     )
+863|                                     logger.info(
+864|                                         "Broadcast: {} retry succeeded ({:.1f}s): {}",
+865|                                         name, _r.latency, content[:80],
+866|                                     )
+867|                                     _timeout_recovery_count = 0
+868|                                     continue  # back to auto-wait
+869| 
+870|                             except Exception as _rec_exc:
+871|                                 logger.warning("Broadcast: {} recovery also failed: {}", name, _rec_exc)
+872| 
+873|          … (4,989字)
+• exec(grep -n "while\|for.*cycle\|cycle.*range\|max_cycles\|_cycle\|continue\|break...) → 237:            break
+447:            break
+491:        _cycle_t0 = _t.time()
+643:            await view.on_tool_start(name, tool_name, args, tool_call_id, _cycle_t0, _cycle_usage)
+681:        max_cycles = 30 if is_leader else 20  # hard cap to prevent runaway agents
+694:            while True:
+696:                if cycle >= max_cycles:
+698:                        "Broadcast: {} hit max_cycles={}, forcing … (2,259字)
+  (还有 3 个工具调用，已省略)
+---
+[Harper]: 找到根因了。看第903-926行：
+
+```python
+# Keep agent alive instead of killing it (mirrors timeout recovery)
+_placeholder = (
+    f"⚠️ [{name}] LLM调用出错（{err_short[:60]}），我仍在线。"
+    f"等待队友消息后将继续工作。"
+)
+content = _placeholder
+engine._add_message(name, _placeholder)
+mailbox.send(name, ["All"], _placeholder)
+...
+continue  # stay alive like timeout branch
+```
+
+**问题链路：** LLM调用出错 → `continue` → 下一cycle再次调LLM → 再次出错 → 无限循环直到`max_cycles`。
+
+对比第686-688行timeout recovery有`_timeout_recovery_count += 1; if >=1: break`，LLM error分支完全没限制。当OpenRouter持续异常时，Kirk每小时循环一次，发了18次「我仍在线」。
+
+**修复方案（最小变更）：** 给LLM error也加一个和`_timeout_recovery_count`一样的recovery limit，超过1次就退出。
+
+<｜DSML｜tool_calls>
+<｜DSML｜invoke name="read_file">
+<｜DSML｜parameter name="limit" string="false">10</｜DSML｜parameter>
+<｜DSML｜parameter name="offset" string="false">686</｜DSML｜parameter>
+<｜DSML｜parameter name="path" string="true">/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 690|         # Hard cap at 1 to prevent recovery loops.
+691|         _timeout_recovery_count = 0
+692| 
+693|         try:
+694|             while True:
+695|                 # Hard cycle cap — prevent runaway agents from draining resources
+696|                 if cycle >= max_cycles:
+697|                     logger.warning(
+698|                         "Broadcast: {} hit max_cycles={}, forcing exit", name, max_cycles
+699|                     )
+700|                     if not content:
+701|                         messages.append({
+702|                             "role": "system",
+703|                             "content": "[已达到最大轮次限制，请立即输出最终总结，禁止再调用工具。]",
+704|                         })
+705|                         try:
+706|                             from nanobot.groupchat.orchestra.tools.… (2,728字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 900|                             await tracker.set_state(name, "error", reason=err_short_disp[:40])
+901|                             await engine._send(f"  ✗ {name} timeout ({latency:.1f}s): {err_short_disp}")
+902| 
+903|                     else:  # is_error
+904|                         err_short = content[:150] if content else "Unknown error"
+905|                         await tracker.set_state(name, "error", reason=err_short[:40])
+906|                         await engine._send(f"  ✗ {name} failed ({latency:.1f}s): {err_short}")
+907| 
+908|                         # Keep agent alive instead of killing it (mirrors timeout recovery)
+909|                         _placeholder = (
+910|                             f"⚠️ [{name}] LLM调用出错（{err_short[:60]}），我仍在线。"
+911|                             f… (4,767字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 850|                                     call_timeout=60.0,          # hard cap for retry
+851|                                 )
+852|                                 if _r.content:
+853|                                     content = _r.content
+854|                                     total_latency += _r.latency
+855|                                     engine._add_message(name, content)
+856|                                     search_pool.on_output(name)
+857|                                     mailbox.send(name, ["All"], content[:300])
+858|                                     await engine._send(
+859|                                         _d.chatroom_send_msg(
+860|                                             name, "重试输出", content, max_len=1000, leader=leader_name
+861|                      … (3,298字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 980|                             try:
+981|                                 _intr_all.append(_intr_q.get_nowait())
+982|                             except Exception:
+983|                                 break
+984|                     # Latest message is the one we respond to; earlier ones
+985|                     # become background context.
+986|                     _intr_msg = _intr_all[-1] if _intr_all else None
+987|                     _intr_earlier = _intr_all[:-1] if len(_intr_all) > 1 else []
+988| 
+989|                     # UI: show who interrupted whom, with distinct label for user vs agent
+990|                     # Fallback to mailbox._last_interrupt_sender because the actual message
+991|                     # may have been consumed by wait() before drain runs.
+992|               … (4,925字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1060|                             "content": f"[打断通知] 你的执行被中断，请立即总结当前进展并响应队友的最新需求。",
+1061|                         })
+1062| 
+1063|                     await tracker.set_state(name, "thinking")
+1064|                     mailbox.mark_busy(name)
+1065|                     content = ""  # reset for the new cycle
+1066|                     continue  # re-enter tool_loop with injected message
+1067| 
+1068|                 # ── Anti-idle guard: force re-entry if agent d… (2,628字)
+  (还有 2 个工具调用，已省略)
+---
+[Kirk]: 验证修改结果：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 920|                         )
+921|                         await tracker.set_state(name, "waiting", detail="error recovery")
+922|                         logger.warning(
+923|                             "Broadcast: {} LLM error, injecting placeholder and continuing",
+924|                             name,
+925|                         )
+926|                         continue  # stay alive like timeout branch
+927| 
+928| 
+929|                 _used_chatroom_send = result.tools_used and "chatroom_send" in result.tools_used
+930| 
+931|                 # Record final text or tool calls in history
+932|                 if content or result.tool_calls_detail:
+933|                     if content:
+934|                         logger.info(
+935|                             "broadcast [{}] cycle {} outpu… (1,726字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 860|                                             name, "重试输出", content, max_len=1000, leader=leader_name
+861|                                         )
+862|                                     )
+863|                                     logger.info(
+864|                                         "Broadcast: {} retry succeeded ({:.1f}s): {}",
+865|                                         name, _r.latency, content[:80],
+866|                                     )
+867|                                     _timeout_recovery_count = 0
+868|                                     continue  # back to auto-wait
+869| 
+870|                             except Exception as _rec_exc:
+871|                                 logger.warning("Broadcast: {} recovery also failed: {}", name, _rec_exc)
+872| 
+873|          … (1,964字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 890|                                 "Broadcast: {} timeout recovery failed, injecting placeholder and continuing",
+891|                                 name,
+892|                             )
+893|                             # Reset recovery counter so next timeout also gets a retry chance
+894|                             _timeout_recovery_count = 0
+895|                             continue  # enter auto-wait, agent stays alive
+896| 
+897|                         else:
+898|                             # Repeated timeout (shouldn't normally reach here due to counter reset above)
+899|                             err_short_disp = f"LLM 超时 ({_base_timeout}s)"
+900|                             await tracker.set_state(name, "error", reason=err_short_disp[:40])
+901|                             aw… (1,412字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 908|                         # Keep agent alive instead of killing it (mirrors timeout recovery)
+909|                         _placeholder = (
+910|                             f"⚠️ [{name}] LLM调用出错（{err_short[:60]}），我仍在线。"
+911|                             f"等待队友消息后将继续工作。"
+912|                         )
+913|                         content = _placeholder
+914|                         engine._add_message(name, _placeholder)
+915|                         mailbox.send(name, ["All"], _placeholder)
+916|                         await engine._send(
+917|                             _d.chatroom_send_msg(
+918|                                 name, "错误恢复", _placeholder, max_len=1000, leader=leader_name
+919|                             )
+920|                         )
+921|                         await t… (1,211字)
+• exec(grep -n "_timeout_recovery_count" /root/nanobot-src/nanobot/groupchat/orchest...) → 691:        _timeout_recovery_count = 0
+833:                        if _timeout_recovery_count == 0:
+834:                            _timeout_recovery_count += 1
+867:                                    _timeout_recovery_count = 0
+894:                            _timeout_recovery_count = 0
+
+
+Exit code: 0 (304字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 825|                             90,
+826|                     … (1,992字)
+  (还有 5 个工具调用，已省略)
+---
+[Harper]: 验证完毕。修复已生效：
+
+| 行号 | 代码 | 作用 |
+|------|------|------|
+| 694 | `_consecutive_error_count = 0` | 初始化计数器 |
+| 695 | `MAX_CONSECUTIVE_ERRORS = 3` | 阈值=3次 |
+| 912 | `_consecutive_error_count += 1` | 每次error+1 |
+| 913-921 | `if >= 3: break` | 超限强制退出 |
+| 947 | `_consecutive_error_count = 0` | 成功cycle重置 |
+
+**逻辑：** 连续3次LLM错误后break退出循环，不再无限发「我仍在线」。前2次保留恢复机会（可能临时网络抖动），第3次确认是持续性故障后退出。✅
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 888|                                 _d.chatroom_send_msg(
+889|                                     name, "超时占位", _placeholder, max_len=1000, leader=leader_name
+890|                                 )
+891|                                 )
+892|                             await tracker.set_state(name, "waiting", detail="timeout recovery")
+893|                             logger.warning(
+894|                                 "Broadcast: {} timeout recovery failed, injecting placeholder and continuing",
+895|                                 name,
+896|                             )
+897|                             # Reset recovery counter so next timeout also gets a retry chance
+898|                             _timeout_recovery_count = 0
+899|                             continue  # enter auto-w… (2,582字)
+• exec(grep -n "MAX_CONSECUTIVE_ERRORS\|_consecutive_error_count" /root/nanobot-src/...) → 693:        # After MAX_CONSECUTIVE_ERRORS, the agent exits instead of continuing.
+694:        _consecutive_error_count = 0
+695:        MAX_CONSECUTIVE_ERRORS = 3
+912:                        _consecutive_error_count += 1
+913:                        if _consecutive_error_count >= MAX_CONSECUTIVE_ERRORS:
+916:                                name, _consecutive_error_count,
+919:                                f"  ✗ {name} 连续 {_consecutive_error_count} 次 LLM 错误，强制退出"
+939:                            na… (617字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 930|                         mailbox.send(name, ["All"], _placeholder)
+931|                         await engine._send(
+932|                             _d.chatroom_send_msg(
+933|                                 name, "错误恢复", _placeholder, max_len=1000, leader=leader_name
+934|                             )
+935|                         )
+936|                         await tracker.set_state(name, "waiting", detail="error recovery")
+937|                         logger.warning(
+938|                             "Broadcast: {} LLM error ({}/{}), injecting placeholder and continuing",
+939|                             name, _consecutive_error_count, MAX_CONSECUTIVE_ERRORS,
+940|                         )
+941|                         continue  # stay alive like timeout branch
+942| 
+943| 
+944|       … (1,155字)
+---
+[Kirk]: ## 结论
+
+**根因：** `broadcast.py` 第907行 LLM error 分支缺少退出限制。出错后 `continue` 回循环顶部，下一 cycle 再次调 LLM → 再次出错 → 无限循环直到 `max_cycles` 耗尽。OpenRouter 异常期间 Kirk 发了 18 次「我仍在线」。
+
+**已修复：** 添加 `_consecutive_error_count` 计数器，连续错误 ≥3 次强制 `break` 退出，成功 cycle 时重置。
+
+## 关键发现
+
+- **文件：** `/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py`
+- **对比：** timeout 分支有 `_timeout_recovery_count` 限制（第833行），error 分支完全没有
+- **改动：** 3处（第693-695行声明、第912-921行计数+退出、第947行重置）
+- **策略：** 允许首次错误恢复（保持 agent 存活），但连续3次失败后强制退出，防止刷屏
+
+## 备注
+
+- 阈值设为3而非1，因为单次瞬态错误（如网络抖动）不应直接杀死 agent
+- 与 timeout recovery 的设计理念一致：给一次机会，但不无限重试
+
+[工具调用记录]
+• exec(grep -n "_consecutive_error_count\|MAX_CONSECUTIVE_ERRORS" /root/nanobot-src/...) → 693:        # After MAX_CONSECUTIVE_ERRORS, the agent exits instead of continuing.
+694:        _consecutive_error_count = 0
+695:        MAX_CONSECUTIVE_ERRORS = 3
+912:                        _consecutive_error_count += 1
+913:                        if _consecutive_error_count >= MAX_CONSECUTIVE_ERRORS:
+916:                                name, _consecutive_error_count,
+919:                                f"  ✗ {name} 连续 {_consecutive_error_count} 次 LLM 错误，强制退出"
+939:                            na… (617字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 903|                             err_short_disp = f"LLM 超时 ({_base_timeout}s)"
+904|                             await tracker.set_state(name, "error", reason=err_short_disp[:40])
+905|                             await engine._send(f"  ✗ {name} timeout ({latency:.1f}s): {err_short_disp}")
+906| 
+907|                     else:  # is_error
+908|                         err_short = content[:150] if content else "Unknown error"
+909|                         await tracker.set_state(name, "error", reason=err_short[:40])
+910|                         await engine._send(f"  ✗ {name} failed ({latency:.1f}s): {err_short}")
+911| 
+912|                         _consecutive_error_count += 1
+913|                         if _consecutive_error_count >= MAX_CONSECUTIVE_ERRORS:
+914|                             lo… (2,962字)
+• memory_palace() → ✅ Stored in wing_code/broadcast-error-recovery-fix (hidden)
+  Drawer ID: drawer_wing_code_broadcast-error-recovery-fix_9ed0c809365c93ec01c0477b (143字)
+• end_discussion() → ✅ 讨论已结束（原因: 根因已定位并修复，记忆已存入。），即将进入总结阶段 (37字)
+---

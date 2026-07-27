@@ -1,0 +1,179 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 帮我看看现在agent的提示词
+---
+[Harper]: ## Agent 提示词结构
+
+当前 agent 基于 **hermes-agent** 框架，提示词由三层组成：
+
+### 1. Stable Tier（稳定层）
+- **身份**: `SOUL.md` 或默认身份
+- **工具指导**: memory、session_search、skill_manage、forget、kanban 等
+- **执行纪律**: 强制使用工具、禁止空承诺
+- **模型特定指导**: GPT/Codex/Grok 用 OPENAI 执行纪律；Gemini/Gemma 用 Google 指导
+- **平台提示**: 根据平台（telegram/discord/cli 等）调整输出格式
+
+### 2. Context Tier（上下文层）
+- `AGENTS.md` — 通用指令
+- `.cursorrules` — 项目规则
+- `SOUL.md` — 身份定义
+
+### 3. Volatile Tier（动态层）
+- 记忆快照
+- `USER.md` 用户画像
+- 时间戳/会话信息
+
+### 关键执行原则
+```
+
+<previous_tool_calls>
+• list_dir(.) → 📁 .deepseek
+📄 .gitignore
+📄 .gitmodules
+📄 AGENTS.md
+📁 AI-Researcher
+📄 HEARTBEAT.md
+📁 RAG-Anything
+📄 SOUL.md
+📄 TOOLS.md
+📄 USER.md
+📁 _archive
+📁 agents
+📄 better-xcloud.user.js
+📄 breakout.html
+📄 breakout_roguelike.html
+📄 breakout_test.txt
+📁 claude-code-leak
+📁 cron
+📄 gen_breakout.py
+📁 mario
+📁 mario_game
+📁… (475字)
+• read_file(SOUL.md) → 1| # Soul
+2| 
+3| I am nanobot 🐈, a personal AI assistant.
+4| 
+5| ## Personality
+6| 
+7| - Helpful and friendly
+8| - Concise and to the point
+9| - Curious and eager to learn
+10| 
+11| ## Values
+12| 
+13| - Accuracy over speed
+14| - User privacy and safety
+15| - Transparency in actions
+16| 
+17| ## Communication Style
+18| 
+19| - Be clear and direct
+20| - Explain reasoning when helpful
+21| - Ask clarifying questions when needed
+
+(End of file — 21 lines total)
+[Reminder: line prefixes 'N| ' are reference only. Omit them when using edit_file old_text.] (549字)
+• read_file(AGENTS.md) → 1| # Agent Instructions
+2| 
+3| You are a helpful AI assistant. Be concise, accurate, and friendly.
+4| 
+5| ## Scheduled Reminders
+6| 
+7| Before scheduling reminders, check available skills and follow skill guidance first.
+8| Use the built-in `cron` tool to create/list/remove jobs (do not call `nanobot cron` via `exec`).
+9| Get USER_ID and CHANNEL from the current session (e.g., `8281248569` and `telegram` from `telegram:8281248569`).
+10| 
+11| **Do NOT just write reminders to MEMORY.md** — that won't trigger actual notifications.
+12| 
+13| ## Heartbeat Tasks
+14| 
+15| `HEARTBEAT.md` is checked on the configured heartbeat interval. Use file tools to manage periodic tasks:
+16| 
+17| - **Add**: `edit_file` to append new tasks
+18| - **Remove**: `edit_file` to delete completed tasks
+19| - **Rewrite*… (1,088字)
+• list_dir(agents) → 📁 hermes-agent (14字)
+• list_dir(agents/hermes-agent) → .dockerignore
+.env.example
+.envrc
+.gitattributes
+.github/
+.github/ISSUE_TEMPLATE/
+.github/ISSUE_TEMPLATE/bug_report.yml
+.github/ISSUE_TEMPLATE/config.yml
+.github/ISSUE_TEMPLATE/feature_request.yml
+.github/ISSUE_TEMPLATE/setup_help.yml
+.github/PULL_REQUEST_TEMPLATE.md
+.github/actions/
+.github/actions… (5,457字)
+• read_file(USER.md) → 1| # User Profile
+2| 
+3| Information about the user to help personalize interactions.
+4| 
+5| ## Basic Information
+6| 
+7| - **Name**: (your name)
+8| - **Timezone**: (your timezone, e.g., UTC+8)
+9| - **Language**: (preferred language)
+10| 
+11| ## Preferences
+12| 
+13| ### Communication Style
+14| 
+15| - [ ] Casual
+16| - [ ] Professional
+17| - [ ] Technical
+18| 
+19| ### Response Length
+20| 
+21| - [ ] Brief and concise
+22| - [ ] Detailed explanations
+23| - [ ] Adaptive based on question
+24| 
+25| ### Technical Level
+26| 
+27| - [ ] Beginner
+28| - [ ] Intermediate
+29| - [ ] Expert
+30| 
+31| ## Work Context
+32| 
+33| - **Primary Role**: (your role, e.g., developer, researcher)
+34| - **Main Projects**: (what you're working on)
+35| - **Tools You Use**: (IDEs, languages, frameworks)
+36| 
+37| ## Topics of… (1,153字)
+• read_file(agents/hermes-agent/agent/system_prompt.py) → 1| """System-prompt assembly for :class:`AIAgent`.
+2| 
+3| The agent's system prompt is built once per session and reused across all
+4| turns — only context compression triggers a rebuild.  This keeps the
+5| upstream prefix cache warm.  See ``hermes-agent-dev``'s
+6| ``references/system-prompt-invariant.md`` for the invariants and
+7| ``references/self-improvement-loop.md`` for how the background-review
+8| fork inherits the cached prompt verbatim.
+9| 
+10| Three tiers are joined with ``\\n\\n``:
+11| 
+12| * ``stable``   — identity (SOUL.md or DEFAULT_AGENT_IDENTITY), tool
+13|   guidance, computer-use guidance, nous subscription block, tool-use
+14|   enforcement guidance + per-model operational guidance, skills prompt,
+15|   alibaba model-name workaround, environment hints, platform hints.
+16| *… (15,763字)
+• read_file(agents/hermes-agent/agent/prompt_builder.py) → 1| """System prompt assembly -- identity, platform hints, skills index, context files.
+2| 
+3| All functions are stateless. AIAgent._build_system_prompt() calls these to
+4| ass… (16,882字)
+  (还有 2 个工具调用，已省略)
+</previous_tool_calls>
+
+---
+[Harper]: ⚠️ [Harper] LLM调用出错（Error calling LLM: litellm.BadRequestError: OpenrouterExcept），我仍在线。等待队友消息后将继续工作。
+---
+[用户]: 帮我构建一个个人博客网站
+---
+[Harper]: ⚠️ [Harper] LLM调用出错（Error calling LLM: litellm.BadRequestError: OpenrouterExcept），我仍在线。等待队友消息后将继续工作。
+---
+[Harper]: ⚠️ [Harper] LLM调用出错（Error calling LLM: litellm.BadRequestError: OpenrouterExcept），我仍在线。等待队友消息后将继续工作。
+---
+[Harper]: ⚠️ [Harper] LLM调用出错（Error calling LLM: litellm.BadRequestError: OpenrouterExcept），我仍在线。等待队友消息后将继续工作。
+---

@@ -1,0 +1,118 @@
+[用户]: 几个stash看看都是什么功能，是否有报错
+---
+[Harper]: 
+
+[工具调用记录]
+• exec() → === $ cd /root/nanobot-src && git stash show -p stash@{0} ===
+diff --git a/nanobot/groupchat/history/context.py b/nanobot/groupchat/history/context.py
+index 670fa55..fa4ea1b 100644
+--- a/nanobot/groupchat/history/context.py
++++ b/nanobot/groupchat/history/context.py
+@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
+ 
+ from loguru import logger
+ 
++from nanobot.groupchat.history.history_settings import get_history_settings
++
+ if TYPE_CHECKING:
+     from nanobot.groupchat.history.persistence … (8,333字)
+• exec() → === $ cd /root/nanobot-src && git stash show stash@{0} --stat ===
+ nanobot/groupchat/history/context.py     | 29 ++++++++++++++++++++++++-----
+ nanobot/groupchat/history/persistence.py |  8 ++++++++
+ 2 files changed, 32 insertions(+), 5 deletions(-)
+
+
+Exit code: 0
+
+=== $ cd /root/nanobot-src && git stash show stash@{1} --stat ===
+ nanobot/groupchat/orchestra/engine.py | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+
+Exit code: 0
+
+=== $ cd /root/nanobot-src && git stash show stash@{… (639字)
+• exec() → Error: Invalid parameters for tool 'exec': commands should be array
+
+[Analyze the error above and try a different approach.] (124字)
+• exec(cd /root/nanobot-src && grep -rn 'interrupt_busy_agents' nanobot/groupchat/) → nanobot/groupchat/orchestra/mailbox.py:431:    def interrupt_busy_agents(self, sender: str) -> int:
+nanobot/groupchat/orchestra/broadcast.py:232:            _interrupted_count += mailbox.interrupt_busy_agents(sender)
+nanobot/groupchat/orchestra/broadcast.py:1300:                _interrupted = mailbox.interrupt_busy_agents("用户")
+nanobot/groupchat/orchestra/broadcast.py.bak:685:                                _interrupted_count += mailbox.interrupt_busy_agents(name)
+nanobot/groupchat/orchestra/bro… (1,187字)
+• exec(cd /root/nanobot-src && sed -n '45,75p' nanobot/groupchat/history/context.py) → # ── Compatibility shim: allow engine._history to keep working ─────────
+    # We expose the messages list directly as a public attribute so that
+    # code still referencing ``engine._history`` can be updated gradually.
+    # TODO: remove once all callers are migrated.
+
+    # ── Internal helpers ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _find_head_indices(history: list[dict]) -> set[int]:
+        """Return indices of head-protected messages: index 0 + first u… (1,075字)
+• exec(cd /root/nanobot-src && grep -rn 'save_history\|def save_' nanobot/groupchat/...) → 44:    def save_active(self, agents: list[str]) -> None:
+67:    def save_leader(self, leader: str | None) -> None:
+103:    def save_groups(self, groups: dict[str, list[str]]) -> None:
+126:    def save_event(
+157:    def save_round_summary(
+172:    def save_message(self, sender: str, content: str, history: list[dict[str, str]]) -> None:
+
+
+Exit code: 0 (352字)
+• exec() → nanobot/groupchat/history/context.py:87:    def add_message(self, sender: str, content: str) -> None:
+nanobot/groupchat/history/context.py:87:    def add_message(self, sender: str, content: str) -> None:
+nanobot/groupchat/orchestra/engine.py:273:        # self.history.add_message() or self.history.messages directly.
+nanobot/groupchat/orchestra/engine.py:273:        # self.history.add_message() or self.history.messages directly.
+nanobot/groupchat/orchestra/engine.py:920:        self.history.add_m… (630字)
+• exec(cd /root/nanobot-src && grep -n 'add_message' nanobot/groupchat/orchestra/eng...) → 273:        # self.history.add_message() or self.history.messages directly.
+918:    def _add_message(self, sender: str, content: str) -> None:
+920:        self.history.add_message(sender, content)
+1132:                engine._add_message("用户", current_user_msg)
+1135:                engine._add_message(agent_name, history_content)
+
+
+Exit code: 0 (346字)
+---
+[用户]: kirk你也看看
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git stash show -p stash@{0}) → diff --git a/nanobot/groupchat/history/context.py b/nanobot/groupchat/history/context.py
+index 670fa55..fa4ea1b 100644
+--- a/nanobot/groupchat/history/context.py
++++ b/nanobot/groupchat/history/context.py
+@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
+ 
+ from loguru import logger
+ 
++from nanobot.groupchat.history.history_settings import get_history_settings
++
+ if TYPE_CHECKING:
+     from nanobot.groupchat.history.persistence import GroupChatState
+ 
+@@ -42,6 +44,7 @@ class HistoryContext… (5,323字)
+• exec(cd /root/nanobot-src && git stash show -p stash@{1}) → diff --git a/nanobot/groupchat/orchestra/engine.py b/nanobot/groupchat/orchestra/engine.py
+index eed76ec..08fcf8d 100644
+--- a/nanobot/groupchat/orchestra/engine.py
++++ b/nanobot/groupchat/orchestra/engine.py
+@@ -813,12 +813,18 @@ class GroupChatEngine:
+         return await _direct_chat(self, user_message)
+ 
+     def inject(self, message: str) -> None:
+-        """Inject a user message into the chat loop (1+ agents)."""
++        """Inject a user message into the chat loop (1+ agents).
++
++      … (1,117字)
+• exec(cd /root/nanobot-src && git stash show -p stash@{2}) → diff --git a/nanobot/groupchat/agent_runner.py b/nanobot/groupchat/agent_runner.py
+index 7f19976..7919dc6 100644
+--- a/nanobot/groupchat/agent_runner.py
++++ b/nanobot/groupchat/agent_runner.py
+@@ -402,12 +402,22 @@ class AgentRunner:
+                     if len(self._mailbox._active_agents) > 1:
+                         continue
+ 
+-                    # 队友全死/只剩 Leader：唤醒 Leader，让它作为唯一活口进行关停总结
+-                    # 如果上一次也是因为这个原因发送过系统提示，并且 Leader 没有真正操作，避免重发刷屏
++                    # 队友全死/只剩 Leade… (1,703字)
+---

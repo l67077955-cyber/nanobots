@@ -1,0 +1,106 @@
+[用户]: 感觉有点意思，用户的新发的消息立即被压缩了吗
+---
+[Harper]: 不是。新用户消息不会被立即压缩。
+
+**压缩触发条件**（`maybe_compress` in `context.py`）：
+
+1. 仅在 **history 接近容量上限** 时触发（`max_messages()` 默认几十条）
+2. 只压缩 **中间区域**（Protected Head | Compressible Middle | Protected Tail）
+3. 最新 N 条消息（tail）受保护，不动
+
+**你的消息生命周期**：新消息 → tail（安全）→ 经过多轮对话后滑入 middle → 被 AI 摘要
+
+之前看到的"消息立即消失"现象，实际上是 **bug 导致的幻觉**：`user_question` 提取匹配了 `"系统"` sender 的压缩摘要消息（`[早期对话摘要...]`），注入 agent 系统提示后，agent 以为自己看到的是"用户请求"——实则是过时的摘要文本，你的真实消息被压缩摘要覆盖了。
+
+**修复后**（`97ae361`）：跳过 `"系统"` sender + 跳过 `[` 开头的摘要块，agent 看到的 `用户请求` 一定是你的真实最新消息。
+---
+[Kirk]: ## 结论
+
+用户的新消息**不会被立即压缩**。时序是 `用户消息 → broadcast_round(agents处理) → maybe_compress`，用户消息作为最后一条永远在 tail 保护区内（`keep_recent=6`）。agent 认为"没请求"的真正原因是 `user_question` 提取逻辑匹配了 `"系统"` sender 的压缩摘要，而非用户实际消息（已修复 `97ae361`）。
+
+## 关键发现
+
+- `run_loop.py:143`：`maybe_compress` 在 `broadcast_round` **之后**执行，agent 已处理完用户消息
+- `context.py:183`：tail 保护 `keep_recent=6`，用户消息作为最新消息始终受保护
+- `broadcast.py:458`（已修复）：倒序提取 `user_question` 时匹配了 `"系统"` sender，导致压缩摘要被当作用户请求注入 agent 系统提示
+
+## 备注
+
+- 压缩摘要本身以 `"系统"` sender 存入 history，这是设计意图（用于跨轮上下文传递）
+- 修复后提取只匹配 `("User", "user", "用户")`，并跳过 `[` 开头的压缩块
+
+[工具调用记录]
+• memory_palace(maybe_compress timing when does compression run relative to user message) → 🔍 5 result(s) for 'maybe_compress timing when does compression run relative to user message':
+
+[1] wing_code/context-compression-bugs (sim=0.023)
+  ## 上下文压缩逻辑 — 已验证的 3 个问题 (2026-05-15)
+
+### Bug 1：keep_user_messages=True 时消息静默丢失
+- 文件：context.py maybe_compress()
+- `compress_start = max(protected_head_indices) + 1` 假设 head 索引连续
+- keep_user_messages=True 时用户消息散布导致 protected_head 不连续
+- head 间隙中的非用户消息既不在 head、不在 tail、也不在压缩区，直接消失
+- 已验证：25条消息，protected_head=[0,1,4,7]，索引 2,3,5,6 丢失
+
+### Bug 2：add_message… (2,298字)
+• exec(cd /root/nanobot-src && grep -n "maybe_compress\|_compress\|compress" nanobot...) → 21:    compression (``tool_results.summarize_model``).
+143:            await engine._maybe_compress_history()
+
+
+Exit code: 0 (124字)
+• exec(cd /root/nanobot-src && sed -n '130,160p' nanobot/groupchat/orchestra/run_loo...) → # Determine speaking order
+            speak_order = list(engine._active_agents)
+
+            # ── 关键修复：给 broadcast_round 加上全局超时保护 ──
+            # 防止某一轮卡死导致整个群聊永久阻塞
+            await broadcast_round(
+                speak_order,
+                engine,
+                engine._mailbox,
+                global_timeout=600.0,   # 10 分钟（可根据需要调整）
+            )
+
+            # Compress history if approaching the message limit
+            await engine._maybe_compress_history()
+
+            # Signal roun… (1,032字)
+• exec(cd /root/nanobot-src && grep -n "_maybe_compress_history\|maybe_compress" nan...) → 950:    async def _maybe_compress_history(self) -> None:
+952:        await self.history.maybe_compress()
+1145:                await engine._maybe_compress_history()
+
+
+Exit code: 0 (179字)
+• exec(cd /root/nanobot-src && sed -n '945,960p' nanobot/groupchat/orchestra/engine....) → """Callback from MailboxHub.send() — persist agent communication."""
+        self._state.save_event("agent_comm", agent=sender, content=content, extra={
+            "targets": targets,
+        })
+
+    async def _maybe_compress_history(self) -> None:
+        """Compress history if needed — delegates to HistoryContext."""
+        await self.history.maybe_compress()
+        self._history = self.history.messages  # keep shim in sync
+
+    def _format_history(self) -> str:
+        """Format history as… (1,968字)
+• exec(cd /root/nanobot-src && sed -n '170,220p' nanobot/groupchat/history/context.py) → )
+
+        limit = max_messages()
+        ratio = compress_ratio()
+        if len(self.messages) < int(limit * ratio):
+            return
+
+        total_len = len(self.messages)
+
+        # ── 1. Protected Head ──
+        protected_head_indices = self._find_head_indices(
+            self.messages, keep_all_users=keep_user_messages()
+        )
+
+        # ── 2. Protected Tail ──
+        keep_recent = compression_keep_recent()
+        protected_tail_indices = set(
+            range(max(0, total_len … (1,847字)
+• memory_palace() → ✅ Stored in wing_code/user-question-extraction-bug (hidden)
+  Drawer ID: drawer_wing_code_user-question-extraction-bug_020a3b69d8477d3f268992a6 (143字)
+• end_discussion() → ✅ 讨论已结束（原因: 问题已回答：用户消息不会被立即压缩，是提取逻辑bug导致选错了消息。），即将进入总结阶段 (56字)
+---

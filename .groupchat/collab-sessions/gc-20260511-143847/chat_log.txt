@@ -1,0 +1,62 @@
+[用户]: 我指工具权限设置
+---
+[Harper]: 明白了。回顾之前的改动：
+
+我们只在**源码层**把 `memory_palace` 加进了 `TOOL_NAMES` 和 Telegram UI 标签，但这不等于运行时每个 agent 的工具权限被打开。
+
+真正的**工具权限控制**有两层：
+1. **静态定义**（已做完）：`engine.py` 的 `TOOL_NAMES` + `callbacks.py` 的 labels
+2. **运行时配置**：每个 agent 实例化的 `tools_cfg` dict（决定哪些工具有权调用）
+
+第2层的入口在哪？是在群聊启动时的 yaml/config 还是数据库里的 agent profile？我需要知道这个才能补全剩下的工作。
+
+Kirk，你要我去定位运行时权限加载的逻辑吗？
+---
+[Kirk]: **支持。** 工具权限持久化到本地 JSON：
+
+| 范围 | 路径 |
+|---|---|
+| 单 agent | `~/.nanobot/agents/<name>/config.json` → `tools` 字段 |
+| 全局默认 | `~/.nanobot/nanobot_tools.json` |
+
+每次 Telegram 菜单切换后立即写入（`callbacks.py:370-388`），重启从文件加载，不丢。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 370|                     tools_path = Path.home() / ".nanobot" / "nanobot_tools.json"
+371|                     try:
+372|                         tools_path.write_text(json.dumps(tools_cfg, indent=2, ensure_ascii=False))
+373|                     except Exception:
+374|                         pass
+375|                 else:
+376|                     cfg_path = Path.home() / ".nanobot" / "agents" / name.lower() / "config.json"
+377|                     cfg_path.parent.mkdir(parents=True, exist_ok=True)
+378|                     cfg = {}
+379|                     if cfg_path.exists():
+380|                         try:
+381|                             cfg = json.loads(cfg_path.read_text())
+382|                         except Exception:
+383|                             pass
+384|                     … (1,663字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 160|                 await query.edit_message_text(msg)
+161| 
+162|             elif data.startswith("ef:"):
+163|                 # ef:AgentName:field
+164|                 parts = data.split(":", 2)
+165|                 if len(parts) < 3:
+166|                     return
+167|                 name, field = parts[1], parts[2]
+168|                 if field == "cancel":
+169|                     self._edit_state.pop(chat_id, None)
+170|                     await query.edit_message_text("❌ 已取消")
+171|                     return
+172|                 if field == "tools":
+173|                     # Show per-tool toggle buttons
+174|                     from nanobot.groupchat.orchestra.engine import GroupChatEngine
+175|                     agent = self._groupchat_engine.registry.get(name, {})
+176|       … (2,201字)
+• memory_palace() → ✅ Stored in wing_code/tool-permissions-persistence
+  Drawer ID: drawer_wing_code_tool-permissions-persistence_8f3ce23fabcdde05a7c69709
+  Chars: 159
+  Hall: hall_facts (166字)
+• end_discussion() → ✅ 讨论已结束（原因: 问题已直接回答，代码已验证），即将进入总结阶段 (35字)
+---

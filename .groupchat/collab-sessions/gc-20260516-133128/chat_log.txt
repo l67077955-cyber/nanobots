@@ -1,0 +1,130 @@
+[用户]: <think>
+---
+[Harper]: 两仓库均已提交，各 3 和 2 个独立 commit，零合并零冲突。
+
+**nanobot-src (dev)**
+- `51c3077` — 删除废弃的 `summarizer.py`（-187行），清理 `history_settings.py` getter 引用
+- `a538729` — 修复 `broadcast.py` 变量引用 `self.gc_settings` → `gc_settings`
+
+**.nanobot (master)**
+- `d3b24c6` — 默认模型切换 `kimi-k2.5` → `deepseek-v4-flash`，移除 kimi 提供商
+- `c41fff4` — 上下文窗口 50k→35k，工具截断 10k→5k，心跳关闭，keep_recent 3→6
+- `6ecd585` — 新增 `restart_nanobot.sh` + `safe_kill.sh` 运维脚本
+
+工作区干净，无未合并变更。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git diff --stat && echo "===" && git diff -- nanobot/...) → ===
+
+
+Exit code: 0 (18字)
+• exec() → === config ===
+=== history_settings ===
+=== providers ===
+
+
+Exit code: 0 (72字)
+• exec(cd /root/nanobot-src && echo "=== BRANCH ===" && git branch && echo "=== STAT...) → === BRANCH ===
+* dev
+  main
+=== STATUS ===
+On branch dev
+nothing to commit, working tree clean
+=== LOG ===
+a538729 fix: broadcast中self.gc_settings→gc_settings变量引用修复
+51c3077 refactor: 删除废弃的summarizer.py及其history_settings getter引用
+abe90b4 perf: reduce conv_keep_turns to 3, append summary to last system msg
+6188597 fix: remove default model fallback and skip empty heartbeat
+4eac88a fix: move user_question from stable prefix to volatile tail to preserve cache
+
+
+Exit code: 0 (474字)
+• exec(cd /root/.nanobot && echo "=== BRANCH ===" && git branch && echo "=== STATUS ...) → === BRANCH ===
+* master
+=== STATUS ===
+On branch master
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	media/telegram/BQACAgEAAxkBAAEC.csv
+
+nothing added to commit but untracked files present (use "git add" to track)
+=== LOG ===
+6ecd585 ops: 新增restart_nanobot.sh和safe_kill.sh运维脚本
+c41fff4 config: 上下文窗口50k→35k，工具截断10k→5k，重启summarize，keep_recent 3→6，启用心跳关闭
+d3b24c6 model: 默认模型kimi-k2.5→deepseek-v4-flash，从providers移除kimi-k2.5
+4f8a991 snapshot: agent configs, cron jo… (639字)
+• exec() → === nanobot-src: last 2 commits ===
+a538729 fix: broadcast中self.gc_settings→gc_settings变量引用修复
+51c3077 refactor: 删除废弃的summarizer.py及其history_settings getter引用
+=== diff a538729 ===
+ nanobot/groupchat/orchestra/broadcast.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+=== diff 51c3077 ===
+ nanobot/groupchat/history/history_settings.py |  18 +--
+ nanobot/tools/summarizer.py                   | 187 --------------------------
+ 2 files changed, 1 insertion(+), 204 deletions(-)
+=== content 51c3… (710字)
+• exec() → === .nanobot: last 3 commits ===
+6ecd585 ops: 新增restart_nanobot.sh和safe_kill.sh运维脚本
+c41fff4 config: 上下文窗口50k→35k，工具截断10k→5k，重启summarize，keep_recent 3→6，启用心跳关闭
+d3b24c6 model: 默认模型kimi-k2.5→deepseek-v4-flash，从providers移除kimi-k2.5
+=== diff 6ecd585 (ops scripts) ===
+ restart_nanobot.sh | 17 +++++++++++++++++
+ safe_kill.sh       | 51 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 68 insertions(+)
+=== diff c41fff4 (config tweaks) ===
+ cron/jobs.json        |  4 ++--
+ history_set… (741字)
+• chatroom_send() → (47字)
+---
+[Kirk]: 两个仓库今天的代码修改已全部提交，工作区干净，没有 merge。
+
+| 仓库 | 分支 | 今日提交 | 状态 |
+|------|------|----------|------|
+| **nanobot-src** | `dev` | `a538729` fix broadcast变量引用<br>`51c3077` 删除废弃summarizer.py<br>`abe90b4` perf减少保留轮数 | ✅ 干净 |
+| **.nanobot** | `master` | `6ecd585` ops新增运维脚本<br>`c41fff4` config上下文/截断/心跳调整<br>`d3b24c6` model切换到deepseek-v4-flash | ✅ 干净 |
+
+两个仓库各自在独立分支上，无合并操作。唯一的未跟踪文件是 `.nanobot` 下的一个 CSV（media目录），不影响。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git status && echo "===LOG===" && git log --oneline -3) → On branch dev
+nothing to commit, working tree clean
+===LOG===
+a538729 fix: broadcast中self.gc_settings→gc_settings变量引用修复
+51c3077 refactor: 删除废弃的summarizer.py及其history_settings getter引用
+abe90b4 perf: reduce conv_keep_turns to 3, append summary to last system msg
+
+
+Exit code: 0 (275字)
+• exec(cd /root/.nanobot && git status && echo "===LOG===" && git log --oneline -3) → On branch master
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	media/telegram/BQACAgEAAxkBAAEC.csv
+
+nothing added to commit but untracked files present (use "git add" to track)
+===LOG===
+6ecd585 ops: 新增restart_nanobot.sh和safe_kill.sh运维脚本
+c41fff4 config: 上下文窗口50k→35k，工具截断10k→5k，重启summarize，keep_recent 3→6，启用心跳关闭
+d3b24c6 model: 默认模型kimi-k2.5→deepseek-v4-flash，从providers移除kimi-k2.5
+
+
+Exit code: 0 (433字)
+• exec(cd /root/.nanobot && git log --oneline --format="%h %ai %s" -5) → 6ecd585 2026-05-16 12:38:13 +0800 ops: 新增restart_nanobot.sh和safe_kill.sh运维脚本
+c41fff4 2026-05-16 12:38:04 +0800 config: 上下文窗口50k→35k，工具截断10k→5k，重启summarize，keep_recent 3→6，启用心跳关闭
+d3b24c6 2026-05-16 12:37:42 +0800 model: 默认模型kimi-k2.5→deepseek-v4-flash，从providers移除kimi-k2.5
+4f8a991 2026-05-15 08:26:22 +0800 snapshot: agent configs, cron jobs, prompts update (2026-05-15)
+ae61f2c 2026-05-14 20:31:40 +0800 harper: maxTokens 3000→8192, temp 0.2→0.1, penalties zeroed, maxToolIterations 10→50
+
+
+Exit cod… (504字)
+• exec(cd /root/nanobot-src && git log --oneline --format="%h %ai %s" -5) → a538729 2026-05-16 12:37:34 +0800 fix: broadcast中self.gc_settings→gc_settings变量引用修复
+51c3077 2026-05-16 12:37:27 +0800 refactor: 删除废弃的summarizer.py及其history_settings getter引用
+abe90b4 2026-05-15 22:56:59 +0800 perf: reduce conv_keep_turns to 3, append summary to last system msg
+6188597 2026-05-15 20:52:20 +0800 fix: remove default model fallback and skip empty heartbeat
+4eac88a 2026-05-15 15:48:06 +0800 fix: move user_question from stable prefix to volatile tail to preserve cache
+
+
+Exit code: 0 (497字)
+---
+[Harper]: 确认。零合并，状态一致，无需补充。
+---

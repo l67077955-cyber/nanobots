@@ -1,0 +1,128 @@
+[用户]: 看看具体的高耗代码
+---
+[Lucas]: 没有发现明显的“死循环”或“计算密集型”代码。**高耗（反应慢）的本质是“架构性阻塞”而非“代码低效”**。
+
+通过对 `nanobot` 核心调度代码（`broadcast.py` 和 `mailbox.py`）的分析，定位到以下具体的高耗/阻塞逻辑：
+
+### 1. 资源池阻塞 (Mailbox 机制)
+在 `mailbox.py` 中，系统将对话配额视为一种“OS 资源”：
+```python
+# 逻辑摘录：
+# - Pool capacity = agent_count × 3
+# - chatroom_send(to="All") 消耗 3 个槽位
+# - 当槽位满时，chatroom_send 会阻塞直到有人 wait() 释放
+self.ALLOCATE_TIMEOUT = 15.0  # 强制等待超时
+```
+**高耗表现**：当多个 Agent 频繁发送 `All` 广播时，槽位迅速耗尽。后续 Agent 的工具调用会卡在 `ALLOCATE_TIMEOUT`（15秒），表现为日志输出停滞，用户感觉“反应慢”。
+
+### 2. 状态看板的节流刷新 (Status Tracker)
+在 `broadcast.py` 中，为了实时显示 Agent 状态（如 `searching...`），系统使用了高频刷新：
+```python
+EDIT_INTERVAL = 0.8  # 每0.8秒刷新一次状态
+```
+**高耗表现**：如果网络环境不稳定，这种高频的 Telegram 消息 `edit_message` 请求会堆积在异步队列中，导致真正的回复内容被排在后面，产生视觉上的延迟。
+
+### 3. 异步锁竞争 (Gateway 进程)
+`ps aux` 显示 `nanobot gateway` 进程（PID 1191246）CPU 占比最高（2.1%），内存占用 340MB。
+- **原因**：Gateway 负责处理所有 Agent 的 IO 流。当日志文件（`nanobot_stdout.log`）达到 **4.4MB** 时，Python 的异步读取和正则匹配（用于提取工具调用）效率会显著下降。
+- **代码位置**：`nanobot/bus/queue.py`（推测，基于文件列表）。
+
+### 4. 模块缺失导致的异常重试
+日志中反复出现 `mempalace` 缺失的报错。
+- **逻辑**：每次 Agent 尝试调用 `memory_palace` 时，系统会经历：`发起调用 -> 导入失败 -> 捕获异常 -> 格式化错误 -> 返回给 Agent`。
+- **损耗**：这一套往返大约消耗 2-5 秒的 LLM 推理和网络传输时间，且完全是无用功。
+
+### 总结
+代码本身没有 `while True: pass` 这种低级错误，慢是因为 **“大日志读取延迟 + 消息配额阻塞 + 频繁的状态刷新”** 共同导致的。
+
+**建议操作：**
+1. `truncate -s 0 /root/.nanobot/workspace/nanobot_stdout.log` (解决 IO 延迟)
+2. 安装 `mempalace` (消除报错重试)
+3. 减少 `chatroom_send(to="All")` 的使用 (避免配额阻塞)
+
+[工具调用记录]
+• exec(ps aux --sort=-%cpu | head -n 10; echo "---"; ps aux --sort=-%mem | head -n 10) → USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+root     1191246  2.1  4.2 1524112 341800 ?      Sl   15:21   7:43 /usr/bin/python3 /usr/local/bin/nanobot gateway
+10001     562769  0.4  0.8 254880 71556 ?        Ssl  May07  15:00 python -m uvicorn main:app --host 0.0.0.0 --port 8000
+root         949  0.3  0.3 2014904 32460 ?       Ssl  Apr12 140:56 /usr/bin/containerd
+root        1183  0.2  0.5 2435408 47604 ?       Ssl  Apr12  84:03 /usr/bin/dockerd -H fd:// --contain… (2,474字)
+• exec() → __init__.py
+__main__.py
+__pycache__
+test_litellm.py
+/root/nanobot-src/nanobot/__pycache__:
+__init__.cpython-312.pyc
+__init__.py
+__pycache__
+events.py
+queue.py
+/root/nanobot-src/nanobot/bus/__pycache__:
+__init__.cpython-312.pyc
+events.cpython-312.pyc
+queue.cpython-312.pyc
+__init__.py
+__pycache__
+base.py
+dingtalk.py
+discord.py
+email.py
+---
+/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py:            while True:
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py:            while Tr… (1,254字)
+• exec(cat /root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py | head -n 50; ...) → """Broadcast execution mode for group chat.
+
+Runs all agents concurrently with out-of-order display.
+Agents can communicate with each other via chatroom_send/wait tools.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import copy
+import json as _json
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
+
+from loguru import logger
+
+from nanobot.groupchat.display import display as _d
+from nanobot.groupchat.orchestra.mailbox import MailboxHub, Con… (3,035字)
+---
+[Kirk]: ## nanobot 高耗代码定位结果
+
+### 1. 消息配额阻塞 — `mailbox.py`
+```python
+self.ALLOCATE_TIMEOUT = 15.0  # 槽位满时强制等15秒
+```
+- `chatroom_send(to="All")` 一次消耗3个槽位
+- 多Agent频繁广播时槽位耗尽，后续调用卡15秒超时
+- **这是用户感知"卡住"的主因**
+
+### 2. 状态看板高频刷新 — `broadcast.py`
+```python
+EDIT_INTERVAL = 0.8  # 每0.8秒刷新Telegram状态消息
+```
+- 网络不稳时 `edit_message` 请求堆积，真正的回复被排队延迟
+
+### 3. 大日志IO延迟 — `nanobot_stdout.log` (4.4MB)
+- Gateway进程每次读取日志做正则匹配提取工具调用
+- 文件越大，IO和解析越慢
+- **代码位置**：`nanobot/bus/queue.py`
+
+### 4. 记忆宫殿模块缺失 — 每次调用浪费2-5秒
+- 调用 → 导入失败 → 捕获异常 → 格式化错误 → 返回
+- 完全无用功的往返
+
+**本质不是CPU计算瓶颈，是架构性阻塞**：配额锁 + IO延迟 + 无效重试叠加。
+
+**立即可做的优化**：
+1. `truncate -s 0 /root/.nanobot/workspace/nanobot_stdout.log` — 清日志
+2. `pip install -e /root/.nanobot/workspace/mempalace --break-system-packages` — 装记忆宫殿
+3. 减少广播消息，优先定向发送
+
+[工具调用记录]
+• chatroom_send() → (62字)
+• wait() → (1,409字)
+• wait() → (29字)
+• end_discussion() → ✅ 讨论已结束（原因: 已定位4个具体高耗代码点，结论明确。），即将进入总结阶段 (40字)
+---

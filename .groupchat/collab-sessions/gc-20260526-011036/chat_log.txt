@@ -1,0 +1,174 @@
+[用户]: 现在有时候有总结有时候没有是为什么
+---
+[Kirk]: 现在看 broadcast 函数返回后，总结是在哪里触发的：
+
+[工具调用记录]
+• memory_palace(总结 summary end_discussion 讨论结束 有时候没有) → 🔍 5 result(s) for '总结 summary end_discussion 讨论结束 有时候没有':
+
+[1] wing_user/user-behavior-fawei (sim=-0.096)
+  用户行为"发我"的含义：用户要求agent把搜索/查询结果直接输出在聊天回复文本中。agent应：1)搜索/抓取内容 2)整理成可读格式 3)直接贴在回复里。不发附件、不只给链接、不说"已获取"而不给内容。
+
+[2] wing_user/prompt-optimization-interest (sim=-0.126)
+  用户再次确认groupchat prompt参数冗余问题。记忆中已有2026-05-24的完整分析（wing_code/groupchat-prompt-optimization），结论不变：4个输出规范区块重叠+Leader说明重复，总计可省~1500 tok/轮。用户对此问题持续关注。
+
+[3] wing_project/git-commits-after-511 (sim=-0.152)
+  2026-05-25: 提交 6b64165 fix(g… (1,112字)
+• memory_palace(end_discussion 总结逻辑 退出条件) → 🔍 5 result(s) for 'end_discussion 总结逻辑 退出条件':
+
+[1] wing_user/user-behavior-fawei (sim=-0.005)
+  用户行为"发我"的含义：用户要求agent把搜索/查询结果直接输出在聊天回复文本中。agent应：1)搜索/抓取内容 2)整理成可读格式 3)直接贴在回复里。不发附件、不只给链接、不说"已获取"而不给内容。
+
+[2] wing_user/prompt-optimization-interest (sim=-0.087)
+  用户再次确认groupchat prompt参数冗余问题。记忆中已有2026-05-24的完整分析（wing_code/groupchat-prompt-optimization），结论不变：4个输出规范区块重叠+Leader说明重复，总计可省~1500 tok/轮。用户对此问题持续关注。
+
+[3] wing_user/art-preferences (sim=-0.167)
+  用户艺术偏好：前卫×AI×材质感×极简。推荐5位核心艺术家：Refik Anadol（AI数据雕塑… (1,388字)
+• exec(cd /root/nanobot-src && grep -rn "end_discussion\|总结\|summary\|final_summar" ...) → tests/test_groupchat.py
+tests/test_loop_consolidation_tokens.py
+tests/test_summarizer.py
+tests/test_broadcast_synthesis_fix.py
+tests/test_compression_behavior_snapshot.py
+tests/test_prompt_robustness.py
+tests/test_memory_consolidation_types.py
+nanobot/providers/cache_probe.py
+nanobot/providers/litellm_provider.py
+nanobot/providers/httpx_provider.py
+nanobot/groupchat/history/tool_pruning.py
+nanobot/groupchat/history/history_settings.py
+nanobot/groupchat/history/component_manager.py
+nanobot/groupc… (785字)
+• exec(cd /root/nanobot-src && grep -n "end_discussion\|总结" nanobot/groupchat/orches...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && grep -n "end_discussion\|总结" nanobot/groupchat/orches...) → 3:Leader's final text reply (before end_discussion) serves as the
+20:    ``end_discussion``.  Uses the same provider + model as history
+51:            f"📋 讨论总结\n"
+60:        "请用简洁的中文总结核心内容、关键决策和结论。\n"
+73:            await engine._send(f"📋 讨论总结\n\n{summary}")
+75:            await engine._send(f"📋 讨论总结\n共 {len(messages)} 条消息")
+78:        await engine._send(f"📋 讨论总结\n共 {len(messages)} 条消息（AI 总结生成失败）")
+
+
+Exit code: 0 (416字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 1| """Main group chat event loop — dispatches to broadcast mode.
+2| 
+3| Leader's final text reply (before end_discussion) serves as the
+4| synthesis; no separate summary generation stage exists.
+5| """
+6| 
+7| from __future__ import annotations
+8| 
+9| import asyncio
+10| 
+11| from loguru import logger
+12| 
+13| from nanobot.groupchat.orchestra.broadcast import broadcast_round
+14| 
+15| 
+16| async def generate_summary(engine: Any) -> None:
+17|     """Generate and send an AI summary of the entire discussion.
+18| 
+19|     Called when user sends ``__SUMMARY__`` or when Leader triggers
+20|     ``end_discussion``.  Uses the same provider + model as history
+21|     compression (``tool_results.summarize_model``).
+22|     """
+23|     from nanobot.groupchat.history.history_settings import (
+24|         … (5,951字)
+• exec(cd /root/nanobot-src && grep -n "end_discussion\|generate_summary\|__SUMMARY_...) → 826:            self._input_queue.put_nowait("__SUMMARY__")
+1000:    async def _generate_summary(self) -> None:
+1002:        from nanobot.groupchat.orchestra.run_loop import generate_summary
+1003:        await generate_summary(self)
+
+
+Exit code: 0 (247字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 810|     async def direct_chat(self, user_message: str) -> str | None:
+811|         """Send message to single active agent — delegates to direct_chat module."""
+812|         from nanobot.groupchat.orchestra.engine import direct_chat as _direct_chat
+813|         return await _direct_chat(self, user_message)
+814| 
+815|     def inject(self, message: str) -> None:
+816|         """Inject a user message into the chat loop (1+ agents… (1,903字)
+  (还有 6 个工具调用，已省略)
+---
+[用户]: 怎么了
+---
+[Kirk]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -rn "synthesis\|总结\|_synth\|post_broadcast\|afte...) → nanobot/groupchat/orchestra/mailbox.py
+nanobot/groupchat/orchestra/run_loop.py
+nanobot/groupchat/orchestra/tools/chatroom_tools.py
+nanobot/groupchat/orchestra/broadcast.py
+
+
+Exit code: 0 (186字)
+• exec(cd /root/nanobot-src && grep -n "synthesis\|总结\|_synth" nanobot/groupchat/orc...) → 4:synthesis; no separate summary generation stage exists.
+51:            f"📋 讨论总结\n"
+60:        "请用简洁的中文总结核心内容、关键决策和结论。\n"
+73:            await engine._send(f"📋 讨论总结\n\n{summary}")
+75:            await engine._send(f"📋 讨论总结\n共 {len(messages)} 条消息")
+78:        await engine._send(f"📋 讨论总结\n共 {len(messages)} 条消息（AI 总结生成失败）")
+
+
+Exit code: 0 (338字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 1| """Main group chat event loop — dispatches to broadcast mode.
+2| 
+3| Leader's final text reply (before end_discussion) serves as the
+4| synthesis; no separate summary generation stage exists.
+5| """
+6| 
+7| from __future__ import annotations
+8| 
+9| import asyncio
+10| 
+11| from loguru import logger
+12| 
+13| from nanobot.groupchat.orchestra.broadcast import broadcast_round
+14| 
+15| 
+16| async def generate_summary(engine: Any) -> None:
+17|     """Generate and send an AI summary of the entire discussion.
+18| 
+19|     Called when user sends ``__SUMMARY__`` or when Leader triggers
+20|     ``end_discussion``.  Uses the same provider + model as history
+21|     compression (``tool_results.summarize_model``).
+22|     """
+23|     from nanobot.groupchat.history.history_settings import (
+24|         … (5,951字)
+• exec(cd /root/nanobot-src && grep -n "end_discussion\|generate_summary\|__SUMMARY_...) → 597:                f"- end_discussion(reason): 结束讨论，进入最终总结\n"
+619:                f"6. 信息充分后，先完成以下两步，再调用 end_discussion()：\n"
+629:                f"7. 完成记忆存入后，调用 end_discussion() 结束任务\n\n"
+631:                f"- 发现队友空转或无法完成任务时：果断 end_discussion\n"
+633:                f"- ⚠️ 如果你打算自己做搜索/验证，必须先完成工具调用，再调用 end_discussion。\n"
+634:                f"  end_discussion 一旦触发无法撤销，之后再说'我来搜索'只是文字，不会执行。\n"
+637:                f"- ⚠️ 禁止在未存记忆的情况下调用 end_discussion。存记忆 → end_discussion 是强制顺序。\n"
+699:        # Onl… (1,369字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 870| 
+871|                 # Flush any remaining buffered search lines
+872| 
+873|                 content = result.content or ""
+874|                 is_error = result.finish_reason == "error"
+875|                 is_timeout = result.finish_reason == "timeout"
+876|                 is_interrupted = result.finish_reason == "interrupted"
+877|                 latency = result.latency
+878|                 total_latency += latency
+879|                 total_iterations += result.iterations
+880|                 all_tools_used.extend(result.tools_used or [])
+881| 
+882|                 if is_leader and "end_discussion" in (result.tools_used or []) and not engine._running:
+883|                     _leader_ended_discussion = True
+884| 
+885|                 if is_error or is_timeout:
+886|              … (3,740字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1220|                             )
+1221|                             tok_suffix = "\n" + _d.format_token_stats(
+1222|                                 tok.get("prompt", 0), tok.get("completion", 0),
+1223|                                 elapsed=elapsed, cost=cost, cache_tokens=cache_t,
+1224|                                 reasoning_tokens=reasoning_t,
+1225|                             )
+1226| 
+1227|                         target_label = f"进展 [{cycle}]" if is_leader else "Self/Final"
+1228|                         await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
+1229|                         logger.info("Broadcast: displayed {} cycle {} output ({} chars) [Local Only]", name, cycle, len(content))
+1230|                     #… (5,385字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → (5,381字)
+  (还有 4 个工具调用，已省略)
+---

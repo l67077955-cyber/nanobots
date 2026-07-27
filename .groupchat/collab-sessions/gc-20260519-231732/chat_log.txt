@@ -1,0 +1,49 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 看看nanobot进程数据
+---
+[Harper]: **Nanobot 进程数据：**
+
+| 指标 | 值 |
+|---|---|
+| PID | 506698 |
+| 父进程 | bash (506550) |
+| 运行时长 | 10h 2m |
+| CPU | 0.7%（单核）|
+| 内存 | **695 MB** RSS / **2.4 GB** VIRT |
+| 物理内存占比 | 8.6% |
+| 线程数 | 23 |
+| 文件描述符 | 48 个打开 |
+| 状态 | Sleeping（空闲等待）|
+| 负载 | 0.21 — 极低 |
+| 系统已运行 | 37天8h |
+
+**结论**：nanobot gateway 运行正常，内存占用约 700MB（RSS），CPU 几乎闲置（等待任务中），线程 23 个，无异常。系统总体空闲（94% idle）。
+
+[工具调用记录]
+• exec(ps aux | grep -E '[n]anobot|[n]ano' | head -30) → root      506550  0.0  0.1  13024  9140 ?        Ss   13:15   0:00 /usr/bin/bash -lic set +m; cd /root/.nanobot && nanobot gateway
+root      506698  0.7  8.5 2532720 695628 ?      Sl   13:15   4:18 /root/.local/share/pipx/venvs/nanobot-ai/bin/python /root/.local/bin/nanobot gateway
+root      636464  0.0  0.0   7740  3532 ?        S    23:17   0:00 /bin/bash -c top -b -n 1 -p $(pgrep -d',' -f nanobot) 2>/dev/null || echo "No PIDs or top failed"
+root      636468  0.0  0.0  10672  3736 ?        R  … (550字)
+• exec(top -b -n 1 -p $(pgrep -d',' -f nanobot) 2>/dev/null || echo "No PIDs or top ...) → top - 23:17:40 up 37 days,  8:27,  1 user,  load average: 0.21, 0.09, 0.03
+Tasks:   3 total,   0 running,   3 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  3.0 us,  3.0 sy,  0.0 ni, 93.9 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st 
+MiB Mem :   7941.6 total,   5389.1 free,   1806.4 used,   1207.2 buff/cache     
+MiB Swap:    960.0 total,    708.5 free,    251.5 used.   6135.2 avail Mem 
+
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+ 506698 root      20   0 2532720 69562… (706字)
+• exec() → 506698  506550  0.7  8.5 695628 2532720  10:02:10 /root/.local/share/pipx/venvs/nanobot-ai/bin/python /root/.local/bin/nanobot gateway
+---
+Name:	python
+State:	S (sleeping)
+FDSize:	256
+VmSize:	 2532720 kB
+VmRSS:	  695628 kB
+Threads:	23
+---
+48
+
+
+Exit code: 0 (257字)
+---

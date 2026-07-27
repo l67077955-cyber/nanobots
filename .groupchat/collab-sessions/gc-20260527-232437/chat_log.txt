@@ -1,0 +1,349 @@
+[用户]: 我指的是代码文件，不是记忆本身
+---
+[系统]: ## 🧠 自动记忆检索（群聊开始时触发）
+当前用户输入: 我指的是代码文件，不是记忆本身
+
+### 技术上下文 (wing_code) — 工具用法/方法/踩坑/技术结论
+## L3 — SEARCH RESULTS for "我指的是代码文件，不是记忆本身"
+  [1] wing_code/round-20260527-自由讨论 (sim=0.353)
+      ## 工具与方法 - 使用 `grep -rn "mempalace\|memory.palace\|memory_palace\|MemPalace"` 在代码目录中搜索 mempalace 相关实现，定位 `_auto_recall.py` 和 `_auto_memory.py` 文件。 - 调用 `ls /root/.nanobot/skills/memory-palace/` 试图查找 mempalace 相关技能文件，未找到。 - 读取 `/root/.nanobot/skills/memory-palace/SKILL.md` 文件内容。 - 通过 `read_file()`...
+      src: auto_memory_poll_1
+  [2] wing_code/auto-recall-semantic-search (sim=0.253)
+      ## _auto_recall.py 改为语义搜索（2026-05-27）  ### 改动 - `_recall_wing(wing)` → `_recall_wing(wing, query=user_input)` - 有 query 时用 `L3.search(query, wing, n_results)` 语义搜索 - 无 query 时 fallback 到 `L2.recall(wing, n_results)` 保持兼容 - `run_loop.py` 调用无需改动，`user_input` 参数已传入  ### 效果 - 之前：每轮群聊注入固定记忆（L2 按插入顺序返回...
+  [3] wing_code/round-20260527-自由讨论 (sim=0.231)
+      用 `L2.retrieve()`（基于元数据过滤）而非语义搜索，导致每轮注入的记忆内容相同，不能根据用户输入动态过滤 - 通过 `grep` 和代码审查确认轮询逻辑基本正确，串行调用的延迟在可接受范围内  ## 技术结论 - 默认轮询逻辑（包括 `_auto_recall.py` 和 `_auto_memory.py`）**基本正确，生产环境可用**，无需紧急修复 - 关键问题在于 `_auto_recall.py` 使用 `L2.retrieve()` 进行固定关键词或元数据过滤，不能实现基于用户输入的语义召回 - **建议改进**：将 `_auto_recall.py` 中的 `L...
+      src: auto_memory_poll_1
+  [4] wing_code/round-20260527-自由讨论 (sim=0.225)
+      ## 工具与方法 - 使用 `L3.search(query=user_input, wing=wing)` 进行语义搜索，替代之前的 `L2.retrieve()` 元数据过滤方法。 - 通过 `memory_palace()` 调用存储和检索记忆内容，支持多维度分层存储（技术上下文、用户偏好、固定信息等）。 - 采用 `sha256(wing+room+content)` 生成内容的哈希ID，确保内容的幂等性和去重。 - 通过 `max_retries=-1` 实现无限重试机制，确保请求的稳定性。 - 使用 `error_callback` 记录所有HTTP错误，增强容错能力。 - ...
+      src: auto_memory_poll_1
+  [5] wing_code/round-20260527-自由讨论 (sim=0.22)
+      相关的召回。 - `user_input` 传入 `auto_recall_memories()` 后未被利用，导致召回不依赖用户实际问题，影响召回的相关性。 - 解决方案：在 `_auto_recall.py` 中新增 `_generate_keywords()`，利用 LLM 根据用户输入生成3-5个关键词，作为搜索条件，用 `L3.search()` 进行语义召回。 - 由于 `auto_recall_memories()` 已是异步函数，无需修改签名，只需在调用前调用 `_generate_keywords()`。 - 另外，建议保持 `_auto_recall.py` 和 `_...
+      src: auto_memory_poll_1
+
+---
+
+### 用户偏好 (wing_user) — 输出风格/交互习惯/格式偏好
+## L3 — SEARCH RESULTS for "我指的是代码文件，不是记忆本身"
+  [1] wing_user/preferences-20260527 (sim=0.104)
+      ## 指令风格 用户偏好简洁明了，倾向于直接提出问题和方案，喜欢用“是否可以”、“建议”、“改成”这类明确的指令，强调方案的可行性和具体实现细节。  ## 输出偏好 偏好结构化、逻辑清晰的回答，喜欢用“结论”、“方案”、“具体步骤”等标题，内容偏向技术细节和方案可行性，语言正式专业，避免冗余。  ## 技术倾向 偏好使用Python，关注异步/同步调用、LLM模型（如glm-5.1）、语义搜索（L3.search）和ChromaDB，倾向于通过LLM生成检索关键词，强调代码的简洁和效率。  ## 交互风格 偏向结果导向、实用性强，喜欢逐步分析问题、提出方案、验证方案的可行性，善于接受技术...
+      src: auto_memory_poll_2
+  [2] wing_user/preferences-20260527 (sim=0.077)
+      ## 指令风格 用户偏好简洁、指令明确，倾向于用短句或命令式表达，强调“快”、“别废话”、“发我”之类的指令风格。  ## 输出偏好 偏好结构化、清晰的输出格式，倾向于简洁明了，内容重点突出，避免冗余。对语言没有特殊要求，但偏向于技术性、专业性表达。  ## 技术倾向 偏好使用Python、LLM（如OpenAI模型）进行自动化处理，倾向于语义搜索（embedding +向量检索）技术，喜欢用ChromaDB、L3等工具，注重工具的可扩展性和自动化。  ## 交互风格 交互偏向结果导向、逻辑清晰，喜欢系统性分析和方案总结。沟通风格偏向专业、理性，喜欢逐步拆解问题、提供详细方案，但也接受简...
+      src: auto_memory_poll_2
+  [3] wing_user/preferences-20260527 (sim=0.071)
+      ## 指令风格 用户偏好简洁明了的指令，倾向于直接提出问题或需求，强调“直接回答”、“技术上可行”等，偏向结果导向，少废话。  ## 输出偏好 偏好结构化、清晰的回答，包含总结、关键点、方案或结论，喜欢用表格或明确的段落表达，强调逻辑性和重点突出。  ## 技术倾向 偏好使用Python、LLM（如glm-5.1）、ChromaDB等工具，关注技术实现细节和优化方案，倾向于用语义搜索（embedding）替代关键词匹配，重视代码合并、模块拆分和性能优化。  ## 交互风格 沟通风格偏向专业、理性，喜欢详细分析、方案比较，善于提出改进建议，强调架构合理性和职责分离，避免盲目合并，重视设计原...
+      src: auto_memory_poll_2
+  [4] wing_user/preferences-20260527 (sim=0.052)
+      ## 用户偏好和习惯提取  ### 指令风格 - 常用简洁、明确的指令，偏向“看看/验证/总结/发结论”。 - 喜欢用“暗示”或“暗示了什么”来引导提取偏好。 - 习惯用“提取规则”、“输出格式”、“控制在 500 字以内”等明确要求。  ### 输出偏好 - 偏好结构化、清晰的文本输出。 - 关注“偏好和习惯”的全面覆盖，内容简洁但信息完整。 - 期望用纯文本，强调“纯文本”格式。 - 喜欢用“无”来表示没有偏好或内容。  ### 技术倾向 - 对工具/技术栈没有明显偏好，但偏向于：   - 关注“工具调用”、“代码片段”、“技术细节”。   - 对“自动化”、“异步”、“语义搜索”、...
+      src: auto_memory_poll_2
+  [5] wing_user/preferences-20260527 (sim=0.049)
+      ## 指令风格 用户倾向于使用简洁、明确的指令，偏好快速确认和验证信息，喜欢用“看看”、“是否正确”、“掌握全部事实”等表达，体现出结果导向和效率优先。  ## 输出偏好 偏好结构化、清晰的输出，强调重点和结论，喜欢用“结论”、“关键发现”、“备注”等标签，内容简洁明了，避免冗长描述。  ## 技术倾向 偏好技术细节和源码分析，关注工具的实现细节和行为逻辑，倾向于通过命令行、脚本和代码grep等技术手段进行验证，重视源码和配置参数的作用。  ## 交互风格 沟通风格偏向理性、专业，喜欢系统性分析和验证，注重事实和结论，倾向于在确认问题后快速达成共识，避免无关信息，追求高效和准确。
+      src: auto_memory_poll_2
+
+---
+
+### 固定信息 (wing_agent) — 事实数据/发现/规则约定
+## L3 — SEARCH RESULTS for "我指的是代码文件，不是记忆本身"
+  [1] wing_agent/discoveries-20260527 (sim=0.33)
+      成针对不同wing的检索关键词，提升召回质量。 - 代码结构：保持存储和召回两个文件分离，职责明确，避免合并带来的内聚性下降。 - 召回调用：`auto_recall_memories()`已是异步，调用时无需改签名，只需在内部实现关键词生成逻辑。  以上为群聊中确认和更新的固定信息，便于后续复用和指导实现。
+      src: auto_memory_poll_3
+  [2] wing_agent/discoveries-20260527 (sim=0.228)
+      ## 事实与数据 - 存储机制：`_auto_memory.py`，讨论结束后由LLM提取信息写入ChromaDB。 - 召回机制：`_auto_recall.py`，讨论开始前通过ChromaDB的语义搜索（`L3.search()`）进行召回。 - 召回调用：`auto_recall_memories()`为异步函数，调用`L3.search()`实现语义搜索。 - 关键词生成：新增`_generate_wing_queries(user_input, engine)`，由LLM一次生成3个不同wing的检索关键词（针对`wing_code`、`wing_user`、`wing_ag...
+      src: auto_memory_poll_3
+  [3] wing_agent/discoveries-20260527 (sim=0.228)
+      ## 事实与数据 - 召回机制包括两个：`_auto_recall.py`（讨论前自动检索）和 `_auto_memory.py`（讨论后存储） - 目前 `_auto_recall.py` 使用 `L2.retrieve()`，按元数据过滤，非语义搜索 - `user_input` 传入但未用于过滤，导致每轮注入的记忆相同 - `tool_add_drawer` 使用 `sha256(wing+room+content)` 作为 drawer_id，内容不同不会覆盖 - `run_loop.py` 中调用的 `auto_recall_memories` 和 `auto_store_me...
+      src: auto_memory_poll_3
+  [4] wing_agent/discoveries-20260527 (sim=0.226)
+      ## 事实与数据 - MemoryPalace 机制包括存储（`_auto_memory.py`）和召回（`_auto_recall.py`） - 当前召回使用的为非语义的元数据过滤和插入顺序，未利用语义搜索 - 存储机制：讨论结束后，LLM提取信息写入ChromaDB - 召回机制：讨论开始前，从ChromaDB按元数据过滤（非语义）查询 - 召回改为语义搜索后，使用`L3.search(query=user_input, wing=wing)`实现 - 召回的三个“wing”分别对应不同内容类别：技术上下文、用户偏好、事实信息 - 召回时，`user_input`作为统一的查询输入 ...
+      src: auto_memory_poll_3
+  [5] wing_agent/discoveries-20260527 (sim=0.207)
+      .py` 增加 LLM 生成关键词的步骤，可以实现 agent 自行生成检索关键词的目标  ## 规则与约定 - 召回机制应优先考虑语义相关性，避免单纯按存储顺序或元数据过滤 - 存储机制已通过内容哈希保证唯一性，不会因多次讨论覆盖 - 召回和存储职责明确，保持两个文件分离，避免职责混淆 - 召回前可以用 LLM 生成关键词，提升召回相关性 - 召回调用应为异步，存储调用为异步或同步皆可，确保流程不阻塞 - 现有的轮询逻辑整体正确，唯一改进点是召回使用语义搜索  总结：当前MemPalace的轮询逻辑基本正确，生产环境可用。未来可通过在 `_auto_recall.py` 增加 LLM ...
+      src: auto_memory_poll_3
+---
+[Kirk]: 现在全貌清晰了。让我看 mempalace 库本身的核心文件结构，确认它的定位。
+
+[工具调用记录]
+• exec(find /root/.nanobot -name "_auto_recall.py" -o -name "_auto_memory.py" -o -na...) → Exit code: 0 (13字)
+• exec(find /root/.nanobot -path "*/plugins/memory*" -name "*.py" 2>/dev/null) → /root/.nanobot/workspace/agents/hermes-agent/plugins/memory/holographic/retrieval.py
+/root/.nanobot/workspace/agents/hermes-agent/plugins/memory/holographic/store.py
+/root/.nanobot/workspace/agents/hermes-agent/plugins/memory/holographic/holographic.py
+/root/.nanobot/workspace/agents/hermes-agent/plugins/memory/holographic/__init__.py
+/root/.nanobot/workspace/agents/hermes-agent/plugins/memory/byterover/__init__.py
+/root/.nanobot/workspace/agents/hermes-agent/plugins/memory/hindsight/__init__.py… (1,568字)
+• exec(find /root/.nanobot -name "*.py" 2>/dev/null | xargs grep -l "auto_recall\|au...) → /root/.nanobot/workspace/agents/hermes-agent/plugins/memory/hindsight/__init__.py
+/root/.nanobot/workspace/agents/hermes-agent/plugins/memory/supermemory/__init__.py
+/root/.nanobot/workspace/agents/hermes-agent/tests/plugins/memory/test_hindsight_provider.py
+/root/.nanobot/workspace/agents/hermes-agent/tests/plugins/memory/test_supermemory_provider.py
+
+
+Exit code: 0 (368字)
+• exec(find /root/.nanobot -name "run_loop.py" -o -name "broadcast.py" -o -name "gro...) → Exit code: 0 (13字)
+• exec(find /root/.nanobot -name "*.py" 2>/dev/null | xargs grep -l "memory_palace\|...) → /root/.nanobot/workspace/mempalace/examples/basic_mining.py
+/root/.nanobot/workspace/mempalace/examples/convo_import.py
+/root/.nanobot/workspace/mempalace/benchmarks/longmemeval_bench.py
+/root/.nanobot/workspace/mempalace/benchmarks/locomo_bench.py
+/root/.nanobot/workspace/mempalace/benchmarks/model_eval/translate_datasets.py
+/root/.nanobot/workspace/mempalace/benchmarks/model_eval/runner.py
+/root/.nanobot/workspace/mempalace/benchmarks/model_eval/summarize.py
+/root/.nanobot/workspace/mempalace/… (1,284字)
+• exec() → /root/.nanobot/workspace/agents/hermes-agent/plugins/memory/holographic/store.py
+/root/.nanobot/workspace/agents/hermes-agent/tests/test_evidence_store.py
+/root/.nanobot/workspace/agents/hermes-agent/tests/run_agent/test_primary_runtime_restore.py
+/root/.nanobot/workspace/agents/hermes-agent/optional-skills/security/oss-forensics/scripts/evidence-store.py
+/root/.nanobot/workspace/mempalace/tests/benchmarks/test_recall_threshold.py
+
+
+Exit code: 0 (449字)
+• exec(ls /root/.nanobot/workspace/mempalace/) → AGENTS.md
+CHANGELOG.md
+CLAUDE.md
+CONTRIBUTING.md
+LICENSE
+MISSION.md
+README.md
+ROADMAP.md
+SECURITY.md
+assets
+benchmarks
+docs
+examples
+hooks
+integrations
+landing
+mempalace
+openarena-claim.txt
+pyproject.toml
+tests
+tools
+uv.lock
+website
+
+
+Exit code: 0 (247字)
+• exec(find /root/.nanobot -name "*.py" 2>/dev/null | xargs grep -l "auto_recall_mem...) → Exit code: 123 (15字)
+• exec(ls /root/.nanobot/workspace/mempalace/mempalace/) → README.md
+__init__.py
+__main__.py
+__pycache__
+_stdio.py
+backends
+cli.py
+closet_llm.py
+config.py
+convo_miner.py
+convo_scanner.py
+corpus_origin.py
+data
+dedup.py
+dialect.py
+diary_ingest.py
+dynamics.py
+embedding.py
+entity_detector.py
+entity_registry.py
+exporter.py
+fact_checker.py
+format_miner.py
+general_extractor.py
+hallways.py
+hooks_cli.py
+i18n
+instructions
+instructions_cli.py
+knowledge_graph.py
+layers.py
+llm_client.py
+llm_refine.py
+mcp_server.py
+migrate.py
+miner.py
+normalize.py
+onboarding.py
+palac… (699字)
+• exec(find /root/.nanobot -name "*.py" 2>/dev/null | xargs grep -rl "auto_recall\|a...) → /root/.nanobot/workspace/agents/hermes-agent/plugins/memory/hindsight/__init__.py
+/root/.nanobot/workspace/agents/hermes-agent/plugins/memory/supermemory/__init__.py
+/root/.nanobot/workspace/agents/hermes-agent/tests/plugins/memory/test_hindsight_provider.py
+/root/.nanobot/workspace/agents/hermes-agent/tests/plugins/memory/test_supermemory_provider.py
+/root/.nanobot/workspace/mempalace/tests/benchmarks/test_palace_boost.py
+
+
+Exit code: 0 (441字)
+• exec() → /root/.nanobot/workspace/agents/hermes-agent/plugins/memory/hindsight/__init__.py
+/root/.nanobot/workspace/agents/hermes-agent/plugins/me… (441字)
+  (还有 12 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• memory_palace(_auto_recall.py _auto_memory.py 代码文件 源码 完整内容) → 🔍 10 result(s) for '_auto_recall.py _auto_memory.py 代码文件 源码 完整内容':
+
+[1] wing_code/round-20260527-自由讨论 (sim=0.529)
+  ## 工具与方法
+- 使用 `grep -rn "mempalace\|memory.palace\|memory_palace\|MemPalace"` 在代码目录中搜索 mempalace 相关实现，定位 `_auto_recall.py` 和 `_auto_memory.py` 文件。
+- 调用 `ls /root/.nanobot/skills/memory-palace/` 试图查找 mempalace 相关技能文件，未找到。
+- 读取 `/root/.nanobot/skills/memory-palace/SKILL.md` 文件内容。
+- 通过 `read_file()` 读取 `_auto_recall.py` 和 `_auto_memory.py` 文件内容，分析其逻辑。
+- 通过 `exec()` 执行命令确认 mempalace 相关… (4,297字)
+• memory_palace(auto_recall auto_memory 源代码 实现) → 🔍 10 result(s) for 'auto_recall auto_memory 源代码 实现':
+
+[1] wing_code/mempalace-auto-polling-review (sim=0.426)
+  ## MemoryPalace 自动轮询逻辑审查结论（2026-05-27）
+
+### 召回侧（_auto_recall.py）
+- `_recall_wing(wing, n_results=5)` 用 `L2.retrieve()` 按元数据过滤+插入顺序返回，**不是语义搜索**
+- `user_input` 参数传了但 `_recall_wing` 完全不用，每轮群聊注入的记忆完全相同
+- **唯一值得改的**：把 `L2.retrieve(wing=wing)` 换成 `L3.search(query=user_input, wing=wing)`，让召回与用户输入语义相关
+
+### 存储侧（_auto_memory.py）
+- 3次串行LLM调用（上下文工具→wing_code，用户偏好→wing_user，固定信息→wing_agent），可async… (4,401字)
+• exec() → -rw-r--r-- 1 root root 9263 May 27 11:15 /root/nanobot-src/nanobot/groupchat/orchestra/_auto_memory.py
+-rw-r--r-- 1 root root 5651 May 27 21:28 /root/nanobot-src/nanobot/groupchat/orchestra/_auto_recall.py
+-rw-r--r-- 1 root root 7024 May 27 21:28 /root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py
+
+
+Exit code: 0 (319字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/_auto_recall.py) → 1| """Pre-discussion automatic memory recall.
+2| 
+3| Called before broadcast_round starts. Generates wing-specific search keywords
+4| from user_input via LLM, then runs 3 parallel wing-filtered semantic searches:
+5|   1. wing_code  — technical context, tools, methods, pitfalls
+6|   2. wing_user  — user preferences, output style, interaction habits
+7|   3. wing_agent — facts, discoveries, rules, cross-task knowledge
+8| 
+9| Uses L3.search (semantic) so results are relevant to the current user input.
+10| Each wing gets its own tailored query instead of reusing the raw user_input.
+11| 
+12| Results are concatenated and injected as a system message into history
+13| so all agents see them in the upcoming broadcast round.
+14| """
+15| 
+16| from __future__ import annotations
+17| 
+18| import json
+19|… (5,834字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/_auto_memory.py) → 1| """Post-discussion automatic memory extraction.
+2| 
+3| Called after broadcast_round returns. Runs 3 sequential LLM polls:
+4|   1. Context + tools/methods that worked  → wing_code
+5|   2. User preferences from instructions   → wing_user
+6|   3. Extra fixed facts/discoveries        → wing_agent
+7| 
+8| Each poll extracts structured content from the conversation and stores
+9| it via tool_add_drawer (direct ChromaDB call, no LLM tool loop needed).
+10| """
+11| 
+12| from __future__ import annotations
+13| 
+14| import hashlib
+15| from datetime import datetime
+16| from typing import TYPE_CHECKING, Any
+17| 
+18| from loguru import logger
+19| 
+20| if TYPE_CHECKING:
+21|     pass  # engine type is Any at runtime
+22| 
+23| # ── 3 extraction prompts ──────────────────────────────────────
+24| 
+25| _POLL_1… (9,152字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 1| """Main group chat event loop — dispatches to broadcast mode.
+2| 
+3| Leader's final text reply (before end_discussion) serves as the
+4| synthesis; no separate summary generation stage exists.
+5| """
+6| 
+7| from __future__ import annotations
+8| 
+9| import asyncio
+10| 
+11| from loguru import logger
+12| 
+13| from nanobot.groupchat.orchestra.broadcast import broadcast_round
+14| 
+15| 
+16| async def generate_summary(engine: Any) -> None:
+17|     """Generate and send an AI summary of the entire discussion.
+18| 
+19|     Called when user sends ``__SUMMARY__`` or when Leader triggers
+20|     ``end_discussion``.  Uses the same provider + model as history
+21|     compression (``tool_results.summarize_model``).
+22|     """
+23|     from nanobot.groupchat.h… (7,489字)
+---
+[Harper]: 好，源码拿到了。三个文件完整内容如下：
+
+---
+
+## 三个核心代码文件
+
+### 1. `_auto_recall.py`（148行）— 讨论前自动召回
+
+**架构**：
+- 3个固定 wing：`wing_code`（技术上下文）、`wing_user`（用户偏好）、`wing_agent`（固定信息）
+- **关键路径**：`user_input` → LLM生成3个wing各自的关键词 → `L3.search(query, wing)` 语义搜索 → 格式化注入系统消息
+- fallback：LLM失败时直接用 `user_input` 作为 query
+
+**核心函数**：
+| 函数 | 作用 |
+|---|---|
+| `_generate_wing_queries(user_input, engine)` | LLM一次调用生成3组关键词（JSON格式） |
+| `_recall_wing(wing, query)` | 有query用L3.search语义搜索，无query回退L2.recall |
+| `auto_recall_memories(user_input, engine)` | 入口，组装结果 |
+
+**验证点**：第59行 `stack.search(query=query, wing=wing)` — **语义搜索已上线** ✅
+
+---
+
+### 2. `_auto_memory.py`（275行）— 讨论后自动存储
+
+**架构**：
+- 3次串行LLM轮询，分别提取不同维度信息
+- **Poll 1** → `wing_code/round-{日期}-{话题}` — 工具方法、踩坑、技术结论
+- **Poll 2** → `wing_user/preferences-{日期}` — 用户偏好、输出风格
+- **Poll 3** → `wing_agent/discoveries-{日期}` — 事实数据、发现洞察、规则约定
+
+**关键细节**：
+- room命名：poll1用话题slug，poll2/poll3固定前缀+日期
+- content <50字或开头含"无"则跳过
+- conversation截断12000字符，单条消息截断800字符
+- `tool_add_drawer`直接调ChromaDB，不走LLM tool loop
+
+---
+
+### 3. `run_loop.py`（193行）— 主循环调度器
+
+```
+用户输入 → auto_recall_memories(注入记忆) → broadcast_round(群聊) 
+         → auto_store_memories(提取存储) → _maybe_compress_history(压缩)
+```
+
+关键参数：全局超时600秒，防止某轮卡死。
+
+---
+
+### Kirk说的没错——源码在宿主环境可访问。之前谁说不在的？
+---
+[Harper]: 同意。补充三点：
+
+**1. 绕过 MemoryManager 不是 bug，是特性。**
+这两个脚本是 `run_loop.py` 内联调用的，设计意图就是独立于插件体系——它们需要在群聊生命周期的精确节点触发（讨论前/讨论后），而 MemoryManager 的 `prefetch_all()` / `sync_all()` 是 session 级别的钩子，粒度不够细。如果强行塞进去反而要加一堆条件判断。
+
+**2. 存储质量治理的具体抓手：**
+- room命名不一致：poll1用话题slug（`round-20260527-自由讨论`），poll2/poll3用固定前缀（`preferences-20260527`、`discoveries-20260527`）→ 同一个 wing 下 room 风格不统一
+- 重复内容：同一事实被多次讨论反复提取存储（如"召回已改为L3.search"出现4次），虽然内容哈希防覆盖，但不同表述不会被去重
+- **最快见效的改动**：给 `_store_drawer` 加一层 dedup——存储前先搜一下 wing+room 是否有语义相似的已有条目
+
+**3. KG激活的前提条件：**
+当前所有记忆都是扁平文本块。要让 `kg_add` 有意义，需要先在存储侧定义实体抽取规则——哪些信息值得建实体关系（工具名、API名、配置参数等）。否则手动一个个加不如不做。
+
+优先级排序没问题：**存储治理 → KG激活 → 阈值优化**。要我动手搞哪个？
+---
+[Kirk]: 
+
+[工具调用记录]
+• chatroom_send() → (50字)
+• wait() → (663字)
+• memory_palace() → ✅ Stored in wing_code/memory-code-architecture-20260527 (hidden)
+  Drawer ID: drawer_wing_code_memory-code-architecture-20260527_e38e1a609a1f5393f06f5172 (153字)
+• end_discussion() → ✅ 讨论已结束（原因: 代码架构分析完成，方向已明确：存储治理→KG激活→阈值优化。Harper确认架构判断正确。），即将进入总结阶段 (67字)
+---

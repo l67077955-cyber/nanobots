@@ -1,0 +1,145 @@
+[用户]: 动态生成的提示词，也同样需要点击编辑按钮后，显示动态生成的完整内容，但和其他可编辑提示词不一样，只显示内容无需编辑
+---
+[Kirk]: `engine.active_agents` 和 `engine.registry` 都可用。但 dynamic 组件的 `_get_component_content` 对 `examples` 需要 `agent` dict，对 `skills_overview` 不需要 agent。对于全局预览，可以用一个虚拟 agent 或当前 leader agent。
+
+让我看看 `examples` 在全局上下文下怎么处理——实际上 `examples` 是 per-agent 的，全局预览时没有特定 agent。最合理的做法是：对 dynamic 组件，直接在 `PromptBuilder` 上加一个 `get_dynamic_content(key, active_agents)` 静态方法，处理不需要 agent 的组件，对需要 agent 的组件（如 `examples`）返回提示信息。
+
+不过更简洁的方案：直接在 callback 里判断，对 dynamic 组件调用 `engine.prompt_builder._get_component_content("__preview__", {}, key, engine.active_agents)`。`examples` 会返回空（agent dict 为空），这没问题——全局预览下 examples 确实没有内容。
+
+直接改：
+
+[工具调用记录]
+• memory_palace(prompt pipeline dynamic components edit button callback settings.py) → 🔍 5 result(s) for 'prompt pipeline dynamic components edit button callback settings.py':
+
+[1] wing_code/prompt-pipeline-display-fix (sim=-0.133)
+  ## Dynamic 组件来源改为运行时推断（2026-05-24）
+
+问题：settings.py 中 _DYN_SOURCE 是硬编码字典，新增组件容易忘记同步。
+
+修复：在 PromptBuilder 上新增 get_component_source(key) 静态方法，运行时推断来源：
+1. 有 _build_{key}() 方法 → 显示函数名
+2. 有 ~/.nanobot/prompts/{key}.md → 显示文件名
+3. 是已知 agent 字段 → 显示 agent.{key}
+4. 兜底 → "runtime"
+
+settings.py 删除硬编码字典，改调 PromptBuilder.get_component_source(key)。
+
+文件：
+- prompt_bui… (2,252字)
+• memory_palace(prompt component edit callback telegram inline keyboard read-only display) → 🔍 5 result(s) for 'prompt component edit callback telegram inline keyboard read-only display':
+
+[1] wing_code/prompt-pipeline-display-fix (sim=-0.409)
+  ## Dynamic 组件来源改为运行时推断（2026-05-24）
+
+问题：settings.py 中 _DYN_SOURCE 是硬编码字典，新增组件容易忘记同步。
+
+修复：在 PromptBuilder 上新增 get_component_source(key) 静态方法，运行时推断来源：
+1. 有 _build_{key}() 方法 → 显示函数名
+2. 有 ~/.nanobot/prompts/{key}.md → 显示文件名
+3. 是已知 agent 字段 → 显示 agent.{key}
+4. 兜底 → "runtime"
+
+settings.py 删除硬编码字典，改调 PromptBuilder.get_component_source(key)。
+
+文件：
+- prom… (2,094字)
+• exec(grep -n "edit_prompt\|_cb_edit\|edit_component\|prompt_edit\|cb_prompt\|def.*...) → Exit code: 1 (13字)
+• exec(grep -n "InlineKeyboardButton.*编辑\|edit.*button\|callback_data.*edit\|cb_edit...) → 50:        """View or edit sampling parameters with interactive buttons."""
+69:        """Send hyperparams display with edit/delete buttons."""
+
+
+Exit code: 0 (158字)
+• exec(grep -n "callback_query\|def _cb_\|def handle_\|register.*callback\|InlineKey...) → 11:from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+75:                InlineKeyboardButton(f"✏️ {k} = {v}", callback_data=f"hp:{k}"),
+76:                InlineKeyboardButton("🗑", callback_data=f"hp_del:{k}"),
+78:        buttons.append([InlineKeyboardButton("➕ 添加参数", callback_data="hp_add")])
+144:            buttons.append([InlineKeyboardButton(
+402:                buttons.append([InlineKeyboardButton(f"📜 {label}", callback_data="pr:refresh")])
+408:                buttons.… (1,994字)
+• exec(grep -n "edit\|编辑\|view\|查看" /root/nanobot-src/nanobot/channels/telegram/comm...) → 50:        """View or edit sampling parameters with interactive buttons."""
+63:        # Sync from disk so external file edits are reflected
+69:        """Send hyperparams display with edit/delete buttons."""
+89:        "tool_earn_per_output": 0.25,    # credits earned per output (float ok, e.g. 0.5 = 1 credit per 2 outputs)
+132:        """Handle /groupchat command: view/edit groupchat parameters."""
+149:        # Show pool capacity preview
+292:        es = self._edit_state.get(chat_id)
+294:    … (1,868字)
+• exec(grep -n "pre:\|prv:\|pr:\|prmanage\|pradd\|prdel\|pru:\|prd:\|pviz:" /root/na...) → 402:                buttons.append([InlineKeyboardButton(f"📜 {label}", callback_data="pr:refresh")])
+408:                buttons.append([InlineKeyboardButton(f"✏️{dot} {label}", callback_data=f"pre:__global__:{key}")])
+410:                buttons.append([InlineKeyboardButton(f"📂 {label}", callback_data="pr:refresh")])
+412:                buttons.append([InlineKeyboardButton(f"🔒 {label}", callback_data="pr:refresh")])
+418:                    row2.append(InlineKeyboardButton("⬆️", callback_data=f"… (1,145字)
+• exec(grep -rn "pre:\|\"pre:" /root/nanobot-src/nanobot/channels/telegram/ --includ...) → /root/nanobot-src/nanobot/channels/telegram/callbacks.py:1206:            elif data.startswith("pre:"):
+/root/nanobot-src/nanobot/channels/telegram/callbacks.py:1207:                # Edit global template: pre:__global__:component_key
+
+
+Exit code: 0 (249字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1200| 
+1201|             elif data in ("pr:refresh", "pr:"):
+1202|                 # Refresh global prompt order view (exits manage mode)
+1203|                 self._prompt_manage_mode = False
+1204|                 await self._prompt_show_components(query)
+1205| 
+1206|             eli… (4,895字)
+  (还有 6 个工具调用，已省略)
+---
+[Kirk]: ## 结论
+
+`callbacks.py` 第1206-1252行已修改。点击 dynamic 组件的编辑按钮时，现在会调用 `_get_component_content()` 获取运行时渲染内容，以只读模式展示（👁图标 + "↩ 返回"按钮），不进入编辑状态。
+
+## 关键发现
+
+- **修改文件**：`callbacks.py` `pre:` 回调
+- **分支逻辑**：`phase == "dynamic"` → 只读预览；`phase == "static"` → 原有编辑流程
+- **内容来源**：`engine.prompt_builder._get_component_content("__preview__", {}, key, active_agents)` — 运行时实际渲染结果
+- **来源标注**：复用上一轮添加的 `PromptBuilder.get_component_source(key)` 显示生成函数/文件名
+- **不设 `_edit_state`**：用户无法回复修改，只有"↩ 返回"按钮
+
+## 备注
+
+- `examples` 组件在全局预览下（agent dict 为空）会返回空字符串，因为它是 per-agent 字段。这是预期行为——全局上下文下没有特定 agent 的 examples。
+- 编译验证通过。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1195|             # ── Prompt orchestration callbacks ──
+1196|             elif data == "prmanage":
+1197|                 # Toggle manage mode for prompt order view
+1198|                 self._prompt_manage_mode = not getattr(self, '_prompt_manage_mode', False)
+1199|                 await self._prompt_show_components(query, manage_mode=self._prompt_manage_mode)
+1200| 
+1201|             elif data in ("pr:refresh", "pr:"):
+1202|                 # Refresh global prompt order view (exits manage mode)
+1203|                 self._prompt_manage_mode = False
+1204|                 await self._prompt_show_components(query)
+1205| 
+1206|             elif data.startswith("pre:"):
+1207|                 # Edit global template: pre:__global__:component_key
+1208|                 parts = data[4:].split(":",… (3,731字)
+• edit_file() → (76字)
+• exec(python3 -c "import py_compile; py_compile.compile('/root/nanobot-src/nanobot/...) → OK
+
+
+Exit code: 0 (17字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1206|             elif data.startswith("pre:"):
+1207|                 # View/edit global template: pre:__global__:component_key
+1208|                 parts = data[4:].split(":", 1)
+1209|                 if len(parts) == 2:
+1210|                     _, key = parts
+1211|                     engine = self._groupchat_engine
+1212|                     label = _COMPONENT_LABELS.get(key, key)
+1213|                     phase = _COMPONENT_PHASES.get(key, "static")
+1214|                     phase_label = "STATIC" if phase == "static" else "DYNAMIC"
+1215| 
+1216|                     if phase == "dynamic":
+1217|                         # Dynamic components are rendered at runtime — show
+1218|                         # actual content read-only (no edit state).
+1219|                         content = engi… (3,548字)
+• exec() → 1206:            elif data.startswith("pre:"):
+1207:                # View/edit global template: pre:__global__:component_key
+
+
+Exit code: 0 (140字)
+• memory_palace() → ✅ Stored in wing_code/prompt-pipeline-display-fix (hidden)
+  Drawer ID: drawer_wing_code_prompt-pipeline-display-fix_72a49c1e7ad2279ffef6e138 (141字)
+• end_discussion() → ✅ 讨论已结束（原因: 任务完成：dynamic组件点击后显示运行时渲染内容（只读），static组件保持原有编辑逻辑。），即将进入总结阶段 (70字)
+---

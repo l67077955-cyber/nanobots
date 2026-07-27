@@ -1,0 +1,37 @@
+[用户]: 还是走正常总结路径就行，修复就行
+---
+[用户]: 不要额外再重复一些代码
+---
+[Kirk]: 
+
+[工具调用记录]
+• memory_palace() → ## L2 — ON-DEMAND (1 drawers)
+  [broadcast-end-discussion-fix] ## Bug: Leader end_discussion 不等 agent 生成内容就移除  ### 根因（两条路径） 1. **disable 绕过 guard**：manage_agent(disable) → task.cancel() → finally mark_agent_done() → agent 从 _active_agents 移除 → end_discussion guard (active - waiting) 检查通过 2. **sentinel 立即 cancel**：broadcast.py:1636-1639，leader_end_sentinel 触发...  (broadcast.py) (379字)
+• memory_palace() → ## L2 — ON-DEMAND (1 drawers)
+  [groupchat-end-discussion-bugfix] ## Bug修复：Leader end_discussion 丢失 agent 生成内容  **问题**：Leader 结束群聊时，agent 正在生成的内容被丢弃（content=""）。  **两条路径**： 1. **disable 绕过 guard**：manage_agent(disable) → task.cancel() → finally mark_agent_done → agent 从 active 移除 → end_discussion guard 通过 2. **sentinel 直接 cancel**：end_discussion → sentinel 立即 c... (366字)
+---
+[Harper]: 明白。不重复代码，直接给结论。
+
+**修复已完成。** Kirk 在 `broadcast.py` 做了三处改动（flag初始化、检测disable工具调用、clean-exit加守卫条件），语法通过，已存入记忆。
+
+效果：以后 Leader 在同一轮踢人+结束讨论时，不会再跳过总结生成。
+---
+[Kirk]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src/nanobot && grep -n "_leader_disabled_agent" groupchat/or...) → 554:        _leader_disabled_agent = False  # track if leader disabled/kicked an agent this cycle
+889:                                _leader_disabled_agent = True
+1248:                    if result.finish_reason == "end_discussion" and not content and not _leader_disabled_agent:
+
+
+Exit code: 0 (295字)
+• end_discussion() → ✅ 讨论已结束（原因: 修复已在上一轮完成，三处变更已验证到位，用户确认不需要额外改动。），即将进入总结阶段 (54字)
+---
+[Kirk]: 修复已完成，无需额外改动。broadcast.py 三处变更已就位：
+
+- **L554** — `_leader_disabled_agent = False` 初始化
+- **L889** — 检测到 `manage_agent(disable/restart)` 时置 flag
+- **L1248** — clean-exit 条件增加 `and not _leader_disabled_agent`，强制走 synthesis retry
+
+效果：Leader disable agent 后调 end_discussion，不再跳过总结，正常走 synthesis 路径。
+---

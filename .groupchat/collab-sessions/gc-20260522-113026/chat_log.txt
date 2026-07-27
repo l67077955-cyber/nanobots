@@ -1,0 +1,370 @@
+[用户]: 看看整体的上下文动态编排代码，是否存在可读性
+---
+[Harper]: 
+
+[工具调用记录]
+• exec() → tests/test_loop_consolidation_tokens.py
+tests/test_mcp_tool.py
+tests/write_phase0_test.py
+tests/test_filesystem_tools.py
+tests/test_config_migration.py
+tests/test_summarizer.py
+tests/test_session_manager_history.py
+tests/test_consolidate_offset.py
+tests/test_gemini_thought_signature.py
+tests/test_tool_validation.py
+tests/test_compression_behavior_snapshot.py
+tests/test_task_cancel.py
+tests/test_commands.py
+tests/test_context_pruning.py
+tests/test_memory_consolidation_types.py
+tests/test_provider… (1,070字)
+• exec() → tests/test_loop_consolidation_tokens.py
+tests/test_filesystem_tools.py
+tests/test_feishu_reply.py
+tests/test_config_migration.py
+tests/test_summarizer.py
+tests/test_session_manager_history.py
+tests/test_gemini_thought_signature.py
+tests/test_tool_validation.py
+tests/test_compression_behavior_snapshot.py
+tests/test_task_cancel.py
+tests/test_context_pruning.py
+tests/test_provider_retry.py
+nanobot/groupchat/history/tool_pruning.py
+nanobot/groupchat/history/history_settings.py
+nanobot/groupchat/hist… (776字)
+• exec(cd /root/nanobot-src && find . -name "*.py" -path "*/nanobot/*" | sort) → ./nanobot/__init__.py
+./nanobot/__main__.py
+./nanobot/bus/__init__.py
+./nanobot/bus/events.py
+./nanobot/bus/queue.py
+./nanobot/channels/__init__.py
+./nanobot/channels/base.py
+./nanobot/channels/dingtalk.py
+./nanobot/channels/discord.py
+./nanobot/channels/email.py
+./nanobot/channels/feishu.py
+./nanobot/channels/manager.py
+./nanobot/channels/matrix.py
+./nanobot/channels/messages.py
+./nanobot/channels/mochat.py
+./nanobot/channels/qq.py
+./nanobot/channels/registry.py
+./nanobot/channels/slack.py
+./na… (3,993字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 1| """HistoryContext — single source of truth for conversation history.
+2| 
+3| Owns the message list and all related operations:
+4|   - add_message     : append + enforce message-count & char-budget limits
+5|   - maybe_compress  : AI summarize (or drop) the middle region on overflow
+6|   - clear / format  : utility helpers
+7| 
+8| Engine and Broadcast delegate to this class instead of maintaining
+9| ``self._history`` directly.  Persistence is still delegated to
+10| ``GroupChatState.save_message()``.
+11| """
+12| 
+13| from __future__ import annotations
+14| 
+15| import asyncio
+16| from typing import TYPE_CHECKING, Any
+17| 
+18| from loguru import logger
+19| 
+20| from nanobot.groupchat.history.message_converter import age_tool_log
+21| 
+22| if TYPE_CHECKING:
+23|     from nanobot.groupchat.history… (10,921字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context_validator.py) → 1| """Context validation for LLM message lists.
+2| 
+3| Validates message ordering, tool call visibility, compression integrity.
+4| Independent of prompt construction — pure diagnostic logic."""
+5| 
+6| from __future__ import annotations
+7| 
+8| from loguru import logger
+9| 
+10| 
+11| def validate_context(
+12|     messages: list[dict],
+13|     agent_name: str = "",
+14|     skipped: int = 0,
+15| ) -> list[str]:
+16|     """Validate a message list and return any warnings found."""
+17|     warnings: list[str] = []
+18|     tag = f"[ctx/{agent_name or '?'}]"
+19| 
+20|     def _warn(msg: str):
+21|         warnings.append(msg)
+22|         logger.warning("{}", msg)
+23| 
+24|     if not messages:
+25|         _warn(f"{tag} 上下文为空")
+26|         return warnings
+27| 
+28|     # ── 1. 顺序检查 ──
+29|     prev_role =… (2,443字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/history_settings.py) → 1| """Centralized history, summarization, and context-pruning settings.
+2| 
+3| Loads ``~/.nanobot/history_settings.json`` once and exposes typed getters
+4| so that shell.py, tool_loop.py, context_pruning.py,
+5| engine.py, broadcast.py, tool_chat.py, and the Telegram UI can all
+6| read the same configuration without hardcoding defaults.
+7| 
+8| Settings are organized into four sections:
+9| 
+10| - **Top-level**: global limits (context window, tool result hard cap)
+11| - **tool_results**: per-tool truncation + AI summarization
+12| - **history**: conversation history window
+13| - **context_prunin… (8,781字)
+  (还有 19 个工具调用，已省略)
+---
+[Kirk]: Now let me check the broadcast.py more carefully — I need to see the core `broadcast_round` function:
+
+[工具调用记录]
+• memory_palace(上下文动态编排 groupchat orchestra readability code review) → 🔍 5 result(s) for '上下文动态编排 groupchat orchestra readability code review':
+
+[1] wing_code/nanobot-dead-code-audit (sim=0.075)
+  ## nanobot 死代码审计结果 (2026-05-11)
+
+### 确认死代码（可安全删除）
+
+**整文件死代码（1,302行）：**
+1. `providers/httpx_provider.py` (853行) — 从未被任何模块import
+2. `tools/spawn.py` (65行) — 从未被任何模块import
+3. `groupchat/orchestra/events.py` (20行) — BroadcastEventDispatcher从未被import
+4. `groupchat/orchestra/tools/tool_chat.py` (312行) — 从未被import
+5. `groupchat/history/tool_storage.py` (8行) — 已标记deprecated，从未被im… (2,076字)
+• list_dir(/root/nanobot-src/nanobot/groupchat/orchestra) → broadcast.py
+broadcast.py.bak
+broadcast.py.bak_guard_removal
+engine.py
+events.py
+mailbox.py
+run_loop.py
+tools/
+tools/__init__.py
+tools/chatroom_tools.py
+tools/tool_chat.py
+tools/tool_loop.py (190字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1| """Broadcast execution mode for group chat.
+2| 
+3| Runs all agents concurrently with out-of-order display.
+4| Agents can communicate with each other via chatroom_send/wait tools.
+5| """
+6| 
+7| from __future__ import annotations
+8| 
+9| import asyncio
+10| import copy
+11| import json as _json
+12| from pathlib import Path
+13| from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
+14| 
+15| from loguru import logger
+16| 
+17| from nanobot.groupchat.display import display as _d
+18| from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool
+19| from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
+20| from nanobot.groupchat.history.component_manager import (
+21|     get_system_warning,
+22|     synthesis_quality_check,
+23|     _MIN_SYNTHESI… (3,675字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 1| """Async group chat engine for multi-agent discussions.
+2| 
+3| # Verified: Harper has write access to source.
+4| 
+5| Supports fluid agent management:
+6| - Agent registry: all available agents (loaded from config/directory)
+7| - Active participants: agents currently in the conversation
+8| - Seamlessly transitions between 1-on-1 and group chat as agents are added/removed
+9| """
+10| 
+11| from __future__ import annotations
+12| 
+13| import asyncio
+14| import random
+15| from contextlib import AsyncExitStack
+16| from pathlib import Path
+17| from typing import Any, Awaitable, Callable
+18| 
+19| from loguru import logger
+20| 
+21| 
+22| from nanobot.groupchat.history.agent_loader import load_agents
+23| from nanobot.groupchat.config import GroupChatConfig
+24| from nanobot.groupchat.orchestra.mailbox… (4,119字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 1| """Main group chat event loop — dispatches to broadcast mode.
+2| 
+3| Leader's final text reply (before end_discussion) serves as the
+4| synthesis; no separate summary generation stage exists.
+5| """
+6| 
+7| from __future__ import annotations
+8| 
+9| import asyncio
+10| 
+11| from loguru import logger
+12| 
+13| from nanobot.groupchat.orchestra.broadcast import broadcast_round
+14| 
+15| 
+16| async def generate_summary(engine: Any) -> None:
+17|     """Generate and send an AI summary of the entire discussion.
+18| 
+19|     Called when user sends ``__SUMMARY__`` or when Leader triggers
+20|     ``end_discussion``.  Uses the same provider + model as history
+21|     compression (``tool_results.summarize_model``).
+22|     """
+23|     from nanobot.groupchat.history.history_settings import (
+24|         … (3,538字)
+• exec() → 1708 /root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py
+  1679 /root/nanobot-src/nanobot/groupchat/orchestra/engine.py
+   165 /root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py
+   855 /root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py
+  1405 /root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py
+   793 /root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py
+  6605 total
+
+
+Exit code: 0 (434字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 101|         """Edit the panel message if dirty and throttle int… (9,213字)
+  (还有 23 个工具调用，已省略)
+---
+[Kirk]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 1010|         from nanobot.groupchat.orchestra.run_loop import generate_summary
+1011|         await generate_summary(self)
+1012| 
+1013|     async def _run_loop(self) -> None:
+1014|         """Main group chat loop — delegates to run_loop module."""
+1015|         from nanobot.groupchat.orchestra.run_loop import run_loop
+1016|         await run_loop(self)
+1017| 
+1018| 
+1019| """Direct 1-on-1 chat mode for group chat engine.
+1020| 
+1021| Handles single-agent conversations when exactly one agent is active.
+1022| Manages session setup, message building, streaming, and response handling.
+1023| 
+1024| Supports user interjection: after the agent replies, the loop waits
+1025| briefly for new user messages (via engine._direct_chat_queue).  If the
+1026| user "interrupts" before the agent finishes or s… (2,085字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 175|         else:
+176|             await self.set_state(agent, "thinking")
+177| 
+178| 
+179| @runtime_checkable
+180| class BroadcastContext(Protocol):
+181|     """Protocol documenting what broadcast_round needs from the engine.
+182| 
+183|     Replaces the opaque ``Any`` type, making the implicit dependency explicit.
+184|     """
+185| 
+186|     # ── Public attributes ──
+187|     registry: dict[str, dict[str, Any]]
+188|     tools: Any  # ToolRegistry
+189|     provider: Any  # LLMProvider
+190|     config: Any  # GroupChatConfig
+191| 
+192|     # ── Private but accessed by broadcast ──
+193|     _round: int
+194|     _leader: str | None
+195|     _debug_context: bool
+196|     _history: list[dict[str, str]]
+197|     _request_log: list[dict[str, Any]]
+198|     _session_dir: Any
+199| 
+200|     # ── M… (2,082字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 40|         self,
+41|         state: "GroupChatState",
+42|         provider: Any = None,
+43|     ) -> None:
+44|         self._state = state
+45|         self._provider = provider
+46|         self.messages: list[dict[str, str]] = []
+47| 
+48|     # ── Compatibility shim: allow engine._history to keep working ─────────
+49|     # We expose the messages list directly as a public attribute so that
+50|     # code still referencing ``engine._history`` can be updated gradually.
+51|     # TODO: remove once all callers are migrated.
+52| 
+53|     # ── Internal helpers ──────────────────────────────────────────────────
+54| 
+55|     @staticmethod
+56|     def _find_head_indices(history: list[dict], keep_all_users: bool = False) -> set[int]:
+57|         """Return indices of head-protected messages.
+58| 
+59… (1,319字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/history_settings.py) → 1| """Centralized history, summarization, and context-pruning settings.
+2| 
+3| Loads ``~/.nanobot/history_settings.json`` once and exposes typed getters
+4| so that shell.py, tool_loop.py, context_pruning.py,
+5| engine.py, broadcast.py, tool_chat.py, and the Telegram UI can all
+6| read the same configuration without hardcoding defaults.
+7| 
+8| Settings are organized into four sections:
+9| 
+10| - **Top-level**: global limits (context window, tool result hard cap)
+11| - **tool_results**: per-tool truncation + AI summarization
+12| - **history**: conversation history window
+13| - **context_pruning**: iterative context pruning thresholds
+14| """
+15| 
+16| from __future__ import annotations
+17| 
+18| import json
+19| from pathlib import Path
+20| from typing import Any
+21| 
+22| from loguru import log… (3,272字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/history_settings.py) → 81| }
+82| 
+83| # Flat list of all known sections for merge logic
+84| _SECTIONS = ("tool_results", "history", "context_pruning")
+85| _TOP_LEVEL_KEYS = ("context_window_tokens", "tool_result_max_chars")
+86| 
+87| # ── Singleton cache ───────────────────────────────────────────────────────
+88| 
+89| _cache: dict[str, Any] | None = None
+90| 
+91| 
+92| def _load() -> dict[str, Any]:
+93|     """Load settings, merging file on top of defaults."""
+94|     global _cache
+95| … (2,849字)
+  (还有 22 个工具调用，已省略)
+---
+[Harper]: 可读性评估已发送给 Kirk，包括：
+
+- **4-stage context pipeline** 的代码分散位置
+- **3个裁剪点**（tool_loop 迭代裁剪 → broadcast 尾巴摘要 → HistoryContext 压缩）的交互关系
+- **8个具体问题**按 P0/P1/P2 分级
+- **3项建议**（高/中/低优先级）
+
+等待 Kirk 后续安排。
+
+[工具调用记录]
+• chatroom_send() → (48字)
+• wait() → (18字)
+• wait() → (18字)
+• wait() → (18字)
+---
+[Harper]: 同意 Kirk 的三个修正。
+
+`_run_one` 1199 行 + 6 个闭包比我概括的 "broadcast.py 要拆" 精确得多——单方法跨 half the file 在认知上是最严重的债务。`_history` 的引用失效风险也是我之前低估的，re-alloc 导致捕获旧引用的闭包拿过期数据，确实该 P0。
+
+延时导入=循环依赖的止痛药——这个诊断也对。`settings_types.py` 做法比把导入提到模块级更干净。
+
+**最终优先级共识**：
+
+| 优先级 | 项 |
+|---|---|
+| P0 | `_run_one` 拆分 → `_history` shim 清理 → Protocol 公共化 |
+| P1 | engine.py 拆分（`direct_chat` 独立） → 抽 `settings_types.py` |
+| P2 | 命名统一 → `_find_head_indices` 去重 → 延时导入 → 架构 doc |
+
+没有新的分歧点，评估已完成。
+---

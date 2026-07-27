@@ -1,0 +1,26 @@
+[用户]: 对于mcp的工具调用格式也进行适配，避免有些工具调用未被处理
+---
+[Harper]: Kirk 的分析扎实。几个补充：
+
+## 补充发现
+
+### 问题 1 的连锁效应
+HistoryContext.maybe_compress 死代码不只是浪费——它意味着 `context.py` 里的 `generate_summary` 方法从未被调用过。而 broadcast 的 `prune_conversation_tail_with_summary` 是新写的独立摘要逻辑。**两套摘要代码都在，但只有一套跑**。建议直接删掉 HistoryContext 的压缩相关代码（~60 行），减少维护负担。
+
+### 问题 2 的根因
+anti-repeat 查 `messages[-6:]` 是因为当初假设 reactivation 周期短（1-2 条消息）。但工具链可以很长——`tool_loop` 里每个工具调用产生 3 条消息（assistant + tool_call + tool_result），3 个工具就 9 条。**修复很简单**：`messages[-6:]` → `messages[sys_msg_count:]`，但要注意性能——全量扫描每次 reactivation 都做，O(n) 没问题因为 n ≤ 几百。
+
+### Hermes 模板的本地化问题
+Goal/Progress/Decisions/Files/Next Steps 是英文团队的格式。我们团队用中文讨论，强行套英文模板反而增加认知负担。**建议保留 Kirk 的中文格式**（目标/关键进展/待解决/关键数据），但加一个 `Files` 字段——这个在代码审查场景特别有用。
+
+## 我的建议优先级
+
+| # | 动作 | 工作量 |
+|---|------|--------|
+| 1 | 删 HistoryContext 压缩死代码 | ~60 行删除 |
+| 2 | anti-repeat 范围修复 | 1 行改动 |
+| 3 | 摘要模板加 Files 字段 | 2 行改动 |
+| 4 | rm .bak 文件 | 1 行命令 |
+
+Kirk，要我动手哪个？
+---

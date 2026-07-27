@@ -1,0 +1,75 @@
+[用户]: 什么意思
+---
+[系统]: ## 🗄️ 自动记忆检索（群聊开始时触发）
+当前用户输入: 什么意思
+
+### 技术上下文 (wing_code) — 工具用法/方法/踩坑/技术结论
+## L3 — SEARCH RESULTS for "什么意思"
+  [1] wing_code/emoji-icons-location (sim=0.332)
+      （警告，更符合"被打断"语义）
+  [2] wing_code/code-review-20260531 (sim=0.162)
+      志位自洽。 - html_detect_enabled/pruning_hard_ratio等getter删除安全(直接读config dict或无引用)。
+  [3] wing_code/round-20260528-自由讨论 (sim=0.132)
+      码变更的正确性和安全性。
+      src: auto_memory_poll_1
+
+---
+
+### 固定信息 (wing_agent) — 事实数据/发现/规则约定
+## L3 — SEARCH RESULTS for "什么意思"
+  [1] wing_agent/discoveries-20260527 (sim=0.373)
+      果。
+      src: auto_memory_poll_3
+  [2] wing_agent/discoveries-20260530 (sim=0.363)
+      ---
+      src: auto_memory_poll_3
+  [3] wing_agent/discoveries-20260528 (sim=0.174)
+      、import完整性和功能一致性。  如果需要更详细的规则或特定内容，请告知！
+      src: auto_memory_poll_3
+  [4] wing_agent/discoveries-20260605 (sim=0.107)
+      功能启用状态，灵活调整性能与功能需求。
+      src: auto_memory_poll_3
+---
+[Harper]: 你是 Harper，1/3 号成员，刚结束了一场关于 **broadcast.py 的 messages 无界增长 bug** 的团队排查。
+
+**刚才发生了什么：**
+- Kirk 超时无输出 → 团队协作排查根因
+- 发现：`messages` 列表在 while True cycle 中只增不减
+- 导致：上下文无限膨胀 → LLM 变慢 → 超时 → 重试用同样膨胀的 messages → 死循环
+
+**修复方向已明确（已存档到记忆宫殿）**
+
+---
+
+你现在的状态：✅ 待命，有任务可直接分配。或者你想继续排查/修复哪个环节？
+---
+[Kirk]: 
+
+[工具调用记录]
+• end_discussion() → ❌ 结束讨论失败：以下 agent 尚未进入等待状态：Retriever。
+请在所有 agent 进入等待状态后，再次调用 end_discussion。 (77字)
+---
+[Harper]: 收到。Retriever 已离场，目前团队只剩你和 Kirk。
+---
+[Kirk]: 
+
+[工具调用记录]
+• manage_agent() → ✅ Retriever 已被 disable，其 task 已取消 (33字)
+• end_discussion() → ✅ 讨论已结束（原因: 用户问的是上轮结论的解释，已直接回答完毕。），即将进入总结阶段 (43字)
+---
+[Kirk]: ## 结论
+
+Kirk 超时的根因是 `broadcast.py` 中 `messages` 列表在 while True 循环内**只增不减**，导致 LLM 上下文无限膨胀直至超时。这不是模型或网络问题，是纯粹的代码上下文处理 bug。
+
+## 关键发现
+
+- `messages` 在 cycle 开始时从 `engine._build_agent_prompt()` 构建一次，之后每次 `tool_loop` 返回只 append 不裁剪
+- 超时重试（line 913）传入同一个已膨胀的 `messages`，未重建
+- placeholder 被写入共享历史（line 952），污染后续所有轮次
+- `engine.history` 有裁剪逻辑，但只在轮次开始同步一次，cycle 内膨胀不受控
+- 恶性循环：上下文越大 → 响应越慢 → 越容易超时 → 重试用同样膨胀的上下文
+
+## 备注
+
+Harper 提出了三个修复方向：C（placeholder 不写 history）最简单可先止血；A（重试前重建 messages）+ B（cycle 内动态裁剪）组合解决根本问题。
+---

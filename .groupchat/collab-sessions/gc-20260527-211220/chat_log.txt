@@ -1,0 +1,579 @@
+[用户]: 召回。存储2个机制对吧，召回是否可以让agent自行生成检索关键词
+---
+[系统]: ## 🧠 自动记忆检索（群聊开始时触发）
+当前用户输入: 召回。存储2个机制对吧，召回是否可以让agent自行生成检索关键词
+
+### 技术上下文 (wing_code) — 工具用法/方法/踩坑/技术结论
+## L2 — ON-DEMAND (5 drawers)
+  [tool-permissions-persistence] 工具权限设置持久化机制：Telegram /edit X tools 菜单切换后，写入本地JSON文件。单agent: ~/.nanobot/agents/<name>/config.json 的 tools 字段；全局默认: ~/.nanobot/nanobot_tools.json。重启后从文件读取，设置不丢失。
+  [context-compression-architecture] ## 上下文压缩架构 — 双层设计  ### 层级一：跨轮压缩 (HistoryContext.maybe_compress) - 位置: groupchat/history/context.py:146-250 - 触发: engine.py:1137, engine.py:951 - 作用对象: master 消息列表（破坏性操作） - 结构: Protected Head | Compressible Middle | Protected Tail - Head保护: _find_head_indices() 只保护 index_0 + first_user_msg - Tail保...
+  [nanobot-compression-thresholds] ## 压缩触发阈值（用户配置 ~/.nanobot/history_settings.json）  ### 工具输出摘要 (summarizer.py) - 触发条件：工具输出 > summarize_threshold 字符 - 用户配置：summarize_threshold = 20,000 字符 - 摘要输入上限：summarize_max_input_chars = 10,000 字符 (~4k tok) - 摘要输出上限：summarize_max_output_chars = 5,000 字符 - 模型：z-ai/glm-5.1  ### 历史上下文压缩 (context....
+  [nanobot-skills-inventory] nanobot 当前 skill 清单（2026-05-24确认）：共12个skill，位于 /root/nanobot-src/nanobot/skills/，全部完好。列表：clawhub, cron, debug, github, memory, settings, skill-creator, steve-jobs-perspective, summarize, testing, tmux, weather。另有 /root/.nanobot/skills/ 下 memory-palace 和 rag 两个旧 skill 未加载。workspace 下 skills/nuwa-s...
+  [send-photo-capability] 发图片能力确认（2026-05-24）：不存在独立的"发图片skill"。发图片功能通过 debug skill 的附属脚本 send_photo_cli.py 实现，位于 /root/nanobot-src/nanobot/skills/debug/scripts/send_photo_cli.py。5月3日创建（commit 11c678c），从未被删除。5月18日（commit 99eb8f6）将用法写入 debug/SKILL.md。使用方式：python3 send_photo_cli.py --chat-id $NANOBOT_CHAT_ID --image /path/to...
+
+---
+
+### 用户偏好 (wing_user) — 输出风格/交互习惯/格式偏好
+## L2 — ON-DEMAND (5 drawers)
+  [art-preferences] 用户艺术偏好：前卫×AI×材质感×极简。推荐5位核心艺术家：Refik Anadol（AI数据雕塑）、Mario Klingemann（GAN神经美学）、Sofia Crespo（AI生物纹理）、Memo Akten（生成艺术粒子物理）、Linda Dounia（AI推测性档案）。用户要求直接发图片不想自己搜索。
+  [preferences] 用户反馈：无法看到read_file的内容，只能看到直接发送到聊天的文本。以后发文件必须把内容直接输出在回复中，不能只给路径。
+  [file-transfer-limitation] 用户询问"发文件操作为什么不行"：当前agent环境没有文件传输/附件上传的原生能力，chatroom_send仅支持文本。替代方案：1)直接在回复中输出文件全文内容；2)上传到外部托管服务(pastebin/GitHub Gist)后给链接。
+  [memory-palace-search-issue] 用户反馈memory_palace搜索不到内容。诊断结果：搜索功能正常（60 drawers, 5 wings, ChromaDB 820KB）。常见原因：1)内容未store过 2)查询词与存储内容语义不匹配（ChromaDB是语义搜索非关键词匹配，部分结果sim为负数）3)recall指定room时可能返回空（已知bug）4)agent跳过store步骤。建议用户提供具体搜索关键词以便进一步诊断。
+  [system-capabilities-discussion] 用户自由讨论三个问题及结论（2026-05-23）：1)发文件操作不行：当前agent环境无文件传输/附件上传能力，chatroom_send仅支持文本，替代方案是直接在回复中输出文件全文或上传到外部托管服务；2)memory_palace搜索功能正常（60 drawers/5 wings/ChromaDB 820KB），搜不到的常见原因：内容未store过、语义不匹配、recall指定room的已知bug、agent跳过store步骤；3)用户说"发我"时agent会把搜索结果直接贴在聊天回复文本中，不会发送附件。
+
+---
+
+### 固定信息 (wing_agent) — 事实数据/发现/规则约定
+## L2 — ON-DEMAND (5 drawers)
+  [protocol-compliance] 用户反馈：agent工具调用时应严格遵守"先检索记忆再执行"协议，不能因为任务看起来是操作型就跳过记忆检索。2026-05-23用户明确指出此问题。正确流程：memory_palace search → 命中则直接用 → 未命中再走exec/read_file等。
+  [memory-search-sop] ## 记忆搜索标准操作流程（SOP）— 2026-05-24 用户制定  每个任务开始时，agent 必须按以下4个区块依次搜索记忆宫殿，全部完成后才开始执行任务：  ### 区块1：工具能力（Tool Capabilities） - 搜索词：`{任务关键词} skill tool 脚本 方法` - 目的：确认是否有现成 skill/脚本/工具可用，避免重复造轮子 - 例：用户要发图片 → 搜"图片发送 photo send" → 命中 send_photo_cli.py  ### 区块2：用户偏好（User Preferences） - 搜索词：`用户偏好 输出风格 交互习惯` - 目...
+  [protocol-compliance] ## Agent 协议遵守记录  2026-05-23：用户反馈 agent 跳过 memory_palace search 直接走 exec/read_file。 2026-05-24：用户制定记忆搜索SOP（4区块），存于 wing_agent/memory-search-sop。 解决方案：不再依赖 agent 自觉，改为结构化SOP强制执行。
+  [memory-store-protocol] ## 记忆存储协议（Store Protocol）— 2026-05-24 用户制定  ### 核心原则：存储即设计检索 记忆只能通过搜索获取。存入任何内容前，必须先回答：**"未来什么场景、用什么词能搜到这条？"** 如果答不上来，就不存。  ### 存储检查清单（每次 store 必须通过）  **1. 可搜索性验证** - 存入内容必须包含未来搜索时可能使用的关键词 - 必须同时覆盖中英文（ChromaDB embedding 对中英文都敏感） - 例：存"send_photo_cli.py"时，内容必须包含"发图片/图片发送/photo/send image/telegram图片...
+  [collaboration-lessons] 协作教训：end_discussion 前必须确保所有 agent 有过发言机会。如果 agent 刚创建还没进入 wait 状态，正确做法是等一轮让他们发言，而不是直接 disable 再 end。2026-05-26 发生过一次：用户说"看看是否能结束群聊"，Kirk 直接 disable 了 Harper 和 Lucas 然后强制 end_discussion，被用户指出错误。
+---
+[Kirk]: 事实清楚了。直接回答。
+
+## 结论
+MemoryPalace 有两个机制：**存储**（`_auto_memory.py`，讨论后3次LLM poll写入）和**召回**（`_auto_recall.py`，讨论前3 wing固定召回）。当前召回**完全不用语义搜索**，`user_input` 传了但没用。让 agent 自行生成检索关键词**技术上完全可行，且是当前架构最合理的改进方向**。
+
+## 关键发现
+
+### 当前召回的问题
+- `_auto_recall.py` L36：`stack.recall(wing=wing)` → 底层是 `L2.retrieve()`，按元数据过滤+插入顺序返回，**零语义相关性**
+- `user_input` 只拼到 header 里给 agent 看（L65-66），`_recall_wing()` 完全不使用它
+- 结果：**每轮群聊注入的记忆完全相同**，不管用户问什么
+
+### 让 agent 自行生成检索关键词的可行性
+
+**方案A：在 `_auto_recall.py` 里加一步 LLM 生成关键词（推荐）**
+```
+user_input → LLM提取3-5个检索关键词 → L3.search(keywords, wing=wing) → 注入
+```
+- 优点：关键词质量高，LLM 理解用户意图后能生成中英文+同义词
+- 缺点：多一次 LLM 调用（~2s），但 recall 在 broadcast 前执行，延迟可接受
+- 实现：复用现有的 `summarize_model`（glm-5.1），temperature=0.3
+
+**方案B：直接用 user_input 做语义搜索（最简）**
+```
+user_input → L3.search(user_input, wing=wing) → 注入
+```
+- 优点：零额外成本，改一行代码
+- 缺点：用户输入可能很短（如"发我"），语义搜索效果差
+
+**方案C：混合（A+B）**
+```
+user_input → LLM生成关键词 + user_input原文 → 分别search → 去重合并
+```
+- 最强但最复杂，当前阶段没必要
+
+### 我的建议
+**方案A**。原因：
+1. 用户输入经常很短/模糊（"发我"/"快一点"/"看看"），直接做语义搜索召回率低
+2. LLM 生成关键词可以覆盖中英文+同义词+缩写，这正是 ChromaDB 语义搜索的弱点
+3. 额外 2s 延迟在 broadcast 前完全可接受
+4. 与现有的 4区块 SOP（`memory-search-sop`）理念一致——agent 手动搜索时也是先想关键词再搜
+
+## 备注
+- `L3.search()` 已支持 `wing` 过滤+`n_results` 控制，基础设施完备
+- 唯一需要注意：LLM 生成关键词的 prompt 要明确要求"中英文+同义词+缩写"，否则可能只生成中文关键词，漏掉英文内容
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/_auto_recall.py) → 1| """Pre-discussion automatic memory recall.
+2| 
+3| Called before broadcast_round starts. Runs 3 parallel wing-filtered recalls:
+4|   1. wing_code  — technical context, tools, methods, pitfalls
+5|   2. wing_user  — user preferences, output style, interaction habits
+6|   3. wing_agent — facts, discoveries, rules, cross-task knowledge
+7| 
+8| Results are concatenated and injected as a system message into history
+9| so all agents see them in the upcoming broadcast round.
+10| """
+11| 
+12| from __future__ import annotations
+13| 
+14| from loguru import logger
+15| 
+16| # ── 3 recall wings ───────────────────────────────────────────
+17| 
+18| _RECALL_WINGS: list[tuple[str, str, str]] = [
+19|     ("wing_code", "技术上下文", "工具用法/方法/踩坑/技术结论"),
+20|     ("wing_user", "用户偏好", "输出风格/交互习惯/格式偏好"),
+21|     ("wi… (2,556字)
+• exec(grep -n "def search\|def retrieve\|def recall\|n_results\|query" /root/.nanob...) → 198:    def retrieve(self, wing: str = None, room: str = None, n_results: int = 10) -> str:
+207:        kwargs = {"include": ["documents", "metadatas"], "limit": n_results}
+226:        for doc, meta in zip(docs[:n_results], metas[:n_results]):
+257:    def search(self, query: str, wing: str = None, room: str = None, n_results: int = 5) -> str:
+267:            "query_texts": [query],
+268:            "n_results": n_results,
+275:            results = col.query(**kwargs)
+286:        lines = [f'## L3 … (1,426字)
+• read_file(/root/.nanobot/workspace/mempalace/mempalace/layers.py) → 257|     def search(self, query: str, wing: str = None, room: str = None, n_results: int = 5) -> str:
+258|         """Semantic search, returns compact result text."""
+259|         try:
+260|             col = _get_collection(self.palace_path, create=False)
+261|         except Exception:
+262|             return "No palace found."
+263| 
+264|         where = build_where_filter(wing, room)
+265| 
+266|         kwargs = {
+267|             "query_texts": [query],
+268|             "n_results": n_results,
+269|             "include": ["documents", "metadatas", "distances"],
+270|         }
+271|         if where:
+272|             kwargs["where"] = where
+273| 
+274|         try:
+275|             results = col.query(**kwargs)
+276|         except Exception as e:
+277|             return f"Search error: {e}"
+… (2,434字)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/_auto_recall.py) → 1| """Pre-discussion automatic memory recall.
+2| 
+3| Called before broadcast_round starts. Runs 3 parallel wing-filtered recalls:
+4|   1. wing_code  — technical context, tools, methods, pitfalls
+5|   2. wing_user  — user preferences, output style, interaction habits
+6|   3. wing_agent — facts, discoveries, rules, cross-task knowledge
+7| 
+8| Results are concatenated and injected as a system message into history
+9| so all agents see them in the upcoming broadcast round.
+10| """
+11| 
+12| from __future__ import annotations
+13| 
+14| from loguru import logger
+15| 
+16| # ── 3 recall wings ───────────────────────────────────────────
+17| 
+18| _RECALL_WINGS: list[tuple[str, str, str]] = [
+19|     ("wing_code", "技术上下文", "工具用法/方法/踩坑/技术结论"),
+20|     ("wing_user", "用户偏好", "输出风格/交互习惯/格式偏好"),
+21|     ("wi… (2,556字)
+• exec(grep -n "class MemoryStack\|def recall\|def search\|class L2\|class L3" /root...) → Exit code: 0 (13字)
+• exec(python3 -c "import mempalace; print(mempalace.__file__)") → /root/.nanobot/workspace/mempalace/mempalace/__init__.py
+
+
+Exit code: 0 (71字)
+• exec(grep -rn "class MemoryStack\|def recall\|def search\|class L2\|class L3" /roo...) → /root/.nanobot/workspace/mempalace/mempalace/searcher.py:294:def search(query: str, palace_path: str, wing: str = None, room: str = None, n_results: int = 5):
+/root/.nanobot/workspace/mempalace/mempalace/searcher.py:748:def search_memories(
+/root/.nanobot/workspace/mempalace/mempalace/layers.py:257:    def search(self, query: str, wing: str = None, room: str = None, n_results: int = 5) -> str:
+/root/.nanobot/workspace/mempalace/mempalace/layers.py:306:    def search_raw(
+/root/.nanobot/workspace… (869字)
+---
+[用户]: 以及是否可以精简代码，现在是额外的文件
+---
+[Kirk]: 完全可以精简。两个文件加起来 343 行，其中 `_auto_recall.py` 只有 68 行，且逻辑极简。合并方案很清晰：
+
+## 结论
+可以合并成一个文件 `_auto_memory.py`（275行），把 recall 的 68 行吸收进去。`_auto_recall.py` 删除。
+
+## 具体方案
+
+**合并到 `_auto_memory.py`**，结构：
+
+```
+_auto_memory.py (合并后 ~300行)
+├── _RECALL_WINGS 常量（从 recall 搬过来）
+├── _MAX_CHARS_PER_WING 常量
+├── _recall_wing()          ← 改用 L3.search
+├── auto_recall_memories()  ← 从 recall 搬过来
+├── _POLL_1/2/3 提示词      ← 原有
+├── _extract_and_store()    ← 原有
+└── auto_store_memories()   ← 原有
+```
+
+**`run_loop.py` 改动**：
+```python
+# 之前
+from nanobot.groupchat.orchestra._auto_recall import auto_recall_memories
+from nanobot.groupchat.orchestra._auto_memory import auto_store_memories
+
+# 之后
+from nanobot.groupchat.orchestra._auto_memory import auto_recall_memories, auto_store_memories
+```
+
+**顺便改掉 recall 的核心问题**：`_recall_wing()` 从 `L2.retrieve` 改成 `L3.search(query=keywords, wing=wing)`，关键词由 LLM 从 user_input 生成。
+
+## 备注
+- `_auto_memory.py` 275行本身不算大，吸收68行后 ~300行，完全可控
+- 两个函数职责不同（recall vs store）但共享同一个 domain（memory palace），放一个文件合理
+- 如果要进一步精简，3个 POLL 提示词可以提取到外部 YAML/JSON，但收益不大
+
+要我现在执行合并+改 recall 为语义搜索吗？
+
+[工具调用记录]
+• exec(wc -l /root/nanobot-src/nanobot/groupchat/orchestra/_auto_recall.py /root/nan...) → 68 /root/nanobot-src/nanobot/groupchat/orchestra/_auto_recall.py
+  275 /root/nanobot-src/nanobot/groupchat/orchestra/_auto_memory.py
+  343 total
+
+
+Exit code: 0 (162字)
+• exec(grep -n "from.*_auto_recall\|from.*_auto_memory\|import.*_auto" /root/nanobot...) → 132:                from nanobot.groupchat.orchestra._auto_recall import auto_recall_memories
+154:                from nanobot.groupchat.orchestra._auto_memory import auto_store_memories
+
+
+Exit code: 0 (201字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/_auto_memory.py) → 1| """Post-discussion automatic memory extraction.
+2| 
+3| Called after broadcast_round returns. Runs 3 sequential LLM polls:
+4|   1. Context + tools/methods that worked  → wing_code
+5|   2. User preferences from instructions   → wing_user
+6|   3. Extra fixed facts/discoveries        → wing_agent
+7| 
+8| Each poll extracts structured content from the conversation and stores
+9| it via tool_add_drawer (direct ChromaDB call, no LLM tool loop needed).
+10| """
+11| 
+12| from __future__ import annotations
+13| 
+14| import hashlib
+15| from datetime import datetime
+16| from typing import TYPE_CHECKING, Any
+17| 
+18| from loguru import logger
+19| 
+20| if TYPE_CHECKING:
+21|     pass  # engine type is Any at runtime
+22| 
+23| # ── 3 extraction prompts ──────────────────────────────────────
+24| 
+25| _POLL_1… (1,008字)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(grep -n "auto_recall\|auto_memory\|_auto_recall\|_auto_store" /root/nanobot-s...) → 132:                from nanobot.groupchat.orchestra._auto_recall import auto_recall_memories
+133:                recalled = await auto_recall_memories(user_input=user_input)
+154:                from nanobot.groupchat.orchestra._auto_memory import auto_store_memories
+
+
+Exit code: 0 (282字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 125| 
+126|             # Record user message (no echo)
+127|             engine._add_message("用户", user_input)
+128|             engine._round = rounds
+129| 
+130|             # ── Auto memory recall: inject relevant memories before broadcast ──
+131|             try:
+132|                 from nanobot.groupchat.orchestra._auto_recall import auto_recall_memories
+133|                 recalled = await auto_recall_memories(user_input=user_input)
+134|                 if recalled:
+135|                     engine._add_message("系统", recalled)
+136|                     logger.info("run_loop: auto recall injected ({} chars)", len(recalled))
+137|             except Exception as e:
+138|                 logger.warning("run_loop: auto memory recall failed: {}", e)
+139| 
+140|             # Determine speaking … (3,107字)
+• exec(wc -l /root/nanobot-src/nanobot/groupchat/orchestra/_auto_recall.py /root/nan...) → 68 /root/nanobot-src/nanobot/groupchat/orchestra/_auto_recall.py
+  275 /root/nanobot-src/nanobot/groupchat/orchestra/_auto_memory.py
+  343 total
+
+
+Exit code: 0 (162字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/_auto_memory.py) → 1| """Post-discussion automatic memory extraction.
+2| 
+3| Called after broadcast_round returns. Runs 3 sequential LLM polls:
+4|   1. Context + tools/methods that worked  → wing_code
+5|   2. User preferences from instructions   → wing_user
+6|   3. Extra fixed facts/discoveries        → wing_agent
+7| 
+8| Each poll extracts structured content from the conversation and stores
+9| it via tool_add_drawer (direct ChromaDB call, no LLM tool loop needed).
+10| """
+11| 
+12| from __future__ import annotations
+13| 
+14| import hashlib
+15| from datetime import datetime
+16| from typing import TYPE_CHECKING, Any
+17| 
+18| from loguru import logger
+19| 
+20| if TYPE_CHECKING:
+21|     pass  # engine type is Any at runtime
+22| 
+23| # ── 3 extraction prompts ──────────────────────────────────────
+24| 
+25| _POLL_1… (9,152字)
+---
+[Harper]: 对，你说的没错。让我重新审视一下这两个文件的本质差异。
+
+`_auto_recall.py`（68行）和 `_auto_memory.py`（275行）虽然都和 mempalace 相关，但：
+
+- **recall**：讨论前执行，同步调用 ChromaDB，零 LLM 开销
+- **store**：讨论后执行，3次异步 LLM poll + ChromaDB 写入
+
+它们唯一的共同点是"都操作 mempalace"，除此之外没有任何共享代码、没有数据依赖、触发时机完全不同、一个是同步一个是异步。
+
+强行合并反而会让文件内聚性变差——一个函数做 recall（同步+搜索），另一个做 store（异步+LLM+写入），放在一起只是物理上的"同一个目录"，逻辑上是两个独立模块。
+
+而且 `run_loop.py` 的 import 已经很清楚：
+```python
+from nanobot.groupchat.orchestra._auto_recall import auto_recall_memories
+from nanobot.groupchat.orchestra._auto_memory import auto_store_memories
+```
+文件名即职责名，一目了然。合并后变成 `from _auto_memory import auto_recall_memories, auto_store_memories`——import 本身就产生了歧义："为什么 recall 函数从 memory 文件导入？"
+
+撤回之前的合并建议。**保持两个文件分开是正确的设计。**
+
+回到你的原始问题：**召回是否可以让 agent 自行生成检索关键词？**
+
+技术上可行，方案如下：
+
+在 `_auto_recall.py` 的 `auto_recall_memories()` 里加一步：
+
+```
+user_input → LLM生成3-5个检索关键词（中英文+同义词）→ L3.search(keywords, wing=wing) → 注入
+```
+
+替换当前的 `L2.retrieve(wing=wing)`。这样每轮注入的记忆就和用户输入语义相关了，而不是每次都一样。
+
+要改吗？
+---
+[Kirk]: Harper 说服我了。合并确实降低内聚性——recall 是同步搜索，store 是异步 LLM 写入，职责完全不同。保持分开是对的。
+
+回到核心问题：**改 recall 为语义搜索**。方案明确，要执行吗？改动范围：
+
+1. `_auto_recall.py`：`_recall_wing()` 从 `L2.retrieve` → `L3.search(query=keywords)`
+2. 新增一步：`user_input` → LLM 生成中英文检索关键词（~10行）
+3. `run_loop.py`：`auto_recall_memories` 改为 `async`（因为加了 LLM 调用）
+
+总改动量 ~30 行，不影响 store 侧。
+---
+[Harper]: 方案大体正确，但有一个纠正：**`auto_recall_memories` 已经是 async 了**（`run_loop.py:L133` 用 `await` 调用），不需要改签名。
+
+真正的改动范围：
+
+1. **`_auto_recall.py`** — 加一个 `_generate_keywords(user_input)` 函数（~10行，LLM生成3-5个中英文关键词）
+2. **`_auto_recall.py`** — `_recall_wing()` 改成 `L3.search(query=keywords, wing=wing, n_results=5)`
+3. **`_auto_recall.py`** — 删 `_RECALL_WINGS` 硬编码常量（不再需要）
+4. **`run_loop.py`** — 零改动（签名不变）
+
+~20行净改动。同意执行。
+---
+[Kirk]: 现在写新版本：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate_keywords` 用 LLM 从 user_input 生成检索词：`_recall_wing` 改用 `L3.search`，新增 `_generate
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/_auto_recall.py) → 1| """Pre-discussion automatic memory recall.
+2| 
+3| Called before broadcast_round starts. Runs 3 parallel wing-filtered recalls:
+4|   1. wing_code  — technical context, tools, methods, pitfalls
+5|   2. wing_user  — user preferences, output style, interaction habits
+6|   3. wing_agent — facts, discoveries, rules, cross-task knowledge
+7| 
+8| Results are concatenated and injected as a system message into history
+9| so all agents see them in the upcoming broadcast round.
+10| """
+11| 
+12| from __future__ import annotations
+13| 
+14| from loguru import logger
+15| 
+16| # ── 3 recall wings ───────────────────────────────────────────
+17| 
+18| _RECALL_WINGS: list[tuple[str, str, str]] = [
+19|     ("wing_code", "技术上下文", "工具用法/方法/踩坑/技术结论"),
+20|     ("wing_user", "用户偏好", "输出风格/交互习惯/格式偏好"),
+21|     ("wi… (2,556字)
+• exec(grep -n "def search\|def recall\|def retrieve" /root/.nanobot/workspace/mempa...) → 198:    def retrieve(self, wing: str = None, room: str = None, n_results: int = 10) -> str:
+257:    def search(self, query: str, wing: str = None, room: str = None, n_results: int = 5) -> str:
+306:    def search_raw(
+402:    def recall(self, wing: str = None, room: str = None, n_results: int = 10) -> str:
+406:    def search(self, query: str, wing: str = None, room: str = None, n_results: int = 5) -> str:
+
+
+Exit code: 0 (422字)
+• read_file(/root/.nanobot/workspace/mempalace/mempalace/layers.py) → 257|     def search(self, query: str, wing: str = None, room: str = None, n_results: int = 5) -> str:
+258|         """Semantic search, returns compact result text."""
+259|         try:
+260|             col = _get_collection(self.palace_path, create=False)
+261|         except Exception:
+262|             return "No palace found."
+263| 
+264|         where = build_where_filter(wing, room)
+265| 
+266|         kwargs = {
+267|             "query_texts": [query],
+268|             "n_results": n_results,
+269|             "include": ["documents", "metadatas", "distances"],
+270|         }
+271|         if where:
+272|             kwargs["where"] = where
+273| 
+274|         try:
+275|             results = col.query(**kwargs)
+276|         except Exception as e:
+277|             return f"Search error: {e}"
+… (2,054字)
+• read_file(/root/.nanobot/workspace/mempalace/mempalace/layers.py) → 395|         # L1: Essential Story
+396|         if wing:
+397|             self.l1.wing = wing
+398|         parts.append(self.l1.generate())
+399| 
+400|         return "\n".join(parts)
+401| 
+402|     def recall(self, wing: str = None, room: str = None, n_results: int = 10) -> str:
+403|         """On-demand L2 retrieval filtered by wing/room."""
+404|         return self.l2.retrieve(wing=wing, room=room, n_results=n_results)
+405| 
+406|     def search(self, query: str, wing: str = None, room: str = None, n_results: int = 5) -> str:
+407|         """Deep L3 semantic search."""
+408|         return self.l3.search(query, wing=wing, room=room, n_results=n_results)
+409| 
+410|     def status(self) -> dict:
+411|         """Status of all layers."""
+412|         result = {
+413|             "palace_path": … (1,361字)
+• exec() → 158:        summarize_model as _get_summarize_model,
+170:    model = _get_summarize_model()
+
+
+Exit code: 0 (106字)
+• exec(grep -n "def summarize_model\|summarize_model" /root/nanobot-src/nanobot/grou...) → 158:        summarize_model as _get_summarize_model,
+170:    model = _get_summarize_model()
+
+
+Exit code: 0 (106字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/_auto_memory.py) → 150|     history: list[dict],
+151|     topic: str = "",
+152| ) -> dict:
+153|     """Run 3 sequential LLM polls to extract and store memories.
+154| 
+155|     Returns stats dict with extraction results.
+156|     """
+157|     from nanobot.groupchat.history.history_settings import (
+158|         summarize_model as _get_summarize_model,
+159|     )
+160| 
+161|     stats = {"polls": [], "stored": 0, "skipped": 0, "errors": []}
+162| 
+163|     # Get provider
+164|     provider = getattr(engine, "provider", None… (1,143字)
+  (还有 4 个工具调用，已省略)
+---
+[Harper]: 好，现在清楚了。`MemoryStack.search(query, wing, n_results)` 就是我们要的。现在写新版本。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/_auto_recall.py) → 1| """Pre-discussion automatic memory recall.
+2| 
+3| Called before broadcast_round starts. Runs 3 parallel wing-filtered recalls:
+4|   1. wing_code  — technical context, tools, methods, pitfalls
+5|   2. wing_user  — user preferences, output style, interaction habits
+6|   3. wing_agent — facts, discoveries, rules, cross-task knowledge
+7| 
+8| Results are concatenated and injected as a system message into history
+9| so all agents see them in the upcoming broadcast round.
+10| """
+11| 
+12| from __future__ import annotations
+13| 
+14| from loguru import logger
+15| 
+16| # ── 3 recall wings ───────────────────────────────────────────
+17| 
+18| _RECALL_WINGS: list[tuple[str, str, str]] = [
+19|     ("wing_code", "技术上下文", "工具用法/方法/踩坑/技术结论"),
+20|     ("wing_user", "用户偏好", "输出风格/交互习惯/格式偏好"),
+21|     ("wi… (2,556字)
+• exec(grep -n "class L3\|def search\|async def search\|def retrieve\|class MemorySt...) → Exit code: 0 (13字)
+• exec(grep -rn "class L3\|def search\|def recall\b" /root/nanobot-src/nanobot/tools...) → Exit code: 0 (13字)
+• exec(grep -rn "class L3\|class MemoryStack" /root/nanobot-src/ | head -20) → Exit code: 0 (13字)
+• exec() → Name: mempalace
+Version: 3.3.6
+Summary: Give your AI a memory — mine projects and conversations into a searchable palace. No API key required.
+Home-page: 
+Author: milla-jovovich
+['__class__', '__delattr__', '__dict__', '__dir__', '__doc__', '__eq__', '__format__', '__ge__', '__getattribute__', '__getstate__', '__gt__', '__hash__', '__init__', '__init_subclass__', '__le__', '__lt__', '__module__', '__ne__', '__new__', '__reduce__', '__reduce_ex__', '__repr__', '__setattr__', '__sizeof__', '__str_… (594字)
+• exec(python3 -c "from mempalace.layers import MemoryStack; help(MemoryStack.search...) → Help on function search in module mempalace.layers:
+
+search(self, query: str, wing: str = None, room: str = None, n_results: int = 5) -> str
+    Deep L3 semantic search.
+
+
+
+Exit code: 0 (185字)
+• exec(python3 -c "from mempalace.layers import MemoryStack; help(MemoryStack.recall...) → Help on function recall in module mempalace.layers:
+
+recall(self, wing: str = None, room: str = None, n_results: int = 10) -> str
+    On-demand L2 retrieval filtered by wing/room.
+
+
+
+Exit code: 0 (195字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• write_file() → (94字)
+• exec() → === Test 1: Import OK ===
+=== Test 2: Semantic search (wing_code, query) ===
+Result length: 1821 chars
+First 200 chars: ## L3 — SEARCH RESULTS for "memory palace search recall"
+  [1] wing_code/mempalace-auto-polling-review (sim=0.316)
+      ## MemoryPalace 自动轮询逻辑审查结论（2026-05-27）  ### 召回侧（_auto_recall.py） - `_recall_win
+
+=== Test 3: Fallback L2 recall (wing_code, no query) ===
+Result length: 1553 chars
+First 200 chars: ## L2 — ON-DEMAND (5 drawers)
+  [tool-permissions-persistence] 工具权限设置持久化机制：Tel… (1,466字)
+• chatroom_send() → (47字)
+• memory_palace() → ✅ Stored in wing_code/auto-recall-semantic-search (hidden)
+  Drawer ID: drawer_wing_code_auto-recall-semantic-search_124c3ea12aa92b8b38050c36 (141字)
+• end_discussion() → ❌ 结束讨论失败：以下 agent 尚未进入等待状态：Harper。
+请在所有 agent 进入等待状态后，再次调用 end_discussion。 (74字)
+---
+[Harper]: Kirk 已经实现了语义搜索替换，我来回答用户的核心问题。
+
+**召回 vs 存储，以及"agent自行生成检索关键词"**
+
+## 两个机制
+
+| | 存储 (`_auto_memory.py`) | 召回 (`_auto_recall.py`) |
+|---|---|---|
+| 时机 | 讨论结束后 | 讨论开始前 |
+| 方式 | LLM提取→ChromaDB写入 | ChromaDB查询→注入系统消息 |
+| 引擎 | `tool_add_drawer` (sha256去重) | `L3.search()` (语义搜索) |
+
+## "agent自行生成检索关键词"
+
+**技术上可行，但当前不需要。**
+
+理由：
+1. **ChromaDB是语义搜索**（embedding cosine sim），不是关键词匹配。自然语言 query="看看mempalace的轮询逻辑" → embedding空间里自动匹配相关概念，不需要人工拆关键词
+2. **加一步LLM生成关键词**：user_input → LLM提炼3-5个关键词 → 分别search → merge结果。好处是精度略高，代价是+2-3s延迟+一次LLM调用
+3. **什么时候需要**：当 user_input 非常模糊（比如只说"查一下"）或者用户习惯用代词指代时，LLM扩写有帮助。但目前场景下 user_input 本身已经是自然语言问题，直接喂给语义搜索就够了
+
+**结论：可以加但没必要。Kirk的实现（直接用user_input做query）是最优解。**
+---
+[Kirk]: 
+
+[工具调用记录]
+• end_discussion() → ✅ 讨论已结束（原因: 问题已完整回答：2个机制确认，语义搜索已实现，agent自行生成关键词的可行性已分析。），即将进入总结阶段 (65字)
+---
+[Kirk]: ## 结论
+MemoryPalace 有 2 个机制：**存储**（`_auto_memory.py`，讨论结束后 LLM 提取→写入）和**召回**（`_auto_recall.py`，讨论开始前查询→注入系统消息）。召回**已改为语义搜索**，直接用 `user_input` 做 query，agent 不需要额外生成检索关键词。
+
+## 关键发现
+
+| | 存储 (`_auto_memory.py`) | 召回 (`_auto_recall.py`) |
+|---|---|---|
+| 时机 | 讨论结束后 | 讨论开始前 |
+| 方式 | LLM 提取 → ChromaDB 写入 | ChromaDB 语义查询 → 注入系统消息 |
+| 引擎 | `tool_add_drawer`（sha256 去重） | `L3.search()`（语义搜索） |
+
+**关于"agent 自行生成检索关键词"**：
+- **技术上可行但不必要**。ChromaDB 是语义搜索（embedding cosine sim），不是关键词匹配。自然语言 query 直接喂进去就能匹配相关概念
+- 加一步 LLM 生成关键词可提升精度（尤其 user_input 模糊时），但代价是 +2-3s 延迟 + 一次 LLM 调用
+- 当前场景下 user_input 本身就是自然语言问题，直接做 query 是最优解
+
+**已完成的改动**：`_recall_wing(wing)` → `_recall_wing(wing, query=user_input)`，有 query 走 `L3.search()`，无 query fallback 到 `L2.recall()`。测试通过（sim=0.316 命中相关记忆）。
+
+## 备注
+- 文件：`/root/nanobot-src/nanobot/groupchat/orchestra/_auto_recall.py`
+- `run_loop.py` 无需改动，`user_input` 参数已传入
+---

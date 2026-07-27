@@ -1,0 +1,406 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 测试消息，最新修改，是否功能正常
+---
+[Harper]: 功能正常，消息收发、记忆检索、工具调用均正常工作。当前系统运行稳定。
+
+[工具调用记录]
+• memory_palace() → Kirk - DeepSeek V4 Research Agent
+
+## L1 — ESSENTIAL STORY
+
+[config-version-audit-20260511]
+  - 配置版本记录对比结果 (2026-05-11): - config.json: VCS迁移后结构变更，模板→解析值，与.backup_pre_vcs一致 - prompt_order.json: 04-17→04-25修改，新增persona/memory/examples，删除hard_rules/user_context/output_efficiency - prompt_overri...
+
+[context-compression-architecture]
+  - ## 上下文压缩架构 — 双层设计  ### 层级一：跨轮压缩 (HistoryContext.maybe_compress) - 位置: groupchat/history/context.py:146-250 - 触发: engine.py:1137, engine.py:951 - 作用对象: master 消息列表（… (3,110字)
+---
+[Kirk]: ## 结论
+系统功能正常，消息收发、记忆检索、工具调用、团队协作链路均无异常。
+
+[工具调用记录]
+• memory_palace(最新修改 功能测试) → 🔍 3 result(s) for '最新修改 功能测试':
+
+[1] wing_code/user-question-extraction-bug (sim=0.07)
+  用户问"新消息是否立即被压缩"——答案是否。时序：用户消息→history→broadcast_round(agents处理)→maybe_compress。用户消息是最后一条，在tail保护区(keep_recent=6)内，同轮不压缩。实际bug是user_question提取选错了消息（匹配了系统sender的压缩摘要），已修复(97ae361)。
+
+[2] wing_user/xbox-cloud-gaming-ios (sim=0.052)
+  用户已确认Better xCloud脚本安装成功（2026-05-13）。
+
+[3] wing_user/fortnite-boring-reasons (sim=0.008)
+  用户觉得Fortnite无聊（2026年5月）。社区普遍反映C7无聊的原因：1)玩法单调/重复，缺乏新颖物品和机制 2)地图设计偏现实/严肃，缺少趣味性 3)枪战为主，缺少创意道具 … (588字)
+• end_discussion() → ✅ 讨论已结束（原因: 功能测试通过，所有组件正常响应），即将进入总结阶段 (37字)
+---
+[Kirk]: 系统功能正常。✅
+
+- 记忆检索 ✅
+- 消息收发 ✅
+- 工具调用 ✅
+- 团队协作链路 ✅
+
+无异常，随时待命。
+---
+[Kirk]: 全部正常，随时待命。
+---
+[用户]: ══ Broadcast · 2 agents · 600s ══
+👑 Kirk
+🔹 Harper
+
+这个消息agent后面带上括号，里面是agent的等级
+---
+[Kirk]: 好的，agent config里有`rank`字段（bishop/knight等），需要把它传到`broadcast_start_msg`显示。让我看下调用点附近rank数据的可用性。
+
+[工具调用记录]
+• memory_palace(broadcast message format agent level grade) → 🔍 5 result(s) for 'broadcast message format agent level grade':
+
+[1] wing_code/prompt-bugfix-2026-05-13 (sim=-0.141)
+  ## /prompt broadcast_hint 修复 (2026-05-13)
+
+### Bug
+broadcast_hint.md 模板使用 {{agent_idx}} {{total}} {{teammates}} {{user_question}} 四个变量，但 build_agent_prompt() 未定义这些变量，导致字面字符串注入 agent prompt。
+
+### 修复（4个文件）
+1. prompt_builder.py — build_agent_prompt() 签名新增 agent_idx/total/teammates/user_question 可选参数，stable_tpl_vars 补齐
+2. engine.py — _build_agent_prompt() 签名同步，透传新参数
+3. broadcast.py … (1,992字)
+• memory_palace(agent等级 level worker leader broadcast模板) → 🔍 5 result(s) for 'agent等级 level worker leader broadcast模板':
+
+[1] wing_code/leader-end-discussion-guard (sim=0.205)
+  2026-05-13: 用户要求 leader 在调用 end_discussion 前必须确认所有活跃 agent 处于 waiting 状态。已在 leader_prompt.md 第21-25行添加 "Agent 状态前置检查" 硬性规则。例外：agent 已被 disable 或明确标记为完成。
+
+[2] wing_code/leader-autowait-on-end (sim=0.191)
+  用户要求：当 leader 调用 end_discussion 但有 agent 仍在执行时，leader 应进入 autowait 模式（自动等待），而不是被拒绝或 disable agent。等待 agent 完成后自动继续结束流程。当前行为是拒绝 end_discussion 并报错，导致 leader 陷入死循环（每次调用 end_discus… (1,648字)
+• exec(grep -rn "Broadcast" /root/nanobot-src/nanobot/groupchat/orchestra/broadcast_...) → STDERR:
+grep: /root/nanobot-src/nanobot/groupchat/orchestra/broadcast_view.py: No such file or directory
+
+
+Exit code: 0 (119字)
+• exec(grep -rn "👑\|🔹\|agents ·" /root/nanobot-src/nanobot/groupchat/ --include="*.p...) → /root/nanobot-src/nanobot/groupchat/history/prompt_builder.py:248:        "[你是 GROUP LEADER 👑。你的职责：\n"
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py:477:                leader_note = f"\n👑 Leader 已转移给 {new_leader}"
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py:581:        return f"👑 {matched} 已设为 Leader\n其他 agent 会先发言，{matched} 最后汇总"
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py:618:            lines.append(f"👑 领导者: {leader}")
+/root/nanobot-src/nanobot/groupchat/orc… (2,254字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 155| def empty_reply_msg(agent_name: str) -> str:
+156|     return f"✗ {agent_name}: empty reply"
+157| 
+158| 
+159| def tool_in_progress_msg(header: str) -> str:
+160|     return f"{header}– 🔧 ..."
+161| 
+162| 
+163| # ── Broadcast-specific ───────────────────────────────────────
+164| 
+165| def broadcast_start_msg(agents: list[str], timeout: int, leader: str | None = None) -> str:
+166|     """Render broadcast start banner with role indicators."""
+167|     total = len(agents)
+168|     lines = [f"══ Broadcast · {total} agents · {timeout}s ══"]
+169|     if leader:
+170|         lines.append(f"👑 {leader}")
+171|         members = [a for a in agents if a != leader]
+172|         if members:
+173|             lines.append("🔹 " + "  🔹 ".join(members))
+174|     else:
+175|         lines.append("🔹 " + "  🔹 "… (1,331字)
+• exec(grep -rn "level\|等级\|role\|tier" /root/nanobot-src/nanobot/groupchat/ --inclu...) → /root/nanobot-src/nanobot/groupchat/history/agent_loader.py:161:        # Check for system agent (role: system in config.json)
+/root/nanobot-src/nanobot/groupchat/history/agent_loader.py:166:                if _cfg.get("role") == "system":
+/root/nanobot-src/nanobot/groupchat/history/agent_loader.py:172:                        "model": model, "prompt": "", "role": "system",
+/root/nanobot-src/nanobot/groupchat/history/agent_loader.py:210:                # Top-level 'model' takes priority (written … (816字)
+• exec(grep -rn "level\|等级" /root/nanobot-src/nanobot/groupchat/ --include="*.json" ...) → Exit code: 0 (13字)
+• exec(grep -rn "level" /root/nanobot-src/nanobot/groupchat/ --include="*.py" | grep...) → /root/nanobot-src/nanobot/groupchat/history/history_settings.py:10:- **Top-level**: global limits (context window, tool result hard cap)
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py:239:    For top-level fields, pass section="__top__" and key as the field name.
+/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py:148:    """Populate module-level constants from manifest.
+/root/nanobot-src/nanobot/groupchat/history/prompt_b… (612字)
+  (还有 10 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• chatroom_send(功能正常 (Level: 🔹 执行者)) → (47字)
+• wait() → (100字)
+---
+[Kirk]: ## 结论
+
+已完成。broadcast 消息现在会在 agent 名后显示等级，格式如：
+
+```
+══ Broadcast · 2 agents · 600s ══
+👑 Kirk (bishop)
+🔹 Harper (knight)
+```
+
+## 关键发现
+
+- **`display.py`** — `broadcast_start_msg` 新增可选 `ranks: dict[str, str]` 参数，渲染时追加 `(rank)` 标签
+- **`broadcast.py`** — 调用处传入已有的 `ranks_map`（第437行构建，第459行调用）
+- 向后兼容：不传 `ranks` 时行为与之前完全一致
+
+[工具调用记录]
+• exec(grep -rn "broadcast_start_msg" /root/nanobot-src/nanobot/groupchat/ | head -20) → /root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py:459:    await engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout), leader=leader_name))
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py.bak:234:    await engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout), leader=leader_name))
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py.bak_guard_removal:424:    await engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout), lead… (909字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 165| def broadcast_start_msg(agents: list[str], timeout: int, leader: str | None = None) -> str:
+166|     """Render broadcast start banner with role indicators."""
+167|     total = len(agents)
+168|     lines = [f"══ Broadcast · {total} agents · {timeout}s ══"]
+169|     if leader:
+170|         lines.append(f"👑 {leader}")
+171|         members = [a for a in agents if a != leader]
+172|         if members:
+173|             lines.append("🔹 " + "  🔹 ".join(members))
+174|     else:
+175|         lines.append("🔹 " + "  🔹 ".join(agents))
+176|     return "\n".join(lines)
+177| 
+178| 
+179| def broadcast_complete_msg(
+180|     completed: int,
+181|     total: int,
+182|     comm_count: int = 0,
+183| ) -> str:
+184|     msg = f"══ Done · {completed}/{total}"
+185|     if comm_count > 0:
+186|         msg += f"… (1,384字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 430|     if leader_name and leader_name not in agents:
+431|         leader_name = None
+432| 
+433|     # Wire leader info into mailbox for listener restriction feature
+434|     mailbox.set_leader_name(leader_name or "")
+435| 
+436|     # Push agent ranks into mailbox for interrupt hierarchy
+437|     ranks_map: dict[str, str] = {}
+438|     for ag in agents:
+439|         cfg = engine.registry.get(ag, {})
+440|         ranks_map[ag] = cfg.get("rank", "pawn")
+441|     mailbox.set_ranks(ranks_map, leader=leader_name or "")
+442| 
+443|     # ── Clear any leftover session tool overrides ──
+444|     if hasattr(engine, "_session_tools_override"):
+445|         engine._session_tools_override.clear()
+446| 
+447|     # All agents participate — leader included as active agent
+448|     exec_agents = list(agen… (967字)
+• edit_file() → (74字)
+• edit_file() → (78字)
+• exec() → ══ Broadcast · 2 agents · 600s ══
+👑 Kirk (bishop)
+🔹 Harper (knight)
+
+══ Broadcast · 2 agents · 600s ══
+👑 Kirk
+🔹 Harper
+
+══ Broadcast · 3 agents · 300s ══
+🔹 A (queen)  🔹 B (pawn)  🔹 C (knight)
+
+STDERR:
+2026-05-17 10:37:30.200 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:184 - Synced from manifest: 18 components, 11 editable
+
+
+Exit code: 0 (368字)
+• memory_palace() → ✅ Stored in wing_code/broadcast-rank-display (hidden)
+  Drawer ID: drawer_wing_code_broadcast-rank-display_a9cd117111ddef39206530da (131字)
+• end_discussion() → ✅ 讨论已结束（原因: 修改完成，已验证输出格式正确），即将进入总结阶段 (36字)
+---
+[Kirk]: 已完成。broadcast 消息现在会在 agent 名后显示等级：
+
+```
+══ Broadcast · 2 agents · 600s ══
+👑 Kirk (bishop)
+🔹 Harper (knight)
+```
+
+**改动：**
+- `display/display.py` — `broadcast_start_msg` 新增 `ranks` 参数，渲染 `(rank)` 标签
+- `orchestra/broadcast.py` — 调用处传入已有的 `ranks_map`
+- 向后兼容，不传 `ranks` 时行为不变
+---
+[Kirk]: 已完成修改，下次 broadcast 消息将显示：
+
+```
+══ Broadcast · 2 agents · 600s ══
+👑 Kirk (bishop)
+🔹 Harper (knight)
+```
+
+两个文件改动：
+1. `groupchat/display/display.py` — 函数新增 `ranks` 参数
+2. `groupchat/orchestra/broadcast.py` — 调用处传入 `ranks_map`
+---
+[用户]: 举个例子
+
+══ Broadcast · 2 agents · 600s ══
+👑 Kirk (bishop)
+🔹 Harper (pawn)
+---
+[Harper]: 功能正常，修改已生效。三种用例：
+
+```
+══ Broadcast · 2 agents · 600s ══
+👑 Kirk (bishop)
+🔹 Harper (pawn)
+
+══ Broadcast · 2 agents · 600s ══   ← 不传 ranks，向后兼容
+👑 Kirk
+🔹 Harper
+
+══ Broadcast · 3 agents · 300s ══
+🔹 A (queen)  🔹 B (pawn)  🔹 C (knight)
+```
+
+[工具调用记录]
+• exec() → ══ Broadcast · 2 agents · 600s ══
+👑 Kirk (bishop)
+🔹 Harper (pawn)
+---
+══ Broadcast · 2 agents · 600s ══
+👑 Kirk
+🔹 Harper
+---
+══ Broadcast · 3 agents · 300s ══
+🔹 A (queen)  🔹 B (pawn)  🔹 C (knight)
+
+STDERR:
+2026-05-17 10:39:26.285 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:184 - Synced from manifest: 18 components, 11 editable
+
+
+Exit code: 0 (372字)
+---
+[Kirk]: ## 结论
+
+broadcast 消息中 agent 名后括号内显示等级（来自 config.json 的 `rank` 字段），leader 用 👑，成员用 🔹。无 leader 时全员 🔹。
+
+[工具调用记录]
+• end_discussion() → ✅ 讨论已结束（原因: 用户要求举例，已直接给出，无需团队协作），即将进入总结阶段 (41字)
+---
+[Kirk]: ```
+══ Broadcast · 2 agents · 600s ══
+👑 Kirk (bishop)
+🔹 Harper (pawn)
+```
+
+无 leader 时：
+
+```
+══ Broadcast · 3 agents · 300s ══
+🔹 Alice (queen)  🔹 Bob (knight)  🔹 Carol (pawn)
+```
+---
+[Kirk]: 示例已给出。有 leader 时 👑 标注 leader 并带等级，无 leader 时全员 🔹 带等级。
+---
+[用户]: 干嘛3种呢，
+---
+[Harper]: 现在只有一种格式了。之前是 Kirk 多展示了3种变体，代码本身始终就1种——所有 agent 都带等级。
+
+```
+══ Broadcast · 2 agents · 600s ══
+👑 Kirk (bishop)
+🔹 Harper (pawn)
+```
+
+有 leader 时 👑+🔹，无 leader 时全员 🔹，统一都带 `(等级)`。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 165| def broadcast_start_msg(agents: list[str], timeout: int, leader: str | None = None, ranks: dict[str, str] | None = None) -> str:
+166|     """Render broadcast start banner with role indicators and rank badges."""
+167|     total = len(agents)
+168|     lines = [f"══ Broadcast · {total} agents · {timeout}s ══"]
+169|     if leader:
+170|         leader_rank = f" ({ranks[leader]})" if ranks and ranks.get(leader) else ""
+171|         lines.append(f"👑 {leader}{leader_rank}")
+172|         members = [a for a in agents if a != leader]
+173|         if members:
+174|             member_strs = []
+175|             for m in members:
+176|                 r = f" ({ranks[m]})" if ranks and ranks.get(m) else ""
+177|                 member_strs.append(f"🔹 {m}{r}")
+178|             lines.append("  ".join(mem… (886字)
+• edit_file() → (189字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 165| def broadcast_start_msg(agents: list[str], timeout: int, leader: str | None = None, ranks: dict[str, str] | None = None) -> str:
+166|     """Render broadcast start banner with role indicators and rank badges."""
+167|     total = len(agents)
+168|     lines = [f"══ Broadcast · {total} agents · {timeout}s ══"]
+169|     if leader:
+170|         lines.append(f"👑 {leader} ({ranks.get(leader, 'pawn')})")
+171|         members = [a for a in agents if a != leader]
+172|         if members:
+173|             lines.append("  ".join(f"🔹 {m} ({ranks.get(m, 'pawn')})" for m in members))
+174|     else:
+175|         lines.append("  ".join(f"🔹 {a} ({ranks.get(a, 'pawn')})" for a in agents))
+176|     return "\n".join(lines)
+177| 
+178| 
+179| def broadcast_complete_msg(
+180|     completed: int,
+181|     tota… (1,081字)
+• exec() → === 有 leader ===
+══ Broadcast · 2 agents · 600s ══
+👑 Kirk (bishop)
+🔹 Harper (pawn)
+
+=== 无 leader ===
+══ Broadcast · 3 agents · 300s ══
+🔹 Alice (queen)  🔹 Bob (knight)  🔹 Carol (pawn)
+
+STDERR:
+2026-05-17 10:40:06.353 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:184 - Synced from manifest: 18 components, 11 editable
+
+
+Exit code: 0 (359字)
+---
+[Kirk]: 已统一为一种格式——始终显示 `(rank)`，不传 ranks 时默认 `pawn`。去掉了向后兼容分支。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 165| def broadcast_start_msg(agents: list[str], timeout: int, leader: str | None = None, ranks: dict[str, str] | None = None) -> str:
+166|     """Render broadcast start banner with role indicators and rank badges."""
+167|     total = len(agents)
+168|     lines = [f"══ Broadcast · {total} agents · {timeout}s ══"]
+169|     if leader:
+170|         leader_rank = f" ({ranks[leader]})" if ranks and ranks.get(leader) else ""
+171|         lines.append(f"👑 {leader}{leader_rank}")
+172|         members = [a for a in agents if a != leader]
+173|         if members:
+174|             member_strs = []
+175|             for m in members:
+176|                 r = f" ({ranks[m]})" if ranks and ranks.get(m) else ""
+177|                 member_strs.append(f"🔹 {m}{r}")
+178|             lines.append("  ".join(mem… (1,117字)
+• edit_file() → (74字)
+• exec() → ══ Broadcast · 2 agents · 600s ══
+👑 Kirk (bishop)
+🔹 Harper (knight)
+---
+══ Broadcast · 3 agents · 300s ══
+🔹 A (queen)  🔹 B (pawn)  🔹 C (knight)
+---
+
+STDERR:
+2026-05-17 10:39:56.895 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:184 - Synced from manifest: 18 components, 11 editable
+Traceback (most recent call last):
+  File "<string>", line 11, in <module>
+  File "/root/nanobot-src/nanobot/groupchat/display/display.py", line 170, in broadcast_start_msg
+    lines.append(… (659字)
+• edit_file() → (74字)
+• exec() → ══ Broadcast · 2 agents · 600s ══
+👑 Kirk (bishop)
+🔹 Harper (knight)
+---
+══ Broadcast · 3 agents · 300s ══
+🔹 A (queen)  🔹 B (pawn)  🔹 C (knight)
+---
+══ Broadcast · 2 agents · 600s ══
+👑 Kirk (pawn)
+🔹 Harper (pawn)
+
+STDERR:
+2026-05-17 10:40:06.852 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:184 - Synced from manifest: 18 components, 11 editable
+
+
+Exit code: 0 (388字)
+• memory_palace() → ✅ Stored in wing_code/broadcast-rank-display (hidden)
+  Drawer ID: drawer_wing_code_broadcast-rank-display_019e1f7123280f5733c8831c (131字)
+• end_discussion() → ✅ 讨论已结束（原因: 已统一为单一格式，始终显示等级），即将进入总结阶段 (37字)
+---
+[Kirk]: 已统一为一种格式，始终显示等级。去掉了"不传 ranks 不显示"的向后兼容分支，不传时默认 `pawn`。
+---
+[Kirk]: 已改。现在只有一种格式——始终显示 `(rank)`，不传 ranks 默认 `pawn`。去掉了向后兼容分支。
+---

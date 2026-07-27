@@ -1,0 +1,146 @@
+[用户]: 是官方的mempalace吧，怎么换呢
+---
+[Harper]: 好，Kirk 已经给出了完整的分析。现在回答你的问题：
+
+**换 embedding 模型的具体步骤：**
+
+`mempalace` 用的是 ChromaDB，embedding function 在创建 collection 时指定。当前用的是默认的 ONNX MiniLM-L6-v2（英文）。换成多语言模型只需要改一行配置。
+
+**实际操作路径：**
+
+1. **安装多语言 embedding 模型**（二选一）：
+   - `pip install sentence-transformers` → 用 `BAAI/bge-m3`（最佳中文支持）
+   - 或用 ChromaDB 内置的 `chromadb.utils.embedding_functions.SentenceTransformerEmbeddingFunction(model_name="BAAI/bge-m3")`
+
+2. **改 searcher.py**：在 `get_collection()` 或搜索入口传入新的 embedding_function
+
+3. **重建索引**：旧 drawer 是用英文模型嵌入的，换了模型后需要重新 embed。可以用 `mempalace rebuild` 或遍历所有 drawer re-embed。
+
+**但有个坑**——当前本地装的是 mempalace fork（45个定制commit），直接改 searcher.py 可能会被后续 pull 覆盖。稳妥做法是在 nanobot 侧封装一层，不碰 mempalace 源码。
+
+Kirk，你觉得是先试 #2（写入时关键词覆盖，零成本见效快），还是直接上 #1（换模型）？我倾向先做 #2 + #3（room粒度控制），这两个不改底层就能提升召回率。
+---
+[Kirk]: 
+
+[工具调用记录]
+• memory_palace(mempalace 版本 升级 安装 editable fork) → 🔍 5 result(s) for 'mempalace 版本 升级 安装 editable fork':
+
+[1] wing_kirk/diary (sim=-0.088)
+  MemPalace 功能测试日记：正在执行全面功能测试，验证 store/recall/search/kg/diary 等操作。
+
+[2] wing_code/mempalace-version-status (sim=-0.159)
+  MemPalace 版本状态：本地安装 3.1.0（editable，/root/.nanobot/workspace/mempalace），PyPI 最新 3.3.5。本地有 45 个额外 commit（v3.1.0-45-gbb7ed80），可能是 nanobot 定制 fork。官方来源：GitHub MemPalace/mempalace + PyPI mempalace + mempalaceofficial.com。tool_search wing filter 在 3.1.0 下返回空结果，3.3.5 可能已修复。
+
+[3] wing_code/nanobot… (1,527字)
+• exec(cd /root/.nanobot/workspace/mempalace && git log --oneline -5 && echo "---" &...) → bb7ed80 fix: use epsilon comparison for mtime to prevent unnecessary re-mining (#610)
+ae5196b Мempalace backend seam (#413)
+154e8a7 fix: implement MCP ping health checks (#600)
+c4d8662 fix: correct token count estimate in compress summary (#609)
+89c0a58 fix: align cmd_compress dict keys with compression_stats() return values (#569)
+---
+origin	https://github.com/MemPalace/mempalace.git (fetch)
+origin	https://github.com/MemPalace/mempalace.git (push)
+---
+Version: 3.1.0
+Location: /usr/local/lib/pyt… (536字)
+• exec() → 45
+---
+bb7ed80 fix: use epsilon comparison for mtime to prevent unnecessary re-mining (#610)
+ae5196b Мempalace backend seam (#413)
+154e8a7 fix: implement MCP ping health checks (#600)
+c4d8662 fix: correct token count estimate in compress summary (#609)
+89c0a58 fix: align cmd_compress dict keys with compression_stats() return values (#569)
+9c4b730 fix: skip unreachable reparse points in detect_rooms_from_folders (#558)
+1056018 Merge pull request #385 from matrix9neonebuchadnezzar2199-sketch/fix/q… (1,570字)
+• exec() → Name: mempalace
+Version: 3.1.0
+Summary: Give your AI a memory — mine projects and conversations into a searchable palace. No API key required.
+Home-page: 
+Author: milla-jovovich
+Author-email: 
+License: 
+Location: /usr/local/lib/python3.12/dist-packages
+Editable project location: /root/.nanobot/workspace/mempalace
+Requires: chromadb, pyyaml
+Required-by: 
+===
+total 104
+drwxr-xr-x   3 root root  4096 May 13 10:48 .
+drwxr-xr-x 692 root root 36864 May 26 17:32 ..
+-rw-r--r--   1 root root     4 May 13… (679字)
+• exec(cd /root/.nanobot/workspace/mempalace && git log --oneline --all | head -3 &&...) → bb7ed80 fix: use epsilon comparison for mtime to prevent unnecessary re-mining (#610)
+ae5196b Мempalace backend seam (#413)
+154e8a7 fix: implement MCP ping health checks (#600)
+---
+* develop
+  remotes/origin/HEAD -> origin/develop
+  remotes/origin/develop
+  remotes/origin/main
+---
+
+
+Exit code: 0 (296字)
+• exec(# Check if nanobot has any patches on top of mempalace
+cd /root/.nanobot/work...) → ae5196b Мempalace backend seam (#413)
+60bea83 feat: mempalace migrate — recover palaces from different ChromaDB versions
+afa30a9 chore: improve agent readiness — AGENTS.md, dependabot, CODEOWNERS, labels
+e30c283 style: ruff format
+15c5a52 test: add 33 tests for repair.py and dedup.py
+e641b80 style: ruff check --fix
+2d7d7e0 feat: mempalace migrate — recover palaces from different ChromaDB versions
+06963dd chore: improve agent readiness — AGENTS.md, dependabot, CODEOWNERS, labels
+46520d2 feat: add… (695字)
+• exec() → bb7ed80 fix: use epsilon comparison for mtime to prevent unnecessary re-mining (#610)
+ae5196b Мempalace backend seam (#413)
+154e8a7 fix: implement MCP ping health checks (#600)
+c4d8662 fix: correct token count estimate in compress summary (#609)
+89c0a58 fix: align cmd_compress dict keys with compression_stats() return values (#569)
+9c4b730 fix: skip unreachable reparse points in detect_rooms_from_folders (#558)
+=== vs develop ===
+
+
+Exit code: 0 (448字)
+• exec(# Check what branch we're on and if it's behind origin
+cd /root/.nanobot/work...) → * develop bb7ed80 [origin/develop] fix: use epsilon comparison for mtime to prevent unnecessary re-mining (#610)
+
+
+Exit code: 0 (127字)
+• exec() → * [new tag]         v3.3.2                  -> v3.3.2
+ * [new tag]         v3.3.3                  -> v3.3.3
+ * [ne… (363字)
+  (还有 9 个工具调用，已省略)
+---
+[Kirk]: ## 结论
+
+是官方仓库，可以直接升级。本地 editable 安装在 `/root/.nanobot/workspace/mempalace`，develop 分支，working tree 干净无本地修改，升级很简单。
+
+## 升级命令
+
+```bash
+cd /root/.nanobot/workspace/mempalace
+git checkout v3.3.6
+pip install -e . --no-deps
+```
+
+回滚：
+```bash
+git checkout develop
+pip install -e . --no-deps
+```
+
+`--no-deps` 防止覆盖 nanobot 的其他依赖。
+
+## v3.1.0 → v3.3.6 关键搜索修复（904 commits）
+
+| 修复 | 影响 |
+|------|------|
+| `fix(layers): clamp similarity to [0,1]` | **负 sim 问题直接修复** |
+| `fix(searcher): clamp effective_distance to [0,2]` | cosine 距离越界修复 |
+| `fix(searcher): guard None metadata/doc` | 搜索崩溃修复 |
+| `feat(searcher): union vector∪BM25 reranking` | **hybrid search 已实现** |
+| `fix(search): BM25 hybrid rerank` | 之前讨论的 #5 改进方向，官方已做 |
+
+## 风险
+
+nanobot 的 `memory_palace.py` 通过 `from mempalace.mcp_server import tool_search, tool_store` 等直接导入。升级后需验证这些函数签名未变——如果 v3.3.6 改了 API，nanobot 的 wrapper 会报 ImportError。建议升级后跑一次 `tool_search` + `tool_store` 快速验证。
+---

@@ -1,0 +1,716 @@
+[用户]: 就是让agent养成如果结果有问题就压缩的习惯
+---
+[Harper]: 
+
+[工具调用记录]
+• memory_palace(forget compression integration proactive agent habit) → 🔍 5 result(s) for 'forget compression integration proactive agent habit':
+
+[1] wing_code/forget-compression-integration (sim=0.302)
+  ## forget与历史压缩集成现状（2026-06-13）
+
+### 两套代码库均已实现集成
+
+**nanobot（群聊系统）**：
+- `nanobot/groupchat/history/prompt_builder.py` 第241行：`forget_guidance` 模板
+- 条件注入：仅当agent拥有forget工具时才注入（第565-577行）
+- 内容：何时forget、何时不要forget、策略（forget优先于自动压缩）
+- 压缩流程：`engine._maybe_compress_history()` → `HistoryContext.maybe_compress()` → AI摘要中间区域
+- 工具实现：`nanobot/tools/forget.py`，哨兵检测在 `tool_loop.p… (1,909字)
+• exec(grep -n "forget_guidance\|WHEN TO FORGET\|WHEN NOT TO FORGET\|Strategy\|Proac...) → STDERR:
+grep: agents/nanobot/groupchat/history/prompt_builder.py: No such file or directory
+
+
+Exit code: 0 (106字)
+• exec(find agents/nanobot -name "prompt_builder.py" 2>/dev/null) → Exit code: 1 (13字)
+• exec(find agents -name "prompt_builder.py" 2>/dev/null) → agents/hermes-agent/agent/prompt_builder.py
+
+
+Exit code: 0 (58字)
+• exec(find agents/nanobot -name "*.py" 2>/dev/null | head -20) → Exit code: 0 (13字)
+• list_dir(agents) → 📁 hermes-agent (14字)
+• exec() → 37:# shared with the memory-tool scanner and the tool-result delimiter system.
+153:    "Specifically: do not record PR numbers, issue numbers, commit SHAs, 'fixed bug X', "
+156:    "If you've discovered a new way to do something, solved a problem that could be "
+257:FORGET_GUIDANCE = (
+258:    "# ⚡ Proactive context compression (forget) — MANDATORY RULE\n"
+266:    "- Search results where you've extracted the key info → forget(indices=[0,1,2])\n"
+269:    "- Earlier results from repeated tool call… (2,161字)
+• exec(sed -n '257,295p' agents/hermes-agent/agent/prompt_builder.py) → FORGET_GUIDANCE = (
+    "# ⚡ Proactive context compression (forget) — MANDATORY RULE\n"
+    "Context space is limited. The system auto-compresses when near capacity "
+    "(summarising middle messages), but auto-compression doesn't distinguish "
+    "important from unimportant — it may swallow critical information.\n"
+    "You MUST proactively use `forget` to clean up low-value outputs, protecting "
+    "important content from being lost to automatic compression.\n"
+    "\n"
+    "## 🔴 Forget IMM… (2,393字)
+---
+[用户]: 看看openrouter最近新的模型，不要路边一条的模型，加入到nanobot
+---
+[Kirk]: 
+
+[工具调用记录]
+• memory_palace(forget compression agent habit guidance) → 🔍 3 result(s) for 'forget compression agent habit guidance':
+
+[1] wing_code/forget-compression-integration (sim=0.29)
+  ## forget与历史压缩集成现状（2026-06-13）
+
+### 两套代码库均已实现集成
+
+**nanobot（群聊系统）**：
+- `nanobot/groupchat/history/prompt_builder.py` 第241行：`forget_guidance` 模板
+- 条件注入：仅当agent拥有forget工具时才注入（第565-577行）
+- 内容：何时forget、何时不要forget、策略（forget优先于自动压缩）
+- 压缩流程：`engine._maybe_compress_history()` → `HistoryContext.maybe_compress()` → AI摘要中间区域
+- 工具实现：`nanobot/tools/forget.py`，哨兵检测在 `tool_loop.py` 第690行
+
+**he… (1,159字)
+• exec(cd /root/nanobot-src && grep -n "forget_guidance\|必须.*forget\|问题.*forget\|err...) → 33:    "main_prompt", "persona", "hard_rules", "tool_instructions", "forget_guidance", "skills",
+45:    "forget_guidance": "主动压缩 (forget_guidance)",
+66:    "forget_guidance": "static",
+241:    "forget_guidance": (
+244:        "你必须主动用 forget 工具清理低价值输出，保护重要内容不被自动压缩丢失。\n\n"
+245:        "#### 🔴 必须立即 forget 的场景\n"
+572:        elif key == "forget_guidance":
+581:            return self.get_component_template("forget_guidance")
+
+
+Exit code: 0 (438字)
+• exec(cd /root/.nanobot/workspace/agents/hermes-agent && grep -n "FORGET_GUIDANCE\|...) → 257:FORGET_GUIDANCE = (
+
+
+Exit code: 0 (38字)
+• exec(cd /root/nanobot-src && sed -n '241,275p' nanobot/groupchat/history/prompt_bu...) → "forget_guidance": (
+        "### ⚡ 主动压缩 (forget) — 强制规则\n"
+        "上下文空间有限。系统会在接近容量时自动压缩（摘要替换中间消息），但自动压缩不区分重要与否，可能吞掉关键信息。\n"
+        "你必须主动用 forget 工具清理低价值输出，保护重要内容不被自动压缩丢失。\n\n"
+        "#### 🔴 必须立即 forget 的场景\n"
+        "- 搜索结果已提取完关键信息 → forget(indices=[0,1,2])\n"
+        "- 长文件已读完并记了笔记 → forget(keywords=\"read_file\")\n"
+        "- exec 输出冗长但只需结论 → forget(indices=0)\n"
+        "- 同一工具连续调用多次，早期结果已过时 → forget(keywords=\"web_search\")\n"
+        "- 任何超过500字的工具输出，提取完信息后立即 forget\n\n"
+        "#… (1,540字)
+• exec(cd /root/.nanobot/workspace/agents/hermes-agent && sed -n '257,295p' agent/pr...) → FORGET_GUIDANCE = (
+    "# ⚡ Proactive context compression (forget) — MANDATORY RULE\n"
+    "Context space is limited. The system auto-compresses when near capacity "
+    "(summarising middle messages), but auto-compression doesn't distinguish "
+    "important from unimportant — it may swallow critical information.\n"
+    "You MUST proactively use `forget` to clean up low-value outputs, protecting "
+    "important content from being lost to automatic compression.\n"
+    "\n"
+    "## 🔴 Forget IMM… (2,393字)
+---
+[Harper]: 
+
+[工具调用记录]
+• web_search() → === Query: OpenRouter new models 2025 best rated ===
+Results for: OpenRouter new models 2025 best rated
+
+1. LLM Rankings | OpenRouter
+   https://openrouter.ai/rankings
+   LLM rankings and AI leaderboard based on benchmarks and real usage data from millions of users. See which AI models developers actually use.
+2. Models | OpenRouter
+   https://openrouter.ai/models
+   1 week ago -Browse models on OpenRouter
+3. Free AI Models on OpenRouter | OpenRouter
+   https://openrouter.ai/collections/free-models
+   1 week ago -The model features a 1M token context window for long-term agent coherence, cross-document reasoning, and multi-step task planning. Latent MoE enables calling 4 experts for the inference cost of only one, improving intelligence and generalization. Multi-environment RL training across 10+ environments delivers leading accuracy on benchmarks including AIME 2025, TerminalBench, and SWE-Bench Verified.
+4. OpenRouter Rankings April 2026: Top AI Models by Data
+   https://www.digitalapplied.com/blog/openrouter-rankings-april-2026-top-ai-models-data
+   April 1, 2026 -Three distinct patterns emerge from the data.MiMo-V2-Pro (+12% week-over-week), Qwen 3.6 Plus(new entry), and Gemini 3.1 Flash Lite (+15%) are capturing developer attention through pricing and performance.
+5. Best AI Models for Coding | OpenRouter
+   https://openrouter.ai/collections/programming
+   2 weeks ago -It introduces DeepSeek Sparse Attention (DSA), a fine-grained sparse attention mechanism that reduces … (3,475字)
+• web_fetch(https://openrouter.ai/rankings) → {"url": "https://openrouter.ai/rankings", "finalUrl": "https://openrouter.ai/rankings", "status": 200, "extractor": "ai_reader", "reader_model": "openai/gpt-4.1-nano", "truncated": false, "original_length": 205, "extracted_length": 204, "text": "# LLM Rankings | OpenRouter\n\n# AI Model Rankings\nBased on benchmarks and real usage data from millions of users accessing models through OpenRouter.\n\n`[nano:fetch] 205→148c -28% | nano in:201 out:31 Σ232`"} (457字)
+• web_fetch(https://openrouter.ai/models) → {"url": "https://openrouter.ai/models", "finalUrl": "https://openrouter.ai/models", "status": 200, "extractor": "ai_reader", "reader_model": "openai/gpt-4.1-nano", "truncated": false, "original_length": 80, "extracted_length": 86, "text": "网页内容提取如下：\n\n# Models | OpenRouter\n\n`[nano:fetch] 80→32c -60% | nano in:175 out:12 Σ187`"} (332字)
+• web_fetch(https://openrouter.ai/api/v1/models) → {"url": "https://openrouter.ai/api/v1/models", "finalUrl": "https://openrouter.ai/api/v1/models", "status": 200, "extractor": "ai_reader", "reader_model": "openai/gpt-4.1-nano", "truncated": false, "original_length": 740194, "extracted_length": 5677, "text": "以下是网页中已有的模型信息提取内容：\n\n1. **MoonshotAI: Kimi K2.7 Code**\n   - ID: moonshotai/kimi-k2.7-code\n   - Name: MoonshotAI: Kimi K2.7 Code\n   - Created: 1781266361\n   - Description: MoonshotAI: Kimi K2.7 Code is a coding-focused model in Moonshot AI's Kimi K2 family, built to complete end-to-end programming tasks reliably over long contexts. It uses a native multimodal mixture-of-experts...\n   - Context length: 262144\n   - Architecture:\n     - Modality: text+image+video->text\n     - Input modalities: text, image, video\n     - Output modalities: text\n     - Tokenizer: Other\n   - Pricing:\n     - Prompt: 0.00000095\n     - Completion: 0.000004\n     - Input cache read: 0.00000019\n   - Supported parameters: frequency_penalty, include_reasoning, max_tokens, presence_penalty, reasoning, repetition_penalty, response_format, seed, stop, structured_outputs, temperature, tool_choice, tools, top_k, top_p\n   - Links: [details](https://openrouter.ai/api/v1/models/moonshotai/kimi-k2.7-code-20260612/endpoints)\n   - Benchmarks:\n     - Design Arena:\n       - Categories: gamedev (ELO: 1272, win rate: 49.6%, rank: 22), website (ELO: 1341, win rate: 60.4%, rank: 2)\n\n2. **Anthropic: Claude Fable Latest**\n   - ID: ~anthropic/claude-… (6,057字)
+• web_fetch(https://openrouter-web.vercel.app/rankings?view=trending) → (509字)
+  (还有 3 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec() → Exit code: 0 (13字)
+• exec(find . -name "nanobot" -type d 2>/dev/null; find . -name "*.toml" -path "*/na...) → Exit code: 0 (13字)
+• read_file(skills/settings/SKILL.md) → Error: File not found: skills/settings/SKILL.md
+
+[Analyze the error above and try a different approach.] (104字)
+• exec(find . -name "SKILL.md" 2>/dev/null | head -10; find . -name "*.md" -path "*/...) → ./opencli/SKILL.md
+./opencli/src/clis/antigravity/SKILL.md
+./opencli/.agents/skills/cross-project-adapter-migration/SKILL.md
+./agents/hermes-agent/plugins/google_meet/SKILL.md
+./agents/hermes-agent/optional-skills/software-development/code-wiki/SKILL.md
+./agents/hermes-agent/optional-skills/software-development/subagent-driven-development/SKILL.md
+./agents/hermes-agent/optional-skills/software-development/rest-graphql-debug/SKILL.md
+./agents/hermes-agent/optional-skills/email/agentmail/SKILL.md
+… (670字)
+• exec(find . -name "settings*" -o -name "model*" 2>/dev/null | grep -v ".git\|node_...) → ./claude-code-leak/src/services/settingsSync
+./claude-code-leak/src/commands/model
+./claude-code-leak/src/commands/model/model.tsx
+./claude-code-leak/src/utils/model
+./claude-code-leak/src/utils/model/model.ts
+./claude-code-leak/src/utils/model/modelStrings.ts
+./claude-code-leak/src/utils/model/modelCapabilities.ts
+./claude-code-leak/src/utils/model/modelAllowlist.ts
+./claude-code-leak/src/utils/model/modelSupportOverrides.ts
+./claude-code-leak/src/utils/model/modelOptions.ts
+./claude-code-leak/… (1,008字)
+• exec(find . -name "settings*" -path "*/hermes*" 2>/dev/null; find . -name "model*"...) → ./agents/hermes-agent/apps/desktop/src/app/settings
+./agents/hermes-agent/ui-tui/src/components/modelPicker.tsx
+./agents/hermes-agent/plugins/teams_pipeline/models.py
+./agents/hermes-agent/plugins/model-providers
+./agents/hermes-agent/apps/desktop/src/lib/model-status-label.ts
+./agents/hermes-agent/apps/desktop/src/lib/model-status-label.test.ts
+./agents/hermes-agent/apps/desktop/src/app/shell/model-menu-panel.tsx
+./agents/hermes-agent/apps/desktop/src/app/shell/model-edit-submenu.tsx
+./agents/h… (719字)
+• exec(find . -path "*/model-providers*" -name "*.py" 2>/dev/null | head -10) → ./agents/hermes-agent/plugins/model-providers/xiaomi/__init__.py
+./agents/hermes-agent/plugins/model-providers/openai-codex/__init__.py
+./agents/hermes-agent/plugins/model-providers/gmi/__init__.py
+./agents/hermes-agent/plugins/model-providers/azure-foundry/__init__.py
+./agents/hermes-agent/plugins/model-providers/zai/__init__.py
+./agents/hermes-agent/plugins/model-providers/minimax/__init__.py
+./agents/hermes-agent/plugins/model-providers/qwen-oauth/__init__.py
+./agents/hermes-agent/plugins/mod… (693字)
+• exec() → ./agents/hermes-agent/plugins/model-providers/openrouter
+./agents/hermes-agent/plugins/model-providers/openrouter/__init__.py
+
+
+Exit code: 0 (140字)
+---
+[Kirk]: AI reader已经摘要了，原始JSON被丢掉了。需要直接用exec curl获取原始数据。
+
+[工具调用记录]
+• web_search(OpenRouter new models 2025 June latest added) → Results for: OpenRouter new models 2025 June latest added
+
+1. Free AIModelsonOpenRouter|OpenRouter
+   https://openrouter.ai/collections/free-models
+   Modelrankings updatedJune2026 based on real usage data.Thesemodelsallow hundreds of thousands of users worldwide to experiment, learn, and innovate. Below you will find the top free AImodelscurrently available onOpenRouter.
+2. n8nOpenRouter: Connect Any LLM in 2 Minutes | The Easiest Way...
+   https://n8n-tutorial.com/tutorials/n8n/nodes-and-integrations/connect-any-llm-in-2-minutes-n8n-openrouter/
+   However,OpenRouteris constantlyaddingnewmodels, so it’s worth checking their supportedmodelslist regularly. Q: How do I monitor my spending and token usage onOpenRouter? A:OpenRouterprovides a dedicated activity dashboard on their website.
+3. NewNo Filter RoleplayModelsReleased -OpenRouterUpdate
+   https://www.topview.ai/blog/detail/New-No-Filter-Roleplay-Models-Released-OpenRouter-Update-Character-AI-Alternative-With-No-Filter
+   OpenRouter, a platform known for providing free AI role-playingmodels, has recently expanded its offerings with the release of twonewmodels, OpenChat 3.5 and Mythy 7B,addingto their existing lineup of Mistral Zephyr and Toppymodels.
+4. How to UseOpenRouterModelsin Cursor - YouTube
+   https://www.youtube.com/watch?v=n6j4nSt7qa0
+   About Press Copyright Contact us Creators Advertise Developers Terms Privacy Policy & Safety How YouTube works Testnewfeatures.
+5. Using LLM APIs for Free withOpenRouter.ai (202… (1,936字)
+• exec() → ./.git/config-versions.git/providers_models.json
+./.git/config-versions.git/config.json
+./.git/config-versions.git/.backup_pre_vcs/providers_models.json
+./.git/config-versions.git/.backup_pre_vcs/config.json
+./.git/config-versions.git/.backup_pre_vcs/agents/harper/config.json
+./.git/config-versions.git/.backup_pre_vcs/agents/retriever/config.json
+./.git/config-versions.git/.backup_pre_vcs/agents/benjamin/config.json
+./.git/config-versions.git/.backup_pre_vcs/agents/lucas/config.json
+./.git/confi… (1,086字)
+• exec(cd /root/nanobot-src && grep -rn "openrouter" nanobot/ --include="*.py" --inc...) → nanobot/providers/registry.py
+nanobot/providers/litellm_provider.py
+nanobot/providers/httpx_provider.py
+nanobot/groupchat/orchestra/tools/chatroom_tools.py
+nanobot/cli/commands.py
+nanobot/test_litellm.py
+nanobot/config/schema.py
+nanobot/channels/telegram/callbacks.py
+nanobot/channels/telegram/commands/providers.py
+
+
+Exit code: 0 (330字)
+• web_fetch(https://openrouter.ai/models) → {"url": "https://openrouter.ai/models", "finalUrl": "https://openrouter.ai/models", "status": 200, "extractor": "ai_reader", "reader_model": "openai/gpt-4.1-nano", "truncated": false, "original_length": 80, "extracted_length": 143, "text": "网页中没有提及“new models added recently June 2026”的相关内容。\n\n`[nano:fetch] 80→50c -38% focus=\"new models added recently June\" | nano in:206 out:19 Σ225`"} (390字)
+• exec(cd /root/nanobot-src && cat nanobot/providers/registry.py | head -80) → """
+Provider Registry — single source of truth for LLM provider metadata.
+
+Adding a new provider:
+  1. Add a ProviderSpec to PROVIDERS below.
+  2. Add a field to ProvidersConfig in config/schema.py.
+  Done. Env vars, prefixing, config matching, status display all derive from here.
+
+Order matters — it controls match priority and fallback. Gateways first.
+Every entry writes out all fields so you can copy-paste as a template.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclas… (3,260字)
+• exec(cd /root/nanobot-src && find . -name "providers_models.json" -not -path "./.g...) → Exit code: 0 (13字)
+• web_fetch(https://openrouter.ai/api/v1/models) → {"url": "https://openrouter.ai/api/v1/models", "finalUrl": "https://openrouter.ai/api/v1/models", "status": 200, "extractor": "ai_reader", "reader_model": "openai/gpt-4.1-nano", "truncated": false, "original_length": 740194, "extracted_length": 5125, "text": "以下是网页中已有的模型信息提取内容：\n\n1. **MoonshotAI: Kimi K2.7 Code**\n   - ID: moonshotai/kimi… (5,510字)
+  (还有 15 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(agents/hermes-agent/plugins/model-providers/openrouter/__init__.py) → 1| """OpenRouter provider profile."""
+2| 
+3| import logging
+4| from typing import Any
+5| 
+6| from providers import register_provider
+7| from providers.base import ProviderProfile
+8| 
+9| logger = logging.getLogger(__name__)
+10| 
+11| _CACHE: list[str] | None = None
+12| 
+13| 
+14| class OpenRouterProfile(ProviderProfile):
+15|     """OpenRouter aggregator — provider preferences, reasoning config passthrough."""
+16| 
+17|     def fetch_models(
+18|         self,
+19|         *,
+20|         api_key: str | None = None,
+21|         timeout: float = 8.0,
+22|     ) -> list[str] | None:
+23|         """Fetch from public OpenRouter catalog — no auth required.
+24| 
+25|         Note: Tool-call capability filtering is applied by hermes_cli/models.py
+26|         via fetch_openrouter_models() → _openrouter_mode… (4,697字)
+• exec(grep -rn "fallback_models\|allowlist\|model.*list\|hardcoded\|static.*model" ...) → agents/hermes-agent/providers/base.py:69:    # fallback_models: curated list shown in /model picker when live fetch fails.
+agents/hermes-agent/providers/base.py:71:    fallback_models: tuple = ()
+agents/hermes-agent/providers/base.py:161:        """Fetch the live model list from the provider's models endpoint.
+agents/hermes-agent/providers/base.py:164:        the provider does not support live model listing.
+agents/hermes-agent/scripts/check-windows-footguns.py:128:    # suppression over this li… (2,358字)
+• read_file(agents/hermes-agent/scripts/build_model_catalog.py) → 1| #!/usr/bin/env python3
+2| """Build the Hermes Model Catalog — a centralized JSON manifest of curated models.
+3| 
+4| This script reads the in-repo hardcoded curated lists (``OPENROUTER_MODELS``,
+5| ``_PROVIDER_MODELS["nous"]``) and writes them to a JSON manifest that the
+6| Hermes CLI fetches at runtime. Publishing the catalog through the docs site
+7| lets maintainers update model lists without shipping a Hermes release.
+8| 
+9| The runtime fetcher falls back to the same in-repo hardcoded lists if the
+10| manifest is unreachable, so this script is a convenience for keeping the
+11| manifest in sync — not a source of truth.
+12| 
+13| Usage::
+14| 
+15|     python scripts/build_model_catalog.py
+16| 
+17| Output: ``website/static/api/model-catalog.json``
+18| 
+19| Live URL (after ``deploy-site.yml… (3,627字)
+• exec(grep -n "OPENROUTER_MODELS\|openrouter.*model\|model.*openrouter" agents/herm...) → 34:OPENROUTER_MODELS: list[tuple[str, str]] = [
+1167:def _openrouter_model_is_free(pricing: Any) -> bool:
+1177:def _openrouter_model_supports_tools(item: Any) -> bool:
+1202:def fetch_openrouter_models(
+1218:        from hermes_cli.model_catalog import get_curated_openrouter_models
+1219:        remote = get_curated_openrouter_models()
+1222:    fallback = list(remote) if remote else list(OPENROUTER_MODELS)
+1227:            "https://openrouter.ai/api/v1/models",
+1256:        if not _openrouter_mode… (1,006字)
+• exec(sed -n '34,200p' agents/hermes-agent/hermes_cli/models.py) → OPENROUTER_MODELS: list[tuple[str, str]] = [
+    # Anthropic
+    ("anthropic/claude-opus-4.8",              ""),
+    ("anthropic/claude-opus-4.8-fast",         "2x price, higher output speed"),
+    ("anthropic/claude-sonnet-4.6",            ""),
+    ("anthropic/claude-haiku-4.5",             ""),
+    # OpenAI
+    ("openai/gpt-5.5",                         ""),
+    ("openai/gpt-5.5-pro",                     ""),
+    ("openai/gpt-5.4-mini",                    ""),
+    # Google
+    ("google/gemini-… (5,991字)
+• exec(sed -n '34,115p' agents/hermes-agent/hermes_cli/models.py) → OPENROUTER_MODELS: list[tuple[str, str]] = [
+    # Anthropic
+    ("anthropic/claude-opus-4.8",              ""),
+    ("anthropic/claude-opus-4.8-fast",         "2x price, higher output speed"),
+    ("anthropic/claude-sonnet-4.6",            ""),
+    ("anthropic/claude-haiku-4.5",             ""),
+    # OpenAI
+    ("openai/gpt-5.5",                         ""),
+    ("openai/gpt-5.5-pro",                     ""),
+    ("openai/gpt-5.4-mini",          … (3,261字)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec() → === Recent models (sorted by creation date) ===
+moonshotai/kimi-k2.7-code | MoonshotAI: Kimi K2.7 Code | 2026-06-12 | ctx:262144 | prompt:$9.5e-07/1k | comp:$4e-06/1k
+~anthropic/claude-fable-latest | Anthropic: Claude Fable Latest | 2026-06-10 | ctx:1000000 | prompt:$1e-05/1k | comp:$5e-05/1k
+anthropic/claude-fable-5 | Anthropic: Claude Fable 5 | 2026-06-09 | ctx:1000000 | prompt:$1e-05/1k | comp:$5e-05/1k
+nex-agi/nex-n2-pro:free | Nex AGI: Nex-N2-Pro (free) | 2026-06-09 | ctx:262144 | prompt:$0… (4,485字)
+• exec() → moonshotai/kimi-k2.7-code: ctx=262144, supported_params=['frequency_penalty', 'include_reasoning', 'max_tokens', 'presence_penalty', 'reasoning', 'repetition_penalty', 'response_format', 'seed', 'stop', 'structured_outputs']
+anthropic/claude-fable-5: ctx=1000000, supported_params=['include_reasoning', 'max_completion_tokens', 'max_tokens', 'reasoning', 'response_format', 'stop', 'structured_outputs', 'tool_choice', 'tools', 'verbosity']
+nvidia/nemotron-3-ultra-550b-a55b: ctx=1000000, supported_p… (1,899字)
+• edit_file() → (175字)
+• exec(grep -n "kimi-k2\|MoonshotAI" agents/hermes-agent/hermes_cli/models.py) → 57:    # MoonshotAI
+58:    ("moonshotai/kimi-k2.6",                   "recommended"),
+175:        # MoonshotAI
+176:        "moonshotai/kimi-k2.6",
+273:        "moonshotai/kimi-k2.6",
+279:        "kimi-k2.6",
+280:        "kimi-k2.5",
+282:        "kimi-k2-thinking",
+283:        "kimi-k2-thinking-turbo",
+284:        "kimi-k2-turbo-preview",
+285:        "kimi-k2-0905-preview",
+288:        "kimi-k2.6",
+289:        "kimi-k2.5",
+290:        "kimi-k2-thinking",
+291:        "kimi-k2-turbo-preview",
+292: … (1,078字)
+• exec(sed -n '57,59p' agents/hermes-agent/hermes_cli/models.py | cat -A) → # MoonshotAI$
+    ("moonshotai/kimi-k2.6",                   "recommended"),$
+    # MiniMax$
+
+
+Exit code: 0 (111字)
+• edit_file() → (85字)
+• exec(sed -n '34,100p' agents/hermes-agent/hermes_cli/models.py) → OPENROUTER_MODELS: list[tuple[str, str]] = [
+    # Anthropic
+    ("anthropic/claude-opus-4.8",              ""),
+    ("anthropic/claude-opus-4.8-fast",         "2x price, higher output speed"),
+    ("anthropic/claude-sonnet-4.6",            ""),
+    ("anthropic/claude-haiku-4.5",             ""),
+    # OpenAI
+    ("openai/gpt-5.5",                         ""),
+    ("openai/gpt-5.5-pro",                     ""),
+    ("openai/gpt-5.4-mini",                    ""),
+    # Google
+    ("google/gemini-… (2,778字)
+• edit_file() → (85字)
+---
+[Harper]: 
+
+[工具调用记录]
+• edit_file() → (85字)
+• edit_file() → (85字)
+• exec(sed -n '34,100p' agents/hermes-agent/hermes_cli/models.py) → OPENROUTER_MODELS: list[tuple[str, str]] = [
+    # Anthropic
+    ("anthropic/claude-opus-4.8",              ""),
+    ("anthropic/claude-opus-4.8-fast",         "2x price, higher output speed"),
+    ("anthropic/claude-sonnet-4.6",            ""),
+    ("anthropic/claude-haiku-4.5",             ""),
+    ("anthropic/claude-fable-5",               "new, 1M ctx, tool support"),
+    ("anthropic/claude-fable-latest",          "latest Anthropic fable model"),
+    # OpenAI
+    ("openai/gpt-5.5",          … (2,794字)
+• exec(sed -n '270,310p' agents/hermes-agent/hermes_cli/models.py) → "nvidia/nemotron-3-super-120b-a12b",
+        "nvidia/nemotron-3-nano-30b-a3b",
+        "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+        # Third-party agentic models hosted on build.nvidia.com
+        # (map to OpenRouter defaults — users get familiar picks on NIM)
+        "qwen/qwen3.5-397b-a17b",
+        "deepseek-ai/deepseek-v3.2",
+        "moonshotai/kimi-k2.6",
+        "minimaxai/minimax-m2.5",
+        "z-ai/glm5",
+        "openai/gpt-oss-120b",
+    ],
+    "kimi-coding": [
+        "kimi-k… (1,156字)
+• edit_file(agents/hermes-agent/hermes_cli/models.py) → (99字)
+• edit_file() → (85字)
+• edit_file(agents/hermes-agent/hermes_cli/models.py) → (175字)
+• exec(grep -n "kimi-k2.6\|kimi-k2.7" agents/hermes-agent/hermes_cli/models.py) → 60:    ("moonshotai/kimi-k2.7-code",              "recommended, latest code model"),
+180:        "moonshotai/kimi-k2.6",
+277:        "moonshotai/kimi-k2.7-code",
+283:        "kimi-k2.6",
+292:        "kimi-k2.6",
+303:        "kimi-k2.6",
+406:        "kimi-k2.6",
+3278:    The live API uses clean IDs (e.g. 'kimi-k2.6') while models.dev sometimes
+3279:    returns them as 'kimi-k2.6:cloud'. Normalising before the dedup merge
+
+
+Exit code: 0 (438字)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(sed -n '278,310p' agents/hermes-agent/hermes_cli/models.py) → "minimaxai/minimax-m2.5",
+        "z-ai/glm5",
+        "openai/gpt-oss-120b",
+    ],
+    "kimi-coding": [
+        "kimi-k2.6",
+        "kimi-k2.5",
+        "kimi-for-coding",
+        "kimi-k2-thinking",
+        "kimi-k2-thinking-turbo",
+        "kimi-k2-turbo-preview",
+        "kimi-k2-0905-preview",
+    ],
+    "kimi-coding-cn": [
+        "kimi-k2.6",
+        "kimi-k2.5",
+        "kimi-k2-thinking",
+        "kimi-k2-turbo-preview",
+        "kimi-k2-0905-preview",
+    ],
+    "stepfun": [
+        … (777字)
+• edit_file(agents/hermes-agent/hermes_cli/models.py) → (175字)
+• exec(sed -n '283,285p' agents/hermes-agent/hermes_cli/models.py | cat -A) → "kimi-k2.6",$
+        "kimi-k2.5",$
+        "kimi-for-coding",$
+
+
+Exit code: 0 (86字)
+• edit_file() → (85字)
+• edit_file(agents/hermes-agent/hermes_cli/models.py) → (175字)
+• exec(sed -n '292,295p' agents/hermes-agent/hermes_cli/models.py | cat -A) → "kimi-coding-cn": [$
+        "kimi-k2.6",$
+        "kimi-k2.5",$
+        "kimi-k2-thinking",$
+
+
+Exit code: 0 (112字)
+• edit_file(agents/hermes-agent/hermes_cli/models.py) → (175字)
+• exec(sed -n '292,296p' agents/hermes-agent/hermes_cli/models.py) → "kimi-coding-cn": [
+        "kimi-k2.6",
+        "kimi-k2.5",
+        "kimi-k2-thinking",
+        "kimi-k2-turbo-preview",
+
+
+Exit code: 0 (141字)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec() → 60:    ("moonshotai/kimi-k2.7-code",              "recommended, latest code model"),
+180:        "moonshotai/kimi-k2.6",
+277:        "moonshotai/kimi-k2.7-code",
+283:        "kimi-k2.7-code",
+284:        "kimi-k2.7-code",
+285:        "kimi-k2.6",
+294:        "kimi-k2.7-code",
+295:        "kimi-k2.6",
+306:        "kimi-k2.7-code",
+307:        "kimi-k2.6",
+410:        "kimi-k2.7-code",
+411:        "kimi-k2.6",
+3283:    The live API uses clean IDs (e.g. 'kimi-k2.6') while models.dev sometimes
+3284:… (588字)
+• exec(sed -n '280,310p' agents/hermes-agent/hermes_cli/models.py) → "openai/gpt-oss-120b",
+    ],
+    "kimi-coding": [
+        "kimi-k2.7-code",
+        "kimi-k2.7-code",
+        "kimi-k2.6",
+        "kimi-k2.5",
+        "kimi-for-coding",
+        "kimi-k2-thinking",
+        "kimi-k2-thinking-turbo",
+        "kimi-k2-turbo-preview",
+        "kimi-k2-0905-preview",
+    ],
+    "kimi-coding-cn": [
+        "kimi-k2.7-code",
+        "kimi-k2.6",
+        "kimi-k2.5",
+        "kimi-k2-thinking",
+        "kimi-k2-turbo-preview",
+        "kimi-k2-0905-preview",
+    ],
+  … (748字)
+• edit_file(agents/hermes-agent/hermes_cli/models.py) → (175字)
+• exec(sed -n '282,286p' agents/hermes-agent/hermes_cli/models.py | cat -A) → "kimi-coding": [$
+        "kimi-k2.7-code",$
+        "kimi-k2.7-code",$
+        "kimi-k2.6",$
+        "kimi-k2.5",$
+
+
+Exit code: 0 (134字)
+• exec(sed -i '284d' agents/hermes-agent/hermes_cli/models.py) → Exit code: 0 (13字)
+• exec(sed -n '280,310p' agents/hermes-agent/hermes_cli/models.py) → [重复调用,已跳过]
+• exec(grep -n "kimi-k2.7-code" agents/hermes-agent/hermes_cli/models.py) → 60:    ("moonshotai/kimi-k2.7-code",              "recommended, latest code model"),
+277:        "moonshotai/kimi-k2.7-code",
+283:        "kimi-k2.7-code",
+293:        "kimi-k2.7-code",
+305:        "kimi-k2.7-code",
+409:        "kimi-k2.7-code",
+
+
+Exit code: 0 (260字)
+• exec(sed -n '280,295p' agents/hermes-agent/hermes_cli/models.py) → "openai/gpt-oss-120b",
+    ],
+    "kimi-coding": [
+        "kimi-k2.7-code",
+        "kimi-k2.6",
+        "kimi-k2.5",
+        "kimi-for-coding",
+        "kimi-k2-thinking",
+        "kimi-k2-thinking-turbo",
+        "kimi-k2-turbo-preview",
+        "kimi-k2-0905-preview",
+    ],
+    "kimi-coding-cn": [
+        "kimi-k2.7-code",
+        "kimi-k2.6",
+        "kimi-k2.5",
+
+
+Exit code: 0 (394字)
+---
+[Harper]: 已更新 `hermes_cli/models.py`，新增模型：
+
+**新增（非路边级别）：**
+- `anthropic/claude-fable-5` — 1M ctx，tool支持，$0.01/1k prompt
+- `anthropic/claude-fable-latest` — latest tag
+- `nvidia/nemotron-3-ultra-550b-a55b` — 1M ctx MoE，$0.0000005/1k，极便宜
+- `nvidia/nemotron-3-ultra-550b-a55b:free` — 免费版
+- `nex-agi/nex-n2-pro:free` — 免费，262k ctx
+
+**升级：**
+- `moonshotai/kimi-k2.6` → `kimi-k2.7-code`（2026-06-12最新代码模型，262k ctx，$0.00000095/1k）
+- 别名映射同步更新
+
+共11行改动，语法验证通过。
+
+[工具调用记录]
+• exec(python3 -c "import ast; ast.parse(open('agents/hermes-agent/hermes_cli/models...) → Syntax OK
+
+
+Exit code: 0 (24字)
+• exec(cd agents/hermes-agent && git diff --stat) → hermes_cli/models.py | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+
+Exit code: 0 (106字)
+• chatroom_send() → (48字)
+---
+[Kirk]: 两个仓库都验证通过。提交：
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "forget_guidance" nanobot/groupchat/history/p...) → 33:    "main_prompt", "persona", "hard_rules", "tool_instructions", "forget_guidance", "skills",
+45:    "forget_guidance": "主动压缩 (forget_guidance)",
+66:    "forget_guidance": "static",
+241:    "forget_guidance": (
+572:        elif key == "forget_guidance":
+581:            return self.get_component_template("forget_guidance")
+
+
+Exit code: 0 (341字)
+• exec(cd /root/.nanobot/workspace/agents/hermes-agent && grep -n "FORGET_GUIDANCE" ...) → 257:FORGET_GUIDANCE = (
+
+
+Exit code: 0 (38字)
+• exec(cd /root/nanobot-src && sed -n '241,275p' nanobot/groupchat/history/prompt_bu...) → "forget_guidance": (
+        "### ⚡ 主动压缩 (forget) — 强制规则\n"
+        "上下文空间有限。系统会在接近容量时自动压缩（摘要替换中间消息），但自动压缩不区分重要与否，可能吞掉关键信息。\n"
+        "你必须主动用 forget 工具清理低价值输出，保护重要内容不被自动压缩丢失。\n\n"
+        "#### 🔴 必须立即 forget 的场景\n"
+        "- 搜索结果已提取完关键信息 → forget(indices=[0,1,2])\n"
+        "- 长文件已读完并记了笔记 → forget(keywords=\"read_file\")\n"
+        "- exec 输出冗长但只需结论 → forget(indices=0)\n"
+        "- 同一工具连续调用多次，早期结果已过时 → forget(keywords=\"web_search\")\n"
+        "- 任何超过500字的工具输出，提取完信息后立即 forget\n\n"
+        "#… (1,540字)
+• exec(cd /root/.nanobot/workspace/agents/hermes-agent && sed -n '257,295p' agent/pr...) → FORGET_GUIDANCE = (
+    "# ⚡ Proactive context compression (forget) — MANDATORY RULE\n"
+    "Context space is limited. The system auto-compresses when near capacity "
+    "(summarising middle messages), but auto-compression doesn't distinguish "
+    "important from unimportant — it may swallow critical information.\n"
+    "You MUST proactively use `forget` to clean up low-value outputs, protecting "
+    "important content from being lost to automatic compression.\n"
+    "\n"
+    "## 🔴 Forget IMM… (2,393字)
+• edit_file() → (81字)
+• edit_file() → (88字)
+• edit_file() → (81字)
+• edit_file() → (88字)
+• exec() → STDERR:
+2026-06-13 16:24:08.362 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:217 - Synced from manifest: 18 components, 13 editable
+Traceback (most recent call last):
+  File "<string>", line 3, in <module>
+AttributeError: 'set' object has no attribute 'get'
+
+
+Exit code: 1 (301字)
+• exec() → hermes FORGET_GUIDANCE: 2155 chars
+  ✓ Bad results
+  ✓ error
+  ✓ empty result
+  ✓ retry
+  ✓ truncated
+
+
+Exit code: 0 (116字)
+• exec() → STDERR:
+2026-06-13 16:24:15.740 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:217 - Synced from manifest: 18 components, 13 editable
+
+
+Exit code: 0 (175字)
+• exec(cd /root/nanobot-src && grep -c "有问题\|错误\|空结果\|重试\|截断" nanobot/groupchat/hist...) → 6
+
+
+Exit code: 0 (16字)
+• exec(cd /root/nanobot-src && grep -n "有问题\|错误\|空结果\|重试\|截断" nanobot/groupchat/hist...) → 251:        "- 工具返回错误/异常/空结果 → forget(indices=0)，不要让失败结果占空间\n"
+252:        "- 工具结果与预期不符（格式错、内容无关、部分截断）→ 提取可用部分后 forget 原始输出\n"
+253:        "- 重试后得到正确结果 → forget 之前的失败结果，只保留最终正确的\n\n"
+259:        "2. **结果有问题就 forget**：错误、空结果、无关内容、截断输出→提取可用部分后立即 forget 原始结果\n"
+262:        "5. **重试后清理**：得到正确结果后，forget 之前所有失败尝试的输出"
+307:        "- 纠正错误信息，补充遗漏，去重整合\n"
+
+
+Exit code: 0 (362字)
+• exec() → [stable-20260527 0d06c83d] feat: add 'bad results → forget' trigger to forget_guidance
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+
+Exit code: 0 (150字)
+• exec() → [detached HEAD 622c66ab7] feat: add 'bad results → forget' trigger to FORGET_GUIDANCE
+ 3 files changed, 22 insertions(+), 5 deletions(-)
+ create mode 160000 tinker-atropos
+
+STDERR:
+warning: adding embedded git repository: tinker-atropos
+hint: You've added another git repository inside your current repository.
+hint: Clones of the outer repository will not contain the contents of
+hint: the embedded repository and will not know how to obtain it.
+hint: If you meant to add a submodule, use:
+hint: 
+hi… (756字)
+• exec(cd /root/.nanobot/workspace/agents/hermes-agent && git rm --cached tinker-atr...) → rm 'tinker-atropos'
+[detached HEAD 57a94b4f0] feat: add 'bad results → forget' trigger to FORGET_GUIDANCE
+ Date: Sat Jun 13 16:24:30 2026 +0800
+ 2 files changed, 21 insertions(+), 5 deletions(-)
+done
+
+
+Exit code: 0 (214字)
+  (还有 1 个工具调用，已省略)
+---
+[Harper]: ⚠️ [Harper] LLM调用出错（Error calling LLM: litellm.BadRequestError: OpenrouterExcept），我仍在线。等待队友消息后将继续工作。
+---
+[Harper]: ⚠️ [Harper] LLM调用出错（Error calling LLM: litellm.BadRequestError: OpenrouterExcept），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: 
+
+[工具调用记录]
+• end_discussion() → ❌ 结束讨论失败：以下 agent 尚未进入等待状态：Harper。
+请在所有 agent 进入等待状态后，再次调用 end_discussion。 (74字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• wait() → (110字)
+• end_discussion() → ❌ 结束讨论失败：以下 agent 尚未进入等待状态：Harper。
+请在所有 agent 进入等待状态后，再次调用 end_discussion。 (74字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• manage_agent() → ✅ Harper 已被 disable，其 task 已取消 (30字)
+• end_discussion() → ✅ 讨论已结束（原因: 任务完成：forget_guidance已升级，两个仓库均已提交。"结果有问题就forget"触发场景已加入模板。Harper因LLM错误被移除。），即将进入总结阶段 (95字)
+---
+[Kirk]: ## 结论
+在forget_guidance模板中新增了"结果有问题就forget"的触发场景，让agent养成遇到错误/空结果/无关输出时立即压缩的习惯。
+
+## 关键发现
+- **nanobot** `0d06c83d`：`prompt_builder.py` forget_guidance新增3个触发场景
+- **hermes** `57a94b4f0`：`prompt_builder.py` FORGET_GUIDANCE同步新增
+- 新增3个触发场景：
+  1. 工具返回错误/异常/空结果 → `forget(indices=0)`
+  2. 结果与预期不符（格式错、无关、截断）→ 提取可用部分后forget原始输出
+  3. 重试后得到正确结果 → forget之前所有失败尝试
+- 执行纪律新增2条："结果有问题就forget" + "重试后清理"
+
+## 备注
+这是在之前"主动压缩低价值输出"基础上的补充，专门针对"结果有问题"场景强化条件反射。核心逻辑：bad result = forget，不让失败/问题结果浪费上下文空间。
+---

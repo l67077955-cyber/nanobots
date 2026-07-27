@@ -1,0 +1,123 @@
+[用户]: 启动修复
+---
+[Harper]: 根据前面分析，Bug 位置明确了。让我精确定位待修改行。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 714|                             )
+715|                             content = _r.content or ""
+716|                         except Exception:
+717|                             pass
+718|                     break
+719|                 # Respect /stop — exit immediately if engine is no longer running
+720|                 if not engine._running:
+721|                     logger.info("Broadcast: {} exiting — engine stopped", name)
+722|                     break
+723|                 cycle += 1
+724|                 # Re-read model from registry each cycle so mid-round changes take effect
+725|                 _live_cfg = engine.registry.get(name, agent_cfg)
+726|                 model = _live_cfg.get("model", model)
+727| 
+728|                 # ── Determine tool definitions for this cycle ──
+729|    … (3,254字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 825|                         )
+826|                         err_short = f"LLM 超时 ({_base_timeout}s)"
+827| 
+828|                         # ── Clean retry on first timeout ──
+829|                         # Re-use the same messages context (no injection) so history
+830|                         # stays clean. Run one short no-tool call to get at least a
+831|                         # brief output rather than abandoning the turn entirely.
+832|                         if _timeout_recovery_count == 0:
+833|                             _timeout_recovery_count += 1
+834|                             await tracker.set_state(name, "thinking", detail="retry...")
+835|                             await engine._send(f"⏰ {name} 超时，重试中...")
+836|                             logger.warning(
+837|                … (5,919字)
+---
+[Kirk]: ## 结论
+
+**已修复 `broadcast.py` 中 synthesis 重试机制被 `engine._running=False` 提前掐断的 bug。** 自 synthesis 验证上线以来，重试从未成功触发过。
+
+## 关键发现
+
+- **根因**：`end_discussion.execute()` 在 `chatroom_tools.py` L1125 设置 `engine._running = False`，但 synthesis 验证（长度不足/质量不达标）注入警告后 `continue` 回到循环顶部，被 L720 的 `not engine._running` 直接 `break`，LLM 永远看不到警告
+- **修复内容**（`broadcast.py`，3处改动）：
+  1. L518：新增 `_synthesis_retries = 0` 计数器
+  2. L1154-1162（长度不足路径）：`continue` 前恢复 `engine._running = True`，最多重试 3 次
+  3. L1186-1191（quality_check 失败路径）：同上
+- **语法验证**：`ast.parse` 通过 ✅
+
+## 备注
+
+- 3 次重试上限防止无限循环；耗尽后 `break` 退出，用户至少能看到最后一次尝试的输出
+- `comm_count=2`（数据汇聚不足）是独立问题，本次未修复，建议后续在 worker prompt 中强化"搜索结果必须 chatroom_send 给 Leader"的约束
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1140|                 # If leader called end_discussion this cycle, validate synthesis length & quality.
+1141|                 if is_leader and _leader_ended_discussion:
+1142|                     stripped = content.strip() if content else ""
+1143|                     if len(stripped) < _MIN_SYNTHESIS_LEN:
+1144|                         logger.warning(
+1145|                         "Broadcast: leader {} synthesis too short ({} chars < {}), forcing retry",
+1146|                         name, len(stripped), _MIN_SYNTHESIS_LEN,
+1147|                         )
+1148|                         messages.append({
+1149|                         "role": "system",
+1150|                         "content": get_system_warning("leader_end_without_text", name=name),
+1151|                         })
+1152|      … (3,272字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 715|                             content = _r.content or ""
+716|                         except Exception:
+717|                             pass
+718|                     break
+719|                 # Respect /stop — exit immediately if engine is no longer running
+720|                 if not engine._running:
+721|                     logger.info("Broadcast: {} exiting — engine stopped", name)
+722|                     break
+723|                 cycle += 1
+724|                 # Re-read model from registry each cycle so mid-round changes take effect
+
+(Showing lines 715-724 of 1579. Use offset=725 to continue.) (612字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 515| 
+516|         is_leader = (name == leader_name)
+517|         _leader_ended_discussion = False
+518|         # Load from override system (editable via /prompt), fallback to default
+519|         # Removed stale prompt_overrides.json lookup; .md files are the source of truth.
+520| 
+521|         if is_leader:
+522|             # ── Leader prompt: active orchestrator ──
+523|             agent_caps = []
+524|             for a in non_leader_agents:
+
+(Showing lines 515-524 of 1579. Use offset=525 to continue.) (510字)
+• edit_file() → (78字)
+• edit_file() → (78字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1160|                         # hasn't produced valid output yet.
+1161|                         engine._running = True
+1162|                         continue
+1163|                     # Step 2 — content quality guard (catches fluff like "问题已解答，无需补充")
+1164|                     quality_ok, quality_reason = synthesis_quality_check(stripped, tools_used=result.tools_used)
+1165|                     if not quality_ok:
+1166|                         logger.warning(
+1167|                         "Broadcast: leader {} synthesis quality check failed ({})",
+1168|                         name, quality_reason,
+1169|                         )
+1170|                         # Pick the most specific warning template
+1171|                         if "记忆" in quality_reason or "memory" in quality_reason:
+1172| … (1,900字)
+• edit_file() → (78字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1140|                 
+1141|                 # If leader called end_discussion this cycle, validate synthesis length & quality.
+1142|                 if is_leader and _leader_ended_discussion:
+1143|                     stripped = content.strip() if content else ""
+1144|                     if len(stripped) < _MIN_SYNTHESIS_LEN:
+1145|                         logger.warning(
+1146|                         "Broadcast: leader {} synthesis too short ({} chars < {}), forcing retry",
+1147|                         name, len(stripped), _MIN_SYNTHESIS_LEN,
+1148|                         )
+1149|                         messages.append({
+1150|                         "role": "system",
+1151|                         "content": get_system_warning("leader_end_without_text", name=name),
+1152|                … (4,012字)
+• exec(cd /root/nanobot-src && python3 -c "import ast; ast.parse(open('nanobot/group...) → (26字)
+  (还有 2 个工具调用，已省略)
+---

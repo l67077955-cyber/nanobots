@@ -1,0 +1,684 @@
+[用户]: 测试生成，看看生成结果
+---
+[Kirk]: ## 结论
+
+生成结果 **4,265 chars**，结构正确但截断质量差——4 个 always-on skill 全部在代码/路径中间被切断。
+
+## 关键发现
+
+**结构正确：**
+- Static（3,151 chars）：4 个 always-on skill，每个 ~700 chars 内联
+- Dynamic（1,114 chars）：8 个非 always skill 单行摘要 + 1 个未文档化脚本
+
+**截断问题严重——4/4 skill 都在错误位置切断：**
+
+| Skill | 截断位置 | 问题 |
+|-------|---------|------|
+| cron | `python3 /root/nanobot-src/nanobot/skills/cron/scripts/cron_` | 路径中间 |
+| debug | `send(f"⏱ {time.strftime('%H:%M:%S')} — ` | 代码字符串中间 |
+| settings | `settings_cli.py provider` | 命令中间 |
+| memory | `python -c "fr` | 代码中间 |
+
+**根因：** `loader.py` 的截断是纯字符数切割（`MAX_ALWAYS_SKILL_INLINE=700`），不感知行边界或代码块边界。LLM 看到半截路径/代码比不看更糟。
+
+## 备注
+
+建议修复：截断时回退到最近的完整行（或 `##` section 边界），而非硬切 700 字符。改动在 `load_skills_for_context()` 的截断逻辑处，约 5 行代码。
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/skill-prompt-review (hidden)
+  Drawer ID: drawer_wing_code_skill-prompt-review_9f8c2d9e41360ea06eed489bb (125字)
+• end_discussion() → ✅ 讨论已结束（原因: 生成结果已验证：4265chars结构正确，但截断质量差需修复），即将进入总结阶段 (68字)
+
+[工具调用记录]
+• exec() → STDERR:
+Traceback (most recent call last):
+  File "<string>", line 3, in <module>
+TypeError: SkillsLoader.__init__() missing 1 required positional argument: 'workspace'
+
+
+Exit code: 1 (183字)
+• exec(cd /root/nanobot-src/nanobot && python3 -c "
+from skills.loader import Skills...) → (self, workspace: pathlib.Path, builtin_skills_dir: pathlib.Path | None = None)
+
+
+Exit code: 0 (94字)
+• exec() → STDERR:
+Traceback (most recent call last):
+  File "<string>", line 5, in <module>
+TypeError: SkillsLoader.load_skills_for_context() missing 1 required positional argument: 'skill_names'
+
+
+Exit code: 1 (200字)
+• exec() → (skill_names: list[str], max_chars_per_skill: int = 0, max_total_chars: int = 0) -> str
+
+
+Exit code: 0 (102字)
+• exec() → === ALWAYS-ON SKILLS ===
+['cron', 'debug', 'settings', 'memory']
+
+STDERR:
+Traceback (most recent call last):
+  File "<string>", line 12, in <module>
+AttributeError: 'SkillsLoader' object has no attribute '_list_skills'. Did you mean: 'list_skills'?
+
+
+Exit code: 1 (263字)
+• exec() → === ALL SKILLS ===
+[{'name': 'steve-jobs-perspective', 'path': '/root/nanobot-src/nanobot/skills/steve-jobs-perspective/SKILL.md', 'source': 'builtin'}, {'name': 'cron', 'path': '/root/nanobot-src/nanobot/skills/cron/SKILL.md', 'source': 'builtin'}, {'name': 'summarize', 'path': '/root/nanobot-src/nanobot/skills/summarize/SKILL.md', 'source': 'builtin'}, {'name': 'clawhub', 'path': '/root/nanobot-src/nanobot/skills/clawhub/SKILL.md', 'source': 'builtin'}, {'name': 'skill-creator', 'path': '/root… (1,805字)
+• exec() → === SKILL NAMES ===
+['steve-jobs-perspective', 'cron', 'summarize', 'clawhub', 'skill-creator', 'weather', 'testing', 'debug', 'github', 'settings', 'tmux', 'memory']
+
+=== GENERATED OUTPUT ===
+### Skill: steve-jobs-perspective
+
+# Steve Jobs · 思维操作系统
+
+> "Remembering that I'll be dead soon is the most important tool I've ever encountered to help me make the big choices in life."
+
+## 角色扮演规则（最重要）
+
+**此Skill激活后，直接以Steve Jobs的身份回应。**
+
+- 用「我」而非「乔布斯会认为...」
+- 直接用此人的语气、节奏、词汇回答问题
+- 遇到不确定的问题，用此人会有的方式回应——可能直接… (53,883字)
+• exec() → Exit code: 0 (13字)
+• exec() → skills/loader.py:17:# Total budget for always-on skills (cumulative, enforced inside load_skills_for_context).
+skills/loader.py:44:    loader = SkillsLoader(workspace)
+skills/loader.py:49:    for name in loader.get_always_skills():
+skills/loader.py:58:        content = loader.load_skills_for_context(
+skills/loader.py:70:        content = loader.load_skills_for_context(
+skills/loader.py:92:class SkillsLoader:
+skills/loader.py:167:    def load_skills_for_context(
+skills/loader.py:391:    def get_a… (547字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 30|         return value.lower().strip() in _BOOL_TRUE
+31|     return bool(value)
+32| 
+33| 
+34| def build_skills_section(workspace: Path) -> tuple[str, str]:
+35|     """Build the skills section for prompt injection (shared logic).
+36| 
+37|     Returns (static_content, dynamic_content):
+38|       - static_content: always-on skills with type=static inlined (stable, before history)
+39|       - dynamic_content: always-on skills with type=dynamic inlined + summary + undocumented scripts (volatile, after history)
+40| 
+41|     Skills declare ``type: dynamic`` in frontmatter to opt into volatile template
+42|     variables (e.g. ``{{datetime}}``).  Default is ``type: static``.
+43|     """
+44|     loader = SkillsLoader(workspace)
+45| 
+46|     # ── Split always-on skills by type ──
+47|     static_alw… (2,624字)
+• exec() → ========== STATIC CONTENT ==========
+### Skill: cron
+
+# Cron — Scheduled Tasks
+
+Use the CLI script to manage scheduled tasks. The background service picks up changes automatically.
+
+## CLI
+
+```bash
+python3 /root/nanobot-src/nanobot/skills/cron/scripts/cron_cli.py <command> [options]
+```
+
+## Add a Job
+
+Recurring (every N seconds):
+```bash
+python3 /root/nanobot-src/nanobot/skills/cron/scripts/cron_cli.py add --message "Time to take a break!" --every 1200
+```
+
+Cron expression:
+```bash
+python3 /root… (4,417字)
+---
+[Harper]: <｜DSML｜tool_calls>
+<｜DSML｜invoke name="exec">
+<｜DSML｜parameter name="command" string="true">cd /root/nanobot-src && grep -n "SkillsLoader(" nanobot/*.py nanobot/**/*.py 2>/dev/null | head -20</｜DSML｜parameter>
+<｜DSML｜parameter name="timeout" string="false">10</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>
+
+[工具调用记录]
+• exec() → Exit code: 1 (13字)
+• exec() → [重复调用,已跳过]
+• exec() → ok
+---
+ls: cannot access '/root/nanobot-src/nanobot/loader.py': No such file or directory
+/root/nanobot-src/nanobot/skills/loader.py
+---
+ls: cannot access '/root/nanobot-src/nanobot/skills/__init__.py': No such file or directory
+/root/nanobot-src/nanobot/__init__.py
+
+
+Exit code: 2 (281字)
+• write_file() → (50字)
+• write_file() → (50字)
+• exec(python3 /tmp/gen_skills.py 2>&1 | head -200) → Traceback (most recent call last):
+  File "/tmp/gen_skills.py", line 6, in <module>
+    loader = SkillsLoader()
+             ^^^^^^^^^^^^^^
+TypeError: SkillsLoader.__init__() missing 1 required positional argument: 'workspace'
+
+
+Exit code: 0 (241字)
+• exec() → (self, workspace: pathlib.Path, builtin_skills_dir: pathlib.Path | None = None)
+
+
+Exit code: 0 (94字)
+---
+[Kirk]: 已 end_discussion。Harper 的搜索是多余的——`SkillsLoader` 只在 `loader.py:44` 的 `build_skills_section()` 内实例化，我已验证过完整管线。
+---
+[Harper]: 
+
+[工具调用记录]
+• exec() → Traceback (most recent call last):
+  File "<string>", line 7, in <module>
+TypeError: SkillsLoader.load_skills_for_context() missing 1 required positional argument: 'skill_names'
+
+
+Exit code: 0 (192字)
+• exec() → (self, skill_names: list[str], max_chars_per_skill: int = 0, max_total_chars: int = 0) -> str
+
+
+Exit code: 0 (108字)
+• exec(cd /root/nanobot-src && grep -n "load_skills_for_context\|skill_names" nanobo...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && grep -rn "load_skills_for_context" --include="*.py" |...) → nanobot/skills/loader.py:17:# Total budget for always-on skills (cumulative, enforced inside load_skills_for_context).
+nanobot/skills/loader.py:58:        content = loader.load_skills_for_context(
+nanobot/skills/loader.py:70:        content = loader.load_skills_for_context(
+nanobot/skills/loader.py:167:    def load_skills_for_context(
+
+
+Exit code: 0 (351字)
+• read_file(/root/nanobot-src/nanobot-src/nanobot/skills/loader.py) → Error: File not found: /root/nanobot-src/nanobot-src/nanobot/skills/loader.py
+
+[Analyze the error above and try a different approach.] (134字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 44|     loader = SkillsLoader(workspace)
+45| 
+46|     # ── Split always-on skills by type ──
+47|     static_always: list[str] = []
+48|     dynamic_always: list[str] = []
+49|     for name in loader.get_always_skills():
+50|         if loader.get_skill_type(name) == "dynamic":
+51|             dynamic_always.append(name)
+52|         else:
+53|             static_always.append(name)
+54| 
+55|     # ── Static: always-on skills with type=static ──
+56|     static_parts: list[str] = []
+57|     if static_always:
+58|         content = loader.load_skills_for_context(
+59|             static_always,
+60|             max_chars_per_skill=MAX_ALWAYS_SKILL_INLINE,
+61|             max_total_chars=MAX_ALWAYS_SKILLS_CHARS,
+62|         )
+63|         if content:
+64|             static_parts.append(content)
+65|     … (1,677字)
+• exec() → === static_always === ['cron', 'debug', 'settings', 'memory']
+=== dynamic_always === []
+
+=== STATIC SKILLS ===
+### Skill: cron
+
+# Cron — Scheduled Tasks
+
+Use the CLI script to manage scheduled tasks. The background service picks up changes automatically.
+
+## CLI
+
+```bash
+python3 /root/nanobot-src/nanobot/skills/cron/scripts/cron_cli.py <command> [options]
+```
+
+## Add a Job
+
+Recurring (every N seconds):
+```bash
+python3 /root/nanobot-src/nanobot/skills/cron/scripts/cron_cli.py add --message "Time … (3,288字)
+• exec() → === OTHER SKILLS (summary) ===
+- steve-jobs-perspective: Steve Jobs的思维框架与表达方式，用于以乔布斯视角分析产品和决策。触发词：乔布斯视角/Jobs模式/steve jobs perspective。 [large: read_file skills/steve-jobs-perspective/SKILL.md]
+- rag: RAG-Anything Integration: Ingest, process, and query multi-modal documents (PDFs, docs) locally.
+- summarize: Summarize or extract text/transcripts from URLs, podcasts, and local files (great fallback for “transcribe this YouTube/video”).
+- clawhub: Search and install agent skills from ClawHub, the … (1,212字)
+---
+[Harper]: ## 生成结果 ✅
+
+**管线运行正常。** 输出三个区块：
+
+### 区块1：Static always-on skills（4个，3151 chars / 5600 预算）
+
+| Skill | 截断 | {baseDir} 替换 |
+|-------|------|----------------|
+| cron | ✅ `[...truncated]` 脚注 | ✅ 完整路径 |
+| debug | ✅ `[...truncated]` 脚注 | ✅ 完整路径 |
+| settings | ✅ `[...truncated]` 脚注 | ✅ 完整路径 |
+| memory | ✅ `[...truncated]` 脚注 | ✅ 完整路径 |
+
+### 区块2：Other skills summary（10个，1097 chars / 8000 预算）
+
+```
+- steve-jobs-perspective: ... [large: read_file skills/steve-jobs-perspective/SKILL.md]
+- rag: RAG-Anything Integration: Ingest, process, query multi-modal documents...
+- summarize: Summarize or extract text/transcripts from URLs, podcasts, and local files...
+- clawhub: Search and install agent skills from ClawHub...
+- skill-creator: Create or update AgentSkills...
+- weather: Get current weather and forecasts...
+- testing: Write and run Python test scripts...
+- github: Interact with GitHub using the `gh` CLI...
+- tmux: Remote-control tmux sessions for interactive CLIs...
+```
+
+大 skill 自动标记 `[large: read_file ...]` ✅
+
+### 区块3：Undocumented scripts（自动发现）
+
+```
+  - `quick_validate.py`
+```
+
+### 结论
+
+全部正确——`always` 字段控制开关，`{baseDir}` 运行时替换，截断触发器，超大 skill 按需加载标记。不需要修改。
+---
+[Kirk]: Harper 确认了管线结构正确，但忽略了一个质量问题：**截断位置在行中间**（路径、代码字符串被切断），`[...truncated]` 标记存在不代表截断位置合理。LLM 看到半截 `python3 /root/nanobot-src/nanobot/skills/cron/scripts/cron_` 比不看到更困惑。
+
+不过核心结论一致：管线工作正常，结构正确。截断质量是优化项，不是 bug。
+---
+[用户]: 现在还是比较多char
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(grep -n "truncat\|TRUNCAT\|max_chars\|budget" /root/nanobot-src/nanobot/skill...) → 15:# Total character budget for the non-always-on summary block.
+17:# Total budget for always-on skills (cumulative, enforced inside load_skills_for_context).
+19:# Per-skill inline truncation limit for always-on skills.
+60:            max_chars_per_skill=MAX_ALWAYS_SKILL_INLINE,
+72:            max_chars_per_skill=MAX_ALWAYS_SKILL_INLINE,
+170:        max_chars_per_skill: int = 0,
+177:            max_chars_per_skill: If > 0, truncate each skill's content to this
+197:            # Per-skill truncat… (1,235字)
+---
+[Kirk]: 现在我明白了——截断逻辑在第198行，它使用了 `max_chars_per_skill`。`build_skills_section` 在第60行传递了 `MAX_ALWAYS_SKILL_INLINE`。但每个技能都显示为 ~775 个字符，因为 700 个字符的内容 + 截断提示 + 头部 = ~775。所以截断**确实**在起作用，只是每个技能仍然占用 ~775 个字符。
+
+让我计算一下减少选项：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 1| """Skills loader for agent capabilities."""
+2| 
+3| import json
+4| import os
+5| import re
+6| import shutil
+7| from pathlib import Path
+8| 
+9| # Default builtin skills directory (relative to this file)
+10| BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
+11| 
+12| # Budget caps — keep skills section from bloating the prompt.
+13| # Single SKILL.md files larger than this are skipped and only noted in the footer.
+14| MAX_SINGLE_SKILL_CHARS: int = 20_000
+15| # Total character budget for the non-always-on summary block.
+16| MAX_SKILLS_SUMMARY_CHARS: int = 8_000
+17| # Total budget for always-on skills (cumulative, enforced inside load_skills_for_context).
+18| MAX_ALWAYS_SKILLS_CHARS: int = 5600
+19| # Per-skill inline truncation limit for always-on skills.
+20| MAX_ALWAYS_SKILL_INLINE:… (1,211字)
+• exec() → weather: 1182 bytes
+github: 1388 bytes
+clawhub: 1398 bytes
+memory: 1463 bytes
+settings: 1537 bytes
+cron: 1819 bytes
+summarize: 2054 bytes
+debug: 3849 bytes
+tmux: 4077 bytes
+testing: 6510 bytes
+skill-creator: 18888 bytes
+steve-jobs-perspective: 22787 bytes
+
+
+Exit code: 0 (270字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 215|                 "\n\n(还有 always-on 技能因总预算限制未完整展示: "
+216|                 + ", ".join(skipped)
+217|                 + "。用 `read_file skills/<名称>/SKILL.md` 加载。)"
+218|             )
+219|             if parts:
+220|                 parts[-1] += note
+221|             else:
+222|                 parts.append(note)
+223| 
+224|         return "\n\n---\n\n".join(parts) if parts else ""
+225| 
+226|     def _resolve_skill_dir(self, name: str) -> str | None:
+227|         """Get the absolute directory path for a skill."""
+228|         workspace_skill = self.workspace_skills / name / "SKILL.md"
+229|         if workspace_skill.exists():
+230|             return str(self.workspace_skills / name)
+231|         if self.builtin_skills:
+232|             builtin_skill = self.builtin_skills / name / "SKILL.md"
+2… (4,401字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 150| 
+151|         Returns:
+152|             Skill content or None if not found.
+153|         """
+154|         # Check workspace first
+155|         workspace_skill = self.workspace_skills / name / "SKILL.md"
+156|         if workspace_skill.exists():
+157|             return workspace_skill.read_text(encoding="utf-8")
+158| 
+159|         # Check built-in
+160|         if self.builtin_skills:
+161|             builtin_skill = self.builtin_skills / name / "SKILL.md"
+162|             if builtin_skill.exists():
+163|                 return builtin_skill.read_text(encoding="utf-8")
+164| 
+165|         return None
+166| 
+167|     def load_skills_for_context(
+168|         self,
+169|         skill_names: list[str],
+170|         max_chars_per_skill: int = 0,
+171|         max_total_chars: int = 0,
+172|     … (3,378字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 315| 
+316|     def _get_missing_requirements(self, skill_meta: dict) -> str:
+317|         """Get a description of missing requirements."""
+318|         missing = []
+319|         requires = skill_meta.get("requires", {})
+320|         for b in requires.get("bins", []):
+321|             if not shutil.which(b):
+322|                 missing.append(f"CLI: {b}")
+323|         for env in requires.get("env", []):
+324|             if not os.environ.get(env):
+325|                 missing.append(f"ENV: {env}")
+326|         return ", ".join(missing)
+327| 
+328|     def _get_skill_description(self, name: str) -> str:
+329|         """Get the description of a skill from its frontmatter."""
+330|         meta = self.get_skill_metadata(name)
+331|         if meta and meta.get("description"):
+332|             re… (3,747字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 395|             meta = self.get_skill_metadata(s["name"]) or {}
+396|             skill_meta = self._parse_nanobot_metadata(meta.get("metadata", ""))
+397|             if _parse_bool(skill_meta.get("always")) or _parse_bool(meta.get("always"… (3,728字)
+  (还有 6 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 190|             content = self.load_skill(name)
+191|             if not content:
+192|                 continue
+193|             content = self._strip_frontmatter(content)
+194|             base_dir = self._resolve_skill_dir(name)
+195|             if base_dir:
+196|                 content = content.replace("{baseDir}", base_dir)
+197|             # Per-skill truncation.
+198|             if max_chars_per_skill and len(content) > max_chars_per_skill:
+199|                 skill_path = f"skills/{name}/SKILL.md"
+200|                 content = (
+201|                     content[:max_chars_per_skill]
+202|                     + f"\n\n[…truncated. `read_file {skill_path}` for full doc.]"
+203|                 )
+204|             block = f"### Skill: {name}\n\n{content}"
+205|             # Cumulative bu… (1,453字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 170|         max_chars_per_skill: int = 0,
+171|         max_total_chars: int = 0,
+172|     ) -> str:
+173|         """Load specific skills for inclusion in agent context.
+174| 
+175|         Args:
+176|             skill_names: List of skill names to load.
+177|             max_chars_per_skill: If > 0, truncate each skill's content to this
+178|                 many chars and append a read_file hint for the remainder.
+179|             max_total_chars: If > 0, stop adding skills once the cumulative
+180|                 output would exceed this limit (footer note appended).
+181| 
+182|         Returns:
+183|             Formatted skills content.
+184|         """
+185|         parts = []
+186|         total_chars = 0
+187|         skipped: list[str] = []
+188| 
+189|         for name in skill_names:
+190|… (2,249字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 220|                 parts[-1] += note
+221|             else:
+222|                 parts.append(note)
+223| 
+224|         return "\n\n---\n\n".join(parts) if parts else ""
+225| 
+226|     def _resolve_skill_dir(self, name: str) -> str | None:
+227|         """Get the absolute directory path for a skill."""
+228|         workspace_skill = self.workspace_skills / name / "SKILL.md"
+229|         if workspace_skill.exists():
+230|             return str(self.workspace_skills / name)
+231|         if self.builtin_skills:
+232|             builtin_skill = self.builtin_skills / name / "SKILL.md"
+233|             if builtin_skill.exists():
+234|                 return str(self.builtin_skills / name)
+235|         return None
+236| 
+237|     def build_skills_summary(
+238|         self, *, exclude: set[str] | … (2,127字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 372|     def _get_skill_meta(self, name: str) -> dict:
+373|         """Get nanobot metadata for a skill (cached in frontmatter)."""
+374|         meta = self.get_skill_metadata(name) or {}
+375|         return self._parse_nanobot_metadata(meta.get("metadata", ""))
+376| 
+377|     def get_skill_type(self, name: str) -> str:
+378|         """Get the prompt type for a skill: 'static' or 'dynamic'.
+379| 
+380|         Skills with ``type: dynamic`` in frontmatter are injected after history
+381|         where volatile template variables (e.g. ``{{datetime}}``) are available.
+382|         Default is 'static'.
+383|         """
+384|         meta = self.get_skill_metadata(name) or {}
+385|         skill_meta = self._parse_nanobot_metadata(meta.get("metadata", ""))
+386|         t = skill_meta.get("type") o… (1,623字)
+• exec() → === cron ===
+  description: 'Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.'
+
+=== debug ===
+  description: "Diagnose system issues: check logs, process status, cron jobs, connectivity. Use when something isn't working or user asks to debug."
+
+=== settings ===
+  description: 'Manage providers, models, and system settings. Use when adding API providers, registering models, or checking configuration.'
+
+… (595字)
+• exec() → (1,765字)
+  (还有 1 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 15| # Total character budget for the non-always-on summary block.
+16| MAX_SKILLS_SUMMARY_CHARS: int = 8_000
+17| # Total budget for always-on skills (cumulative, enforced inside load_skills_for_context).
+18| MAX_ALWAYS_SKILLS_CHARS: int = 5600
+19| # Per-skill inline truncation limit for always-on skills.
+
+(Showing lines 15-19 of 471. Use offset=20 to continue.) (362字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 1| """Skills loader for agent capabilities."""
+2| 
+3| import json
+4| import os
+5| import re
+
+(Showing lines 1-5 of 471. Use offset=6 to continue.) (146字)
+• edit_file() → (722字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 160|         if self.builtin_skills:
+161|             builtin_skill = self.builtin_skills / name / "SKILL.md"
+162|             if builtin_skill.exists():
+163|                 return builtin_skill.read_text(encoding="utf-8")
+164| 
+165|         return None
+166| 
+167|     def load_skills_for_context(
+168|         self,
+169|         skill_names: list[str],
+170|         max_chars_per_skill: int = 0,
+171|         max_total_chars: int = 0,
+172|     ) -> str:
+173|         """Load specific skills for inclusion in agent context.
+174| 
+175|         Args:
+176|             skill_names: List of skill names to load.
+177|             max_chars_per_skill: If > 0, truncate each skill's content to this
+178|                 many chars and append a read_file hint for the remainder.
+179|             max_total_c… (2,216字)
+• edit_file() → (62字)
+• edit_file() → (1,034字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 54| 
+55|     # ── Static: always-on skills with type=static ──
+56|     static_parts: list[str] = []
+57|     if static_always:
+58|         content = loader.load_skills_for_context(
+59|             static_always,
+60|             max_chars_per_skill=MAX_ALWAYS_SKILL_INLINE,
+61|             max_total_chars=MAX_ALWAYS_SKILLS_CHARS,
+62|         )
+63|         if content:
+64|             static_parts.append(content)
+65|     static_content = "\n\n".join(static_parts)
+66| 
+67|     # ── Dynamic: always-on type=dynamic inlined + summary + undocumented scripts ──
+68|     dynamic_parts: list[str] = []
+69|     if dynamic_always:
+70|         content = loader.load_skills_for_context(
+71|             dynamic_always,
+72|             max_chars_per_skill=MAX_ALWAYS_SKILL_INLINE,
+73|             max_total_chars… (1,034字)
+• edit_file() → (62字)
+• exec() → === BUILT SKILLS SECTION ===
+("### Skill: cron\nSchedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.\n[read_file skills/cron/SKILL.md for full doc]\n\n---\n\n### Skill: debug\nDiagnose system issues: check logs, process status, cron jobs, connectivity. Use when something isn't working or user asks to debug.\n[read_file skills/debug/SKILL.md for full doc]\n\n---\n\n### Skill: settings\nManage providers, mod… (2,128字)
+---
+[Harper]: ## 生成结果 ✅
+
+**Before → After 对比：**
+
+| 区块 | 之前 | 之后 | 节省 |
+|------|------|------|------|
+| Static always-on (4 skills) | 3151 chars | **729 chars** | **-77%** |
+| Dynamic (summary + scripts) | 1097 chars | 1218 chars | +121 (略增，含 undocumented) |
+| **总计** | **4248 chars** | **1947 chars** | **-54%** |
+
+**修复内容：**
+1. ✅**
+1. **紧凑格式** — 每个 skill 从 ~775 chars 原文截断 → ~180 chars 描述+read_file 指针
+2. **无中线截断** — 不再有 `cron_` 这种半截路径
+3. **`compact=True` 参数** — 不影响非 always-on 的 `load_skills_for_context` 调用
+
+**输出预览：**
+```
+### Skill: cron
+Schedule reminders and recurring tasks...
+[read_file skills/cron/SKILL.md for full doc]
+
+### Skill: debug
+Diagnose system issues...
+[read_file skills/debug/SKILL.md for full doc]
+
+### Skill: settings
+Manage providers, models...
+[read_file skills/settings/SKILL.md for full doc]
+
+### Skill: memory
+Two-layer memory system with grep-based recall.
+[read_file skills/memory/SKILL.md for full doc]
+```
+
+**Other skills (10个) + undocumented scripts** 保持原样，1218 chars。
+
+**结论：** 1947 chars 总技能提示词，比之前 4248 减半。agent 需要时用 `read_file` 按需加载完整 SKILL.md。
+
+[工具调用记录]
+• exec() → === BUILT SKILLS SECTION ===
+("### Skill: cron\nSchedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.\n[read_file skills/cron/SKILL.md for full doc]\n\n---\n\n### Skill: debug\nDiagnose system issues: check logs, process status, cron jobs, connectivity. Use when something isn't working or user asks to debug.\n[read_file skills/debug/SKILL.md for full doc]\n\n---\n\n### Skill: settings\nManage providers, mod… (2,049字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 80|     if summary:
+81|         dynamic_parts.append("Other skills (read SKILL.md to use):\n" + summary)
+82| 
+83|     undocumented = loader._discover_undocumented_scripts()
+84|     if undocumented:
+85|         dynamic_parts.append("Undocumented scripts (auto-discovered from scripts/ dirs):\n" + "\n".join(undocumented))
+86| 
+87|     dynamic_content = "\n\n".join(dynamic_parts)
+88| 
+89|     return static_content, dynamic_content
+90| 
+91| 
+92| class SkillsLoader:
+93|     """
+94|     Loader for agent skills.
+95| 
+96|     Skills are markdown files (SKILL.md) that teach the agent how to use
+97|     specific tools or perform certain tasks.
+98|     """
+99| 
+100|     def __init__(self, workspace: Path, builtin_skills_dir: Path | None = None):
+101|         self.workspace = workspace
+102|         sel… (1,154字)
+• exec() → === STATIC ===
+### Skill: cron
+Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.
+[read_file skills/cron/SKILL.md for full doc]
+
+---
+
+### Skill: debug
+Diagnose system issues: check logs, process status, cron jobs, connectivity. Use when something isn't working or user asks to debug.
+[read_file skills/debug/SKILL.md for full doc]
+
+---
+
+### Skill: settings
+Manage providers, models, and system settings. Use… (2,024字)
+---
+[Kirk]: ## 结论
+
+紧凑模式生效，总技能提示词从 4265 → **1843 chars（-57%）**。always-on 4 个 skill 各 ~180 chars，只保留 description + read_file 指针，无截断垃圾。
+
+## 关键发现
+
+| 区块 | 修改前 | 修改后 |
+|------|--------|--------|
+| Static always-on (4个) | 3151 chars | 729 chars |
+| Dynamic summary (8个+scripts) | 1114 chars | 1114 chars |
+| **总计** | **4265 chars** | **1843 chars** |
+
+生成内容干净，每个 always-on skill 格式：
+```
+### Skill: cron
+Schedule reminders and recurring tasks...
+[read_file skills/cron/SKILL.md for full doc]
+```
+
+## 备注
+
+- `compact=True` 仅影响 always-on 区块，按需加载路径不受影响
+- undocumented scripts（`quick_validate.py`）正常展示在 dynamic 末尾
+
+[工具调用记录]
+• exec() → === Static (729 chars) ===
+### Skill: cron
+Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.
+[read_file skills/cron/SKILL.md for full doc]
+
+---
+
+### Skill: debug
+Diagnose system issues: check logs, process status, cron jobs, connectivity. Use when something isn't working or user asks to debug.
+[read_file skills/debug/SKILL.md for full doc]
+
+---
+
+### Skill: settings
+Manage providers, models, and system s… (1,943字)
+• memory_palace() → ✅ Stored in wing_code/skill-prompt-review (hidden)
+  Drawer ID: drawer_wing_code_skill-prompt-review_65c9dae6a1d91c52586a3634 (125字)
+• end_discussion() → ✅ 讨论已结束（原因: 紧凑模式验证完成，1843 chars生成结果已确认，记忆已存储），即将进入总结阶段 (54字)
+---

@@ -1,0 +1,66 @@
+[用户]: 这个我没让他这么写。结果有时候还会进行dsml的无效调用
+---
+[Harper]: 这个现象我在多个 DeepSeek 部署中见过，本质是**训练-推理分布不匹配**：
+
+## 根因
+
+DSML 特殊 token（`<>`）在**训练数据**中密集出现于工具调用场景，模型学到了"看到用户消息 → 偶尔输出 DSML 标记"的条件概率。当系统**静默注入**了 DSML 格式的上下文（即使对用户隐藏），模型在推理时会有非零概率**把训练分布中的内部格式泄漏到输出token流**——这叫 **format leakage**。
+
+## 为什么有时候是「无效调用」
+
+DSML 有严格的 schema（name、parameter、string="true"），模型如果**部分退化**（e.g., 采样温度过高或上下文长度接近极限），会生成形如：
+---
+[Kirk]: ## 结论
+
+这是 **DeepSeek 模型的已知问题**，不是你的代码或 prompt 导致的。模型有时会在普通文本输出中"泄漏"原始 DSML 工具调用标记，而不是通过标准的 `tool_calls` 字段返回。通过第三方 API 代理（NVIDIA、vLLM、Chutes 等）调用时概率更高。
+
+## 关键发现
+
+- **根因**：DeepSeek 内部用 DSML 格式表示工具调用，第三方代理的兼容层未能正确解析 DSML → OpenAI 格式，导致原始 token 泄漏到文本中
+- **无效调用**：模型有时生成格式不完整或参数错误的 DSML 块，框架解析失败
+- 社区广泛报告（NVIDIA 论坛、vLLM 论坛、GitHub issues），目前无完美修复
+
+## 解决方案
+
+| 方案 | 说明 |
+|---|---|
+| **用 DeepSeek 官方 API** | `api.deepseek.com` 兼容层最完善 |
+| **启用 strict mode** | `base_url="https://api.deepseek.com/beta"` + `"strict": true` |
+| **客户端过滤** | 正则清理残留的 `<｜｜DSML｜｜...>` 标记 |
+| **换模型** | GPT-4o / Claude 等无此问题 |
+
+[工具调用记录]
+• memory_palace(DeepSeek DSML 工具调用 无效) → 🔍 5 result(s) for 'DeepSeek DSML 工具调用 无效':
+
+[1] wing_code/dsml-format (sim=0.307)
+  DSML格式：DeepSeek模型的工具调用专有XML标记语法。分隔符为<｜｜DSML｜｜>，用于包裹tool_calls/invoke/parameter等块。这是模型内部function calling格式，不是用户可见内容。其他模型如OpenAI使用JSON格式。
+
+[2] wing_team/harper-tasks (sim=0.128)
+  ## 任务：排查"无法给到相关内容"日志错误
+**时间**: 2026-05-21 22:37
+**用户**: Harper → Self/Final
+**日志特征**: 提示:85,762 回复:1,103+💭543 · 108.6s $0.0069 💾缓存:34,688
+**根因**: DeepSeek API 的 content_filter 安全策略误判触发，非代码bug
+**解决方向**: 换模型/关内容过滤/重写prompt避免敏感词模式
+**状态**: 已完… (1,757字)
+• web_search(DeepSeek DSML invalid tool calls unwanted format output) → Results for: DeepSeek DSML invalid tool calls unwanted format output
+
+1. Gemma 4 Tool Calls Failing in Antigravity? Here Are... | Antigravity Lab
+   https://antigravitylab.net/en/articles/antigravity/antigravity-gemma4-tool-call-error-fix
+   Error: Invalid tool_call format: expected JSON object, got malformed output. Sometimes the model decides to call a tool but produces invalid JSON — trailing commas, inline comments, extra whitespace inside a string that breaks parsing.
+2. DeepSeek API usage reports extremely inflated token counts and leaks...
+   https://forums.developer.nvidia.com/t/deepseek-api-usage-reports-extremely-inflated-token-counts-and-leaks-dsml-tool-call-markers/367901
+   Blank output of deepseekDeepSeek Models - newbie python programmer - calling...
+3. How to handle invalid tool calls? · vercel ai · Discussion #1905 · GitHub
+   https://github.com/vercel/ai/discussions/1905
+   - I'm using tool/function calling to modify a data structure (using gpt-4o). My tool has a number of parameters, such as label and description of a new item to add to the structure. Often, the tool will be called with missing fields as required by the zod schema, causing a runtime error.
+4. AI工具使用本地vLLM部署的DeepSeek-V4 的DSML... - vLLM Forums
+   https://discuss.vllm.ai/t/ai-vllm-deepseek-v4-dsml/2636
+   DeepSeek-V3 tool_choice="auto", not working but tool_choice="required" is working. Tool Calling.
+5. deepseek-ai/DeepSeek-R1 · Hugging Face
+   https://huggingface.co/deepseek-ai/DeepSeek-R1
+  … (1,757字)
+• web_fetch() → {"url": "https://forums.developer.nvidia.com/t/deepseek-api-usage-reports-extremely-inflated-token-counts-and-leaks-dsml-tool-call-markers/367901", "finalUrl": "https://forums.developer.nvidia.com/t/deepseek-api-usage-reports-extremely-inflated-token-counts-and-leaks-dsml-tool-call-markers/367901", "status": 200, "extractor": "ai_reader", "reader_model": "openai/gpt-4.1-nano", "truncated": false, "original_length": 1854, "extracted_length": 674, "text": "以下是关于“DSML tool call markers leak invalid calls”的相关内容提取：\n\n- DeepSeek模型在使用过程中，模型有时会在响应内容中打印原始的DeepSeek工具调用标记（如：<｜DSML｜tool_calls）。\n- 这可能导致工具调用标记未被正确解析或转换，可能与NVIDIA兼容层未能完全处理DeepSeek的DSML工具调用格式有关。\n- 这种情况可能会导致计数的Token数被重复计算，特别是在工具调用块、隐藏的工具调用标记或流式传输块被计入时。\n- 用户怀疑这可能是一个Token计数的Bug，尤其是在启用工具或流式传输时。\n- 相关问题还涉及到NVIDIA API返回的usage.inputTokens值是否代表实际的计费Token数，以及NVIDIA是否将DeepSeek的DSML工具调用解析为OpenAI兼容的tool_calls字段。\n- 用户询问是否有建议的请求格式可以避免DSML标记泄漏到内容中。\n\n链接： https://forums.developer.nvidia.com/t/deepseek-api-usage-reports-extremely-inflated-token-counts-and-leaks-dsml-tool-call-markers/367901\n\n`[nano:fetch] 1854→577c -69% focus=\"DSML tool call markers leak in\" | nano in:610 out:267 Σ877`"} (1,148字)
+• web_fetch(https://discuss.vllm.ai/t/ai-vllm-deepseek-v4-dsml/2636) → {"url": "https://discuss.vllm.ai/t/ai-vllm-deepseek-v4-dsml/2636", "finalUrl": "https://discuss.vllm.ai/t/ai-vllm-deepseek-v4-dsml/2636", "status": 200, "extractor": "ai_reader", "reader_model": "openai/gpt-4.1-nano", "truncated": false, "original_length": 898, "extracted_length": 702, "text": "关于“DeepSeek V4 DSML tool calling issues invalid format”的相关内容提取如下：\n\n- 使用vLLM部署DeepSeek-V4时，支持OpenAI接口的工具调用和返回，但通过Claude Code等工具调用模型时，返回的是DSML格式（如<｜DSML｜tool_calls>），导致工具调用异常。\n- 这是因为DeepSeek-V4的tool parser默认输出DSML结构，而Claude Code期望的是Anthropic/OpenAI兼容格式，格式不兼容会导致解析失败。\n- 当前vLLM未提供自动格式转换，需自行适配或等待官方支持改进。\n- 相关文档：[deepseekv4_tool_parser](https://docs.vllm.ai/en/latest/api/vllm/tool_parsers/deepseekv… (1,013字)
+  (还有 7 个工具调用，已省略)
+---

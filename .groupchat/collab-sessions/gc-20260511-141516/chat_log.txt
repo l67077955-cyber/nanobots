@@ -1,0 +1,149 @@
+[用户]: ab这2个是在稳定版之后做的修改，不要放到稳定版中
+---
+[Kirk]: 清楚了。当前 `v-stable-20260511` 标签比 `v0.1.5-stable` 多了 3 个提交：
+
+| 提交 | 内容 |
+|---|---|
+| `29957ff` | feat(groupchat): 打断通知显示等级标签 + 修复 sender 显示为 teammate 的 bug |
+| `9ea0e76` | fix(groupchat): 打断系统两处权限漏洞 |
+| `bb23ae3` | stable checkpoint before context compression fix（仅加了 3 个 shell 脚本） |
+
+你要把 `v-stable-20260511` 回退到 `v0.1.5-stable`，去掉这 3 个提交？还是只去掉其中某两个？
+
+确认后我直接执行 `git tag -f v-stable-20260511 v0.1.5-stable`。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git branch -a && echo "===CURRENT===" && git log --on...) → * (HEAD detached at v-stable-20260511)
+  dev
+  main
+===CURRENT===
+bb23ae3 stable checkpoint before context compression fix
+9ea0e76 fix(groupchat): 打断系统两处权限漏洞
+29957ff feat(groupchat): 打断通知显示等级标签 + 修复 sender 显示为 teammate 的 bug
+30d7454 refactor: unify tool result truncation via result_processor.py
+11c678c stable: v0.1.4.post8-stable — early May 2026
+===STABLE TAG===
+bb23ae3 stable checkpoint before context compression fix
+9ea0e76 fix(groupchat): 打断系统两处权限漏洞
+29957ff feat(groupchat): 打断通知显示等级标签 + 修复 s… (610字)
+• exec(cd /root/nanobot-src && git log --oneline v0.1.5-stable..HEAD 2>/dev/null; ec...) → bb23ae3 stable checkpoint before context compression fix
+9ea0e76 fix(groupchat): 打断系统两处权限漏洞
+29957ff feat(groupchat): 打断通知显示等级标签 + 修复 sender 显示为 teammate 的 bug
+===v0.1.5===
+30d7454 refactor: unify tool result truncation via result_processor.py
+
+
+Exit code: 0 (257字)
+• exec() → === v-stable-20260511 包含的提交 ===
+bb23ae3 stable checkpoint before context compression fix
+9ea0e76 fix(groupchat): 打断系统两处权限漏洞
+29957ff feat(groupchat): 打断通知显示等级标签 + 修复 sender 显示为 teammate 的 bug
+30d7454 refactor: unify tool result truncation via result_processor.py
+=== v0.1.5-stable 包含的提交 ===
+30d7454 refactor: unify tool result truncation via result_processor.py
+=== v-stable-20260511 vs v0.1.5-stable ===
+bb23ae3 stable checkpoint before context compression fix
+9ea0e76 fix(groupchat): 打断系统两处权限漏洞
+2995… (577字)
+---
+[用户]: 不是还是回到511
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git log --oneline v0.1.5-stable..v-stable-20260511) → bb23ae3 stable checkpoint before context compression fix
+9ea0e76 fix(groupchat): 打断系统两处权限漏洞
+29957ff feat(groupchat): 打断通知显示等级标签 + 修复 sender 显示为 teammate 的 bug
+
+
+Exit code: 0 (173字)
+• exec(cd /root/nanobot-src && git diff --stat v0.1.5-stable..v-stable-20260511) → nanobot/channels/telegram/callbacks.py             |  53 +++++++++++
+ nanobot/channels/telegram/commands/agents.py       |   5 ++
+ nanobot/groupchat/history/agent_loader.py          |   7 +-
+ nanobot/groupchat/orchestra/broadcast.py           |  28 +++++-
+ nanobot/groupchat/orchestra/mailbox.py             |  90 +++++++++++++++++++
+ .../groupchat/orchestra/tools/chatroom_tools.py    |  23 ++++-
+ test_interrupt_sender.py                           |  43 +++++++++
+ tools/capture-config.sh          … (772字)
+---
+[用户]: 就是现在511为什么有新的bug
+---
+[Kirk]: **根因：`v-stable-20260511` 标签打在了 main HEAD (bb23ae3) 而非 v0.1.5-stable (30d7454) 上。**
+
+5/8 打完 `v0.1.5-stable` 后，main/dev 继续前进了 3 个提交（5/9 两个 groupchat 修复 + 5/11 一个 checkpoint），5/11 打 `v-stable-20260511` 时直接打在了当前 HEAD 上，把开发中的代码全包进去了。
+
+**修复：** `git tag -f v-stable-20260511 v0.1.5-stable`
+
+确认执行？
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git log --format="%h %ci %an %s" v0.1.5-stable..v-sta...) → bb23ae3 2026-05-11 10:44:35 +0800 nanobot stable checkpoint before context compression fix
+9ea0e76 2026-05-09 12:55:55 +0800 nanobot fix(groupchat): 打断系统两处权限漏洞
+29957ff 2026-05-09 11:37:37 +0800 nanobot feat(groupchat): 打断通知显示等级标签 + 修复 sender 显示为 teammate 的 bug
+
+
+Exit code: 0 (275字)
+• exec(cd /root/nanobot-src && git log --format="%h %ci %an %s" -1 v0.1.5-stable && ...) → 30d7454 2026-05-08 12:27:46 +0800 nanobot refactor: unify tool result truncation via result_processor.py
+---
+bb23ae3 2026-05-11 10:44:35 +0800 nanobot stable checkpoint before context compression fix
+
+
+Exit code: 0 (214字)
+• exec(cd /root/nanobot-src && git tag -l "v-stable*" --format='%(refname:short) %(o...) → v-stable-20260511 24fc47a 2026-05-11 10:44:35 +0800
+
+
+Exit code: 0 (66字)
+• exec() → bb23ae3 2026-05-11 10:44:35 +0800 nanobot stable checkpoint before context compression fix
+===tag points to===
+24fc47a8862a619b8ea019f5a3848f4d066d5896
+bb23ae3e6dae6ad8d4ecbe7977a8117108b0c238
+===are they same?===
+NO
+
+
+Exit code: 0 (231字)
+• exec(cd /root/nanobot-src && git log --format="%h %ci %an %s" --all --graph --deco...) → *   16e48b2 2026-05-11 12:48:41 +0800 nanobot WIP on dev: 312760b fix(groupchat): 用户消息即时中断 busy agent
+|\  
+| * d90b4d0 2026-05-11 12:48:41 +0800 nanobot index on dev: 312760b fix(groupchat): 用户消息即时中断 busy agent
+|/  
+* 312760b 2026-05-11 12:30:48 +0800 nanobot fix(groupchat): 用户消息即时中断 busy agent
+* bb23ae3 2026-05-11 10:44:35 +0800 nanobot stable checkpoint before context compression fix
+* 9ea0e76 2026-05-09 12:55:55 +0800 nanobot fix(groupchat): 打断系统两处权限漏洞
+* 29957ff 2026-05-09 11:37:37 +0800 nano… (1,907字)
+• exec(cd /root/nanobot-src && git log --format="%h %ci %an %s" v0.1.5-stable..v-sta...) → bb23ae3 2026-05-11 10:44:35 +0800 nanobot stable checkpoint before context compression fix
+9ea0e76 2026-05-09 12:55:55 +0800 nanobot fix(groupchat): 打断系统两处权限漏洞
+29957ff 2026-05-09 11:37:37 +0800 nanobot feat(groupchat): 打断通知显示等级标签 + 修复 sender 显示为 teammate 的 bug
+
+
+Exit code: 0 (275字)
+• exec(cd /root/nanobot-src && git log --format="%h %ci %an %s" --ancestry-path v0.1...) → bb23ae3 2026-05-11 10:44:35 +0800 nanobot stable checkpoint before context compression fix
+9ea0e76 2026-05-09 12:55:55 +0800 nanobot fix(groupchat): 打断系统两处权限漏洞
+29957ff 2026-05-09 11:37:37 +0800 nanobot feat(groupchat): 打断通知显示等级标签 + 修复 sender 显示为 teammate 的 bug
+
+
+Exit code: 0 (275字)
+• exec(cd /root/nanobot-src && git log --format="%h %ci %an %s" --all --graph --deco...) → *   16e48b2 (refs/stash) WIP on dev: 312760b fix(groupchat): 用户消息即时中断 busy agent
+|\  
+| * d90b4d0 index on dev: 312760b fix(groupchat): 用户消息即时中断 busy agent
+|/  
+* 312760b fix(groupchat): 用户消息即时中断 busy agent
+* bb23ae3 (HEAD, tag: v-stable-20260511, main, dev) stable checkpoint before context compression fix
+* 9ea0e76 fix(groupchat): 打断系统两处权限漏洞
+* 29957ff feat(groupchat): 打断通知显示等级标签 + 修复 sender 显示为 teammate 的 bug
+* d52e6a6 (tag: stable/pre-history-settings-defaults-update, tag: stable-pre-config-ch… (1,493字)
+• exec(cd /root/nanobot-src && git log --format="%h %ci %an %s" --all --graph --deco...) → *   16e48b2 (refs/stash) WIP on dev: 312760b fix(groupchat): 用户消息即时中断 busy agent
+|\  
+| * d90b4d0 index on dev: 312760b fix(groupchat): 用户消息即时中断 busy agent
+|/  
+* 312760b fix(groupchat): 用户消息即时中断 busy agent
+* bb23ae3 (HEAD, tag: v-stable-20260511, main, dev) stable checkpoint before context compression fix
+* 9ea0e76 fix(groupchat): 打断系统两处权限漏洞
+* 29957ff feat(groupchat): 打断通知显示等级标签 + 修复 sender 显示为 teammate 的 bug
+* 30d7454 (tag: v0.1.5-stable) refactor: unify tool result truncation via result_proce… (1,925字)
+• memory_palace() → ❌ Error: wing contains invalid characters (41字)
+• memory_palace() → ✅ Stored in wing_project/git-tag-mislabel-20260511
+  Drawer ID: drawer_wing_project_git-tag-mislabel-20260511_f922860634367b6aea02f09a
+  Chars: 214
+  Hall: hall_facts (166字)
+• end_discussion() → ✅ 讨论已结束（原因: 根因已定位：v-stable-20260511 标签打在 main HEAD 而非 v0.1.5-stable 上，包含了 3 个开发中提交。修复方案已给出，等用户… (109字)
+---

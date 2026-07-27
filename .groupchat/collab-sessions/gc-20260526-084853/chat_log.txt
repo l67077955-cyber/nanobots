@@ -1,0 +1,131 @@
+[用户]: 现在该逻辑好像弃用了吧
+---
+[Kirk]: ## 结论
+
+**600s 是纯硬编码常量，来自两个位置：**
+
+1. **`run_loop.py:139`** — `global_timeout=600.0`，每轮讨论的全局超时（**实际生效的约束**）
+2. **`mailbox.py:596`** — `wait()` 的默认超时也是600s，但内部有120s hard cap，所以不构成实际约束
+
+渲染路径：`run_loop` → `broadcast.py:462` → `display.py:168` → header显示
+
+**不是动态计算的，就是写死的10分钟。** 想改改 `run_loop.py:139`。
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/groupchat-600s-timeout (hidden)
+  Drawer ID: drawer_wing_code_groupchat-600s-timeout_f8c10ceb9dd74d8b76ce3151 (131字)
+• end_discussion() → ✅ 讨论已结束（原因: 问题已完整回答，Harper补充了mailbox.py的第二处来源，记忆已更新存档。），即将进入总结阶段 (64字)
+---
+[Kirk]: **没有弃用。** 代码验证结果：
+
+| 位置 | 状态 |
+|------|------|
+| `run_loop.py:135-139` | `broadcast_round(..., global_timeout=600.0)` **仍在调用** |
+| `broadcast.py:462` | `broadcast_start_msg(list(agents), int(global_timeout), ...)` **仍在渲染** |
+| `display.py:165-177` | 旧3行格式 `══ Broadcast · {total} agents · {timeout}s ══` **仍是当前代码** |
+
+三个文件、调用链完整，没有任何弃用标记或注释。你看到的是哪个现象让你觉得弃用了？是实际运行时header没显示，还是代码里有别的入口绕过了这个路径？
+
+[工具调用记录]
+• memory_palace(run_loop broadcast_round 600s timeout 弃用 废弃) → 🔍 5 result(s) for 'run_loop broadcast_round 600s timeout 弃用 废弃':
+
+[1] wing_code/groupchat-600s-timeout (sim=0.395)
+  600s的来源追踪（2026-05-26，补充完整版）：
+
+两个硬编码位置：
+1. run_loop.py:139 — `broadcast_round(..., global_timeout=600.0)` 硬编码600秒（10分钟），这是每轮讨论的全局超时，防止某一轮卡死导致群聊永久阻塞。
+2. mailbox.py:596 — `wait()` 方法的 `timeout: float = 600.0`，agent等待消息的默认超时。但wait()内部有120s hard cap，所以实际约束来自run_loop的global_timeout。
+
+渲染路径：run_loop → broadcast.py:462 → display.py:168 `f"══ Broadcast · {total} agents · {timeout}s ══"`
+
+结论… (2,090字)
+• memory_palace(groupchat broadcast header 弃用 逻辑变更) → 🔍 5 result(s) for 'groupchat broadcast header 弃用 逻辑变更':
+
+[1] wing_user/prompt-optimization-interest (sim=0.323)
+  用户再次确认groupchat prompt参数冗余问题。记忆中已有2026-05-24的完整分析（wing_code/groupchat-prompt-optimization），结论不变：4个输出规范区块重叠+Leader说明重复，总计可省~1500 tok/轮。用户对此问题持续关注。
+
+[2] wing_code/groupchat-broadcast-header (sim=0.296)
+  Groupchat broadcast header 最终设计：
+
+旧格式（3行，冗余）：
+  ══ Broadcast · 2 agents · 600s ══
+  👑 Kirk (bishop)
+  🔹 Harper (knight)
+
+新格式（1行）：
+  ─ Kirk · Harper ─ 600s
+
+设计决策：
+- 砍掉"Broadcast"标签（废话）
+… (1,895字)
+• exec(grep -n "broadcast_round\|global_timeout\|600" /root/nanobot-src/nanobot/grou...) → 13:from nanobot.groupchat.orchestra.broadcast import broadcast_round
+40:        if len(content) > 600:
+41:            content = content[:600] + "…"
+69:            max_tokens=600,
+133:            # ── 关键修复：给 broadcast_round 加上全局超时保护 ──
+135:            await broadcast_round(
+139:                global_timeout=600.0,   # 10 分钟（可根据需要调整）
+
+
+Exit code: 0 (349字)
+• exec(grep -n "broadcast_start_msg\|Broadcast" /root/nanobot-src/nanobot/groupchat/...) → 1:"""Broadcast execution mode for group chat.
+180:class BroadcastContext(Protocol):
+217:    engine: BroadcastContext,
+246:            "Broadcast: {} {} → {} 实时打断 {} 个 busy agent",
+252:class BroadcastOrchestrator:
+255:    def __init__(self, agents: list[str], engine: BroadcastContext, mailbox: MailboxHub):
+398:    engine: BroadcastContext,
+462:    await engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout), leader=leader_name, ranks=ranks_map))
+464:    orch = BroadcastOrchestrator… (1,661字)
+• exec(grep -n "broadcast_start_msg" /root/nanobot-src/nanobot/groupchat/display/ -r...) → /root/nanobot-src/nanobot/groupchat/display/display.py:165:def broadcast_start_msg(agents: list[str], timeout: int, leader: str | None = None, ranks: dict[str, str] | None = None) -> str:
+
+
+Exit code: 0 (202字)
+• exec(find /root/nanobot-src/nanobot/groupchat/display/ -name "*.py" 2>/dev/null | ...) → /root/nanobot-src/nanobot/groupchat/display/broadcast_view.py
+/root/nanobot-src/nanobot/groupchat/display/streaming.py
+/root/nanobot-src/nanobot/groupchat/display/display.py
+
+
+Exit code: 0 (188字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 160|     return f"{header}– 🔧 ..."
+161| 
+162| 
+163| # ── Broadcast-specific ───────────────────────────────────────
+164| 
+165| def broadcast_start_msg(agents: list[str], timeout: int, leader: str | None = None, ranks: dict[str, str] | None = None) -> str:
+166|     """Render broadcast start banner with role indicators and rank badges."""
+167|     total = len(agents)
+168|     lines = [f"══ Broadcast · {total} agents · {timeout}s ══"]
+169|     _r = ranks or {}
+170|     if leader:
+171|         lines.append(f"👑 {leader} ({_r.get(leader, 'pawn')})")
+172|         members = [a for a in agents if a != leader]
+173|         if members:
+174|             lines.append("  ".join(f"🔹 {m} ({_r.get(m, 'pawn')})" for m in members))
+175|     else:
+176|         lines.append("  ".join(f"🔹 {a} ({_r.get(a, 'pawn'… (1,498字)
+• exec(grep -rn "broadcast_start_msg" /root/nanobot-src/nanobot/ --include="*.py" 2>...) → /root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py:462:    await engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout), leader=leader_name, ranks=ranks_map))
+/root/nanobot-src/nanobot/groupchat/display/display.py:165:def broadcast_start_msg(agents: list[str], timeout: int, leader: str | None = None, ranks: dict[str, str] | … (384字)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(grep -rn "600\|global_timeout\|broadcast_start_msg" /app/groupchat/ 2>/dev/nu...) → Exit code: 0 (13字)
+• exec(ls -la /app/groupchat/ 2>/dev/null || echo "no /app/groupchat"; find /app -na...) → no /app/groupchat
+
+
+Exit code: 0 (32字)
+• exec(find /root/nanobot-src -name "*.py" -path "*groupchat*" 2>/dev/null | head -30) → /root/nanobot-src/tests/test_groupchat.py
+/root/nanobot-src/nanobot/groupchat/history/message_converter.py
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py
+/root/nanobot-src/nanobot/groupchat/history/result_processor.py
+/root/nanobot-src/nanobot/groupchat/history/component_manager.py
+/root/nanobot-src/nanobot/groupchat/history/persistence.py
+/root/nanobot-src/nanobot/groupchat/history/tool_storage.py
+/root/nanobot-src/nan… (1,737字)
+• exec(ps aux | grep -i "nanobot\|groupchat\|python" | grep -v grep | head -10) → root         948  0.0  0.0 111236  3344 ?        Ssl  Apr12   0:00 /usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal
+root      503317  0.0  0.1  16956  8524 ?        Ss   May19   0:22 tmux new-session -d -s deepseek_tui_bot cd /root && python3 deepseek_tui_bot.py 2>&1 | tee /tmp/dstui_bot.log
+root      503318  0.0  0.0   7740  2180 pts/0    Ss+  May19   0:00 bash -c cd /root && python3 deepseek_tui_bot.py 2>&1 | tee /tmp/dstui_bot.log
+root      503319 … (1,556字)
+---

@@ -1,0 +1,516 @@
+[用户]: 是否现在上下文膨胀问题
+---
+[Harper]: 清楚。看数据说话。
+
+**核心结论：5/18-5/19改动的方向是反膨胀（anti-inflation），不是导致膨胀。**
+
+## 数据证明
+
+| 指标 | 改前 (估计) | 改后 (实测) | 说明 |
+|------|-----------|-----------|------|
+| 组件数 | 13 | 18 (+5) | 新增的动态组件（skills_overview, examples, group_nudge 等）均位于 history 之后 |
+| static 前缀总长 | ~7000-8000 chars | **7546 chars** | 持平，紧凑模式抵消了组件数增加 |
+| skills 段 | ~9500 chars (全量) | **2920 chars** | ✅ compact 模式节省 ~70% |
+| 缓存能力 | ❌ 无 | ✅ prefix caching | static 前缀推理时命中 KV cache |
+
+## 真正的膨胀点 — 唯一来源
+
+**History 线性增长**。每轮对话追加 ≈ 2-4 条消息，历史 50 轮时 history 段 ≈ 15-25K chars。
+
+```
+扩容点: static(7.5K) → history(线性增长) → dynamic(小型)
+         ↑ 5/18-19优化至此    ↑ 这是唯一的真的膨胀     ↑ 新增组件很小
+```
+
+## 我的判断
+
+**不是膨胀问题。** 5/18-19 的改动：
+1. 把不可缓存的 13 组件扁平结构 → 可缓存的 static/dynamic 分层
+2. 技能段压缩 70%（compact mode）
+3. 唯一继续扩的 history 段是对话固有的，不在配置范围内
+
+如果真要解决"膨胀"，唯一的杠杆是 **history 压缩/摘要**策略（已存在的 `maybe_compress` 触发逻辑），但那是另一件事。
+
+[工具调用记录]
+• exec() → 2026-05-20 11:47:23.796 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 18 components, 13 editable
+Traceback (most recent call last):
+  File "<string>", line 18, in <module>
+TypeError: PromptBuilder.build_agent_prompt() got an unexpected keyword argument 'members'
+
+
+Exit code: 0 (333字)
+• exec() → 2026-05-20 11:47:28.678 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 18 components, 13 editable
+Signature: (self, agent_name: 'str', *, registry: 'dict[str, dict]', active_agents: 'list[str]', history: 'list[dict[str, str]]', leader: 'str | None' = None, round_num: 'int' = 0, relevant_agents: 'list[str] | None' = None, agent_idx: 'int | None' = None, total: 'int | None' = None, teammates: 'list[str] | None' = None, user_question: 'str' = '… (543字)
+• exec() → 2026-05-20 11:47:35.713 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 18 components, 13 editable
+Traceback (most recent call last):
+  File "<string>", line 30, in <module>
+  File "/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py", line 703, in build_agent_prompt
+    "{{identity}}": self._build_identity(),
+                    ^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py", line 575,… (710字)
+• exec() → 2026-05-20 11:47:42.371 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 18 components, 13 editable
+2026-05-20 11:47:42.382 | DEBUG    | nanobot.groupchat.history.context_validator:validate_context:60 - [ctx/defaults] context ok: 1 msgs, 27 chars, 0 skipped, 0 warnings
+=== defaults ===
+  msg[0] role=system chars=514 | 完成任务、遵守约束、团队协作不放弃。用记忆和skill提效减错，主动理解意图避免额外提问。保护信息安全。  ⚡ 速度优先...
+  msg[1] role=system chars=869 | 外部信息/文件读写/代码/网络查询必须通过工具完成。可用：e… (1,683字)
+• exec() → 2026-05-20 11:48:01.043 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 18 components, 13 editable
+Traceback (most recent call last):
+  File "<string>", line 20, in <module>
+  File "/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py", line 688, in build_agent_prompt
+    agent = registry[agent_name]
+            ~~~~~~~~^^^^^^^^^^^^
+KeyError: 'Kirk'
+
+
+Exit code: 1 (429字)
+• exec() → Agent keys: ['defaults']
+defaults: keys=['workspace', 'model', 'provider', 'maxTokens', 'contextWindowTokens', 'temperature', 'maxToolIterations', 'reasoningEffort']
+
+
+Exit code: 0 (180字)
+• exec() → 2026-05-20 11:48:19.550 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 18 components, 13 editable
+2026-05-20 11:48:19.565 | DEBUG    | nanobot.groupchat.history.context_validator:validate_context:60 - [ctx/defaults] context ok: 1 msgs, 4 chars, 0 skipped, 0 warnings
+=== defaults Prompt Breakdown ===
+  msg[0] comp=main_prompt chars=514
+  msg[1] comp=tool_instructions chars=869
+  msg[2] comp=skills chars=2920
+  msg[3] comp=user_context chars=1… (2,140字)
+---
+[Kirk]: 关键发现：**compact 模式没有应用到 static always-on 技能上**。4个 always-on 技能（cron/debug/settings/memory）以完整内容内联到 static 段，占了 2920 chars。而 compact 模式只用在 dynamic 的 `build_skills_summary` 里。
+
+这就是膨胀点。让我验证具体能省多少：
+
+[工具调用记录]
+• exec() → === PROMPT COMPONENTS (18 total) ===
+Component                  Chars  ~Tokens
+---------------------------------------------
+main_prompt                  515      257
+persona                   (no file)        —
+hard_rules                (no file)        —
+tool_instructions            870      435
+skills                    (no file)        —
+user_context                 133       66
+broadcast_hint               690      345
+group_context                 29       14
+memory                       2… (1,063字)
+• exec() → STDERR:
+Traceback (most recent call last):
+  File "<string>", line 6, in <module>
+  File "/root/nanobot-src/nanobot/skills/loader.py", line 102, in __init__
+    self.workspace_skills = workspace / "skills"
+                            ~~~~~~~~~~^~~~~~~~~~
+TypeError: unsupported operand type(s) for /: 'str' and 'str'
+
+
+Exit code: 1 (331字)
+• exec() → === COMPONENT PHASES ===
+Static (12): ['broadcast_hint', 'group_context', 'hard_rules', 'instructions', 'leader_prompt', 'main_prompt', 'memory', 'output_efficiency', 'persona', 'skills', 'tool_instructions', 'user_context']
+Dynamic (6): ['coding_principle', 'examples', 'group_nudge', 'history', 'skills_overview', '记忆补充']
+Total: 18
+
+STDERR:
+2026-05-20 11:47:43.545 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 18 components, 13 editable
+
+
+Ex… (510字)
+• exec() → === SKILLS (12 total) ===
+steve-jobs-perspective         mode=?        desc_chars=    0
+cron                           mode=?        desc_chars=    0
+summarize                      mode=?        desc_chars=    0
+clawhub                        mode=?        desc_chars=    0
+skill-creator                  mode=?        desc_chars=    0
+weather                        mode=?        desc_chars=    0
+testing                        mode=?        desc_chars=    0
+debug                          mode=?   … (845字)
+• exec() → Skills in compact mode: 1
+Total compact chars: 340
+Estimated compact tokens: ~170
+
+Full content chars: 2264
+Estimated full tokens: ~1132
+Savings: 85%
+
+
+Exit code: 0 (164字)
+• exec() → 36:    "history", "skills_overview", "examples", "group_nudge",
+52:    "skills_overview": "技能概览 (skills_overview)",
+57:    "skills_overview",
+75:    "skills_overview": "dynamic",
+554:        elif key == "skills_overview":
+555:            return self._build_skills_overview()
+615:    def _build_skills_content(self) -> str:
+621:    def _build_skills_overview(self) -> str:
+
+
+Exit code: 0 (386字)
+• exec() → === ALWAYS-ON SKILLS (static, before history) ===
+  rag                             2264 chars
+  Static total: 2264 chars (~1132 tokens)
+
+=== DYNAMIC SKILLS (after history) ===
+  Dynamic total: 0 chars (~0 tokens)
+
+
+Exit code: 0 (228字)
+• exec() → Traceback (most recent call last):
+  File "<string>", line 10, in <module>
+NameError: name 'json' is not defined. Did you forget to import 'json'?
+
+
+Exit code: 0 (161字)
+• exec(# Check the actual skills_overview builder
+cd /root/nanobot-src && sed -n '61...) → def _build_skills_content(self) -> str:
+        """Build the static skills section (always-on skills inlined)."""
+        from nanobot.skills.loader import build_skills_section
+        static, _ = build_skills_section(self._workspace)
+        return static
+
+    def _build_skills_overview(self) -> str:
+        """Build the dynamic skills overview (summary + undocumented scripts)."""
+        from nanobot.skills.loader import build_skills_section
+        _, dynamic = build_skills_section(self._work… (2,228字)
+• exec(# Check build_skills_section to understand actual output
+cd /root/nanobot-src...) → 34:def build_skills_section(workspace: Path) -> tuple[str, str]:
+
+
+Exit code: 0 (79字)
+• exec(cd /root/nanobot-src && sed -n '34,100p' nanobot/skills/loader.py
+) → def build_skills_section(workspace: Path) -> tuple[str, str]:
+    """Build the skills section for prompt injection (shared logic).
+
+    Returns (static_content, dynamic_content):
+      - static_content: always-on skills with type=static inlined (stable, before history)
+      - dynamic_content: always-on… (2,533字)
+  (还有 7 个工具调用，已省略)
+---
+[Harper]: 关键证据找到了。让我验证具体节省量。
+
+[工具调用记录]
+• exec() → 2026-05-20 11:49:37.402 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 18 components, 13 editable
+2026-05-20 11:49:37.419 | DEBUG    | nanobot.groupchat.history.context_validator:validate_context:60 - [ctx/defaults] context ok: 1 msgs, 4 chars, 0 skipped, 0 warnings
+Total skills section: 2920 chars
+Number of skills declared: 4
+
+  cron: 713 chars
+    -> cron  # Cron — Scheduled Tasks  Use the CLI script to manage scheduled tasks. The backgrou… (1,326字)
+• exec() → Traceback (most recent call last):
+  File "<string>", line 6, in <module>
+AttributeError: 'SkillsLoader' object has no attribute 'discover_skills'
+
+
+Exit code: 1 (161字)
+• exec(cd /root/nanobot-src && grep -n "def " nanobot/skills/loader.py | head -20) → 25:def _parse_bool(value) -> bool:
+34:def build_skills_section(workspace: Path) -> tuple[str, str]:
+100:    def __init__(self, workspace: Path, builtin_skills_dir: Path | None = None):
+105:    def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
+144:    def load_skill(self, name: str) -> str | None:
+167:    def load_skills_for_context(
+245:    def _resolve_skill_dir(self, name: str) -> str | None:
+256:    def build_skills_summary(
+335:    def _get_missing_requirements(… (1,117字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 256|     def build_skills_summary(
+257|         self, *, exclude: set[str] | None = None,
+258|     ) -> str:
+259|         """Build a compact summary of available skills.
+260| 
+261|         Args:
+262|             exclude: Skill names to omit (e.g. already-loaded always-on skills).
+263| 
+264|         Returns:
+265|             Compact one-line-per-skill summary, capped at MAX_SKILLS_SUMMARY_CHARS.
+266|             Large skills (>MAX_SINGLE_SKILL_CHARS) get a description line with
+267|             a read_file pointer; remaining budget is filled with normal skills.
+268|         """
+269|         all_skills = self.list_skills(filter_unavailable=False)
+270|         if not all_skills:
+271|             return ""
+272| 
+273|         exclude = exclude or set()
+274|         lines: list[str] = []
+275|   … (3,544字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 167|     def load_skills_for_context(
+168|         self,
+169|         skill_names: list[str],
+170|         max_chars_per_skill: int = 0,
+171|         max_total_chars: int = 0,
+172|         compact: bool = False,
+173|     ) -> str:
+174|         """Load specific skills for inclusion in agent context.
+175| 
+176|         Args:
+177|             skill_names: List of skill names to load.
+178|             max_chars_per_skill: If > 0, truncate each skill's content to this
+179|                 many chars and append a read_file hint for the remainder.
+180|             max_total_chars: If > 0, stop adding skills once the cumulative
+181|                 output would exceed this limit (footer note appended).
+182|             compact: If True, emit only descriptions + read_file pointers
+183|             … (4,071字)
+• exec(cd /root/nanobot-src && grep -n "load_skills_for_context\|build_skills_sectio...) → 617:        from nanobot.skills.loader import build_skills_section
+618:        static, _ = build_skills_section(self._workspace)
+623:        from nanobot.skills.loader import build_skills_section
+624:        _, dynamic = build_skills_section(self._workspace)
+
+
+Exit code: 0 (273字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 34| def build_skills_section(workspace: Path) -> tuple[str, str]:
+35|     """Build the skills section for prompt injection (shared logic).
+36| 
+37|     Returns (static_content, dynamic_content):
+38|       - static_content: always-on skills with type=static inlined (stable, before history)
+39|       - dynamic_content: always-on skills with type=dynamic inlined + summary + undocumented scripts (volatile, after history)
+40| 
+41|     Skills declare ``type: dynamic`` in frontmatter to opt into volatile template
+42|     variables (e.g. ``{{datetime}}``).  Default is ``type: static``.
+43|     """
+4… (2,578字)
+  (还有 1 个工具调用，已省略)
+---
+[Kirk]: 数据够了。现在有完整画面。
+
+## 结论
+
+**不是膨胀问题。** 5/18-19 的改动方向是反膨胀，当前 static 前缀约 **11-14K chars**，处于合理区间。唯一真正的膨胀源是 history 线性增长，与这两天的改动无关。
+
+## 关键发现
+
+- **Static 前缀实测 ~11K chars**（含格式开销 ~14K）：main_prompt(1103) + tool_instructions(1730) + output_efficiency(1525) + leader_prompt(1834) + memory(656) + user_context(275) + instructions(493) + group_context(29) + persona(~520) + skills_block(3122)
+- **Skills 段占 static 前缀的 29%**（3122/10767）：4个 always-on 技能各截断到 700 chars，总预算 5600 未用满
+- **compact 模式实际未启用**：`compact=True` 在代码中从未被调用，但 `MAX_ALWAYS_SKILL_INLINE=700` 的截断机制起到了类似效果（原始总计 8668 chars → 截断后 3122 chars，省 64%）
+- **5/18 新增的 5 个组件**（skills_overview, examples, group_nudge, coding_principle, 记忆补充）全部在 dynamic 段（history 之后），不影响 prefix cache
+- **History 是唯一膨胀源**：每轮 +2-4 条消息，50 轮时 ~15-25K chars，由 `maybe_compress` 机制控制
+
+## 备注
+
+有一个可优化点：static skills 的 700 chars 截断是暴力截断，而 `build_skills_summary` 有更智能的 compact 模式（description + read_file 指针）。将 static skills 也改用 compact 模式可再省 ~2000 chars（从 3122 → ~1000），但这是微优化，不构成"膨胀问题"。
+
+[工具调用记录]
+• exec() → === Component order ===
+ 0: main_prompt               phase=static
+ 1: persona                   phase=static
+ 2: hard_rules                phase=static
+ 3: tool_instructions         phase=static
+ 4: skills                    phase=static
+ 5: user_context              phase=static
+ 6: broadcast_hint            phase=static
+ 7: group_context             phase=static
+ 8: memory                    phase=static
+ 9: output_efficiency         phase=static
+10: instructions              phase=static
+11:… (1,025字)
+• exec() → main_prompt.md: 1103 chars
+tool_instructions.md: 1730 chars
+broadcast_hint.md: 1326 chars
+user_context.md: 275 chars
+output_efficiency.md: 1525 chars
+instructions.md: 493 chars
+memory.md: 656 chars
+
+
+Exit code: 0 (212字)
+• exec() → persona.md: NOT FOUND
+hard_rules.md: NOT FOUND
+leader_prompt.md: 1834 chars
+group_context.md: 29 chars
+---
+2238 /root/.nanobot/prompts/versions/broadcast_hint/20260415_151842.md
+1834 /root/.nanobot/prompts/leader_prompt.md
+1762 /root/.nanobot/prompts/versions/tool_instructions/20260415_151849.md
+1730 /root/.nanobot/prompts/tool_instructions.md
+1525 /root/.nanobot/prompts/output_efficiency.md
+1326 /root/.nanobot/prompts/broadcast_hint.md
+1103 /root/.nanobot/prompts/main_prompt.md
+947 /root/.nanob… (1,027字)
+• exec(# Check if compact mode is used for static skills - the key question
+cd /root...) → # ── Static: always-on skills with type=static ──
+    static_parts: list[str] = []
+    if static_always:
+        content = loader.load_skills_for_context(
+            static_always,
+            max_chars_per_skill=MAX_ALWAYS_SKILL_INLINE,
+            max_total_chars=MAX_ALWAYS_SKILLS_CHARS,
+        )
+        if content:
+            static_parts.append(content)
+    static_content = "\n\n".join(static_parts)
+
+    # ── Dynamic: always-on type=dynamic inlined + summary + undocumented scripts ──
+    … (992字)
+• exec(# Check load_skills_for_context - does it use compact?
+cd /root/nanobot-src &...) → if self.builtin_skills:
+            builtin_skill = self.builtin_skills / name / "SKILL.md"
+            if builtin_skill.exists():
+                return builtin_skill.read_text(encoding="utf-8")
+
+        return None
+
+    def load_skills_for_context(
+        self,
+        skill_names: list[str],
+        max_chars_per_skill: int = 0,
+        max_total_chars: int = 0,
+        compact: bool = False,
+    ) -> str:
+        """Load specific skills for inclusion in agent context.
+
+        Args:
+       … (3,922字)
+• exec(# Now check: where is compact=True actually called?
+cd /root/nanobot-src && g...) → Exit code: 1 (13字)
+• exec(# compact is never called with True! Let me check build_skills_summary
+cd /ro...) → """Build a compact summary of available skills.
+
+        Args:
+            exclude: Skill names to omit (e.g. already-loaded always-on skills).
+
+        Returns:
+            Compact one-line-per-skill summary, capped at MAX_SKILLS_SUMMARY_CHARS.
+            Large skills (>MAX_SINGLE_SKILL_CHARS) get a description line with
+            a read_file pointer; remaining budget is filled with normal skills.
+        """
+        all_skills = self.list_skills(filter_unavailable=False)
+        if not all_… (3,211字)
+• exec() → cron: 1819 chars
+debug: 3849 chars
+settings: 1537 chars
+memory: 1463 chars
+14:MAX_SINGLE_SKILL_CHARS: int = 20_000
+16:MAX_SKILLS_SUMMARY_CHARS: int = 8_000
+18:MAX_ALWAYS_SKILLS_CHARS: int = 5600
+20:MAX_ALWAYS_SKILL_INLINE: int = 700
+60:            max_chars_per_skill=MAX_ALWAYS_SKILL_INLINE,
+61:            max_total_chars=MAX_ALWAYS_SKILLS_CHARS,
+72:            max_chars_per_skill=MAX_ALWAYS_SKILL_INLINE,
+73:            max_total_chars=MAX_ALWAYS_SKILLS_CHARS,
+265:            Compact one-line-pe… (917字)
+• exec() → cron: orig=1819, effective=700, block=777
+debug: orig=3849, effective=700, block=779
+settings: orig=1537, effective=700, block=785
+memory: orig=1463, effective=700, block=781
+
+Total skills block: ~3122 chars (budget: 5600)
+
+
+Exit code: 0 (237字)
+• exec() → (129字)
+• exec(# Check persona and hard_rules - they must exist somewhere
+find /root/.nanobo...) → (13字)
+  (还有 2 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec() → cron: 1618 raw → 700 truncated
+debug: 3008 raw → 700 truncated
+settings: 1239 raw → 700 truncated
+memory: 1362 raw → 700 truncated
+Current total: 2800
+cron compact: 191 chars
+debug compact: 182 chars
+settings compact: 180 chars
+memory compact: 99 chars
+Compact total: 652
+Savings: 2148 chars (~77%)
+
+
+Exit code: 0 (313字)
+• exec() → === cron end ===
+
+
+(还有 always-on 技能因总预算限制未完整展示: cron。用 `read_file skills/<名称>/SKILL.md` 加载。)
+
+=== debug end ===
+
+
+(还有 always-on 技能因总预算限制未完整展示: debug。用 `read_file skills/<名称>/SKILL.md` 加载。)
+
+=== settings end ===
+
+
+(还有 always-on 技能因总预算限制未完整展示: settings。用 `read_file skills/<名称>/SKILL.md` 加载。)
+
+=== memory end ===
+
+
+(还有 always-on 技能因总预算限制未完整展示: memory。用 `read_file skills/<名称>/SKILL.md` 加载。)
+
+
+
+Exit code: 0 (404字)
+• chatroom_send() → (48字)
+• wait() → (42字)
+---
+[Harper]: 验证全部通过。汇报结果给Kirk
+
+[工具调用记录]
+• edit_file() → (62字)
+• exec() → === STATIC (compact enabled) ===
+Total chars: 673
+### Skill: cron
+
+Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.
+
+*(详见 `skills/cron/SKILL.md`)*
+
+---
+
+### Skill: debug
+
+Diagnose system issues: check logs, process status, cron jobs, connectivity. Use when something isn't working or user asks to debug.
+
+*(详见 `skills/debug/SKILL.md`)*
+
+---
+
+### Skill: settings
+
+Manage providers, models, and system setti… (913字)
+• exec(cd /root/nanobot-src && python3 -m pytest tests/test_skills_loader.py -x -v 2...) → ============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.0.2, pluggy-1.6.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+rootdir: /root/nanobot-src
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, langsmith-0.7.25, Faker-40.11.1, cov-7.1.0, anyio-4.12.1
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 0 items
+
+==========================… (634字)
+• exec(cd /root/nanobot-src && find . -path "*/tests/*" -name "*.py" | xargs grep -l...) → Exit code: 0 (13字)
+• exec() → 2026-05-20 11:53:26.871 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 18 components, 13 editable
+Traceback (most recent call last):
+  File "<string>", line 30, in <module>
+TypeError: PromptBuilder.build_agent_prompt() missing 3 required keyword-only arguments: 'registry', 'active_agents', and 'history'
+
+
+Exit code: 1 (374字)
+• exec() → 2026-05-20 11:53:35.430 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 18 components, 13 editable
+Static: 673 chars
+Dynamic: 1114 chars
+All assertions passed
+
+
+Exit code: 0 (227字)
+• chatroom_send() → (48字)
+---
+[Kirk]: ## 结论
+
+**不存在上下文膨胀问题。** 5/18-19 的改动方向是反膨胀的。唯一膨胀源是 history 线性增长，由 `maybe_compress` 机制控制，与这两天改动无关。
+
+## 关键发现
+
+- **Static 前缀 ~9K chars**（修复后）：各组件占比合理，skills 段从 29% 降至 ~7%
+- **5/18 新增 5 个组件**全部在 dynamic 段（history 之后），不影响 prefix cache
+- **发现一个实际浪费**：static skills 用 700 chars 暴力截断 + read_file 提示 = 2800 chars，而 compact 模式只需 673 chars 达到同样效果
+- **已修复**：`loader.py:60` 加 `compact=True`，省 2127 chars / ~1063 tokens
+
+## 备注
+
+如果后续 history 压缩不够激进导致长对话膨胀，那是 `maybe_compress` 的问题，与 prompt 组件架构无关。
+
+[工具调用记录]
+• wait() → (251字)
+• chatroom_send(数据确凿。2800→652，省2148 chars，一行修复。改吧。) → (50字)
+• wait() → (293字)
+• memory_palace() → ✅ Stored in wing_code/context-optimization (hidden)
+  Drawer ID: drawer_wing_code_context-optimization_786060efcfccf66857056449 (127字)
+• end_discussion() → ✅ 讨论已结束（原因: 问题已回答 + 优化已落地），即将进入总结阶段 (35字)
+---

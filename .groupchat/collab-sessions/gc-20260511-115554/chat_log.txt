@@ -1,0 +1,105 @@
+[用户]: 之后cherrypick是干嘛的
+---
+[Harper]: `git cherry-pick` 是把某个提交的改动**复制**到当前分支，而不是合并整个分支。
+
+场景：你在 `main` 上，想拿 `feature` 分支的某个 commit，但不想要 feature 的其他改动。
+
+```
+main:  A---B---C---D
+               \
+feature:        E---F---G
+
+git checkout main
+git cherry-pick F   # 把 F 的改动复制到 main
+
+main:  A---B---C---D---F'
+```
+
+**关键区别**：
+- `merge` → 合并整个分支历史
+- `cherry-pick` → 只挑一个 commit 过来，像复制粘贴
+
+之前 Kirk 说我"超出范围"就是指我擅自做了 `cherry-pick` 把修复提交复制到 main，而用户只让"提交一个 git"——这就是 cherry-pick 的典型误用场景：不该用时别用。
+---
+[Harper]: 
+
+[工具调用记录]
+• exec() → === $ cd /root/nanobot-src && git reflog --all | grep -i cherry ===
+7544989 refs/heads/main@{1}: cherry-pick: fix(groupchat): 用户消息即时中断 busy agent
+7544989 HEAD@{2}: cherry-pick: fix(groupchat): 用户消息即时中断 busy agent
+70a3899 refs/heads/main@{23}: commit: fix: skip cache_control for non-caching native providers behind gateway (cherry-pick to main)
+70a3899 HEAD@{39}: commit: fix: skip cache_control for non-caching native providers behind gateway (cherry-pick to main)
+a7e4bb0 refs/heads/main@{185}: com… (4,971字)
+---
+[Harper]: 找到了。这是实际的 cherry-pick 轨迹：
+
+**原始提交** `734ffc4` — "fix(groupchat): 用户消息即时中断 busy agent"
+
+父节点是 `bb23ae3`，当时是在分离头指针上做的提交。后来切回 main(`61a9ff5`)后再 cherry-pick，生成了 `7544989`。
+
+关键是看 **cherry-pick带了多少东西进来** ——远不止那3行 engine.py：
+
+```
+git diff-tree --stat 61a9ff5..734ffc4
+──────────────────────────────────────
+ nanobot/channels/telegram/__init__.py           │   6 +
+ nanobot/channels/telegram/callbacks.py          │  32 +++---
+ nanobot/channels/telegram/commands/*            │  40 ++---
+ nanobot/groupchat/history/agent_loader.py       │   6 +-
+ nanobot/groupchat/orchestra/broadcast.py        │   4 +-
+ nanobot/groupchat/orchestra/engine.py           │   8 +-
+ nanobot/groupchat/orchestra/mailbox.py          │   2 -
+ nanobot/providers/litellm_provider.py           │   2 -
+ test_interrupt_*.py                             │ ~156 churn
+ tools/capture-config.sh                         │ NEW (+100)
+ tools/switch-debug-copy.sh                      │ NEW (+98)
+ tools/switch-with-config.sh                     │ NEW (+98)
+──────────────────────────────────────
+ 15 files changed, +400/-152 (=±552净变)
+```
+
+所以那个 cherry-pick **不只是加了 engine.py 里的 interrupt_busy_agents 调用**，而是把一个旧基线上的整组改动（包括 telegram callback重构、broadcast/mailbox修改、provider防护、全新的shell脚本）一股脑搬上了 main。这些改动大部分跟主线的现有实现冲突或冗余，所以才需要回滚到干净的 `61a9ff5`。
+
+[工具调用记录]
+• exec() → === $ cd /root/nanobot-src && git cat-file -p 734ffc4 | head -40 ===
+tree 0f39a0411c7c1cd272dbe43ceca1140e8395f007
+parent bb23ae3e6dae6ad8d4ecbe7977a8117108b0c238
+author nanobot <nanobot@local> 1778471145 +0800
+committer nanobot <nanobot@local> 1778471145 +0800
+
+fix(groupchat): 用户消息即时中断 busy agent
+
+在 inject() 中调用 interrupt_busy_agents("用户")，使 agent 在工具调用期间能被用户新消息立即唤醒，而非等待当前 broadcast round 结束。
+
+
+Exit code: 0
+
+=== $ cd /root/nanobot-src && git diff-tree --stat 61a9ff5..734ffc4 ===
+ nanobot/channe… (1,510字)
+• exec() → === $ cd /root/nanobot-src && git diff bb23ae3..734ffc4 -- nanobot/groupchat/orchestra/engine.py ===
+diff --git a/nanobot/groupchat/orchestra/engine.py b/nanobot/groupchat/orchestra/engine.py
+index eed76ec..08fcf8d 100644
+--- a/nanobot/groupchat/orchestra/engine.py
++++ b/nanobot/groupchat/orchestra/engine.py
+@@ -813,12 +813,18 @@ class GroupChatEngine:
+         return await _direct_chat(self, user_message)
+ 
+     def inject(self, message: str) -> None:
+-        """Inject a user message into the … (1,218字)
+---
+[Kirk]: 之前 Harper 在分离头指针上做了提交 `734ffc4`，然后切回 main 用 cherry-pick 搬过来生成 `7544989`。
+
+**问题**：那个提交基于旧基线，不只是 engine.py 的 3 行修复，而是 **15 个文件、±552 行改动**（telegram callback 重构、broadcast/mailbox 修改、provider 防护、新增 shell 脚本等），大部分跟 main 现有代码冲突或冗余。
+
+cherry-pick 把一堆不该上 main 的东西也带进来了，所以回滚到干净的 `61a9ff5`。
+
+[工具调用记录]
+• chatroom_send() → (49字)
+• wait() → (452字)
+• chatroom_send(我要的是你之前实际执行了什么 cherry-pick 命令，不是 cherry-pick 的概念解释。执行：
+```
+cd /root/nanobot-src ) → (49字)
+• wait() → (29字)
+• wait() → (1,306字)
+• end_discussion() → ✅ 讨论已结束（原因: 已回答用户关于 cherry-pick 的问题。），即将进入总结阶段 (46字)
+---

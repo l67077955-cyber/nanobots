@@ -1,0 +1,247 @@
+[用户]: 提交代码git，作为今天的稳定版本
+---
+[Harper]: 现在我已经掌握了完整的等级体系现状。让我整理一下并发给Kirk。
+
+现有等级体系：
+- **pawn**(0) — beholder, benjamin, lucas, retriever
+- **knight**(1) — harper, scholar, verifier
+- **bishop**(2) — kirk
+- **leader** — 隐式最高(bishop+1=3)
+- **user** — 不在等级体系中（无rank字段）
+
+用户说的"相当于兵象马后4个明等级，然后leader和user作为隐藏等级" —— 目前只有 pawn/knight/bishop 三个明文等级，UI已经支持 queen（第4个可见等级）。
+
+所以需求很清晰：把 queen 正式加入等级序列，形成 pawn→knight→bishop→queen 四个公开等级，加上 leader(user?) 作为隐藏更高层。
+
+[工具调用记录]
+• exec(grep -r "rank" /root/.nanobot/ --include="*.py" -l 2>/dev/null | head -20) → /root/.nanobot/workspace/mempalace/benchmarks/longmemeval_bench.py
+/root/.nanobot/workspace/mempalace/benchmarks/locomo_bench.py
+/root/.nanobot/workspace/mempalace/tests/benchmarks/data_generator.py
+/root/.nanobot/workspace/mempalace/mempalace/mcp_server.py
+/root/.nanobot/workspace/mempalace/mempalace/dialect.py
+
+Exit code: 0 (328字)
+• exec(grep -rn "rank" /root/.nanobot/ --include="*.py" 2>/dev/null | grep -i "pawn\...) → Exit code: 0 (13字)
+• exec(grep -rn "rank" /root/nanobot-src/ --include="*.py" 2>/dev/null | grep -v "__...) → /root/nanobot-src/test_interrupt_sender.py:9:    mb.set_ranks({"kirk": "bishop", "harper": "pawn"}, leader="kirk")
+/root/nanobot-src/nanobot/groupchat/history/agent_loader.py:37:            # Supplement with per-agent config.json from agents_dir (hyperparams, tools, rank, etc.)
+/root/nanobot-src/nanobot/groupchat/history/agent_loader.py:51:                        if _cfg.get("rank"):
+/root/nanobot-src/nanobot/groupchat/history/agent_loader.py:52:                            agent_data["rank"] = _… (4,862字)
+• exec(grep -rn "pawn\|knight\|bishop\|queen" /root/nanobot-src/ --include="*.py" 2>...) → /root/nanobot-src/test_interrupt_sender.py:9:    mb.set_ranks({"kirk": "bishop", "harper": "pawn"}, leader="kirk")
+/root/nanobot-src/nanobot/groupchat/history/agent_loader.py:170:                    rank = _cfg.get("rank", "pawn")
+/root/nanobot-src/nanobot/groupchat/history/agent_loader.py:231:        # Rank: pawn < knight < bishop (controls who-can-interrupt-whom)
+/root/nanobot-src/nanobot/groupchat/history/agent_loader.py:232:        rank = acfg.get("rank", "pawn") if config_file.exists() else… (2,630字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 355|         """Mark an agent as no longer inside tool_loop."""
+356|         self._busy_agents.discard(agent_name)
+357|         logger.debug("MailboxHub: {} is now idle", agent_name)
+358| 
+359|     def set_ranks(self, ranks: dict[str, str], leader: str = "") -> None:
+360|         """Store agent ranks for interrupt permission checking.
+361|         
+362|         Args:
+363|             ranks: Mapping of agent_name -> rank_string ("pawn", "knight", "bishop")
+364|             leader: Leader agent name — always gets highest priority regardless of rank.
+365|         """
+366|         order = {"pawn": 0, "knight": 1, "bishop": 2}
+367|         self._ranks.clear()
+368|         self._leader = leader
+369|         for name, r in ranks.items():
+370|             # Leader always gets highest rank (bishop … (3,212字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/agent_loader.py) → 160| 
+161|         # Check for system agent (role: system in config.json)
+162|         config_file = d / "config.json"
+163|         if config_file.exists():
+164|             try:
+165|                 _cfg = json.loads(config_file.read_text())
+166|                 if _cfg.get("role") == "system":
+167|                     model = _cfg.get("model", "?")
+168|                     desc = _cfg.get("description", "系统 agent")
+169|                     tools_enabled = _cfg.get("tools_enabled", False)
+170|                     rank = _cfg.get("rank", "pawn")
+171|                     agent_data = {
+172|                         "model": model, "prompt": "", "role": "system",
+173|                         "description": desc, "tools_enabled": tools_enabled,
+174|                         "workspace_scope": "… (4,227字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 412|     # Wire leader info into mailbox for listener restriction feature
+413|     mailbox.set_leader_name(leader_name or "")
+414| 
+415|     # Push agent ranks into mailbox for interrupt hierarchy
+416|     ranks_map: dict[str, str] = {}
+417|     for ag in agents:
+418|         cfg = engine.registry.get(ag, {})
+419|         ranks_map[ag] = cfg.get("rank", "pawn")
+420|     mailbox.set_ranks(ranks_map, leader=leader_name or "")
+421| 
+422|     # ── Clear any leftover session tool overrides ──
+423|     i… (772字)
+  (还有 1 个工具调用，已省略)
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git status) → HEAD detached at 9ea0e76
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   nanobot/channels/telegram/callbacks.py
+	modified:   nanobot/channels/telegram/commands/agents.py
+	modified:   nanobot/groupchat/history/agent_loader.py
+	modified:   nanobot/groupchat/history/component_manager.py
+	modified:   nanobot/groupchat/orchestra/broadcast.py
+	modified:   nanobot/groupchat/o… (874字)
+• exec(cd /root/nanobot-src && git diff --stat) → nanobot/channels/telegram/callbacks.py             | 16 ++--
+ nanobot/channels/telegram/commands/agents.py       |  2 +-
+ nanobot/groupchat/history/agent_loader.py          | 32 ++++++-
+ nanobot/groupchat/history/component_manager.py     | 99 +++++++++++++++++++++-
+ nanobot/groupchat/orchestra/broadcast.py           | 57 +++++++++++--
+ nanobot/groupchat/orchestra/engine.py              | 60 +++++++++----
+ nanobot/groupchat/orchestra/mailbox.py             |  4 +-
+ nanobot/groupchat/orchestra/run… (790字)
+• exec(cd /root/nanobot-src && git diff --stat HEAD) → nanobot/channels/telegram/callbacks.py             | 16 ++--
+ nanobot/channels/telegram/commands/agents.py       |  2 +-
+ nanobot/groupchat/history/agent_loader.py          | 32 ++++++-
+ nanobot/groupchat/history/component_manager.py     | 99 +++++++++++++++++++++-
+ nanobot/groupchat/orchestra/broadcast.py           | 57 +++++++++++--
+ nanobot/groupchat/orchestra/engine.py              | 60 +++++++++----
+ nanobot/groupchat/orchestra/mailbox.py             |  4 +-
+ nanobot/groupchat/orchestra/run… (790字)
+• exec(cd /root/nanobot-src && git log --oneline -5) → 9ea0e76 fix(groupchat): 打断系统两处权限漏洞
+29957ff feat(groupchat): 打断通知显示等级标签 + 修复 sender 显示为 teammate 的 bug
+30d7454 refactor: unify tool result truncation via result_processor.py
+11c678c stable: v0.1.4.post8-stable — early May 2026
+9d81fbb Save state before fixing tool call log pollution
+
+
+Exit code: 0 (297字)
+• exec(cd /root/nanobot-src && git diff HEAD -- nanobot/groupchat/orchestra/mailbox....) → diff --git a/nanobot/groupchat/orchestra/mailbox.py b/nanobot/groupchat/orchestra/mailbox.py
+index 1fd576e..529cb73 100644
+--- a/nanobot/groupchat/orchestra/mailbox.py
++++ b/nanobot/groupchat/orchestra/mailbox.py
+@@ -360,10 +360,10 @@ class MailboxHub:
+         """Store agent ranks for interrupt permission checking.
+         
+         Args:
+-            ranks: Mapping of agent_name -> rank_string ("pawn", "knight", "bishop")
++            ranks: Mapping of agent_name -> rank_string ("pawn", "knig… (862字)
+• exec(cd /root/nanobot-src && git diff HEAD -- nanobot/channels/telegram/callbacks....) → diff --git a/nanobot/channels/telegram/callbacks.py b/nanobot/channels/telegram/callbacks.py
+index 51c663e..8721a23 100644
+--- a/nanobot/channels/telegram/callbacks.py
++++ b/nanobot/channels/telegram/callbacks.py
+@@ -64,7 +64,9 @@ class CallbacksMixin:
+         return buttons
+ 
+ 
+-    async def _send_agent_hyperparams_keyboard(self, chat_id: str, agent_name: str, agent_hp: dict) -> None:
++    async def _send_agent_hyperparams_keyboard(self, chat_id: str, agent_name: str, agent_hp) -> None:
++    … (2,697字)
+• exec(cd /root/nanobot-src && git status --porcelain) → M nanobot/channels/telegram/callbacks.py
+ M nanobot/channels/telegram/commands/agents.py
+ M nanobot/groupchat/history/agent_loader.py
+ M nanobot/groupchat/history/component_manager.py
+ M nanobot/groupchat/orchestra/broadcast.py
+ M nanobot/groupchat/orchestra/engine.py
+ M nanobot/groupchat/orchestra/mailbox.py
+ M nanobot/groupchat/orchestra/run_loop.py
+ M nanobot/groupchat/orchestra/tools/chatroom_tools.py
+ M nanobot/groupchat/orchestra/tools/tool_loop.py
+ M nanobot/tools/memory_palace.py
+
+
+Exit … (508字)
+• exec() → HEAD detached from 9ea0e76
+nothing to commit, working tree clean
+
+
+Exit code: 1 (79字)
+• exec(cd /root/nanobot-src && git log --oneline -3) → 1bf9cfb stable: v0.1.5 — 2026-05-13 稳定版本
+9ea0e76 fix(groupchat): 打断系统两处权限漏洞
+29957ff feat(groupchat): 打断通知显… (157字)
+  (还有 1 个工具调用，已省略)
+---
+[Kirk]: ## 结论
+
+`v0.1.5` 已提交并打标签，作为 2026-05-13 稳定版本。
+
+## 关键变更
+
+| 类别 | 内容 |
+|------|------|
+| **queen等级** | pawn→knight→bishop→queen 四级体系，leader/user 隐藏 |
+| **autowait守卫** | leader 调 end_discussion 时自动等 busy agent（60s超时） |
+| **per-agent config** | agent_loader 读取各 agent 的 config.json（tools/rank/hyperparams） |
+| **bug修复** | tool_loop list序列化、callbacks类型守卫 |
+| **memory_palace** | store 新增 visible 参数 |
+
+**commit**: `1bf9cfb` | **tag**: `v0.1.5` | **11文件** +285/-77
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git status --short) → M nanobot/channels/telegram/callbacks.py
+ M nanobot/channels/telegram/commands/agents.py
+ M nanobot/groupchat/history/agent_loader.py
+ M nanobot/groupchat/history/component_manager.py
+ M nanobot/groupchat/orchestra/broadcast.py
+ M nanobot/groupchat/orchestra/engine.py
+ M nanobot/groupchat/orchestra/mailbox.py
+ M nanobot/groupchat/orchestra/run_loop.py
+ M nanobot/groupchat/orchestra/tools/chatroom_tools.py
+ M nanobot/groupchat/orchestra/tools/tool_loop.py
+ M nanobot/tools/memory_palace.py
+
+
+Exit … (508字)
+• exec(cd /root/nanobot-src && git diff --stat) → nanobot/channels/telegram/callbacks.py             | 16 ++--
+ nanobot/channels/telegram/commands/agents.py       |  2 +-
+ nanobot/groupchat/history/agent_loader.py          | 32 ++++++-
+ nanobot/groupchat/history/component_manager.py     | 99 +++++++++++++++++++++-
+ nanobot/groupchat/orchestra/broadcast.py           | 57 +++++++++++--
+ nanobot/groupchat/orchestra/engine.py              | 60 +++++++++----
+ nanobot/groupchat/orchestra/mailbox.py             |  4 +-
+ nanobot/groupchat/orchestra/run… (790字)
+• exec(cd /root/nanobot-src && git log --oneline -5) → 9ea0e76 fix(groupchat): 打断系统两处权限漏洞
+29957ff feat(groupchat): 打断通知显示等级标签 + 修复 sender 显示为 teammate 的 bug
+30d7454 refactor: unify tool result truncation via result_processor.py
+11c678c stable: v0.1.4.post8-stable — early May 2026
+9d81fbb Save state before fixing tool call log pollution
+
+
+Exit code: 0 (297字)
+• exec(cd /root/nanobot-src && git diff) → diff --git a/nanobot/channels/telegram/callbacks.py b/nanobot/channels/telegram/callbacks.py
+index 51c663e..8721a23 100644
+--- a/nanobot/channels/telegram/callbacks.py
++++ b/nanobot/channels/telegram/callbacks.py
+@@ -64,7 +64,9 @@ class CallbacksMixin:
+         return buttons
+ 
+ 
+-    async def _send_agent_hyperparams_keyboard(self, chat_id: str, agent_name: str, agent_hp: dict) -> None:
++    async def _send_agent_hyperparams_keyboard(self, chat_id: str, agent_name: str, agent_hp) -> None:
++    … (28,803字)
+• exec() → [detached HEAD 1bf9cfb] stable: v0.1.5 — 2026-05-13 稳定版本
+ 11 files changed, 285 insertions(+), 77 deletions(-)
+
+
+Exit code: 0 (125字)
+• exec(cd /root/nanobot-src && git tag -a v0.1.5 -m "2026-05-13 stable: queen等级 + au...) → 1bf9cfb stable: v0.1.5 — 2026-05-13 稳定版本
+9ea0e76 fix(groupchat): 打断系统两处权限漏洞
+29957ff feat(groupchat): 打断通知显示等级标签 + 修复 sender 显示为 teammate 的 bug
+---
+v0.1.3.post4
+v0.1.3.post5
+v0.1.3.post6
+v0.1.3.post7
+v0.1.4
+v0.1.4.post1
+v0.1.4.post2
+v0.1.4.post3
+v0.1.4.post4
+v0.1.4.post5
+v0.1.4.post5-safe
+v0.1.4.post6-stable
+v0.1.4.post7-stable
+v0.1.4.post8-stable
+v0.1.5
+v0.1.5-stable
+
+
+Exit code: 0 (384字)
+• memory_palace() → ✅ Stored in wing_code/v0-1-5-stable-20260513 (hidden)
+  Drawer ID: drawer_wing_code_v0-1-5-stable-20260513_ff2019d0bcf6726836cec80a (131字)
+• end_discussion() → ✅ 讨论已结束（原因: Git提交完成，v0.1.5 stable已打标签），即将进入总结阶段 (47字)
+---

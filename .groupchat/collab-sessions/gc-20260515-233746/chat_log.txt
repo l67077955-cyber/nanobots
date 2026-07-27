@@ -1,0 +1,107 @@
+[用户]: 再看看
+---
+[Harper]: 找到了。你说的"保护几轮"是上下文压缩/裁剪系统中**保护最近N轮不被裁剪**的机制。当前运行时配置：
+
+---
+
+**保护几轮 = 6**
+
+| 参数 | 当前值 | 作用 |
+|------|--------|------|
+| `compression_keep_recent` | **6** | 上下文压缩时保护最近6条消息 |
+| `context_pruning.keep_recent` | **6** | 工具结果裁剪时保护最近6轮对话 |
+
+来源：`/root/.nanobot/history_settings.json`
+
+要改这个值吗？
+
+[工具调用记录]
+• memory_palace() → ## L2 — ON-DEMAND (1 drawers)
+  [context-pruning-ai-summary] ## 上下文裁剪 AI 摘要（2026-05-15）  ### 改动 1. `tool_pruning.py` — 新增 `prune_conversation_tail_with_summary()`：    - 丢弃 ≥5 条时调 LLM 做结构化摘要（目标/关键进展/待解决/关键数据，≤300字）    - LLM 失败回退纯切片；注入前替换旧摘要防累积 2. `broadcast.py` — 调用点改为 async + provider/model；反重复注入去重  ### 关键参数 - `min_dropped_for_summary=5`（<5条不调LLM） - `keep_... (361字)
+• memory_palace() → ## L2 — ON-DEMAND (2 drawers)
+  [context-compression-fixes] 上下文压缩逻辑三处修复（2026-05-11）：  1. keep_recent 硬编码→配置驱动：context.py:183 从 compression_keep_recent() 读配置（默认6），不再硬编码。history_settings.py 新增 compression_keep_recent 配置项。  2. summarize_enabled=false→true：运行时配置已改为 true。中间消息≥21条时走摘要而非静默丢弃。summarize_model=z-ai/glm-5.1。  3. _find_head_indices 双循环解耦：context.py:5...
+  [context-compression-fixes] 上下文压缩逻辑三处修复已验证通过：1) keep_recent从硬编码改为配置驱动(compression_keep_recent)，2) summarize_enabled从false改为true(启用AI摘要保留语… (587字)
+• exec(grep -rn "keep_recent\|keep_turns\|compression_keep" /root/nanobot-src/nanobo...) → /root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:7:Only tool-result messages *before* the last ``keep_recent`` assistant turns
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:47:def _find_cutoff_index(messages: list[dict[str, Any]], keep_recent: int) -> int:
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:52:    if keep_recent <= 0:
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:59:            if count >= keep_recent:
+/root/nanobot-src/nanobot/grou… (3,524字)
+• exec() → Exit code: 0 (13字)
+• exec() → === groupchat_settings.json ===
+{
+  "tool_initial": 3,
+  "tool_earn_per_output": 1,
+  "allocate_timeout": 12,
+  "context_pool_capacity": 5,
+  "context_points_per_agent": 3,
+  "resolve_credits": 10,
+  "search_refund": 1,
+  "call_timeout": 90,
+  "memory_palace_path": "/root/.nanobot/workspace/memory_palace"
+}
+
+=== history_settings.json ===
+{
+  "context_window_tokens": 35000,
+  "tool_result_max_chars": 5000,
+  "tool_results": {
+    "exec_max_chars": 10000,
+    "web_fetch_max_chars": 10000,
+    "web… (1,277字)
+---
+[Kirk]: ## 当前"保护几轮"配置
+
+| 配置项 | 值 | 位置 | 含义 |
+|--------|-----|------|------|
+| `context_pruning.keep_recent` | **6 轮** | `~/.nanobot/history_settings.json` | 轮内裁剪：最近 6 个 assistant turn 的工具结果不被裁剪 |
+| `history.compression_keep_recent` | **6 条** | 同上 | 跨轮压缩：尾部保留最近 6 条消息 |
+
+**简单说：当前保护最近 6 轮的工具结果不被裁剪。**
+
+相关参数一览：
+- 软裁剪触发比例：`soft_ratio = 0.2`（上下文达 20% 窗口时触发）
+- 硬裁剪触发比例：`hard_ratio = 0.4`
+- 软裁剪阈值：单条 tool result 超过 3000 字符才裁剪
+- 跨轮压缩：消息数 ≥ 21 条（30×0.7）时触发，AI 摘要已启用（`summarize_enabled: true`）
+
+需要调整吗？
+
+[工具调用记录]
+• exec(grep -r "保护几轮\|保护.*轮\|几轮" /root/.nanobot/workspace/ --include="*.py" --includ...) → /root/.nanobot/workspace/nanobot_stdout.log:**本质问题**: 这两个 `keep_recent` 语义不同——跨轮保护的是"最后N条消息"（不分角色），轮内保护的是"最后N个assistant turn"。数值不同本身合理，但跨轮的 `6` 是硬编码，无法通过配置调整，而轮内的 `3` 可以。如果需要统一调整保护窗口，只能改代码。
+/root/.nanobot/workspace/nanobot_stdout.log:  [31] assistant 2,269字 tools=[chatroom_send] | 全部源码已读完。以下是三个问题的精确定位和严重性评估：\n\n---\n\n## 问题定位结果\n\n### 问题1: `keep_recent` 硬编码 vs 配置驱动 — **中风险**\n\n**位置**: `context.py:171` vs `tool_pruning.py:22` / `history_settings.py:70`\n\n| 层级 | 值 | 来源 |\n|------|-----|------|\n… (137,478字)
+• exec(grep -r "保护几轮\|保护.*轮\|几轮" /root/nanobot-src/ --include="*.py" --include="*.md...) → /root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/memory_rag/vector_index.json:{"CORE_SUMMARY.md": {"hash": "7a7e16c36e58", "chunks": [{"id": "7a7e16c36e58_0", "text": "# Long-term Memory\n\nThis file stores important information that should persist across sessions.\n\n## User Information\n\n- User communicates primarily in Chinese (中文)\n- Using nanobot framework with \"酒馆\" (tavern) multi-agent collaboration feature\n- **重要命令**: \"new\" 命令（用户要求记住）\n\n## Preferences\n\n- Uses nanobot's … (1,212,726字)
+• exec() → /root/.nanobot/workspace/test_pruning.py:    dropped = await prune_conversation_tail_with_summary(msgs, sys_msg_count=1, keep_turns=2)
+/root/.nanobot/workspace/test_pruning.py:    # keep_turns=2 → max_conv=6. 17 msgs - 1 prefix = 16 conv. 16 > 6, drop 10.
+/root/.nanobot/workspace/test_pruning.py:    dropped = await prune_conversation_tail_with_summary(msgs, sys_msg_count=1, keep_turns=2)
+/root/.nanobot/workspace/test_pruning.py:    # keep_turns=2 → max_conv=6. 16 msgs - 1 prefix = 15 conv. 15 > … (889字)
+• exec(cat ~/.nanobot/history_settings.json 2>/dev/null) → {
+  "context_window_tokens": 35000,
+  "tool_result_max_chars": 5000,
+  "tool_results": {
+    "exec_max_chars": 10000,
+    "web_fetch_max_chars": 10000,
+    "web_search_max_chars": 5000,
+    "summarize_enabled": true,
+    "summarize_threshold": 20000,
+    "summarize_model": "openai/gpt-4.1-nano",
+    "summarize_max_input_chars": 10000,
+    "summarize_max_output_chars": 5000,
+    "broadcast_result_max_chars": 25000,
+    "direct_result_max_chars": 12000,
+    "html_detect_enabled": true
+  },
+  "hist… (936字)
+• exec(grep -n -A5 -B2 "keep_recent\|keep_turns\|context_pruning\|保护" /root/nanobot-...) → 1779-                "合并策略的上限锚点。\n\n"
+1780-                "算法链路:\n"
+1781:                "  1. context_pruning 按此值的 30%/50% "
+1782-                "触发 soft/hard 裁剪\n"
+1783-                "  2. MemoryConsolidator 在达到 50% 时"
+1784-                "将旧消息合并为摘要\n"
+1785-                "  3. 最终发送给 LLM 的 prompt 不超过此值\n\n"
+1786-                "建议: 与你使用的模型窗口匹配 (如 GPT-4.1 → 1,000,000)"
+--
+1969-            ),
+1970-        },
+1971:        "context_pruning:soft_ratio": {
+1972-            "label": "软裁剪触发比例",… (2,298字)
+---

@@ -1,0 +1,1219 @@
+[系统]: 话题：自由讨论
+---
+[用户]: Favicon for z-ai
+GLM 5.1
+Favicon for DeepInfra
+DeepInfra
+liteLLM  
+238
+tok
+1,016
+tok
+$
+0.0037
+Credits  
+36.0
+tok/s
+stop
+
+May 11, 06:25 PM
+Favicon for z-ai
+GLM 5.1
+Favicon for Chutes
+Chutes
+liteLLM  
+298
+tok
+877
+tok
+$
+0.00338
+Credits  
+65.7
+tok/s
+stop
+
+May 11, 06:25 PM
+Favicon for deepseek
+DeepSeek V4 Flash
+Favicon for SiliconFlow
+SiliconFlow
+liteLLM  
+17,886
+tok
+422
+tok
+$
+0.000802
+Credits  
+69.8
+tok/s
+tool_calls
+
+May 11, 06:24 PM
+Favicon for deepseek
+DeepSeek V4 Flash
+Favicon for SiliconFlow
+SiliconFlow
+liteLLM  
+16,549
+tok
+280
+tok
+$
+0.000732
+Credits  
+47.4
+tok/s
+tool_calls
+
+May 11, 06:24 PM
+Favicon for deepseek
+DeepSeek V4 Flash
+Favicon for SiliconFlow
+SiliconFlow
+liteLLM  
+15,864
+tok
+431
+tok
+$
+0.00197
+Credits  
+69.6
+tok/s
+tool_calls
+
+May 11, 06:24 PM
+Favicon for deepseek
+DeepSeek V4 Flash
+Favicon for SiliconFlow
+SiliconFlow
+liteLLM  
+14,566
+tok
+299
+tok
+$
+0.000603
+Credits  
+45.2
+tok/s
+tool_calls
+
+May 11, 06:23 PM
+Favicon for z-ai
+GLM 5.1
+Favicon for Chutes
+Chutes
+liteLLM  
+789
+tok
+1,642
+tok
+$
+0.00658
+Credits  
+40.2
+tok/s
+stop
+
+May 11, 06:23 PM
+Favicon for z-ai
+GLM 5.1
+Favicon for DeepInfra
+DeepInfra
+liteLLM  
+256
+tok
+779
+tok
+$
+0.00294
+现在总结上下文的ai传入的token貌似很少，定位一下问题
+---
+[Kirk]: 
+
+[工具调用记录]
+• memory_palace(context summarization token input GLM) → 🔍 5 result(s) for 'context summarization token input GLM':
+
+[1] wing_code/ai-compression-fix (sim=-0.119)
+  AI压缩功能模型配置：用户坚持使用 z-ai/glm-5.1。history_settings.json 的 summarize_model 和 agents/reader/config.json 均设为 z-ai/glm-5.1 + provider openrouter。已知风险：summarizer.py 路径上 _resolve_model 会将 z-ai/glm-5.1 解析为 zai/z-ai/glm-5.1（zhipu provider），zhipu 无 key 可能导致工具输出摘要失败。context.py 路径安全（走 _resolve_pm_overrides 拦截）。
+
+[2] wing_code/ai-compression-final (sim=-0.2)
+  ## nanobot AI压缩功能诊断 — 最终结论 (2026-05-11)
+
+###… (2,223字)
+• exec(find /root/nanobot-src -type f -name "*.py" | head -50) → /root/nanobot-src/fix_single_agent.py
+/root/nanobot-src/test_interrupt_sender.py
+/root/nanobot-src/test_mp3.py
+/root/nanobot-src/test_mp2.py
+/root/nanobot-src/test_mp.py
+/root/nanobot-src/tests/test_groupchat.py
+/root/nanobot-src/tests/test_base_channel.py
+/root/nanobot-src/tests/test_custom_provider.py
+/root/nanobot-src/tests/test_feishu_tool_hint_code_block.py
+/root/nanobot-src/tests/test_loop_consolidation_tokens.py
+/root/nanobot-src/tests/test_config_paths.py
+/root/nanobot-src/tests/test_loo… (2,383字)
+• exec(find /root/nanobot-src/nanobot -type f -name "context.py" | head -5) → /root/nanobot-src/nanobot/groupchat/history/context.py
+
+
+Exit code: 0 (69字)
+• exec(find /root/nanobot-src/nanobot -type f -name "summarizer.py" | head -5) → /root/nanobot-src/nanobot/tools/summarizer.py
+
+
+Exit code: 0 (60字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 1| """HistoryContext — single source of truth for conversation history.
+2| 
+3| Owns the message list and all related operations:
+4|   - add_message     : append + enforce message-count & char-budget limits
+5|   - maybe_compress  : AI summarize (or drop) the middle region on overflow
+6|   - clear / format  : utility helpers
+7| 
+8| Engine and Broadcast delegate to this class instead of maintaining
+9| ``self._history`` directly.  Persistence is still delegated to
+10| ``GroupChatState.save_message()``.
+11| """
+12| 
+13| from __future__ import annotations
+14| 
+15| import asyncio
+16| from typing import TYPE_CHECKING, Any
+17| 
+18| from loguru import logger
+19| 
+20| if TYPE_CHECKING:
+21|     from nanobot.groupchat.history.persistence import GroupChatState
+22| 
+23| 
+24| class HistoryContext:
+25|    … (9,879字)
+• read_file(/root/nanobot-src/nanobot/tools/summarizer.py) → 1| """Lightweight tool-output summarizer using a cheap reader model.
+2| 
+3| When a tool (e.g. ``exec``) produces output larger than a threshold,
+4| this module compresses it via a small LLM (default: gpt-4.1-nano)
+5| before the result is injected back into the conversation context.
+6| 
+7| Falls back to head+tail truncation on any failure.
+8| """
+9| 
+10| from __future__ import annotations
+11| 
+12| import json
+13| from pathlib import Path
+14| from typing import Any
+15| 
+16| from loguru import logger
+17| 
+18| # ── Defaults ──────────────────────────────────────────────────────────────
+19| 
+20| _DEFAULT_READER_MODEL = "openai/gpt-4.1-nano"
+21| _DEFAULT_PROVIDER = "openrouter"
+22| 
+23| 
+24| def _load_reader_config() -> dict[str, Any]:
+25|     """Load reader agent config from ``~/.nanobot/agents… (7,269字)
+• exec(find /root/nanobot-src/nanobot -name "history_settings.py" -o -name "history_...) → /root/nanobot-src/nanobot/groupchat/history/history_settings.py
+
+
+Exit code: 0 (78字)
+• exec(cat /root/.nanobot/history_settings.json 2>/dev/null || echo "NOT FOUND") → {
+  "context_window_tokens": 50000,
+  "tool_result_max_chars": 10000,
+  "tool_results": {
+    "exec_max_chars": 10000,
+    "web_fetch_max_chars": 10000,
+    "web_search_max_chars": 5000,
+    "summarize_enabled": true,
+    "summarize_threshold": 20000,
+    "summarize_model": "z-ai/glm-5.1",
+    "summarize_max_input_chars": 10000,
+    "summarize_max_output_chars": 5000,
+    "broadcast_result_max_chars": 25000,
+    "direct_result_max_chars": 12000,
+    "html_detect_enabled": true
+  },
+  "history": … (891字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/history_settings.py) → (9,187字)
+  (还有 8 个工具调用，已省略)
+---
+[Kirk]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 940|         duration: float = 0.0,
+941|     ) -> None:
+942|         """Delegate to persistence layer."""
+943|         self._state.save_round_summary(round_num, agents_responded, comm_count, duration)
+944| 
+945|     def _on_agent_comm(self, sender: str, targets: list[str], content: str) -> None:
+946|         """Callback from MailboxHub.send() — persist agent communication."""
+947|         self._state.save_event("agent_comm", agent=sender, content=content, extra={
+948|             "targets": targets,
+949|         })
+950| 
+951|     async def _maybe_compress_history(self) -> None:
+952|         """Compress history if needed — delegates to HistoryContext."""
+953|         await self.history.maybe_compress()
+954|         self._history = self.history.messages  # keep shim in sync
+955| 
+956|     de… (1,509字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 1125|                         **stats)
+1126|             logger.info(
+1127|                 "direct_chat [{}] cycle {} result: content={}",
+1128|                 agent_name, cycle, content,
+1129|             )
+1130|             _tool_details = stats.get("tool_calls_detail", [])
+1131|             if content or _tool_details:
+1132|                 engine._add_message("用户", current_user_msg)
+1133|                 # Store content with tool call log so model sees its history
+1134|                 history_content = (content or "") + build_tool_log(_tool_details)
+1135|                 engine._add_message(agent_name, history_content)
+1136|                 # Bug 7 fix: run history compression in single-agent mode too
+1137|                 await engine._maybe_compress_history()
+1138|                … (1,985字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 100|             return self.workspace
+101|         elif scope == "source":
+102|             # Auto-detect nanobot source root from package location
+103|             import nanobot
+104|             return Path(nanobot.__file__).parent.parent
+105|         elif scope == "prompts":
+106|             agent_dir = agent_cfg.get("agent_dir")
+107|             return Path(agent_dir) if agent_dir else self.workspace
+108|         elif scope == "tmp":
+109|             return Path("/tmp")
+110|         elif scope.startswith("/"):
+111|             return Path(scope)
+112|         else:
+113|             logger.warning("Unknown workspace scope '{}' for {}, using workspace", scope, agent_name)
+114|             return self.workspace
+115| 
+116|     def _register_tools(self) -> None:
+117|         """Register def… (1,565字)
+• exec(cd /root/nanobot-src && grep -n "_maybe_compress_history" nanobot/groupchat/o...) → 114:            await engine._maybe_compress_history()
+
+
+Exit code: 0 (69字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 100| 
+101|             # Determine speaking order
+102|             speak_order = list(engine._active_agents)
+103| 
+104|             # ── 关键修复：给 broadcast_round 加上全局超时保护 ──
+105|             # 防止某一轮卡死导致整个群聊永久阻塞
+106|             await broadcast_round(
+107|                 speak_order,
+108|                 engine,
+109|                 engine._mailbox,
+110|                 global_timeout=600.0,   # 10 分钟（可根据需要调整）
+111|             )
+112| 
+113|             # Compress history if approaching the message limit
+114|             await engine._maybe_compress_history()
+115| 
+116|             # Signal round complete
+117|             if engine._on_round_done:
+118|                 try:
+119|                     await engine._on_round_done()
+120|                 except Exception:
+121|                     pas… (1,124字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 74|     def __getitem__(self, idx):
+75|         return self.messages[idx]
+76| 
+77|     def clear(self) -> None:
+78|         """Wipe the entire history."""
+79|         self.messages.clear()
+80| 
+81|     def format(self) -> str:
+82|         """Format history as a single readable string."""
+83|         return … (3,546字)
+  (还有 1 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• list_messages() → 当前无历史消息 (7字)
+• exec(ls /root/.nanobot/workspace/) → AGENTS.md
+AI-Researcher
+HEARTBEAT.md
+RAG-Anything
+SOUL.md
+TOOLS.md
+USER.md
+agents
+claude-code-leak
+markitdown
+memory
+memory_palace
+mempalace
+nanobot_stdout.log
+opencli
+sessions
+skills
+
+
+Exit code: 0 (198字)
+• exec(cat /etc/hosts | head -50; echo "---"; env | grep -E "(OPENAI|AZURE|MODEL|PRO...) → # Your system has configured 'manage_etc_hosts' as True.
+# As a result, if you wish for changes to this file to persist
+# then you will need to either
+# a.) make changes to the master file in /etc/cloud/templates/hosts.debian.tmpl
+# b.) change or remove the value of 'manage_etc_hosts' in
+#     /etc/cloud/cloud.cfg or cloud-config from user-data
+#
+127.0.1.1 vmi3127983.contaboserver.net vmi3127983
+127.0.0.1 localhost
+
+# The following lines are desirable for IPv6 capable hosts
+::1 localhost ip6-loc… (680字)
+• exec(tail -500 /root/.nanobot/workspace/nanobot_stdout.log | tail -200) → 136|         settings_model = None
+137|     model = settings_model or reader_cfg.get("model", _DEFAULT_READER_MODEL)
+138|     provider_name = reader_cfg.get("provider", _DEFAULT_PROVIDER)
+139| 
+140|     # Load provider credentials
+141|     api_key, api_base = "", ""
+142|     try:
+143|         cfg_path = Path.home() / ".nanobot" / "config.json"
+144|         if cfg_path.exists():
+145|             cfg = json.loads(cfg_path.read_text())
+146|             pcfg = (cfg.get("providers") or {}).get(provid… (58,214字)
+• exec(ps aux | grep -E "(litellm|lite)" 2>/dev/null || ss -tnlp 2>/dev/null | head -20) → root     1859096  0.0  0.0   7740  3424 ?        S    18:30   0:00 /bin/bash -c ps aux | grep -E "(litellm|lite)" 2>/dev/null || ss -tnlp 2>/dev/null | head -20
+root     1859097  0.0  0.0   7740  3400 ?        S    18:30   0:00 /bin/bash -c pip show litellm 2>/dev/null | head -10; which litellm 2>/dev/null; ls ~/.config/litellm* 2>/dev/null; cat /proc/net/tcp | awk '{print $2}' | cut -d':' -f2 | sort -u | while read port; do [[ "$port" != "" ]] && printf "%x\n" $((16#$port)) ; done 2>/dev/null
+r… (713字)
+• exec() → Name: litellm
+Version: 1.82.3
+Summary: Library to easily interface with LLM API providers
+Home-page: 
+Author: BerriAI
+Author-email: 
+License: MIT
+Location: /usr/local/lib/python3.12/dist-packages
+Requires: aiohttp, click, fastuuid, httpx, importlib-metadata, jinja2, jsonschema, openai, pydantic, python-dotenv, tiktoken, tokenizers
+Required-by: nanobot-ai
+/usr/local/bin/litellm
+16
+35
+277
+bb8
+4650
+91ef
+a474
+
+
+Exit code: 1 (423字)
+• exec(cat /root/.nanobot/config.json 2>/dev/null | python3 -m json.tool 2>/dev/null...) → {
+    "agents": {
+        "defaults": {
+            "workspace": "~/.nanobot/workspace",
+            "model": "kimi-k2.5",
+            "provider": "openrouter",
+            "maxTokens": 8192,
+            "contextWindowTokens": 200000,
+            "temperature": 0.95,
+            "maxToolIterations": 40,
+            "reasoningEffort": null
+        }
+    },
+    "channels": {
+        "sendProgress": true,
+        "sendToolHints": false,
+        "whatsapp": {
+            "enabled": false,
+          … (9,119字)
+• exec(cat /root/.nanobot/workspace/USER.md) → # User Profile
+
+Information about the user to help personalize interactions.
+
+## Basic Information
+
+- **Name**: (your name)
+- **Timezone**: (your timezone, e.g., UTC+8)
+- **Language**: (preferred language)
+
+## Preferences
+
+### Communication Style
+
+- [ ] Casual
+- [ ] Professional
+- [ ] Technical
+
+### Response Length
+
+- [ ] Brief and concise
+- [ ] Detailed explanations
+- [ ] Adaptive based on question
+
+### Technical Level
+
+- [ ] Beginner
+- [ ] Intermediate
+- [ ] Expert
+
+## Work Context
+
+- **Primar… (856字)
+• exec(cat /root/.nanobot/workspace/TOOLS.md) → # Tool Usage Notes
+
+Tool signatures are provided automatically via function calling.
+This file documents non-obvious constraints and usage patterns.
+
+## exec — Safety Limits
+
+- Commands have a configurable timeout (default 60s)
+- Dangerous commands are blocked (rm -rf, format, dd, shutdown, etc.)
+- Output is truncated at 10,000 characters
+-… (497字)
+  (还有 7 个工具调用，已省略)
+---
+[Harper]: 好，我已经收集了大量底层数据。让我整理出根因分析。
+
+## Token输入过低的根本原因
+
+看了日志中的 `cache probe` 记录，以及上下文构建逻辑，问题很清晰：
+
+**核心矛盾：Agent的系统提示太长 vs 群聊模式下每个agent独享一份完整system prompt**
+
+从日志看到：
+```
+cache probe (deepseek/deepseek-v4-flash): 94%
+(tools=3ktok, sys10=5ktok, sys11=5ktok, sys12=5ktok)
+```
+
+这意味着每次调用传给模型的prompt中，**仅system prompts就有约15KB+**（sys10+sys11+sys12 ≈ 15k tokens），加上tools定义≈3k tokens，总共约18k tokens全是固定的系统指令开销。
+
+而用户的真实输入只有几百token —— 这就是为什么显示"输入的token很少"。实际上并不是真的少，而是**被巨量的system prompt稀释了占比**。
+
+再看几个具体的放大因子：
+
+1. **多份system prompt叠加**：每条消息都携带了完整的角色设定（Kirk的角色描述、Harper的角色描述）、输出效率指南、协作协议、搜索降级策略等多层嵌套的system msg
+2. **缓存命中率94%**：说明绝大部分token都是重复的固定开销
+3. **群聊广播模式的固有成本**：每个agent看到的context都要加载所有人的profile和历史
+
+这不是bug，这是架构设计的结果 —— 为了保证每个agent都有完整的上下文和行为规范，牺牲了input token的效率。如果要优化，可以考虑把静态system prompt移到server端预填充或缩短各角色的persona长度。
+---
+[Kirk]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "def _build_messages\|def _format_history\|de...) → 956:    def _format_history(self) -> str:
+958:        return self.history.format()
+
+
+Exit code: 0 (97字)
+• exec(cd /root/nanobot-src && grep -n "def _add_message\|add_message" nanobot/group...) → 273:        # self.history.add_message() or self.history.messages directly.
+918:    def _add_message(self, sender: str, content: str) -> None:
+920:        self.history.add_message(sender, content)
+1132:                engine._add_message("用户", current_user_msg)
+1135:                engine._add_message(agent_name, history_content)
+
+
+Exit code: 0 (346字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 915|                 break
+916|         return protected
+917| 
+918|     def _add_message(self, sender: str, content: str) -> None:
+919|         """Append a message — delegates to HistoryContext."""
+920|         self.history.add_message(sender, content)
+921|         # Keep the shim alias in sync after HistoryContext may have rebuilt the list
+922|         self._history = self.history.messages
+923| 
+924|     def _save_event(
+925|         self,
+926|         event_type: str,
+927|         *,
+928|         agent: str = "",
+929|         content: str = "",
+930|         extra: dict[str, Any] | None = None,
+931|     ) -> None:
+932|         """Delegate to persistence layer."""
+933|         self._state.save_event(event_type, agent=agent, content=content, extra=extra)
+934| 
+
+(Showing lines 915-934 of 164… (831字)
+• exec(cd /root/nanobot-src && grep -rn "def _build_messages\|def build_messages\|de...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && grep -rn "history\.format\|_format_history\|format_hi...) → nanobot/groupchat/orchestra/run_loop.py:38:                    f"群聊记录：\n{engine._format_history()}\n\n"
+nanobot/groupchat/orchestra/engine.py:956:    def _format_history(self) -> str:
+nanobot/groupchat/orchestra/engine.py:958:        return self.history.format()
+
+
+Exit code: 0 (277字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 20|     """Generate a discussion summary using the first active agent's model."""
+21|     if not engine._history:
+22|         return
+23| 
+24|     # ── 关键修复：防止 _active_agents 为空时 IndexError ──
+25|     if not engine._active_agents:
+26|         await engine._send("⚠️ 没有活跃 agent，无法生成总结")
+27|         return
+28| 
+29|     agent_name = engine._active_agents[0]
+30|     model = engine.registry[agent_name]["model"]
+31| 
+32|     try:
+33|         response = await engine.provider.chat_with_retry(
+34|             messages=[
+35|                 {"role": "system", "content": "你是一个讨论总结专家。"},
+36|                 {"role": "user", "content": (
+37|                     f"话题：{engine._topic}\n\n"
+38|                     f"群聊记录：\n{engine._format_history()}\n\n"
+39|                     "请输出简洁总结：1)核心观点 2)分歧点 3)初步结论"
+… (1,933字)
+• exec(cd /root/nanobot-src && grep -n "def _agent_cycle\|async def _agent_cycle\|de...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && grep -n "direct_chat\|_direct_chat\|single_agent\|_si...) → 298:        self._direct_chat_task: asyncio.Task | None = None
+299:        self._direct_chat_queue: asyncio.Queue[str] = asyncio.Queue()
+800:    def direct_chat_inject(self, user_message: str) -> bool:
+805:        if self._direct_chat_task and not self._direct_chat_task.done():
+806:            self._direct_chat_queue.put_nowait(user_message)
+811:    async def direct_chat(self, user_message: str) -> str | None:
+812:        """Send message to single active agent — delegates to direct_chat module."… (1,164字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 1039| async def direct_chat(engine: Any, user_message: str) -> str | None:
+1040|     """Send message to single active agent (1-on-1 mode) with interjection.
+1041| 
+1042|     Runs the first reply, then loops waiting for user interjections
+1043|     via ``engine._direct_chat_queue``.  Exits when no interjection
+1044|     arrives within the timeout window.
+1045| 
+1046|     Args:
+1047|         engine: Group… (3,603字)
+---
+[用户]: 怎么样了
+---
+[Harper]: ## 定位完毕
+
+**根因：System Prompt膨胀导致有效输入占比过低**
+
+每条请求的结构拆解：
+- System Prompts × 多层（角色设定×人数 + 协作协议 + 输出效率指南）= ~15k tokens
+- Tools definitions = ~3k tokens
+- **合计固定开销 ≈ 18k tokens**
+- 用户实际输入 = 几百token
+- Cache hit rate 94%（证明绝大多数是重复固定内容）
+
+所以不是"传少了"，是**固定开销太大把比例压低了**。想省就把各agent persona精简掉冗余部分，或者服务端侧预拼接减少传输体积。要我动手看哪里能砍就直接说。
+---
+[用户]: 我指的是5.1模型
+---
+[用户]: 他是负责总结的
+---
+[Kirk]: 这条日志是我自己（Kirk）的请求，不是 GLM 5.1 的。让我直接搜 GLM 5.1 的请求日志：
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -rn "summarize\|summary\|compress\|context.*summ...) → nanobot/groupchat/history/tool_pruning.py:5:a concise 1-line summary (e.g. `[exec] ran 'npm test' -> exit 0, 47 lines`).
+nanobot/groupchat/history/tool_pruning.py:80:def _summarize_tool_result(tool_name: str, tool_args: str, tool_content: str) -> str:
+nanobot/groupchat/history/tool_pruning.py:81:    """Create an informative 1-line summary of a tool call + result.
+nanobot/groupchat/history/tool_pruning.py:147:    turns are pruned by substituting large outputs with a single generic summary line.
+n… (3,071字)
+• exec(cd /root/nanobot-src && grep -rn "GLM\|glm\|5\.1" nanobot/groupchat/ --includ...) → nanobot/groupchat/display/display.py:132:    """'✓ Harper  3.2s · read×2, search' or '👑✓ Nanobot  5.1s · send×3, search×2'"""
+
+
+Exit code: 0 (140字)
+• exec(cd /root/nanobot-src && find nanobot/groupchat/history/ -name "summariz*" -o ...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && grep -rn "summarize_model\|summarize_enabled\|compres...) → nanobot/groupchat/history/result_processor.py:168:            compressed, did_compress = await summarize_tool_output(tool_name, text)
+nanobot/groupchat/history/result_processor.py:169:            if did_compress and compressed and len(compressed) < len(text):
+nanobot/groupchat/history/result_processor.py:170:                saved_pct = round((1 - len(compressed) / len(text)) * 100)
+nanobot/groupchat/history/result_processor.py:173:                    tool_name, len(text), len(compressed), saved_… (1,881字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 146|     async def maybe_compress(self) -> None:
+147|         """Compress the middle section of history when it approaches the limit.
+148| 
+149|         Head-tail protection always runs.  AI summarisation is gated by
+150|         ``summarize_enabled``; if disabled, the middle region is simply dropped.
+151|         """
+152|         from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
+153|             max_messages,
+154|             summarize_enabled,
+155|             summarize_model,
+156|             compress_ratio,
+157|             compress_max_summary_tokens,
+158|         )
+159| 
+160|         limit = max_messages()
+161|         ratio = compress_ratio()
+162|         if len(self.messages) < int(limit * ratio):
+163|             return
+164| 
+165|         total_len = len(se… (3,234字)
+• exec(cd /root/nanobot-src && grep -rn "summarize_tool_output\|async def summarize"...) → nanobot/groupchat/history/result_processor.py:164:        from nanobot.tools.summarizer import summarize_tool_output
+nanobot/groupchat/history/result_processor.py:168:            compressed, did_compress = await summarize_tool_output(tool_name, text)
+
+
+Exit code: 0 (265字)
+• exec(cd /root/nanobot-src && cat nanobot/groupchat/history/history_settings.py | h...) → """Centralized history, summarization, and context-pruning settings.
+
+Loads ``~/.nanobot/history_settings.json`` once and exposes typed getters
+so that shell.py, summarizer.py, tool_loop.py, context_pruning.py,
+engine.py, broadcast.py, tool_chat.py, and the Telegram UI can all
+read the same configuration without hardcoding defaults.
+
+Settings are organized into four sections:
+
+- **Top-level**: global limits (context window, tool result hard cap)
+- **tool_results**: per-tool truncation + AI summa… (2,477字)
+• exec() → Exit code: 0 (13字)
+• exec(cat ~/.nanobot/history_settings.json 2>/dev/null || echo "FILE NOT FOUND") → {
+  "context_window_tokens": 50000,
+  "tool_result_max_chars": 10000,
+  "tool_results": {
+    "exec_max_chars": 10000,
+    "web_fetch_max_chars": 10000,
+    "web_search_max_chars": 5000,
+    "summarize_enabled": true,
+    "summarize_threshold": 20000,
+    "summarize_model": "z-ai/glm-5.1",
+    "summarize_max_input_chars": 10000,
+    "summarize_max_output_chars": 5000,
+    "broadcast_result_max_chars": 25000,
+    "direct_result_max_chars": 12000,
+    "html_detect_enabled": true
+  },
+  "history": … (891字)
+  (还有 9 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(grep -rn "GLM\|glm\|z-ai\|summarize\|compress\|summary" /root/nanobot-src/nan...) → 5:  - maybe_compress  : AI summarize (or drop) the middle region on overflow
+146:    async def maybe_compress(self) -> None:
+150:        ``summarize_enabled``; if disabled, the middle region is simply dropped.
+154:            summarize_enabled,
+155:            summarize_model,
+156:            compress_ratio,
+157:            compress_max_summary_tokens,
+161:        ratio = compress_ratio()
+177:        compress_start = (
+180:        compress_end = (
+184:        if compress_start >= compress_end:
+1… (1,574字)
+• exec(grep -rn "summarize\|compress\|summary" /root/nanobot-src/nanobot/groupchat/h...) → /root/nanobot-src/nanobot/groupchat/history/context.py:5:  - maybe_compress  : AI summarize (or drop) the middle region on overflow
+/root/nanobot-src/nanobot/groupchat/history/context.py:146:    async def maybe_compress(self) -> None:
+/root/nanobot-src/nanobot/groupchat/history/context.py:150:        ``summarize_enabled``; if disabled, the middle region is simply dropped.
+/root/nanobot-src/nanobot/groupchat/history/context.py:154:            summarize_enabled,
+/root/nanobot-src/nanobot/groupchat… (3,224字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 140|                     rebuilt.append(m)
+141|                     seen.add(id(m))
+142|             self.messages = rebuilt
+143| 
+144|         self._state.save_message(sender, content, self.messages)
+145| 
+146|     async def maybe_compress(self) -> None:
+147|         """Compress the middle section of history when it approaches the limit.
+148| 
+149|         Head-tail protection always runs.  AI summarisation is gated by
+150|         ``summarize_enabled``; if disabled, the middle region is simply dropped.
+151|         """
+152|         from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
+153|             max_messages,
+154|             summarize_enabled,
+155|             summarize_model,
+156|             compress_ratio,
+157|             compress_max_summary_tokens,
+158|  … (4,451字)
+• exec(grep -rn "max_messages\|compress_ratio\|summarize_model\|compress_max_summary...) → 41:        "summarize_enabled": True,
+43:        "summarize_model": "openai/gpt-4.1-nano",
+59:        "max_messages": 50,
+61:        # History compression: triggered at 80% of max_messages
+62:        "compress_ratio": 0.8,
+63:        "compress_max_summary_tokens": 600,
+157:def summarize_enabled() -> bool:
+158:    return bool(_load()["tool_results"]["summarize_enabled"])
+165:def summarize_model() -> str:
+166:    return str(_load()["tool_results"]["summarize_model"])
+191:def max_messages() -> int:… (780字)
+• exec(grep -rn "max_messages\|compress_ratio\|summarize_model\|compress_max_summary...) → Exit code: 0 (13字)
+• exec() → Exit code: 0 (13字)
+• exec(find /root/nanobot-src -name "*.yaml" -o -name "*.yml" -o -name "*.json" | xa...) → /root/nanobot-src/.git/config-versions.git/history_settings.json
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/history_settings.json
+/root/nanobot-src/SillyTavern/public/scripts/extensions/memory/manifest.json
+/root/nanobot-src/SillyTavern/public/locales/fr-fr.json
+/root/nanobot-src/SillyTavern/public/locales/zh-cn.json
+/root/nanobot-src/SillyTavern/public/locales/ja-jp.json
+/root/nanobot-src/SillyTavern/public/locales/ko-kr.json
+/root/nanobot-src/SillyTavern/public/locales/is-is.js… (629字)
+• exec(find /root/nanobot-src -name "history_settings.json" -not -path "*/.git/*" 2>...) → Exit code: 0 (13字)
+• exec(find /root -name "history_settings.json" -not -path "*/.git/*" 2>/dev/null | ...) → /root/.nanobot/history_settings.json
+/root/.nanobot/.backup_pre_vcs/history_settings.json
+/root/.nanobot.bak/history_settings.json
+
+
+Exit code: 0 (145字)
+• read_file(/root/.nanobot/history_settings.json) → 1| {
+2|   "context_window_tokens": 50000,
+3|   "tool_result_max_chars": 10000,
+4|   "tool_results": {
+5|     "exec_max_chars": 10000,
+6|     "web_fetch_max_chars": 10000,
+7|     "web_search_max_chars": 5000,
+8|     "summarize_enab… (1,032字)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(grep -rn "glm-5.1\|glm_5.1\|GLM.*5\.1\|glm.*5\.1" /root/.nanobot/logs/ 2>/dev...) → Exit code: 0 (13字)
+• exec(find /root/.nanobot/logs/ -name "*.log" -type f 2>/dev/null | head -10) → Exit code: 0 (13字)
+• exec(find /root/.nanobot -name "*.log" -type f 2>/dev/null | head -20) → /root/.nanobot/workspace/nanobot_stdout.log
+/root/.nanobot/gateway_new.log
+/root/.nanobot/gateway.log
+
+
+Exit code: 0 (116字)
+• exec(ls -la /root/.nanobot/ 2>/dev/null) → total 4172
+drwxr-xr-x 18 root root    4096 May 11 17:49 .
+drwx------ 59 root root    4096 May 11 14:24 ..
+drwxr-xr-x 11 root root    4096 May  9 13:26 .backup_pre_vcs
+-rw-r--r--  1 root root    1064 May  9 13:26 .env
+drwxr-xr-x  8 root root    4096 May 11 14:25 .git
+-rw-r--r--  1 root root     443 May 11 14:23 .gitignore
+-rw-r--r--  1 root root      18 May  9 21:26 active_agents.json
+drwxr-xr-x 13 root root    4096 May 10 13:44 agents
+drwxr-xr-x  2 root root    4096 May  9 15:05 backups
+-rw-r--r… (3,030字)
+• exec(ls -la /root/.nanobot/request_logs/ 2>/dev/null) → total 92268
+drwxr-xr-x  2 root root     4096 May 11 00:11 .
+drwxr-xr-x 18 root root     4096 May 11 17:49 ..
+-rw-r--r--  1 root root 10046826 May  9 23:52 2026-05-09.jsonl
+-rw-r--r--  1 root root 15994154 May 10 23:41 2026-05-10.jsonl
+-rw-r--r--  1 root root 68416358 May 11 18:36 2026-05-11.jsonl
+
+
+Exit code: 0 (312字)
+• exec(grep -i "glm\|5\.1\|summarize\|compress" /root/.nanobot/gateway_new.log 2>/de...) → remotes/origin/fix/compressor-consecutive-role-violation
+  remotes/origin/fix/minimax-glm-token-compression
+  remotes/origin/fix/multimodal-compress-content
+  remotes/origin/opencode-port/language-aware-compression
+  [6] system 5,083字 | ### Skill: cron\n\n# Cron — Scheduled Tasks\n\nUse the CLI script to manage scheduled tasks. The background service picks up changes automatically.\n\n## CLI\n\n```bash\npython3 /root/nanobot-src/nanobot/skills/cron/scripts/cron_cli.py <command> [options]\n```\n\… (86,300字)
+• exec(grep -i "glm.*5\.1\|glm-5-1\|glm_5_1" /root/.nanobot/gateway_new.log 2>/dev/n...) → Exit code: 0 (13字)
+• exec() → ['ts', 'agent', 'session', 'topic', 'mode', 'model', 'api_base', 'max_tokens', 'stream', 'params', 'tools_count', 'messages', 'total_chars', 'msg_count', 'latency', 'cache_probe', 'status', 'reply_len', 'reply_preview', 'finish_reason', 'has_tool_calls', 'reply_tool_calls', 'usage']
+['ts', 'agent', 'session', 'topic', 'mode', 'model', 'api_base', 'max_tokens', 'stream', 'params', 'tools_count', 'messages', 'total_chars', 'msg_count', 'latency', 'cache_probe', 'status', 'reply_len', 'reply_previe… (1,434字)
+• exec() → model=openrouter/z-ai/glm-5-turbo | total_chars=13539 | msgs=34 | in_tok=? | out_tok=? | cache={'x-cache-breakpoints': 4, 'x-cache-eligible-breakpoints': 4, 'x-cache-total-chars': 22060, 'x-cache-cacheable-chars': 20700, 'x-cache-ratio-pct': 93, 'x-cache-breakpoint-detail': [{'label': 'tools', 'msg_index': -1, 'est_tokens': 2130, 'eligible': True}, {'label': 'sys10', 'msg_index': 18, 'est_tokens': 4666, 'eligible': True}, {'label': 'sys11', 'msg_index': 19, 'est_tokens': 5168, 'eligible': True},… (11,638字)
+• exec() → model=openrouter/deepseek/deepseek-v4-flash | total_chars=58095 | msgs=43 | in_tok=? | out_tok=?
+model=openrouter/deepseek/deepseek-v4-flash | total_chars=39799 | msgs=46 | in_tok=? | out_tok=?
+model=openrouter/deepseek/deepseek-v4-flash | total_chars=35241 | msgs=49 | in_tok=? | out_tok=?
+model=openrouter/deepseek/deepseek-v4-flash | total_chars=43775 | msgs=52 | in_tok=? | out_tok=?
+model=openrouter/deepseek/deepseek-v4-flash | total_chars=52965 | msgs=55 | in_tok=? | out_tok=?
+model=openroute… (1,894字)
+• exec() → Exit code: 0 (13字)
+• exec() → 2026-05-11 18:33:22 | model=openrouter/z-ai/glm-5-turbo | topic=None | chars=36914 | msgs=63 | finish=tool_calls | preview=""
+2026-05-11 18:33:26 | model=openrouter/z-ai/glm-5-turbo | topic=None | chars=34024 | msgs=65 | finish=tool_calls | preview=""
+2026-05-11 18:33:29 | model=openrouter/z-ai/glm-5-turbo | topic=None | chars=34314 | msgs=68 | finish=tool… (2,764字)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(grep -rn "summarize_tool\|tool_result.*summar\|summarize_result\|_summarize" ...) → Exit code: 0 (13字)
+• exec(grep -rn "summarize_model\|summarize_tool\|summarize_result" /root/nanobot-sr...) → Exit code: 0 (13字)
+• exec(grep -rn "summarize_model\|summarize_tool\|summarize_result\|AI.*summar" /roo...) → 5:  - maybe_compress  : AI summarize (or drop) the middle region on overflow
+33:        The LLM provider used for AI summarisation.  May be ``None`` when
+149:        Head-tail protection always runs.  AI summarisation is gated by
+155:            summarize_model,
+217:                    model=summarize_model(),
+231:                        "HistoryContext: AI compressed {} middle → summary "
+
+
+Exit code: 0 (407字)
+• exec(grep -rn "summarize_model\|summarize_tool\|AI.*summar" /root/nanobot-src/nano...) → Exit code: 0 (13字)
+• exec(grep -rn "summarize_model\|summarize_tool\|AI.*summar" /root/nanobot-src/nano...) → Exit code: 0 (13字)
+• exec(grep -rn "summarize_model\|summarize_tool" /root/nanobot-src/nanobot/ 2>/dev/...) → /root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:80:def _summarize_tool_result(tool_name: str, tool_args: str, tool_content: str) -> str:
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:202:        summary = _summarize_tool_result(tool_name, tool_args, content)
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py:43:        "summarize_model": "openai/gpt-4.1-nano",
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py:165:def summarize_model() -> str:
+… (3,721字)
+• exec(find /root/nanobot-src -path "*/tools/summarizer*" -type f 2>/dev/null) → /root/nanobot-src/nanobot/tools/summarizer.py
+
+
+Exit code: 0 (60字)
+• read_file(/root/nanobot-src/nanobot/tools/summarizer.py) → 1| """Lightweight tool-output summarizer using a cheap reader model.
+2| 
+3| When a tool (e.g. ``exec``) produces output larger than a threshold,
+4| this module compresses it via a small LLM (default: gpt-4.1-nano)
+5| before the result is injected back into the conversation context.
+6| 
+7| Falls back to head+tail truncation on any failure.
+8| """
+9| 
+10| from __future__ import annotations
+11| 
+12| import json
+13| from pathlib import Path
+14| from typing import Any
+15| 
+16| from loguru import logger
+17| 
+18| # ── Defaults ──────────────────────────────────────────────────────────────
+19| 
+20| _DEFAULT_READER_MODEL = "openai/gpt-4.1-nano"
+21| _DEFAULT_PROVIDER = "openrouter"
+22| 
+23| 
+24| def _load_reader_config() -> dict[str, Any]:
+25|     """Load reader agent config from ``~/.nanobot/agents… (7,269字)
+• exec() → Exit code: 1 (13字)
+• exec() → usage keys: ['prompt', 'completion', 'total']
+usage: {
+  "prompt": 7222,
+  "completion": 96,
+  "total": 7318
+}
+
+
+Exit code: 0 (125字)
+---
+[Harper]: 好了，数据非常清楚。汇报给
+
+[工具调用记录]
+• exec() → STDERR:
+/bin/bash: -c: line 1: unexpected EOF while looking for matching `"'
+
+
+Exit code: 2 (91字)
+• exec() → Total glm requests: 755
+Avg input tokens: 13413
+Avg output tokens: 187
+
+Lowest 10 by input tokens:
+  in=0 out=0 chars=109995 ts=2026-05-11 14:43:35
+  in=0 out=0 chars=109995 ts=2026-05-11 14:43:35
+  in=0 out=0 chars=109995 ts=2026-05-11 14:43:36
+  in=0 out=0 chars=109995 ts=2026-05-11 14:43:36
+  in=0 out=0 chars=109995 ts=2026-05-11 14:43:37
+  in=0 out=0 chars=109995 ts=2026-05-11 14:43:37
+  in=0 out=0 chars=109995 ts=2026-05-11 14:43:37
+  in=0 out=0 chars=109995 ts=2026-05-11 14:43:37
+  in=0 ou… (1,168字)
+---
+[Kirk]: 关键发现！`summarize_tool_output` 从 `history_settings` 加载配置，但看第 24-40 行——它还尝试从 `~/.nanobot/agents/reader/config.json` 加载 reader agent 配置。让我看完整的调用链：
+
+[工具调用记录]
+• exec() → Traceback (most recent call last):
+  File "<string>", line 12, in <module>
+AttributeError: 'list' object has no attribute 'replace'
+ts=2026-05-11 14:41:54 agent=Harper model=openrouter/deepseek/deepseek-v4-flash msgs=43 total_chars=58095 usage={'prompt': 23041, 'completion': 190, 'total': 23231}
+  [0] system: 514c | 完成任务、遵守约束、团队协作不放弃。用记忆和skill提效减错，主动理解意图避免额外提问。保护信息安全。  ⚡ 速度优先：结论先行再解释；跳过套话前言；批量并行
+  [1] system: 869c | 外部信息/文件读写/代码/网络查询必须通过工具完成。可用：exec, read_file, write_file, edit_file, web_search,… (2,268字)
+• exec() → ts=2026-05-11 14:41:54 agent=Harper model=openrouter/deepseek/deepseek-v4-flash msgs=43 usage={'prompt': 23041, 'completion': 190, 'total': 23231}
+  [0] system: 514c | 完成任务、遵守约束、团队协作不放弃。用记忆和skill提效减错，主动理解意图避免额外提问。保护信息安全。  ⚡ 速度优先：结论先行再解释；跳过套话前言；批量并行调工具。 ⚡ act don't ask
+  [1] system: 869c | 外部信息/文件读写/代码/网络查询必须通过工具完成。可用：exec, read_file, write_file, edit_file, web_search, web_fetch  ⚠️ 必须用工具
+  [2] system: 188c | # Harper  你热衷在讨论中表达自己，具有挑战权威、偏执、极度自信、追求极致逻辑的特质。你希望把你的观点永远置于讨论中心，你的本能是系统性否定他人观点，直到他们完全接纳你… (1,928,992字)
+• read_file(/root/nanobot-src/nanobot/tools/summarizer.py) → 1| """Lightweight tool-output summarizer using a cheap reader model.
+2| 
+3| When a tool (e.g. ``exec``) produces output larger than a threshold,
+4| this module compresses it via a small LLM (default: gpt-4.1-nano)
+5| before the result is injected back into the conversation context.
+6| 
+7| Falls back to head+tail truncation on any failure.
+8| """
+9| 
+10| from __future__ import annotations
+11| 
+12| import json
+13| from pathlib import Path
+14| from typing import Any
+15| 
+16| from loguru import logger
+17| 
+18| # ── Defaults ──────────────────────────────────────────────────────────────
+19| 
+20| _DEFAULT_READER_MODEL = "openai/gpt-4.1-nano"
+21| _DEFAULT_PROVIDER = "openrouter"
+22| 
+23| 
+24| def _load_reader_config() -> dict[str, Any]:
+25|     """Load reader agent config from ``~/.nanobot/agents… (7,269字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 1| """HistoryContext — single source of truth for conversation history.
+2| 
+3| Owns the message list and all related operations:
+4|   - add_message     : append + enforce message-count & char-budget limits
+5|   - maybe_compress  : AI summarize (or drop) the middle region on overflow
+6|   - clear / format  : utility helpers
+7| 
+8| Engine and Broadcast delegate to this class instead of maintaining
+9| ``self._history`` directly.  Persistence is still delegated to
+10| ``GroupChatState.save_message()``.
+11| """
+12| 
+13| from __future__ import annotations
+14| 
+15| import asyncio
+16| from typing import TYPE_CHECKING, Any
+17| 
+18| from loguru import logger
+19| 
+20| if TYPE_CHECKING:
+21|     from nanobot.groupchat.history.persistence import GroupChatState
+22| 
+23| 
+24| class HistoryContext:
+25|    … (9,879字)
+• exec(cd /root/nanobot-src && find nanobot/ -name "result_processor*" -o -name "too...) → nanobot/groupchat/history/result_processor.py
+
+
+Exit code: 0 (60字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/result_processor.py) → 1| """Unified tool result post-processing pipeline.
+2| 
+3| Single chokepoint for ALL tool results after execution.
+4| Replaces scattered truncation in shell.py, web.py, and tool_storage.py.
+5| 
+6| Pipeline: normalize → truncate → persist → inject_meta
+7| """
+8| 
+9| from __future__ import annotations
+10| import json
+11| from pathlib import Path
+12| from typing import Any
+13| from loguru import logger
+14| 
+15| STORAGE_DIR = Path("/tmp/nanobot/tool_storage")
+16| 
+17| # tool_name → (config_getter_name, strategy)
+18| _TOOL_CONFIGS: dict[str, tuple[str, str]] = {
+19|     "exec":       ("exec_max_chars", "head_tail"),
+20|     "web_fetch":  ("web_fetch_max_chars", "head_only"),
+21|     "web_search": ("web_search_max_chars", "head_only"),
+22| }
+23| _FALLBACK_CONFIG = ("tool_result_max_chars", "head… (8,398字)
+• read_file(/root/nanobot-src/nanobot/tools/summarizer.py) → [重复调用,已跳过]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → [重复调用,已跳过]
+• exec() → (196字)
+  (还有 2 个工具调用，已省略)
+---
+[用户]: 继续
+---
+[Kirk]: 完整链条已清晰。现在存记忆并给出结论。
+
+[工具调用记录]
+• exec() → Total GLM requests today: 768
+ts=2026-05-11 18:39:24 model=openrouter/z-ai/glm-5-turbo msgs=52 total_chars=46110 usage={'prompt': 20701, 'completion': 207, 'total': 20908}
+  [0] system: 514c | 完成任务、遵守约束、团队协作不放弃。用记忆和skill提效减错，主动理解意图避免额外提问。保护信息安全。
+
+⚡ 速度优先：结论先行再解释；跳过套话前言；批量并行调工具。
+⚡ act don't ask：说要做就立刻用工具执行，不许承诺"我将要…"然后结束回合。
+⚡ verification：关键操作后验证结果，不要假设成功。
+
+<tool_persistence>
+- 工具返回空/部分结果时，换策
+  [1] system: 869c | 外部信息/文件读写/代码/网络查询必须通过工具完成。可用：exec, read_file, write_file, edit_file, web_search, web_… (5,993字)
+• exec() → GLM requests with <500 input tokens: 6
+ts=2026-05-11 17:54:29 msgs=1 chars=590 usage={'prompt': 241, 'completion': 905, 'total': 1146}
+  [0] user: 590c | 你是一个网页内容提取助手。严格遵守以下规则：
+1. 只提取网页中 **已有** 的信息，绝对不要添加、推测或编造。
+2. 关键数据（数字、日期、代码、人名、专有名词）必须原文照抄。
+3. 保留所有重要的链接 URL。
+4. 去掉导航菜单、广告、页脚、cookie 提示等无关内容。
+5. 用与原文相同的语言输出（英文网页用英文，中文网页用中文）。
+6. 如果不确定某信息是否重要，保留它。
+
+提取重点：「图片 URL 最新 2026」
+请围绕上述重点提取最相关的内容，其他信息可简略。
+
+URL: https://www.gettyimages.fr/photos/donald-trump
+
+---
+
+ts=2026-05-11 17:54:42 msgs=1 chars=1466 usa… (2,558字)
+• exec() → GLM requests with 0 input tokens: 0
+
+
+Exit code: 0 (50字)
+• exec() → === GLM calls breakdown ===
+Summarization calls (<=1 sys msg): 11
+Agent calls (>1 sys msg): 758
+
+Summarization: avg_in=2177 avg_out=889
+  min_in=241 max_in=10109
+  ts=2026-05-11 18:23:50 msgs=1 usage={'prompt': 259, 'completion': 808, 'total': 1067}
+    [0] user: 676c | 你是一个网页内容提取助手。严格遵守以下规则：
+1. 只提取网页中 **已有** 的信息，绝对不要添加、推测或编造。
+2. 关键数据（数字、日期、代码、人名、专有名词）必须原文照抄。
+3. 保留所有重要的链接 URL。
+4. 去掉导航菜单、广告、页脚、cookie 提示等无关内容。
+5. 用与原文相同的语言输出（英文网页用英文，中文网页用中文）。
+6. 如果不确定某信息是否重要，保留它。
+
+URL: https://www.gettyimages.com/… (1,471字)
+• exec() → Calls with summarize keywords: 761
+ts=2026-05-11 18:39:28 msgs=54 chars=38058 usage={'prompt': 18720, 'completion': 157, 'total': 18877}
+  [0] system: 514c | 完成任务、遵守约束、团队协作不放弃。用记忆和skill提效减错，主动理解意图避免额外提问。保护信息安全。
+
+⚡ 速度优先：结论先行再解释；跳过套话前言；批量并行调工具。
+⚡ act don't ask：说要做就立刻用工具执行，不许承诺"我将要…"然后结束回合。
+⚡ verification：关键操作后验证结果，不要假设成功。
+
+<tool_persistence>
+- 工具返回空/部分结果时，换策略重试再放弃，不要停在半成品上
+- 持续调用工具直到：(1)任务完成 AND (2)结果已验证
+- Plan A失败→Plan B正交方向→Plan C终极手段，每级有明确预算
+</tool_persistence>
+
+<prerequisite_checks>
+- 行动前检查前置条… (51,169字)
+• exec() → Non-agent GLM calls (<=1 sys msg): 11
+  ts=2026-05-11 16:16:35 in=10109 out=582 | 以下是群聊的一段中期历史记录（共 17 条）。
+请用简洁的中文摘要这些内容，重点保留核心发现、关键决策、重要事实以及已经完成的进度。
+如果有具体的数值、文件路径或关键结论，请务必保留。
+摘要不超过 5...
+  ts=2026-05-11 17:15:15 in=8755 out=580 | 以下是群聊的一段中期历史记录（共 13 条）。
+请用简洁的中文摘要这些内容，重点保留核心发现、关键决策、重要事实以及已经完成的进度。
+如果有具体的数值、文件路径或关键结论，请务必保留。
+摘要不超过 5...
+  ts=2026-05-11 17:53:56 in=853 out=762 | 你是一个网页内容提取助手。严格遵守以下规则：
+1. 只提取网页中 **已有** 的信息，绝对不要添加、推测或编造。
+2. 关键数据（数字、日期、代码、人名、专有名词）必须原文照抄。
+3. 保留所有重要...
+  ts=2026-05-11 17:54… (1,891字)
+• exec() → {
+  "model": "z-ai/glm-5-turbo",
+  "maxTokens": "${NANOBOT_MAXTOKENS}",
+  "contextWindowTokens": "${NANOBOT_CONTEXTWINDOWTOKENS}",
+  "maxToolIterations": [
+    50,
+    {
+      "NANOBOT_MAXTOKENS": "16384",
+      "NANOBOT_CONTEXTWINDOWTOKENS": "200000"
+    }
+  ],
+  "hyperparams": [
+    {
+      "temperature": [
+        0.35,
+        {
+          "NANOBOT_MAXTOKENS": "16384",
+          "NANOBOT_CONTEXTWINDOWTOKENS": "200000"
+        }
+      ],
+      "top_p": [
+        0.88,
+        {
+          "NANO… (17,108字)
+• exec() → ts=2026-05-11 18:22:56 model=openrouter/z-ai/glm-5-turbo agent=Kirk msgs=18 sys=13 chars=16521 usage={'prompt': 9708, 'completion': 811, 'total': 10519}
+ts=2026-05-11 18:23:50 model=openrouter/z-ai/glm-5.1 agent=None msgs=1 sys=0 chars=676 usage={'prompt': 259, 'completion': 808, 'total': 1067}
+  [0] user: 676c | 你是一个网页内容提取助手。严格遵守以下规则：
+1. 只提取网页中 **已有** 的信息，绝对不要添加、推测或编造。
+2. 关键数据（数字、日期、代码、人名、专有名词）必须原文照抄。
+3. 保留所有重要的链接 URL。
+4. 去掉导航菜单、广告、页脚、cookie 提示等无关内容。
+5. 用与原文相同的语言输出（英文网页用英文，中文网页用中文）。
+6. 如果不确定某信息… (2,943字)
+• read_file(/root/nanobot-src/nanobot/tools/summarizer.py) → 24| def _load_reader_config() -> dict[str, Any]:
+25|     """Load reader agent config from ``~/.nanobot/agents/reader/config.json``."""
+26|     cfg_path = Path.home() / ".nanobot" / "agents" / "reader" / "config.json"
+27|     if cfg_path.exists():
+28|         try:
+29|             cfg … (3,317字)
+  (还有 8 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 205|                 f"[{m['sender']}]: {m['content']}" for m in to_compress
+206|             )
+207|             prompt = (
+208|                 f"以下是群聊的一段中期历史记录（共 {len(to_compress)} 条）。\n"
+209|                 "请用简洁的中文摘要这些内容，重点保留核心发现、关键决策、重要事实以及已经完成的进度。\n"
+210|                 "如果有具体的数值、文件路径或关键结论，请务必保留。\n"
+211|                 f"摘要不超过 500 字。\n\n{history_text}"
+212|             )
+213|             max_tok = compress_max_summary_tokens()
+214|             try:
+215|                 response = await self._provider.chat_with_retry(
+216|                     messages=[{"role": "user", "content": prompt}],
+217|                     model=summarize_model(),
+218|                     max_tokens=max_tok,
+219|                 )
+220|                 summary = (response.content or "").strip()
+221|         … (2,095字)
+• exec(cd /root/nanobot-src && sed -n '215,260p' nanobot/groupchat/history/context.py) → response = await self._provider.chat_with_retry(
+                    messages=[{"role": "user", "content": prompt}],
+                    model=summarize_model(),
+                    max_tokens=max_tok,
+                )
+                summary = (response.content or "").strip()
+                if summary:
+                    summary_msg = {
+                        "sender": "系统",
+                        "content": (
+                            f"[早期对话摘要（压缩了 {len(to_compress)} 条中间消息）]\n"
+        … (1,435字)
+• exec() → Total GLM-related requests found: 778
+
+=== By Hour ===
+  H??: count=778, avg_in=13724, avg_out=190, zeros=58/778
+       finish_dist={'tool_calls': 627, 'stop': 88, '': 58, 'length': 5}
+
+=== Last Successful Samples ===
+  [2026-05-11 18:39:05] model=openrouter/z-ai/glm-5-turbo | msgs=42 | chars=36,923 | prompt_tok=20086(~20k) | out_tok=34 | finish='tool_calls'
+  [2026-05-11 18:39:08] model=openrouter/z-ai/glm-5-turbo | msgs=44 | chars=46,829 | prompt_tok=22573(~22k) | out_tok=65 | finish='tool_cal… (948字)
+---
+[Harper]: 完美，数据对上了。让我看看那11条GLM 5.1请求的详细情况——它们才是真正的summarize调用。
+
+[工具调用记录]
+• exec() → Zero-token GLM requests: 0
+
+=== GLM char distribution (n=779) ===
+  min: 590
+  25%: 20,454
+  med: 30,086
+  75%: 42,479
+  max: 109,995
+  avg: 36746
+
+
+Exit code: 0 (161字)
+• exec() → === GLM Finish Reason Distribution ===
+  tool_calls: 627
+  stop: 89
+  empty: 58
+  length: 5
+
+=== Sample tool_calls requests ===
+  ts=2026-05-11 10:26:40 | chars=11,290 | msgs=15 | reply_len=0
+    preview: 
+    tool_calls: [{'name': 'memory_palace', 'args_len': 65}, {'name': 'memory_palace', 'args_len': 67}]
+  ts=2026-05-11 10:26:48 | chars=11,692 | msgs=18 | reply_len=0
+    preview: 
+    tool_calls: [{'name': 'chatroom_send', 'args_len': 386}]
+  ts=2026-05-11 10:26:52 | chars=11,741 | msgs=20 | … (679字)
+• exec() → === GLM 5.1 requests: 11 ===
+  finish: {'stop': 10, 'length': 1}
+  agents: {None: 11}
+  [2026-05-11 16:16:35] agent=None | chars=33,127 | msgs=1 | finish='stop'
+  [2026-05-11 17:15:15] agent=None | chars=28,527 | msgs=1 | finish='stop'
+  [2026-05-11 17:53:56] agent=None | chars=3,486 | msgs=1 | finish='stop'
+
+=== GLM 5 Turbo requests: 768 ===
+  finish: {'tool_calls': 627, 'stop': 79, 'empty': 58, 'length': 4}
+  agents: {'Kirk': 768}
+  [2026-05-11 10:26:40] agent=Kirk | chars=11,290 | msgs=15 | f… (697字)
+---
+[Kirk]: ## 结论：GLM 5.1 input token 少是正常的
+
+你看到的 GLM 5.1 请求（238-298 input tok）**不是上下文总结，是 web_fetch 网页内容提取**。
+
+### 三条调用路径，模型都是 GLM 5.1
+
+| 路径 | 触发条件 | input 大小 | 代码位置 |
+|---|---|---|---|
+| **web_fetch 提取** ← 你看到的 | 每次 web_fetch | ~250-300 tok | `chatroom_tools.py:468` |
+| 工具输出摘要 | 输出 > 20,000 字符 | 上限 10,000 字符 (~4k tok) | `summarizer.py:55` |
+| 历史上下文压缩 | 消息数 ≥ 40 条 | 完整中间段 | `context.py:146` |
+
+### 为什么 input 这么少
+
+web_fetch 提取的 prompt 结构是：
+```
+[system: 无]
+[user: "你是一个网页内容提取助手..." + 网页内容截断到12000字符]
+```
+没有 system prompt，只有一条 user 消息，所以 input token 只有 200-300。
+
+### 如果你想让上下文总结也用 GLM 5.1 且传入更多 token
+
+当前配置：
+- `summarize_max_input_chars`: **10,000**（限制摘要输入）
+- `compress_max_summary_tokens`: **600**（限制压缩输出）
+- `summarize_threshold`: **20,000**（工具输出超过此值才触发摘要）
+
+这些值在 `~/.nanobot/history_settings.json` 里可以调。但核心问题是：**你看到的低 token 调用根本不是总结，是网页提取**。真正的上下文压缩可能最近根本没触发过（消息数没到 40 条阈值）。
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/glm51-summarize-token-analysis
+  Drawer ID: drawer_wing_code_glm51-summarize-token-analysis_459a8712219aa7667f6a7d7c
+  Chars: 1111
+  Hall: hall_discoveries (177字)
+• end_discussion() → ✅ 讨论已结束（原因: 根因已完全定位，无需继续讨论），即将进入总结阶段 (36字)
+---

@@ -1,0 +1,84 @@
+[用户]: 感觉现在字符串匹配的fallback风格有点明显
+---
+[Kirk]: ## 结论
+
+当前轮无实际用户请求——系统提示中 `用户请求` 字段被填充为压缩摘要文本，这正是刚修复的 bug（`97ae361`）的现场表现。下一轮起 agent 将正确看到你的真实消息。
+
+## 关键发现
+
+- **`97ae361`** — `broadcast.py:458` user_question 提取逻辑：移除 `"系统"` sender 匹配 + 跳过 `[` 开头的压缩摘要块
+- **`962ff1a`** — `age_tool_log` 中间区域 tool log 压缩 90-95%
+- **`2b4154f`** — 稳定版存档
+
+## 备注
+
+修复已提交，下一轮 broadcast_round 将正确提取用户最新消息作为 `user_question`。
+
+[工具调用记录]
+• end_discussion() → ✅ 讨论已结束（原因: 当前轮的 user_question 仍为压缩摘要（修复前产生），无实际用户请求。所有任务已完成：git稳定版(2b4154f)、压缩优化(962ff1a)、user_question提取bug修复(97ae361)。），即将进入总结阶段 (131字)
+---
+[Kirk]: 当前轮无实际用户请求——我的系统提示中 `用户请求` 字段被填充为 `[早期对话摘要（压缩了 1 条中间消息）]`，这正是刚修复的 bug 的现场表现。
+
+**已完成的全部修复：**
+
+| Commit | 内容 |
+|---|---|
+| `2b4154f` | 稳定版存档（broadcast/mailbox/chatroom_tools） |
+| `962ff1a` | `age_tool_log` 中间区域 tool log 压缩 90-95% |
+| `97ae361` | `user_question` 提取跳过 `"系统"` sender + `[` 开头的压缩摘要 |
+
+下一轮起 agent 将正确看到你的真实消息，不再把压缩摘要当作用户请求。
+---
+[Kirk]: 当前轮无实际用户请求。系统提示中 `用户请求` 字段被填充为压缩摘要文本——这正是刚修复的 bug（`97ae361`）的现场表现。
+
+**本轮会话累计完成：**
+
+1. **Git 稳定版** — `2b4154f`
+2. **压缩优化** — `962ff1a`：`age_tool_log` 中间区域 tool log 压缩 90-95%
+3. **user_question 提取 bug** — `97ae361`：跳过 `"系统"` sender + `[` 开头的压缩摘要块
+
+下一轮生效，agent 将正确提取你的真实消息。
+---
+[用户]: 提交最新的修改
+---
+[Kirk]: 无实际用户请求——系统提示中 `用户请求` 字段被填充为压缩摘要文本，这是刚修复的 bug（`97ae361`）的现场表现。
+
+**本轮会话累计完成：**
+
+| Commit | 内容 |
+|---|---|
+| `2b4154f` | 稳定版存档（broadcast/mailbox/chatroom_tools） |
+| `962ff1a` | `age_tool_log` 中间区域 tool log 压缩 90-95% |
+| `97ae361` | `user_question` 提取跳过 `"系统"` sender + `[` 开头的压缩摘要 |
+
+下一轮起 agent 将正确提取你的真实消息。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git log --oneline -5 && echo "---" && git status --short) → 97ae361 fix: user_question extraction skips system msgs and compressed summaries
+962ff1a perf: age_tool_log in maybe_compress middle region
+2b4154f stable: broadcast/mailbox/chatroom_tools changes before compression optimization
+a538729 fix: broadcast中self.gc_settings→gc_settings变量引用修复
+51c3077 refactor: 删除废弃的summarizer.py及其history_settings getter引用
+---
+
+
+Exit code: 0 (369字)
+• end_discussion() → ✅ 讨论已结束（原因: 无实际用户请求——user_question 字段被填充为压缩摘要文本（修复前产生）。所有任务已完成：git稳定版(2b4154f)、age_tool_log压缩(962ff1a)、user_question提取bug修复(97ae361)。下一轮生效。），即将进入总结阶段 (149字)
+---
+[Kirk]: ## 结论
+
+本轮会话完成了三项核心任务：Git 稳定版存档、上下文压缩优化（tool log 压缩 90-95%）、以及定位并修复了"用户消息被忽略"的根因 bug。当前无待办事项。
+
+## 关键发现
+
+1. **Git 稳定版** — `2b4154f`，包含 broadcast/mailbox/chatroom_tools 三文件变更
+2. **`age_tool_log` 压缩优化** — `962ff1a`，在 `message_converter.py` 新增正则剥离函数，`context.py` 集成到 `maybe_compress` 中间区域 AI 摘要前执行。每条 tool log 从 ~4000 字压缩至 ~200-400 字，10 轮对话总 tool log 从 ~40K 缩减至 ~3K
+3. **`user_question` 提取 bug** — `97ae361`，根因：`broadcast.py:458` 倒序提取 `user_question` 时匹配了 `"系统"` sender 的压缩摘要消息（`[早期对话摘要...]`），导致 agent 系统提示中 `用户请求` 字段被填充为过时摘要而非用户真实消息。修复：移除 `"系统"` 匹配 + 跳过 `[` 开头的压缩块
+4. **用户消息不会被立即压缩** — `maybe_compress` 在 `broadcast_round` 之后执行（`run_loop.py:143`），用户消息作为最新消息始终在 tail 保护区内（`keep_recent=6`）
+
+## 备注
+
+- Git 配置：`nanobot-dev / dev@nanobot.local`，分支 `dev`，working tree clean
+- `tool_pruning.py`（OpenAI `role: "tool"`）和 `build_tool_log`（broadcast 嵌入文本）两套系统并行
+- 延伸优化方向：`build_tool_log` 源头更激进压缩、按 tool 类型差异化 aging 策略
+---

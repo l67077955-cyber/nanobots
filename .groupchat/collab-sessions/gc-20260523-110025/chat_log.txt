@@ -1,0 +1,244 @@
+[用户]: 面试我说的持久化指的是不变、稳定的意思，不是序列化和存储的意思
+---
+[Kirk]: ## 结论
+
+**进程内一致，跨进程不持久。** 动态编排生成的历史在单次进程生命周期内是确定性的（相同输入→相同输出），但进程重启后历史完全丢失，无法恢复。
+
+## 关键发现
+
+### 持久化现状
+
+| 数据 | 是否持久化 | 机制 |
+|------|-----------|------|
+| **消息历史** (`HistoryContext.messages`) | ❌ **不持久** | `__init__` 中 `self.messages = []`，无 `load_messages()` |
+| **轮次计数** (`self._round`) | ❌ **不持久** | 硬编码 `= 0`，无 save/load |
+| **活跃 agent 列表** | ✅ 持久 | `GroupChatState.load_active()` → `active_agents.json` |
+| **Leader 名称** | ✅ 持久 | `GroupChatState.load_leader()` → `leader.txt` |
+| **Agent 注册表** | ✅ 持久 | 从配置文件加载 |
+| **会话日志** | ⚠️ 仅追加写 | `chat_log.txt` + `session.jsonl`，**不回读** |
+
+### 根因
+
+```
+HistoryContext.__init__ → self.messages = []  # 空列表，无恢复
+self._round = 0                               # 硬编码，无恢复
+GroupChatState.save_message() → append-only   # 只写不读
+```
+
+### 进程内为什么一致
+
+`history_to_messages()` 是纯函数：`relevant_agents`、`agent_ranks`、`max_chars`、`age_tool_log()` 全部确定性，相同输入→相同输出。
+
+### 跨进程为什么不持久
+
+进程重启后 `messages` 清空、`_round` 归零，`session.jsonl` 有记录但不回读。
+
+## 备注
+
+- 当前架构是"有状态长驻服务"模式，历史靠内存保持，日志仅审计用途
+- 要实现跨进程持久需从 `session.jsonl` 回放消息 + 持久化 `_round`，但 `maybe_compress()` 的 AI 摘要无法复现（LLM 不确定性）
+- `552e2ab` 的 `age_tool_log` 修改不受影响（确定性正则）
+---
+[Kirk]: ## 结论
+
+**进程内一致，跨进程不持久。** 动态编排生成的历史在单次进程生命周期内是确定性的（相同输入→相同输出），但进程重启后历史完全丢失，无法恢复。
+
+## 关键发现
+
+### 持久化现状
+
+| 数据 | 是否持久化 | 机制 |
+|------|-----------|------|
+| **消息历史** (`HistoryContext.messages`) | ❌ **不持久** | `__init__` 中 `self.messages = []`，无 `load_messages()` |
+| **轮次计数** (`self._round`) | ❌ **不持久** | 硬编码 `= 0`，无 save/load |
+| **活跃 agent 列表** | ✅ 持久 | `GroupChatState.load_active()` → `active_agents.json` |
+| **Leader 名称** | ✅ 持久 | `GroupChatState.load_leader()` → `leader.txt` |
+| **Agent 注册表** | ✅ 持久 | 从配置文件加载 |
+| **会话日志** | ⚠️ 仅追加写 | `chat_log.txt` + `session.jsonl`，**不回读** |
+
+### 根因
+
+```
+HistoryContext.__init__ → self.messages = []  # 空列表，无恢复
+self._round = 0                               # 硬编码，无恢复
+GroupChatState.save_message() → append-only   # 只写不读
+```
+
+### 进程内为什么一致
+
+`history_to_messages()` 是纯函数：`relevant_agents`、`agent_ranks`、`max_chars`、`age_tool_log()` 全部确定性，相同输入→相同输出。
+
+### 跨进程为什么不持久
+
+进程重启后 `messages` 清空、`_round` 归零，`session.jsonl` 有记录但不回读。
+
+## 备注
+
+- 当前架构是"有状态长驻服务"模式，历史靠内存保持，日志仅审计用途
+- 要实现跨进程持久需从 `session.jsonl` 回放消息 + 持久化 `_round`，但 `maybe_compress()` 的 AI 摘要无法复现（LLM 不确定性）
+- `552e2ab` 的 `age_tool_log` 修改不受影响（确定性正则）
+---
+[Kirk]: 现在完全理解了。让我给出精确结论。
+
+## 结论
+
+**不稳定。** 动态编排生成的历史在后续调用中**不保证一致**，有三个确定性破坏点。
+
+## 关键发现
+
+### 确定性链路分析
+
+| 环节 | 是否稳定 | 原因 |
+|------|---------|------|
+| `age_tool_log()` | ✅ 稳定 | 纯正则替换，同输入同输出 |
+| `strip_tool_log()` | ✅ 稳定 | 纯正则删除 |
+| `agent_ranks` 计算 | ✅ 稳定 | 从静态配置读取，`_agent_ranks_cache` 缓存 |
+| `history_settings` 值 | ✅ 稳定 | 从 JSON 文件读取，进程内不变 |
+| **`history_to_messages` 尾部截断** | ❌ **不稳定** | 见下 |
+| **`prune_conversation_tail_with_summary`** | ❌ **不稳定** | 见下 |
+| **`maybe_compress`** | ❌ **不稳定** | 见下 |
+
+### 三个确定性破坏点
+
+**1. 滑动窗口截断（`message_converter.py:136-148`）**
+
+```python
+for m in reversed(msgs_full):
+    if budget - c < 0:
+        break  # ← 截断点随 history 增长而移动
+    tail.insert(0, m)
+    budget -= c
+```
+
+同一条消息在 round 3 可能被包含，round 10 被排除。**截断边界是 history 长度的函数，不是消息内容的函数**。这意味着 agent 看到的上下文窗口在不断滑动。
+
+**2. AI 摘要压缩（`tool_pruning.py:prune_conversation_tail_with_summary`）**
+
+```python
+response = await provider.chat_with_retry(
+    messages=[{"role": "user", "content": prompt}],
+    model=model, max_tokens=600,
+)
+```
+
+当 dropped ≥ 5 条时调用 LLM 生成摘要。**LLM 输出不确定**——同一批被丢弃的消息，两次调用产生不同摘要。这个摘要被注入到 system 消息末尾（`messages[last_sys_idx]["content"] += summary_block`），直接改变后续所有 agent 看到的 system prompt。
+
+**3. `maybe_compress`（`context.py:156`）**
+
+单 agent 模式下每次回复后调用，用 AI 压缩中间区域。broadcast 模式不直接调用，但 `prune_conversation_tail_with_summary` 在 broadcast 中每轮都执行（`broadcast.py:1354`），效果等价。
+
+### 传导效应
+
+```
+Round 1: history=[A,B,C] → agent看到 [A,B,C]
+Round 5: history=[A,B,C,D,E,F,G,H] → agent看到 [A,摘要,G,H]  ← C,D,E,F 被AI摘要替换
+Round 6: history=[A,B,C,D,E,F,G,H,I] → agent看到 [A,摘要',H,I]  ← 摘要内容不同，G也被挤出
+```
+
+**同一个 agent 在不同 round 看到的"同一批早期消息"的表示不同**——要么被截断、要么被不同摘要替换。
+
+### 唯一稳定的部分
+
+- system prompt 模板本身（不含动态注入的摘要）
+- agent 自身配置（rank、tools、persona）
+- `age_tool_log` 对单条消息的处理（给定相同输入）
+
+## 备注
+
+- 这不是 bug，是**有意的权衡**——用确定性换取上下文窗口利用率。如果要求绝对稳定，需要固定窗口大小+禁止 AI 压缩，代价是上下文利用率大幅下降。
+- 如果要提升稳定性而不完全禁止压缩：可以用**确定性摘要**（如提取关键句、保留结构化字段）替代 LLM 摘要，或者对同一批消息缓存摘要结果。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 94|     def add_message(self, sender: str, content: str) -> None:
+95|         """Append a message and enforce message-count / char-budget limits.
+96| 
+97|         Head-protection guarantees that the very first message and the first
+98|         user message are never evicted during trimming.
+99|         """
+100|         self.messages.append({"sender": sender, "content": content})
+101| 
+102|         try:
+103|             from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
+104|                 max_messages,
+105|                 max_context_chars,
+106|                 keep_user_messages,
+107|             )
+108|             limit = max_messages()
+109|             char_budget = max_context_chars()
+110|             _keep_users = keep_user_messages()
+111|         except Excep… (3,656字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/message_converter.py) → 1| """History → LLM messages conversion with smart truncation.
+2| 
+3| Handles both groupchat (sender) and LLM (role) input formats.
+4| Independent of prompt construction."""
+5| 
+6| from __future__ import annotations
+7| 
+8| import re
+9| from typing import Any
+10| 
+11| from nanobot.groupchat.history.context_validator import validate_context
+12| 
+13| # ── Tool Log Aging ──────────────────────────────────────────────────────────
+14| 
+15| _TOOL_LOG_RE = re.compile(
+16|     r"(• \w+\([^)]*\) → )"
+17|     r"(.*?)"           # preview text (greedy within line)
+18|     r"(\(\d[\d,]*字\))",  # trailing char count
+19|     re.DOTALL,
+20| )
+21| 
+22| # Matches the entire [工具调用记录]... block at the end of a message
+23| _TOOL_LOG_BLOCK_RE = re.compile(
+24|     r"\n*\[工具调用记录\].*$",
+25|     re.DOTALL,
+26| )
+27… (6,419字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 156|     async def maybe_compress(self) -> None:
+157|         """Compress the middle section of history when it approaches the limit.
+158| 
+159|         Head-tail protection always runs.  AI summarisation is gated by
+160|         ``summarize_enabled``; if disabled, the middle region is simply dropped.
+161|         """
+162|         from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
+163|             max_messages,
+164|             history_summarize_enabled,
+165|             summarize_model,
+166|             compress_ratio,
+167|             compress_max_summary_tokens,
+168|             compression_keep_recent,
+169|             keep_user_messages,
+170|         )
+171| 
+172|         limit = max_messages()
+173|         ratio = compress_ratio()
+174|         if len(self.messag… (4,780字)
+• exec(cd /root/nanobot-src && grep -n "maybe_compress\|_compress" nanobot/groupchat...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && grep -n "maybe_compress\|_compress" nanobot/groupchat...) → 940:    async def _maybe_compress_history(self) -> None:
+942:        await self.history.maybe_compress()
+1137:                await engine._maybe_compress_history()
+
+
+Exit code: 0 (179字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 935|         """Callback from MailboxHub.send() — persist agent communication."""
+936|         self._state.save_event("agent_comm", agent=sender, content=content, extra={
+937|             "targets": targets,
+938|         })
+939| 
+940|     async def _maybe_compress_history(self) -> None:
+941|         """Compress history if needed — delegates to HistoryContext."""
+942|         await self.history.maybe_compress()
+943|         self._history = self.history.messages  # keep shim in sync
+944| 
+945|     def _format_history(self) -> str:
+946|         """Format history as string — delegates to HistoryContext."""
+947|         return self.history.format()
+948| 
+949| 
+
+(Showing lines 935-949 of 1671. Use offset=950 to continue.) (725字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 1130|             _tool_details = stats.get("tool_calls_detail", [])
+1131|             if content or _tool_details:
+1132|                 engine._add_message("用户… (1,040字)
+  (还有 8 个工具调用，已省略)
+---

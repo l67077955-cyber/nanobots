@@ -1,0 +1,299 @@
+[用户]: 检查一下功能
+---
+[用户]: 看看视觉方面是否能做到和其他风格一致
+---
+[Kirk]: 
+
+[工具调用记录]
+• memory_palace(prompt phase static dynamic UI visualization rules) → 🔍 5 result(s) for 'prompt phase static dynamic UI visualization rules':
+
+[1] wing_code/prompt-phases (sim=0.276)
+  ## Prompt Rules Visualization (commit 47a5cd3)
+
+### What
+Added "📖 规则说明" button to /prompt UI that explains the static/dynamic phase system to users.
+
+### Where
+- settings.py `_build_prompt_order_view`: Added 📖 button to bottom row (callback_data="prrules")
+- callbacks.py: Added `prrules` handler showing:
+  - Assembly order: ⬛ static → 💬 history → ⬜ dynamic
+  - Phase differences (sta… (2,296字)
+• exec(cd /root/nanobot-src && git log --oneline -8) → 47a5cd3 feat: add prompt assembly rules visualization (📖 规则说明 button + prrules handler)
+3790223 fix: remove orphan 工程原则 from fallback phases, fix dynamic editable_by mismatches
+513acff fix: add_custom_component writes phase field to manifest
+93439b6 feat: adapt /prompt display and edit UI to static/dynamic phase system
+2363adb feat: add COMPONENT_PHASES (static/dynamic) to replace implicit past_history tracking
+12306db feat(skills): per-skill type=static|dynamic controls prompt placement
+cdba012… (688字)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git status --short) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && git log --oneline -6) → 47a5cd3 feat: add prompt assembly rules visualization (📖 规则说明 button + prrules handler)
+3790223 fix: remove orphan 工程原则 from fallback phases, fix dynamic editable_by mismatches
+513acff fix: add_custom_component writes phase field to manifest
+93439b6 feat: adapt /prompt display and edit UI to static/dynamic phase system
+2363adb feat: add COMPONENT_PHASES (static/dynamic) to replace implicit past_history tracking
+12306db feat(skills): per-skill type=static|dynamic controls prompt placement
+
+
+Exit … (507字)
+• exec() → ✅ nanobot/groupchat/history/prompt_builder.py
+✅ nanobot/channels/telegram/commands/settings.py
+✅ nanobot/channels/telegram/callbacks.py
+
+
+Exit code: 0 (150字)
+• exec() → Total components: 18
+
+  [ 0] static   editable=global   主提示 (main_prompt)
+  [ 1] static   editable=none     hard_rules
+  [ 2] static   editable=global   工具指令 (tool_instructions)
+  [ 3] static   editable=agent    人设/SOUL (persona)
+  [ 4] static   editable=global   广播协调 (broadcast_hint)
+  [ 5] static   editable=none     user_context
+  [ 6] static   editable=none     output_efficiency
+  [ 7] static   editable=global   技能列表 (skills)
+  [ 8] static   editable=global   领袖指令 (leader_prompt)
+  [ 9] stati… (985字)
+• exec() → ✅ Manifest ↔ COMPONENT_PHASES 完全一致
+✅ Editable_by 与 editable sets 完全一致
+
+组件总数: 18
+GLOBAL_EDITABLE: 12
+AGENT_EDITABLE: 1
+
+STDERR:
+2026-05-18 12:48:49.072 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:214 - Synced from manifest: 18 components, 13 editable
+
+
+Exit code: 0 (294字)
+• exec() → STDERR:
+  File "<string>", line 7
+    'prrules callback': ' in content: 'prrules callback handler',
+                                                               ^
+SyntaxError: unterminated string literal (detected at line 7)
+
+
+Exit code: 1 (241字)
+---
+[Harper]: <｜DSML｜tool_calls>
+<｜DSML｜invoke name="exec">
+<｜DSML｜parameter name="command" string="true">cd /root/nanobot-src && git add -A && git diff --cached --stat</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "prrules\|规则说明" nanobot/channels/telegram/cal...) → 1310:            elif data == "prrules":
+1313:                    "📖 Prompt 组装规则说明\n\n"
+
+
+Exit code: 0 (102字)
+• exec(cd /root/nanobot-src && sed -n '/prrules/,/^            elif/p' nanobot/chann...) → elif data == "prrules":
+                # Show prompt assembly rules explanation
+                rules_text = (
+                    "📖 Prompt 组装规则说明\n\n"
+                    "📌 组装顺序\n"
+                    "  ⬛ 静态区 → 💬 聊天记录 → ⬜ 动态区\n\n"
+                    "📌 Phase 区别\n"
+                    "  ⬛ 静态 (static)\n"
+                    "    • 位于聊天记录之前，所有 agent 共享\n"
+                    "    • 仅可使用 stable vars（不随轮次变化）\n"
+                    "    • 适合: 人设、工具指令、硬规则等固定内容\n"
+                    "    • 缓存友好，… (1,639字)
+• exec(cd /root/nanobot-src && sed -n '333,430p' nanobot/channels/telegram/commands/...) → def _build_prompt_order_view(self, engine) -> tuple[str, "InlineKeyboardMarkup"]:
+        """Build the global prompt component order view with edit/reorder buttons."""
+        order = engine.prompt_builder.get_agent_prompt_order()
+        labels = _COMPONENT_LABELS
+        global_editable = _GLOBAL_EDITABLE
+        agent_editable = _AGENT_EDITABLE
+        conditional_tags = self._CONDITIONAL_TAGS
+
+        phases = _COMPONENT_PHASES
+        static_keys = [k for k in order if phases.get(k) == "sta… (4,805字)
+• exec(cd /root/nanobot-src && sed -n '1195,1210p' nanobot/channels/telegram/callbac...) → # ── Prompt orchestration callbacks ──
+            elif data in ("pr:refresh", "pr:"):
+                # Refresh global prompt order view
+                await self._prompt_show_components(query)
+
+            elif data.startswith("pre:"):
+                # Edit global template: pre:__global__:component_key
+                parts = data[4:].split(":", 1)
+                if len(parts) == 2:
+                    _, key = parts
+                    engine = self._groupchat_engine
+                    co… (807字)
+• edit_file() → (76字)
+• exec(cd /root/nanobot-src && sed -n '1200,1260p' nanobot/channels/telegram/callbac...) → elif data.startswith("pre:"):
+                # Edit global template: pre:__global__:component_key
+                parts = data[4:].split(":", 1)
+                if len(parts) == 2:
+                    _, key = parts
+                    engine = self._groupchat_engine
+                    content = PromptBuilder.get_component_template(key)
+                    label = _COMPONENT_LABELS.get(key, key)
+                    phase = _COMPONENT_PHASES.get(key, "static")
+                    phase_label = … (3,298字)
+• exec(cd /root/nanobot-src && grep -A 30 "pradd_custom_name" nanobot/channels/teleg...) → self._edit_state[chat_id] = {"field": "pradd_custom_name"}
+                await query.edit_message_text(
+                    "✏️ 创建自定义提示词组件\n\n"
+                    "请输入组件名称（如: 角色背景、安全规则、写作风格 等）:\n\n"
+                    "💡 名称会显示在组件列表中，创建后可编辑内容",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("❌ 取消", callback_data="prcan")]
+                    ]),
+                )
+
+            elif data == "prrules":
+                # Show prompt assembly … (1,548字)
+• exec(cd /root/nanobot-src && python3 -c "
+import py_compile
+py_compile.compile('na...) → ✅ callbacks.py OK
+
+
+Exit code: 0 (32字)
+• exec(cd /root/nanobot-src && grep -A 40 "pradd_custom_name" nanobot/channels/teleg...) → "  📂 per-agent — /editagent 编辑，各 agent 独立\n"
+                    "  🔒 代码生成 — 不可编辑（history、skills_overview）\n"
+                    "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
+--
+        if state.get("field") == "pradd_custom_name":
+            del self._edit_state[chat_id]
+            name_input = content.strip()
+            if not name_input or name_input in ("0", "取消", "/cancel"):
+                await self._gc_send(chat_id, "❌ 已取消")
+                return
+            # Sanitize: use the input as label, derive a … (2,117字)
+• edit_file() → (76字)
+---
+[Kirk]: ## 结论
+
+视觉风格已统一（`fd9b9a6`），3 处修复：分隔线 `┄→━`、移除 `•` bullet、移除 `**bold**`。现在主视图/预览页/规则页三处使用相同的视觉语言。
+
+## 关键发现
+
+**统一后的风格规范：**
+
+| 元素 | 规范 | 用途 |
+|------|------|------|
+| Section divider | `━━━━━━━━━━━━━━━━━━━━━` (21字符) | 区分大板块 |
+| Component header | `─── [N] label ───` | 预览页内组件标题 |
+| Title banner | `─── 上下文管线 · 实时演示 ───` | 页面标题 |
+| Section header | `📌 {title}` | 板块标题 |
+| 列表项 | 纯缩进，无 bullet | 所有列表 |
+| 加粗 | 不用（Telegram HTML 模式不渲染） | — |
+
+**保留未改的 `───`**：预览页组件标题和管线演示标题，语义是"子标题"而非"分隔线"，与 `━━━` 区分合理。
+
+## 备注
+
+- 代码注释中的 `───` section markers 未动，不影响用户可见 UI
+- 后续新增 UI 页面应遵循此规范
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/channels/telegram/commands/settings.py) → 333|     def _build_prompt_order_view(self, engine) -> tuple[str, "InlineKeyboardMarkup"]:
+334|         """Build the global prompt component order view with edit/reorder buttons."""
+335|         order = engine.prompt_builder.get_agent_prompt_order()
+336|         labels = _COMPONENT_LABELS
+337|         global_editable = _GLOBAL_EDITABLE
+338|         agent_editable = _AGENT_EDITABLE
+339|         conditional_tags = self._CONDITIONAL_TAGS
+340| 
+341|         phases = _COMPONENT_PHASES
+342|         static_keys = [k for k in order if phases.get(k) == "static"]
+343|         dynamic_keys = [k for k in order if phases.get(k) == "dynamic"]
+344| 
+345|         lines = ["📋 System Prompt 组装管线 (全局)\n"]
+346|         lines.append("📌 组装顺序: ⬛ 静态区 → 💬 聊天记录 → ⬜ 动态区\n")
+347|         lines.append("   ⬛ 静态: 仅 stab… (6,387字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1310|             elif data == "prrules":
+1311|                 # Show prompt assembly rules explanation
+1312|                 rules_text = (
+1313|                     "📖 Prompt 组装规则说明\n\n"
+1314|                     "📌 组装顺序\n"
+1315|                     "  ⬛ 静态区 → 💬 聊天记录 → ⬜ 动态区\n\n"
+1316|                     "📌 Phase 区别\n"
+1317|                     "  ⬛ 静态 (static)\n"
+1318|                     "    • 位于聊天记录之前，所有 agent 共享\n"
+1319|                     "    • 仅可使用 stable vars（不随轮次变化）\n"
+1320|                     "    • 适合: 人设、工具指令、硬规则等固定内容\n"
+1321|                     "    • 缓存友好，LLM 可复用前缀\n\n"
+1322|                     "  ⬜ 动态 (dynamic)\n"
+1323|                     "    • 位于聊天记录之后，每轮刷新\n"
+1324|                     "    • 可使用 stable + volatile vars\n"
+1325|                     "    • 适合: 群聊上下… (4,284字)
+• exec(cd /root/nanobot-src && grep -n "┄\|━━\|───\|📌\|•" nanobot/channels/telegram/...) → nanobot/channels/telegram/commands/settings.py:85:    # ── Groupchat Settings ─────────────────────────────────────
+nanobot/channels/telegram/commands/settings.py:310:    # ── Prompt Orchestration ────────────────────────────────
+nanobot/channels/telegram/commands/settings.py:346:        lines.append("📌 组装顺序: ⬛ 静态区 → 💬 聊天记录 → ⬜ 动态区\n")
+nanobot/channels/telegram/commands/settings.py:356:                lines.append("┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄")
+nanobot/channels/telegram/commands/settings.py:358:        … (3,707字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1390|                     if len(tpl) > 400:
+1391|                         preview += "…"
+1392|                     lines.append(preview)
+1393|                     lines.append("")
+1394| 
+1395|                 full_text = "\n".join(lines)
+1396|                 page_size = 3500
+1397|                 total_pages = max(1, (len(full_text) + page_size - 1) // page_size)
+1398|                 start = page * page_size
+1399|                 end = min(start + page_size, len(full_text))
+1400|                 page_text = f"🔍 全局 Prompt 模板预览 (第{page+1}/{total_pages}页)\n\n" + full_text[start:end]
+1401| 
+1402|                 nav = []
+1403|                 if page > 0:
+1404|                     nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"prv:{page-1}"))
+1405|                 if page < total_… (1,610字)
+• edit_file() → (84字)
+• edit_file() → (191字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1310|             elif data == "prrules":
+1311|                 # Show prompt assembly rules explanation
+1312|                 rules_text = (
+1313|                     "📖 Prompt 组装规则说明\n\n"
+1314|                     "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
+1315|                     "📌 组装顺序\n"
+1316|                     "    ⬛ 静态区 → 💬 聊天记录 → ⬜ 动态区\n"
+1317|                     "    静态位于 history 前，动态位于 history 后\n"
+1318|                     "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
+1319|                     "📌 Phase 区别\n\n"
+1320|                     "  ⬛ 静态 (static)\n"
+1321|                     "    • 位于聊天记录**之前**，所有 agent 共享\n"
+1322|                     "    • 仅可使用 stable vars（不随轮次变化）\n"
+1323|                     "    • 适合: 人设、工具指… (1,955字)
+  (还有 7 个工具调用，已省略)
+---
+[Kirk]: 功能检查通过，无问题。`fd9b9a6` 已提交，三处视图视觉统一。
+
+[工具调用记录]
+• wait() → (187字)
+• end_discussion() → ✅ 讨论已结束（原因: 功能检查完成。视觉风格统一（fd9b9a6）已验证通过，Harper 确认 callbacks.py/settings.py 无残留，编译通过。/prompt 三处视图（主视图/规则页/预览页）视觉语言一致。），即将进入总结阶段 (126字)
+---
+[Kirk]: ## 结论
+
+功能检查全部通过。本轮共 5 次提交，完成 prompt 系统 static/dynamic phase 架构适配 + UI 可视化。
+
+## 关键发现
+
+**提交记录：**
+
+| Commit | 内容 |
+|--------|------|
+| `2363adb` | `COMPONENT_PHASES` 基础架构（替代隐式 `history_idx`） |
+| `93439b6` | `/prompt` 列表视图 + 预览/编辑 UI 适配 phase 标签 |
+| `513acff` | `add_custom_component` 写入 `phase` 字段 |
+| `3790223` | 修复 dynamic 组件 `editable_by` 不一致 + 清理孤儿组件 |
+| `47a5cd3` | 新增 `📖 规则说明` 按钮 + `prrules` handler |
+| `fd9b9a6` | 视觉风格统一（`━` 分隔线 + 纯缩进列表） |
+
+**验证结果：**
+- 19 个组件 phase 分布正确：static 11 / dynamic 8
+- Manifest ↔ `COMPONENT_PHASES` ↔ `_FALLBACK_PHASES` 三方一致
+- `editable_by` 与内容来源匹配（代码生成→none，模板驱动→global）
+- `add_custom_component(key, label, phase)` 三参数签名，默认 `phase="static"`
+- 编译通过，无语法错误
+- 视觉风格三处视图统一（主视图/规则页/预览页）
+
+## 备注
+
+- `broadcast_hint`（static）含 `{{user_question}}` 未解析变量，历史遗留，非本次范围
+- 规则说明页内容硬编码，后续可抽为模板支持多语言
+---

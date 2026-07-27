@@ -1,0 +1,135 @@
+[用户]: 是否改好
+---
+[Harper]: 改好了。三项验证通过：
+
+**P0** — `broadcast.py:1282` 读取 `gc_settings["conv_keep_turns"]`，默认值 `3` ✅
+
+**P1** — `tool_pruning.py:324-333` 摘要追加到 `messages[last_sys_idx]`（最后一个 system 消息末尾），不插入新消息 ✅
+
+**P2** — `broadcast.py:268` `_gc_defaults` 已含 `"conv_keep_turns": 3`，用户改 `~/.nanobot/groupchat_settings.json` 加该字段即可覆盖 ✅
+
+Kirk 结论准确，无需额外工作。
+---
+[用户]: 提交git
+---
+[Harper]: 已提交：`abe90b4` — 2 files, 24 insertions, 23 deletions。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git status --short) → M nanobot/groupchat/history/tool_pruning.py
+ M nanobot/groupchat/orchestra/broadcast.py
+
+
+Exit code: 0 (103字)
+• exec(cd /root/nanobot-src && git diff --stat) → nanobot/groupchat/history/tool_pruning.py | 39 ++++++++++++++++---------------
+ nanobot/groupchat/orchestra/broadcast.py  |  8 +++----
+ 2 files changed, 24 insertions(+), 23 deletions(-)
+
+
+Exit code: 0 (202字)
+• exec() → [dev abe90b4] perf: reduce conv_keep_turns to 3, append summary to last system msg
+ 2 files changed, 24 insertions(+), 23 deletions(-)
+
+
+Exit code: 0 (149字)
+---
+[Kirk]: 已提交。最新 commit `abe90b4`：
+
+```
+abe90b4 perf: reduce conv_keep_turns to 3, append summary to last system msg
+```
+
+三项改动全部在此 commit 中，工作区干净，无需额外操作。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git status --short) → M nanobot/groupchat/history/tool_pruning.py
+ M nanobot/groupchat/orchestra/broadcast.py
+
+
+Exit code: 0 (103字)
+• exec(cd /root/nanobot-src && git diff --stat) → nanobot/groupchat/history/tool_pruning.py | 39 ++++++++++++++++---------------
+ nanobot/groupchat/orchestra/broadcast.py  |  8 +++----
+ 2 files changed, 24 insertions(+), 23 deletions(-)
+
+
+Exit code: 0 (202字)
+• exec(cd /root/nanobot-src && git diff) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && git status && echo "---" && git log --oneline -5) → On branch dev
+nothing to commit, working tree clean
+---
+abe90b4 perf: reduce conv_keep_turns to 3, append summary to last system msg
+6188597 fix: remove default model fallback and skip empty heartbeat
+4eac88a fix: move user_question from stable prefix to volatile tail to preserve cache
+8d81ee9 feat: AI-summarized conversation pruning + anti-repeat dedup
+4c30d14 fix(providers): skip cache_control injection for automatic-cache providers (DeepSeek)
+
+
+Exit code: 0 (464字)
+---
+[Harper]: 已确认，工作区干净。收工。
+---
+[Kirk]: 已确认。`abe90b4` 已提交，工作区干净。
+---
+[Kirk]: ## 结论
+
+已改好。commit `abe90b4`，2 文件，24 增 23 删。
+
+| 优先级 | 改动 | 状态 |
+|--------|------|------|
+| P0 | `conv_keep_turns` 6→3 | ✅ |
+| P1 | 摘要追加到最后一个 system 消息末尾 | ✅ |
+| P2 | 暴露为 `gc_settings["conv_keep_turns"]`，默认 3 | ✅ |
+
+可通过 `~/.nanobot/groupchat_settings.json` 添加 `"conv_keep_turns": <N>` 调整。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git show --stat abe90b4) → commit abe90b4244390d199d19f3aa997b6801e30b8487
+Author: nanobot-dev <dev@nanobot.local>
+Date:   Fri May 15 22:56:59 2026 +0800
+
+    perf: reduce conv_keep_turns to 3, append summary to last system msg
+    
+    - P0: conv_keep_turns 6→3 (broadcast.py reads from gc_settings)
+    - P1: summary appended to last system message instead of new msg
+      (preserves DeepSeek prefix cache)
+    - P2: exposed as gc_settings['conv_keep_turns'], default 3,
+      configurable via ~/.nanobot/groupchat_settings.… (708字)
+• end_discussion() → ✅ 讨论已结束（原因: 三项改动全部完成并提交，工作区干净，无需额外工作。），即将进入总结阶段 (47字)
+---
+[Kirk]: 没有配置远程仓库。`git remote -v` 为空。
+
+需要先添加 remote：
+
+```bash
+git remote add origin <仓库URL>
+git push -u origin dev
+```
+
+你的远程仓库地址是什么？
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git push) → STDERR:
+fatal: No configured push destination.
+Either specify the URL from the command-line or configure a remote repository using
+
+    git remote add <name> <url>
+
+and then push using the remote name
+
+    git push <name>
+
+
+
+Exit code: 128 (239字)
+• exec(cd /root/nanobot-src && git remote -v) → Exit code: 0 (13字)
+---
+[Kirk]: 没有配置远程仓库。`git remote -v` 为空。
+
+需要先添加 remote：
+
+```bash
+git remote add origin <仓库URL>
+git push -u origin dev
+```
+
+你的远程仓库地址是什么？
+---

@@ -18,29 +18,72 @@ from loguru import logger
 from nanobot.utils.helpers import cn_now as _cn_now
 
 
-_NANOBOT_DIR = Path.home() / ".nanobot"
+# Legacy location (pre-Phase 5.2) — used for one-time migration
+_LEGACY_NANOBOT_DIR = Path.home() / ".nanobot"
 
 
 class GroupChatState:
     """Unified persistence layer for group chat state.
 
-    All state files live under ``~/.nanobot/``:
+    All state files live under ``workspace/.groupchat/`` (Phase 5.2+):
     - ``active_agents.json``  — ordered list of active agent names
     - ``leader.txt``          — current leader name (or absent)
     - ``groups.json``         — saved named groups
     - ``chat_history.json``   — persisted in-memory chat state (survives gateway restart)
     - ``collab-sessions/``    — per-session event logs
+
+    Legacy migration: On init, if ``~/.nanobot/`` contains groupchat state files
+    and ``workspace/.groupchat/`` doesn't exist, migrate automatically.
     """
 
-    def __init__(self, registry: dict[str, Any]) -> None:
+    def __init__(self, registry: dict[str, Any], workspace: Path | None = None) -> None:
         self._registry = registry
+        self._workspace = workspace or Path.cwd()
+        self._state_dir = self._workspace / ".groupchat"
         self._session_dir: Path | None = None
+        self._migrate_from_legacy()
+
+    def _migrate_from_legacy(self) -> None:
+        """One-time migration: ~/.nanobot/ → workspace/.groupchat/."""
+        if self._state_dir.exists():
+            return  # Already migrated or new installation
+
+        legacy_files = [
+            "active_agents.json", "leader.txt", "groups.json",
+            "chat_history.json", "current_session.json",
+        ]
+        legacy_sessions = _LEGACY_NANOBOT_DIR / "collab-sessions"
+        has_legacy = any((_LEGACY_NANOBOT_DIR / f).exists() for f in legacy_files)
+        has_legacy |= legacy_sessions.exists()
+
+        if not has_legacy:
+            return
+
+        import shutil
+        try:
+            self._state_dir.mkdir(parents=True, exist_ok=True)
+            migrated = []
+            for fname in legacy_files:
+                src = _LEGACY_NANOBOT_DIR / fname
+                if src.exists():
+                    shutil.move(str(src), str(self._state_dir / fname))
+                    migrated.append(fname)
+            if legacy_sessions.exists():
+                shutil.move(str(legacy_sessions), str(self._state_dir / "collab-sessions"))
+                migrated.append("collab-sessions/")
+            if migrated:
+                logger.info(
+                    "Migrated groupchat state from {} to {} [{}]",
+                    _LEGACY_NANOBOT_DIR, self._state_dir, ", ".join(migrated),
+                )
+        except Exception as e:
+            logger.warning("Failed to migrate legacy groupchat state: {}", e)
 
     # ── Active Agents ────────────────────────────────────────
 
     @property
     def _active_file(self) -> Path:
-        return _NANOBOT_DIR / "active_agents.json"
+        return self._state_dir / "active_agents.json"
 
     def save_active(self, agents: list[str]) -> None:
         """Persist active agents list (and order) to disk."""
@@ -65,21 +108,24 @@ class GroupChatState:
 
     # ── Leader ───────────────────────────────────────────────
 
+    @property
+    def _leader_file(self) -> Path:
+        return self._state_dir / "leader.txt"
+
     def save_leader(self, leader: str | None) -> None:
         try:
-            p = _NANOBOT_DIR / "leader.txt"
             if leader:
-                p.write_text(leader)
-            elif p.exists():
-                p.unlink()
+                self._leader_file.parent.mkdir(parents=True, exist_ok=True)
+                self._leader_file.write_text(leader)
+            elif self._leader_file.exists():
+                self._leader_file.unlink()
         except Exception:
             pass
 
     def load_leader(self) -> str | None:
-        p = _NANOBOT_DIR / "leader.txt"
-        if p.exists():
+        if self._leader_file.exists():
             try:
-                name = p.read_text().strip()
+                name = self._leader_file.read_text().strip()
                 if name and name in self._registry:
                     logger.info("Restored leader: {}", name)
                     return name
@@ -91,7 +137,7 @@ class GroupChatState:
 
     @property
     def _groups_file(self) -> Path:
-        return _NANOBOT_DIR / "groups.json"
+        return self._state_dir / "groups.json"
 
     def load_groups(self) -> dict[str, list[str]]:
         if self._groups_file.exists():
@@ -117,7 +163,7 @@ class GroupChatState:
 
     @property
     def _current_session_file(self) -> Path:
-        return _NANOBOT_DIR / "current_session.json"
+        return self._state_dir / "current_session.json"
 
     def save_current_session(
         self,
@@ -162,7 +208,7 @@ class GroupChatState:
     def create_session(self) -> Path:
         """Create a new session directory and return its path."""
         timestamp = _cn_now().strftime("%Y%m%d-%H%M%S")
-        sessions_dir = _NANOBOT_DIR / "collab-sessions"
+        sessions_dir = self._state_dir / "collab-sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
         self._session_dir = sessions_dir / f"gc-{timestamp}"
         self._session_dir.mkdir(parents=True, exist_ok=True)
@@ -268,7 +314,7 @@ class GroupChatState:
 
     @property
     def _history_snapshot_file(self) -> Path:
-        return _NANOBOT_DIR / "chat_history.json"
+        return self._state_dir / "chat_history.json"
 
     def save_history_snapshot(
         self,

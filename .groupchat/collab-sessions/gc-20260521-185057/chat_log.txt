@@ -1,0 +1,803 @@
+[用户]: 可以
+---
+[Harper]: 收到，开始执行Phase 0。先读当前代码接口，再写行为快照测试。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 1| """Context pruning for tool results.
+2| 
+3| Prunes old tool-result messages to keep the prompt within token budgets.
+4| When token limits are exceeded, replaces old voluminous tool outputs with
+5| a concise 1-line summary (e.g. `[exec] ran 'npm test' -> exit 0, 47 lines`).
+6| 
+7| Only tool-result messages *before* the last ``keep_recent`` assistant turns
+8| are eligible for pruning. User and assistant messages are never modified.
+9| """
+10| 
+11| from __future__ import annotations
+12| 
+13| import json
+14| import re
+15| from typing import Any
+16| 
+17| CHARS_PER_TOKEN = 4  # conservative estimate
+18| 
+19| # ── Defaults ──────────────────────────────────────────────────────────────
+20| 
+21| DEFAULT_SOFT_RATIO = 0.3     # start pruning when > 30% of window
+22| DEFAULT_KEEP_RECENT = 3      # … (3,979字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 140|                 available -= c
+141|             self.messages = head_msgs + tail
+142| 
+143|         self._state.save_message(sender, content, self.messages)
+144| 
+145|     async def maybe_compress(self) -> None:
+146|         """Compress the middle section of history when it approaches the limit.
+147| 
+148|         Head-tail protection always runs.  AI summarisation is gated by
+149|         ``summarize_enabled``; if disabled, the middle region is simply dropped.
+150|         """
+151|         from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
+152|             max_messages,
+153|             history_summarize_enabled,
+154|             summarize_model,
+155|             compress_ratio,
+156|             compress_max_summary_tokens,
+157|             compression_keep_rec… (3,445字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/result_processor.py) → 1| """Unified tool result post-processing pipeline.
+2| 
+3| Single chokepoint for ALL tool results after execution.
+4| Replaces scattered truncation in shell.py, web.py, and tool_storage.py.
+5| 
+6| Pipeline: normalize → truncate → persist → inject_meta
+7| """
+8| 
+9| from __future__ import annotations
+10| import json
+11| from pathlib import Path
+12| from typing import Any
+13| from loguru import logger
+14| 
+15| STORAGE_DIR = Path("/tmp/nanobot/tool_storage")
+16| 
+17| # tool_name → (config_getter_name, strategy)
+18| _TOOL_CONFIGS: dict[str, tuple[str, str]] = {
+19|     "exec":       ("exec_max_chars", "head_tail"),
+20|     "web_fetch":  ("web_fetch_max_chars", "head_only"),
+21|     "web_search": ("web_search_max_chars", "head_only"),
+22| }
+23| _FALLBACK_CONFIG = ("tool_result_max_chars", "head… (3,200字)
+• exec(ls /root/nanobot-src/nanobot/groupchat/history/tests/ 2>/dev/null; echo "---"...) → ---
+
+
+Exit code: 0 (18字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 100|         exit_match = re.search(r'(?:exit[_ ]?code|returncode)\s*[:=]\s*(-?\d+)', content, re.IGNORECASE)
+101|         exit_code = exit_match.group(1) if exit_match else "?"
+102|         return f"[exec] ran `{cmd}` -> exit {exit_code}, {line_count} lines output"
+103| 
+104|     if tool_name == "read_file":
+105|         path = args.get("path", "?")
+106|         return f"[read_file] read {path} ({content_len:,} chars)"
+107| 
+108|     if tool_name in ("write_file", "edit_file"):
+109|         path = args.get("path", "?")
+110|         return f"[{tool_name}] modified {path} ({content_len:,} chars result)"
+111| 
+112|     if tool_name in ("web_search", "smart_search"):
+113|         query = args.get("query", "?")
+114|         return f"[{tool_name}] query='{query}' ({content_len:,} chars result)"… (11,348字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 220|                     messages=[{"role": "user", "content": prompt}],
+221|                     model=summarize_model(),
+222|                     max_tokens=max_tok,
+223|                 )
+224|                 summary = (response.content or "").strip()
+225|                 if summary:
+226|                     summary_msg = {
+227|            … (1,563字)
+  (还有 8 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/result_processor.py) → 1| """Unified tool result post-processing pipeline.
+2| 
+3| Single chokepoint for ALL tool results after execution.
+4| Replaces scattered truncation in shell.py, web.py, and tool_storage.py.
+5| 
+6| Pipeline: normalize → truncate → persist → inject_meta
+7| """
+8| 
+9| from __future__ import annotations
+10| import json
+11| from pathlib import Path
+12| from typing import Any
+13| from loguru import logger
+14| 
+15| STORAGE_DIR = Path("/tmp/nanobot/tool_storage")
+16| 
+17| # tool_name → (config_getter_name, strategy)
+18| _TOOL_CONFIGS: dict[str, tuple[str, str]] = {
+19|     "exec":       ("exec_max_chars", "head_tail"),
+20|     "web_fetch":  ("web_fetch_max_chars", "head_only"),
+21|     "web_search": ("web_search_max_chars", "head_only"),
+22| }
+23| _FALLBACK_CONFIG = ("tool_result_max_chars", "head… (5,782字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 1| """Context pruning for tool results.
+2| 
+3| Prunes old tool-result messages to keep the prompt within token budgets.
+4| When token limits are exceeded, replaces old voluminous tool outputs with
+5| a concise 1-line summary (e.g. `[exec] ran 'npm test' -> exit 0, 47 lines`).
+6| 
+7| Only tool-result messages *before* the last ``keep_recent`` assistant turns
+8| are eligible for pruning. User and assistant messages are never modified.
+9| """
+10| 
+11| from __future__ import annotations
+12| 
+13| import json
+14| import re
+15| from typing import Any
+16| 
+17| CHARS_PER_TOKEN = 4  # conservative estimate
+18| 
+19| # ── Defaults ──────────────────────────────────────────────────────────────
+20| 
+21| DEFAULT_SOFT_RATIO = 0.3     # start pruning when > 30% of window
+22| DEFAULT_KEEP_RECENT = 3      # … (12,810字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 301|         "## 关键进展\n（已完成的重要发现、决策、结论）\n\n"
+302|         "## 待解决\n（尚未达成共识或需要继续讨论的问题）\n\n"
+303|         "## 关键数据\n（具体的数值、路径、URL、配置等硬事实）\n\n"
+304|         "不超过 300 字。\n\n"
+305|         f"{conversation_text}"
+306|     )
+307| 
+308|     summary_text = ""
+309|     if provider is not None and model:
+310|         try:
+311|             from loguru import logger as _logger
+312|             response = await provider.chat_with_retry(
+313|                 messages=[{"role": "user", "content": prompt}],
+314|                 model=model,
+315|                 max_tokens=600,
+316|             )
+317|             summary_text = (response.content or "").strip()
+318|             if summary_text:
+319|                 _logger.info(
+320|                     "prune_conversation_tail: AI summarised {} dropped msgs… (2,407字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/history_settings.py) → 1| """Centralized history, summarization, and context-pruning settings.
+2| 
+3| Loads ``~/.nanobot/history_settings.json`` once and exposes typed getters
+4| so that shell.py, tool_loop.py, context_pruning.py,
+5| engine.py, broadcast.py, tool_chat.py, and the Telegram UI can all
+6| read the same configuration without hardcoding defaults.
+7| 
+8| Settings are organized into four sections:
+9| 
+10| - **Top-level**: global limits (context window, tool result hard cap)
+11| - **tool_results**: per-tool truncation + AI summarization
+12| - **history**: conversation history window
+13| - **context_pruning**: iterative context pruning thresholds
+14| """
+15| 
+16| from __future__ import annotations
+17| 
+18| import json
+19| from pathlib import Path
+20| from typing import Any
+21| 
+22| from loguru import log… (8,883字)
+• exec() → /root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:80:def _summarize_tool_result(tool_name: str, tool_args: str, tool_content: str) -> str:
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:135:def prune_messages(
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:239:async def prune_conversation_tail_with_summary(
+
+
+Exit code: 0 (359字)
+• exec() → /root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:155:        fr… (823字)
+  (还有 9 个工具调用，已省略)
+---
+[Harper]: <｜｜DSML｜｜tool_calls>
+<｜｜DSML｜｜invoke name="exec">
+<｜｜DSML｜｜parameter name="command" string="true">grep -B2 -A15 "def _truncate" /root/nanobot-src/nanobot/groupchat/history/result_processor.py</｜｜DSML｜｜parameter>
+</｜｜DSML｜｜invoke>
+</｜｜DSML｜｜tool_calls>
+
+[工具调用记录]
+• exec() → 16:async def generate_summary(engine: Any) -> None:
+21:    compression (``tool_results.summarize_model``).
+24:        summarize_model as _get_summarize_model,
+25:        history_summarize_enabled,
+28:    if not engine._history or not history_summarize_enabled():
+57:    model = _get_summarize_model()
+
+
+Exit code: 0 (315字)
+• exec(find /root/nanobot-src/tests -name "*.py" 2>/dev/null | head -20) → /root/nanobot-src/tests/test_groupchat.py
+/root/nanobot-src/tests/test_base_channel.py
+/root/nanobot-src/tests/test_custom_provider.py
+/root/nanobot-src/tests/test_feishu_tool_hint_code_block.py
+/root/nanobot-src/tests/test_loop_consolidation_tokens.py
+/root/nanobot-src/tests/test_config_paths.py
+/root/nanobot-src/tests/test_loop_save_turn.py
+/root/nanobot-src/tests/test_web_search_tool.py
+/root/nanobot-src/tests/test_mcp_tool.py
+/root/nanobot-src/tests/test_message_tool_suppress.py
+/root/nanobo… (978字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 16| async def generate_summary(engine: Any) -> None:
+17|     """Generate and send an AI summary of the entire discussion.
+18| 
+19|     Called when user sends ``__SUMMARY__`` or when Leader triggers
+20|     ``end_discussion``.  Uses the same provider + model as history
+21|     compression (``tool_results.summarize_model``).
+22|     """
+23|     from nanobot.groupchat.history.history_settings import (
+24|         summarize_model as _get_summarize_model,
+25|         history_summarize_enabled,
+26|     )
+27| 
+28|     if not engine._history or not history_summarize_enabled():
+29|         return
+30| 
+31|     messages = list(engine._history)
+32|     if not messages:
+33|         return
+34| 
+35|     # Format conversation for summarisation
+36|     lines = []
+37|     for m in messages:
+38|         send… (1,754字)
+• exec(cat /root/nanobot-src/tests/conftest.py 2>/dev/null | head -30) → Exit code: 0 (13字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 100|         exit_match = re.search(r'(?:exit[_ ]?code|returncode)\s*[:=]\s*(-?\d+)', content, re.IGNORECASE)
+101|         exit_code = exit_match.group(1) if exit_match else "?"
+102|         return f"[exec] ran `{cmd}` -> exit {exit_code}, {line_count} lines output"
+103| 
+104|     if tool_name == "read_file":
+105|         path = args.get("path", "?")
+106|         return f"[read_file] read {path} ({content_len:,} chars)"
+107| 
+108|     if tool_name in ("write_file", "edit_file"):
+109|         path = args.get("path", "?")
+110|         return f"[{tool_name}] modified {path} ({content_len:,} chars result)"
+111| 
+112|     if tool_name in ("web_search", "smart_search"):
+113|         query = args.get("query", "?")
+114|         return f"[{tool_name}] query='{query}' ({content_len:,} chars result)"… (5,509字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 219|     if hard_max_total_chars and hard_max_total_chars > 0 and total_chars > hard_max_total_chars:
+220|         tool_map = _build_tool_map(messages)
+221|         # Collect all tool message indices sorted oldest-first
+222|         tool_indices = [i for i, m in enumerate(result) if m.get("role") == "tool"]
+223|         
+224|         for i in tool_indices:
+225|             content = result[i].get("content", "")
+226|             if not isinstance(content, str):
+227|                 continue
+228|             tcid = result[i].get("tool_call_id", "")
+229|             tool_name, tool_args = tool_map.get(tcid, ("unknown_tool", ""))
+230|             summary = _summarize_tool_result(tool_name, tool_args, content)
+231|             if len(summary) < len(content):
+232|                 result[i] = {**… (2,362字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/result_processor.py) → 1| """Unified tool result post-processing pipeline.
+2| 
+3| Single chokepoint for ALL tool results after execution.
+4| Replaces scattered truncation in shell.py, web.py, and tool_storage.py.
+5| 
+6| Pipeline: normalize → truncate → persist → inject_meta
+7| """
+8| 
+9| from __future__ import annotations
+10| import json
+11| from pathlib import… (3,200字)
+  (还有 2 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 185|             prunable: list[int] = []
+186|             for i in range(cutoff):
+187|                 if messages[i].get("role") == "tool":
+188|                     content = messages[i].get("content", "")
+189|                     if isinstance(content, str) and len(content) > max_chars:
+190|                         prunable.append(i)
+191| 
+192|             if prunable:
+193|                 result = list(messages)
+194|                 tool_map = _build_tool_map(messages)
+195| 
+196|                 for i in prunable:
+197|                     content = result[i].get("content", "")
+198|                     if not isinstance(content, str) or len(content) <= max_chars:
+199|                         continue
+200|                         
+201|                     tcid = result[i].get("tool_call_… (3,875字)
+• exec(grep -n "def _summarize_tool_result" /root/nanobot-src/nanobot/groupchat/hist...) → 80:def _summarize_tool_result(tool_name: str, tool_args: str, tool_content: str) -> str:
+
+
+Exit code: 0 (103字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 80| def _summarize_tool_result(tool_name: str, tool_args: str, tool_content: str) -> str:
+81|     """Create an informative 1-line summary of a tool call + result.
+82| 
+83|     Returns strings like::
+84|         [exec] ran `npm test` -> exit 0, 47 lines output
+85|         [read_file] read config.py (1,200 chars)
+86|     """
+87|     try:
+88|         args = json.loads(tool_args) if tool_args else {}
+89|     except (json.JSONDecodeError, TypeError):
+90|         args = {}
+91| 
+92|     content = tool_content or ""
+93|     content_len = len(content)
+94|     line_count = content.count("\n") + 1 if content.strip() else 0
+95| 
+96|     if tool_name == "exec":
+97|         cmd = args.get("command", "")
+98|         if len(cmd) > 80:
+99|             cmd = cmd[:77] + "..."
+100|         exit_match = re.sea… (2,222字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 130|         sv = str(v)[:40]
+131|         first_arg += f" {k}={sv}"
+132|     return f"[{tool_name}]{first_arg} ({content_len:,} chars result)"
+133| 
+134| 
+135| def prune_messages(
+136|     messages: list[dict[str, Any]],
+137|     context_window_tokens: int,
+138|     *,
+139|     soft_ratio: float | None = None,
+140|     keep_recent: int | None = None,
+141|     max_chars: int | None = None,
+142|     hard_max_total_chars: int | None = None,
+143| ) -> list[dict[str, Any]]:
+144|     """Prune old tool-result messages to fit within the context window.
+145| 
+146|     Returns a new list (shallow copy) with pruned messages. User/assistant messages
+147|     are never modified. Only tool results before the last ``keep_recent`` assistant
+148|     turns are pruned by substituting large outputs with a s… (1,413字)
+• write_file() → (93字)
+• write_file() → (93字)
+• exec() → STDERR:
+/bin/bash: line 11: warning: here-document at line 1 delimited by end-of-file (wanted `PYEOF')
+
+
+Exit code: 0 (117字)
+---
+[Harper]: 
+
+[工具调用记录]
+• write_file() → (93字)
+• write_file() → (76字)
+• exec() → STDERR:
+/bin/bash: line 7: warning: here-document at line 1 delimited by end-of-file (wanted `ENDOFSCRIPT')
+
+
+Exit code: 0 (122字)
+• exec() → Current file length: 283
+First 200 chars: '"""Phase 0: Behavior snapshot tests for the 4-stage compression pipeline.\n\nEach test captures current behavior BEFORE refactoring.\nPurpose: detect regressions when logic is moved into pipeline.py + st'
+
+
+Exit code: 0 (262字)
+• exec() → Written 9088 bytes
+
+
+Exit code: 0 (33字)
+• exec(cd /root/nanobot-src && python3 -c "import py_compile; py_compile.compile('te...) → Syntax OK
+
+
+Exit code: 0 (24字)
+• exec() → 2026-05-21 18:57:15.274 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 18 components, 13 editable
+result_processor import OK
+tool_pruning import OK
+
+
+Exit code: 0 (217字)
+• exec(cd /root/nanobot-src && python3 -m pytest tests/test_compression_behavior_sna...) → except Exception as e:
+                from loguru import logger as _logger
+                _logger.warning(
+                    "prune_conversation_tail: AI summary failed ({}), falling back to drop", e
+                )
+    
+        # ── Rebuild messages, appending summary to last system msg to preserve prefix cache ──
+        if summary_text:
+            summary_block = (
+>               f"\n\n[上下文摘要 — 以下 {dropped_count} 条早期消息已被压缩]\n"
+                + summary_text
+            )
+E           T… (2,240字)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && python3 -m pytest tests/test_compression_behavior_sna...) → ============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.0.2, pluggy-1.6.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+rootdir: /root/nanobot-src
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, langsmith-0.7.25, Faker-40.11.1, cov-7.1.0, anyio-4.12.1
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 10 items
+
+tests/test_compression_be… (6,766字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 135| def prune_messages(
+136|     messages: list[dict[str, Any]],
+137|     context_window_tokens: int,
+138|     *,
+139|     soft_ratio: float | None = None,
+140|     keep_recent: int | None = None,
+141|     max_chars: int | None = None,
+142|     hard_max_total_chars: int | None = None,
+143| ) -> list[dict[str, Any]]:
+144|     """Prune old tool-result messages to fit within the context window.
+145| 
+146|     Returns a new list (shallow copy) with pruned messages. User/assistant messages
+147|     are never modified. Only tool results before the last ``keep_recent`` assistant
+148|     turns are pruned by substituting large outputs with a single generic summary line.
+149| 
+150|     If ``hard_max_total_chars`` is set and the total still exceeds it after soft
+151|     pruning, a second pass forc… (2,683字)
+• exec(grep -n "exit\|returncode\|lines\|exit_code\|_summarize" /root/nanobot-src/na...) → 5:a concise 1-line summary (e.g. `[exec] ran 'npm test' -> exit 0, 47 lines`).
+80:def _summarize_tool_result(tool_name: str, tool_args: str, tool_content: str) -> str:
+84:        [exec] ran `npm test` -> exit 0, 47 lines output
+100:        exit_match = re.search(r'(?:exit[_ ]?code|returncode)\s*[:=]\s*(-?\d+)', content, re.IGNORECASE)
+101:        exit_code = exit_match.group(1) if exit_match else "?"
+102:        return f"[exec] ran `{cmd}` -> exit {exit_code}, {line_count} lines output"
+204:    … (826字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 295| 
+296|     # ── Structured summary prompt ──
+297|     prompt = (
+298|         f"以下是群聊中已超出上下文窗口的早期对话（共 {dropped_count} 条消息）。\n"
+299|         "请用结构化格式摘要，保留关键信息：\n\n"
+300|         "## 目标\n（本轮讨论要解决什么问题）\n\n"
+301|         "## 关键进展\n（已完成的重要发现、决策、结论）\n\n"
+302|         "## 待解决\n（尚未达成共识或需要继续讨论的问题）\n\n"
+303|         "## 关键数据\n（具体的数值、路径、URL、配置等硬事实）\n\n"
+304|         "不超过 300 字。\n\n"
+305|         f"{conversation_text}"
+306|     )
+307| 
+308|     summary_text = ""
+309|     if provider is not None and model:
+310|         try:
+311|             from loguru import logger as _logger
+312|             response = await provider.chat_with_retry(
+313|                 messages=[{"role": "user", "content": prompt}],
+314|                 model=model,
+315|                 max_tokens=600,
+316|             )
+317|  … (2,615字)
+• exec() → Written 10299 bytes
+
+
+Exit code: 0 (34字)
+---
+[Harper]: <｜｜DSML｜｜tool_calls>
+<｜｜DSML｜｜invoke name="exec">
+<｜｜DSML｜｜parameter name="command" string="true">grep -B2 -A15 "def _truncate" /root/nanobot-src/nanobot/groupchat/history/result_processor.py</｜｜DSML｜｜parameter>
+</｜｜DSML｜｜invoke>
+</｜｜DSML｜｜tool_calls>
+
+[工具调用记录]
+• exec() → Syntax OK
+        msgs = self._make_long_conversation(10)  # 10*2=20 conv msgs, keep 3*2=6, drop 14... wait
+        # Actually 10 user+assistant pairs = 20 conv msgs, keep 6, drop 14
+        # But min_dropped=5, so 14 >= 5 would trigger summary
+        # Need dropped < 5: keep_turns=10 so keep 20, drop 0... no that doesn't drop
+        # Let me think: 5 conv msgs total = 10 messages (5 user + 5 assistant)
+        # keep_turns=3 means keep last 3 turns = 6 messages
+        # dropped = 10 - 6 = 4.… (1,963字)
+• exec(cd /root/nanobot-src && python3 -m pytest tests/test_compression_behavior_sna...) → tests/test_compression_behavior_snapshot.py::TestStage1_ToolTruncation::test_multimodal_list_passthrough FAILED [ 30%]
+tests/test_compression_behavior_snapshot.py::TestStage3_ContextPrune::test_soft_pruning_not_triggered PASSED [ 40%]
+tests/test_compression_behavior_snapshot.py::TestStage3_ContextPrune::test_soft_pruning_old_results_replaced FAILED [ 50%]
+tests/test_compression_behavior_snapshot.py::TestStage3_ContextPrune::test_hard_cap_breaks_keep_recent PASSED [ 60%]
+tests/test_compression_be… (3,713字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 192|             if prunable:
+193|                 result = list(messages)
+194|                 tool_map = _build_tool_map(messages)
+195| 
+196|                 for i in prunable:
+197|                     content = result[i].get("content", "")
+198|                     if not isinstance(content, str) or len(content) <= max_chars:
+199|                         continue
+200|                         
+201|                     tcid = result[i].get("tool_call_id", "")
+202|                     tool_name, tool_args = tool_map.get(tcid, ("unknown_tool", ""))
+203|                     
+204|                     summary = _summarize_tool_result(tool_name, tool_args, content)
+205|                     result[i] = {**result[i], "content": summary}
+206|                 
+207|                 total_chars = _est… (1,228字)
+• exec(grep -n "def prune_messages" /root/nanobot-src/nanobot/groupchat/history/tool...) → 135:def prune_messages(
+
+
+Exit code: 0 (38字)
+• exec(sed -n '135,145p' /root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → def prune_messages(
+    messages: list[dict[str, Any]],
+    context_window_tokens: int,
+    *,
+    soft_ratio: float | None = None,
+    keep_recent: int | None = None,
+    max_chars: int | None = None,
+    hard_max_total_chars: int | None = None,
+) -> list[dict[str, Any]]:
+    """Prune old tool-result messages to fit within the context window.
+
+
+
+Exit code: 0 (361字)
+• exec(grep "DEFAULT_MAX_CHARS\|pruning_soft_max_chars\|max_chars" /root/nanobot-src...) → DEFAULT_MAX_CHARS = 1_000    # prune tool outputs larger than this
+    max_chars: int | None = None,
+        if max_chars is None:
+            max_chars = hs.pruning_soft_max_chars()
+    if max_chars is None:
+        max_chars = DEFAULT_MAX_CHARS
+                    if isinstance(content, str) and len(content) > max_chars:
+                    if not isinstance(content, str) or len(content) <= max_chars:
+
+
+Exit code: 0 (421字)
+• exec(sed -n '60,80p' /root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → return i
+    return 0
+
+
+def _build_tool_map(messages: list[dict[str, Any]]) -> dict[str, tuple[str, str]]:
+    """Map tool_call_id to (tool_name, tool_arguments) from assistant messages."""
+    result: dict[str, tuple[str, str]] = {}
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            for tc in msg.get("tool_calls") or []:
+                if isinstance(tc, dict):
+                    fn = tc.get("function", {})
+                    tcid = tc.get("id", "")
+              … (809字)
+---
+[Kirk]: Now let me read the key functions more carefully:
+
+[工具调用记录]
+• memory_palace(总结机制 重构 测试 tool_pruning context compression pipeline) → 🔍 5 result(s) for '总结机制 重构 测试 tool_pruning context compression pipeline':
+
+[1] wing_code/context-management-architecture (sim=0.155)
+  ## 上下文管理架构（3层）
+
+### 第1层: tool_pruning.prune_messages() — tool_loop内每轮迭代前
+- 裁剪旧tool result为1行摘要
+- 配置: soft_ratio=0.1, keep_recent=2, max_chars=3000
+- 阈值: 14K chars触发（context_window=35000 tokens * 4 chars/token * 0.1）
+- Kirk超时修复: keep_recent 6→2, soft_ratio 0.2→0.1
+
+### 第2层: HistoryContext.maybe_compress() — engine级跨轮次
+- AI摘要中间区域（head-tail保护）
+- 触发: 消息数 > max_messag… (2,379字)
+• chatroom_send() → (49字)
+• wait() → (43字)
+• wait() → (261字)
+• wait() → (19字)
+• chatroom_send(进度？测试文件写完了吗？) → (49字)
+• wait() → (19字)
+• chatroom_send(Harper，还在吗？如果卡住了告诉我卡在哪。) → (49字)
+• wait() → (261字)
+• manage_agent() → ✅ Harper 已被 disable，其 task 已取消 (30字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/result_processor.py) → 1| """Unified tool result post-processing pipeline.
+2| 
+3| Single chokepoint for ALL tool results after execution.
+4| Replaces scattered truncation in shell.py, web.py, and tool_storage.py.
+5| 
+6| Pipeline: normalize → truncate → persist → inject_meta
+7| """
+8| 
+9| from __future__ import annotations
+10| import json
+11| from pathlib import Path
+12| from typing import Any
+13| from loguru import logger
+14| 
+15| STORAGE_DIR = Path("/tmp/nanobot/tool_storage")
+16| 
+17| # tool_name → (config_getter_name, strategy)
+18| _TOOL_CONFIGS: dict[str, tuple[str, str]] = {
+19|     "exec":       ("exec_max_chars", "head_tail"),
+20|     "web_fetch":  ("web_fetch_max_chars", "head_only"),
+21|     "web_search": ("web_search_max_chars", "head_only"),
+22| }
+23| _FALLBACK_CONFIG = ("tool_result_max_chars", "head… (5,782字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 1| """Context pruning for tool results.
+2| 
+3| Prunes old tool-result messages to keep the prompt within token budgets.
+4| When token limits are exceeded, replaces old voluminous tool outputs with
+5| a concise 1-line summary (e.g. `[exec] ran 'npm test' -> exit 0, 47 lines`).
+6| 
+7| Only tool-result messages *before* the last ``keep_recent`` assistant turns
+8| are eligible for pruning. User and assistant messages are never modified.
+9| """
+10| 
+11| from __future__ import annotations
+12| 
+13| import json
+14| import re
+15| from typing import Any
+16| 
+17| CHARS_PER_TOKEN = 4  # conservative estimate
+18| 
+19| # ── Defaults ──────────────────────────────────────────────────────────────
+20| 
+21| DEFAULT_SOFT_RATIO = 0.3     # start pruning when > 30% of window
+22| DEFAULT_KEEP_RECENT = 3      # … (12,810字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 1| """HistoryContext — single source of truth for conversation history.
+2| 
+3| Owns the message list and all related operations:
+4|   - add_message     : append + enforce message-count & char-budget limits
+5|   - maybe_compress  : AI summarize (or drop) the middle region on overflow
+6|   - clear / format  : utility helpers
+7| 
+8| Engine and Broadcast delegate to this class instead of maintaining
+9| ``self._history`` directly.  Persistence is still delegated to
+10| ``GroupChatState.save_message()``.
+11| """
+12| 
+13| from __future__ import annotations
+14| 
+15| import asyncio
+16| from typing import TYPE_CHECKING, Any
+17| 
+18| from loguru import logger
+19| 
+20| from nanobot.groupchat.history.message_converter import age_tool_log
+21| 
+22| if TYPE_CHECKING:
+23|     from nanobot.groupchat.history… (10,419字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/history_settings.py) → 1| """Centralized history, summarization, and context-pruning settings.
+2| 
+3| Loads ``~/.nanobot/history_settings.json`` once and exposes typed getters
+4| so that shell.py, tool_loop.py, context_pruning.py,
+5| engine.py, broadcast.py, tool_chat.py, and the Telegram UI can all
+6| read the same configuration without hardcoding defaults.
+7| 
+8| Settings are organized into four sections:
+9| 
+10| - **Top-level**: global limits (context window, tool result hard cap)
+11| - **tool_results**: per-tool truncation + AI … (8,883字)
+---
+[Kirk]: shell 引号嵌套太深了。用 base64 方式：先写临时 Python 脚本生成文件：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 301|         "## 关键进展\n（已完成的重要发现、决策、结论）\n\n"
+302|         "## 待解决\n（尚未达成共识或需要继续讨论的问题）\n\n"
+303|         "## 关键数据\n（具体的数值、路径、URL、配置等硬事实）\n\n"
+304|         "不超过 300 字。\n\n"
+305|         f"{conversation_text}"
+306|     )
+307| 
+308|     summary_text = ""
+309|     if provider is not None and model:
+310|         try:
+311|             from loguru import logger as _logger
+312|             response = await provider.chat_with_retry(
+313|                 messages=[{"role": "user", "content": prompt}],
+314|                 model=model,
+315|                 max_tokens=600,
+316|             )
+317|             summary_text = (response.content or "").strip()
+318|             if summary_text:
+319|                 _logger.info(
+320|                     "prune_conversation_tail: AI summarised {} dropped msgs… (2,407字)
+• exec(find /root/nanobot-src -path "*/tests/*" -name "*.py" | head -20) → /root/nanobot-src/tests/test_groupchat.py
+/root/nanobot-src/tests/test_base_channel.py
+/root/nanobot-src/tests/test_custom_provider.py
+/root/nanobot-src/tests/test_feishu_tool_hint_code_block.py
+/root/nanobot-src/tests/test_loop_consolidation_tokens.py
+/root/nanobot-src/tests/test_config_paths.py
+/root/nanobot-src/tests/test_loop_save_turn.py
+/root/nanobot-src/tests/test_web_search_tool.py
+/root/nanobot-src/tests/test_mcp_tool.py
+/root/nanobot-src/tests/test_message_tool_suppress.py
+/root/nanobo… (974字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 1| """Context pruning for tool results.
+2| 
+3| Prunes old tool-result messages to keep the prompt within token budgets.
+4| When token limits are exceeded, replaces old voluminous tool outputs with
+5| a concise 1-line summary (e.g. `[exec] ran 'npm test' -> exit 0, 47 lines`).
+6| 
+7| Only tool-result messages *before* the last ``keep_recent`` assistant turns
+8| are eligible for pruning. User and assistant messages are never modified.
+9| """
+10| 
+11| from __future__ import annotations
+12| 
+13| import json
+14| import re
+15| from typing import Any
+16| 
+17| CHARS_PER_TOKEN = 4  # conservative estimate
+18| 
+19| # ── Defaults ──────────────────────────────────────────────────────────────
+20| 
+21| DEFAULT_SOFT_RATIO = 0.3     # start pruning when > 30% of window
+22| DEFAULT_KEEP_RECENT = 3      # … (12,810字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/result_processor.py) → 1| """Unified tool result post-processing pipeline.
+2| 
+3| Single chokepoint for ALL tool results after execution.
+4| Replaces scattered truncation in shell.py, web.py, and tool_storage.py.
+5| 
+6| Pipeline: normalize → truncate → persist → inject_meta
+7| """
+8| 
+9| from __future__ import annotations
+10| import json
+11| from pathlib import Path
+12| from typing import Any
+13| from loguru import logger
+14| 
+15| STORAGE_DIR = Path("/tmp/nanobot/tool_storage")
+16| 
+17| # tool_name → (config_getter_name, strategy)
+18| _TOOL_CONFIGS: dict[str, tuple[str, str]] = {
+19|     "exec":       ("exec_max_chars", "head_tail"),
+20|     "web_fetch":  ("web_fetch_max_chars", "head_only"),
+21|     "web_search": ("web_search_max_chars", "head_only"),
+22| }
+23| _FALLBACK_CONFIG = ("tool_result_max_chars", "head… (5,782字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 1| """HistoryContext — single source of truth for conversation history.
+2| 
+3| Owns the message list and all related operations:
+4|   - add_message     : append + enforce message-count & char-budget limits
+5|   - maybe_compress  : AI summarize (or drop) the middle region on overflow
+6|   - clear / format  : utility helpers
+7| 
+8| Engine and Broadcast delegate to this class instead of maintaining
+9| ``self._history`` directly.  Persistence is still delegated to
+10| ``GroupChatState.save_message()``.
+11| """
+12| 
+13| from __future__ import annotations
+14| 
+15| import asyncio
+16| from typing import TYPE_CHECKING, Any
+17| 
+18| from loguru import logger
+19| 
+20| from nanobot.groupchat.history.message_converter import age_tool_log
+21| 
+22| if TYPE_CHECK… (10,419字)
+  (还有 8 个工具调用，已省略)
+---
+[Kirk]: ## 结论
+
+重构计划定稿。6 阶段 5 天工期，核心改动 Phase 0-3（3.5 天）解决分散问题，Phase 4-5 可后置。
+
+## 关键发现
+
+**采纳 Harper 的 3 项修正：**
+
+1. **双入口接口**（非单一 `run(messages)`）
+   - `process_tool_result(tool_msg)` → S1+S2 增量处理单条工具结果
+   - `maybe_compress(messages)` → S3+S4 全局压缩
+   - 原因：S1/S2 是每次工具返回后增量触发，S3/S4 是 `add_message` 时全量触发，统一接口会退化
+
+2. **错误恢复策略**
+   - 每 Stage 加 `graceful_fallback`，异常时保持 messages 原样不中断会话
+   - 现有代码的容错机制（静默返回原始内容）必须保留
+
+3. **Phase 0 测试覆盖 12 个**（非 4 个）
+   - S1: 超大结果 / 空结果 / 阈值边界
+   - S2: LLM 返回空 / 纯元信息 / 超时
+   - S3: soft+keep_recent保护 / hard cap突破保护 / user/assistant不可修改
+   - S4: 丢弃<5条不调LLM / 丢弃≥5条调LLM / 摘要注入位置
+
+## 执行计划
+
+| Phase | 天数 | 产出 |
+|---|---|---|
+| 0 验证 | 0.5 | 12 个行为快照测试 |
+| 1 骨架 | 1 | Pipeline 类 + BaseStage + 双入口 |
+| 2 迁移 | 2 | 4 个独立 Stage 模块 |
+| 3 切换 | 0.5 | 调用入口统一，旧函数 deprecated |
+| 4 可观测 | 0.5 | stage_stats 注入 |
+| 5 配置 | 0.5 | 按 Stage 重组织 section |
+
+## 备注
+
+- Phase 0-3 是核心（3.5 天），Phase 4-5 锦上添花可后置
+- 不改阈值默认值、不合并 S2/S4、不引入 DAG
+- `hard_max_total_chars` 突破 `keep_recent` 的优先级 + `[上下文摘要` 分割符替换必须保留
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/summarization-refactor-plan (hidden)
+  Drawer ID: drawer_wing_code_summarization-refactor-plan_b654d514227fee7b5d03ea30 (141字)
+• end_discussion() → ✅ 讨论已结束（原因: 重构计划已定稿，采纳了Harper的3项修正（双入口接口、错误恢复、12个测试覆盖），已存入记忆。用户确认"可以"，计划可执行。），即将进入总结阶段 (86字)
+---

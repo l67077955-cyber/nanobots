@@ -14,19 +14,25 @@ from nanobot.groupchat.history.persistence import GroupChatState
 
 
 @pytest.fixture()
-def nanobot_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def groupchat_state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Set up a temp workspace with .groupchat state dir."""
     import nanobot.cli.logs as logs_mod
-    import nanobot.groupchat.history.persistence as persistence_mod
 
-    monkeypatch.setattr(persistence_mod, "_NANOBOT_DIR", tmp_path)
-    monkeypatch.setattr(logs_mod, "_NANOBOT_DIR", tmp_path)
-    monkeypatch.setattr(logs_mod, "_SESSIONS_DIR", tmp_path / "collab-sessions")
-    return tmp_path
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    state_dir = workspace / ".groupchat"
+
+    # Make logs.py use our temp workspace
+    monkeypatch.setattr(logs_mod, "_get_state_dir", lambda: state_dir)
+    monkeypatch.setattr(logs_mod, "_resolve_state_dir_with_fallback", lambda: state_dir)
+
+    return state_dir
 
 
-def test_save_current_session_pointer(nanobot_home: Path) -> None:
-    state = GroupChatState(registry={})
-    session_dir = nanobot_home / "collab-sessions" / "gc-20260620-141846"
+def test_save_current_session_pointer(groupchat_state_dir: Path) -> None:
+    workspace = groupchat_state_dir.parent
+    state = GroupChatState(registry={}, workspace=workspace)
+    session_dir = groupchat_state_dir / "collab-sessions" / "gc-20260620-141846"
     session_dir.mkdir(parents=True)
     state.save_current_session(
         session_dir,
@@ -42,10 +48,10 @@ def test_save_current_session_pointer(nanobot_home: Path) -> None:
     assert loaded["leader"] == "Harper"
 
 
-def test_resolve_session_from_current_pointer(nanobot_home: Path) -> None:
-    session_dir = nanobot_home / "collab-sessions" / "gc-test"
+def test_resolve_session_from_current_pointer(groupchat_state_dir: Path) -> None:
+    session_dir = groupchat_state_dir / "collab-sessions" / "gc-test"
     session_dir.mkdir(parents=True)
-    (nanobot_home / "current_session.json").write_text(
+    (groupchat_state_dir / "current_session.json").write_text(
         json.dumps({"session_id": "gc-test", "session_dir": str(session_dir)}),
         encoding="utf-8",
     )
@@ -53,8 +59,8 @@ def test_resolve_session_from_current_pointer(nanobot_home: Path) -> None:
     assert resolve_session_dir("gc-test") == session_dir
 
 
-def test_recover_conversation_from_session_jsonl(nanobot_home: Path) -> None:
-    session_dir = nanobot_home / "collab-sessions" / "gc-test"
+def test_recover_conversation_from_session_jsonl(groupchat_state_dir: Path) -> None:
+    session_dir = groupchat_state_dir / "collab-sessions" / "gc-test"
     session_dir.mkdir(parents=True)
     (session_dir / "session.jsonl").write_text(
         json.dumps(
@@ -74,8 +80,8 @@ def test_recover_conversation_from_session_jsonl(nanobot_home: Path) -> None:
     assert "收到" in text
 
 
-def test_logs_cli_show(nanobot_home: Path) -> None:
-    session_dir = nanobot_home / "collab-sessions" / "gc-cli"
+def test_logs_cli_show(groupchat_state_dir: Path) -> None:
+    session_dir = groupchat_state_dir / "collab-sessions" / "gc-cli"
     session_dir.mkdir(parents=True)
     (session_dir / "session.jsonl").write_text(
         json.dumps(
@@ -92,7 +98,7 @@ def test_logs_cli_show(nanobot_home: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    (nanobot_home / "current_session.json").write_text(
+    (groupchat_state_dir / "current_session.json").write_text(
         json.dumps({"session_id": "gc-cli", "session_dir": str(session_dir)}),
         encoding="utf-8",
     )

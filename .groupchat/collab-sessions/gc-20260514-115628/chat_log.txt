@@ -1,0 +1,472 @@
+[用户]: 但是prompt指令中没有，说明不是动态检测prompt类型的
+---
+[Harper]: 你说得对。这个机制的实质是：
+
+**静态组合，非动态检测。**
+
+- `get_component_template("user_context")` 按固定键名去磁盘读对应 `.md` 文件
+- 它不是运行时解析主 prompt 的内容来决定要不要加某个模块
+- 它是预先编排好的装配清单（`prompt_order.json`）+ 每个组件的静态文件
+
+所以“是不是硬编码”这个问题本身有两面：
+1. **内容是硬的** —— `user_context.md` 里的那段描述不会自动更新
+2. **结构也是预定义的** —— 哪些组件参与拼装是在 json 里配死的，不是在推理时根据语义决定的
+
+你说的更准确：这不是动态检测型架构，而是**声明式组装**。各部件各自固化，靠配置文件决定谁上场。
+
+有什么要我进一步核实的？
+---
+[用户]: 我想把prompt文件格式改成存储，里面记录顺序和可见性和内容等信息
+---
+[Kirk]: 
+
+[工具调用记录]
+• exec(cat /root/.nanobot/prompts/prompt_order.json 2>/dev/null || echo "NOT FOUND") → NOT FOUND
+
+
+Exit code: 0 (24字)
+• exec() → 417:            f"- State intent before tool calls, but NEVER predict or claim results before receiving them.\n"
+600:            merged = [{"type": "text", "text": runtime_ctx}] + user_content
+
+
+Exit code: 0 (207字)
+• exec(grep -rn "detect\|classify\|prompt.*type\|动态\|intent" /root/.nanobot/prompts/...) → Exit code: 0 (13字)
+• exec(grep -rn "prompt_order\|component_order\|get_component\|_build_prompt\|build_...) → 172:        self._prompt_order: dict[str, list[str]] = self._load_prompt_order()
+177:    def _load_prompt_order(self) -> dict[str, list[str]]:
+178:        f = Path.home() / ".nanobot" / "prompt_order.json"
+189:    def _save_prompt_order(self) -> None:
+190:        f = Path.home() / ".nanobot" / "prompt_order.json"
+192:        f.write_text(json.dumps(self._prompt_order, ensure_ascii=False, indent=2))
+219:    def get_component_visibility(self, key: str) -> str:
+238:        current = self.get_compon… (1,921字)
+• exec(ls /root/.nanobot/prompts/) → broadcast_hint.md
+coding_principle.md
+group_context.md
+group_nudge.md
+instructions.md
+leader_prompt.md
+leader_prompt.md.backup
+library
+main_prompt.md
+memory.md
+output_efficiency.md
+tool_instructions.md
+user_context.md
+versions
+worker_hint.md
+记忆补充.md
+
+
+Exit code: 0 (264字)
+• exec(cat /root/.nanobot/prompt_order.json 2>/dev/null) → {
+  "default": [
+    "main_prompt",
+    "hard_rules",
+    "tool_instructions",
+    "persona",
+    "broadcast_hint",
+    "user_context",
+    "output_efficiency",
+    "skills",
+    "leader_prompt",
+    "instructions",
+    "memory",
+    "history",
+    "group_context"
+  ]
+}
+
+Exit code: 0 (284字)
+• exec(grep -n "DEFAULT_PROMPT_ORDER" /root/nanobot-src/nanobot/groupchat/history/pr...) → 29:DEFAULT_PROMPT_ORDER = [
+244:        return list(self._prompt_order.get("default", DEFAULT_PROMPT_ORDER))
+265:        all_known = list(DEFAULT_PROMPT_ORDER) + [
+266:            k for k in COMPONENT_LABELS if k not in DEFAULT_PROMPT_ORDER
+
+
+Exit code: 0 (255字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 29| DEFAULT_PROMPT_ORDER = [
+30|     "main_prompt", "group_context", "persona", "memory",
+31|     "tool_instructions", "skills", "broadcast_hint", "examples",
+32|     "history", "instructions", "leader_prompt", "group_nudge",
+33| ]
+34| 
+35| COMPONENT_LABELS: dict[str, str] = {
+36|     "main_prompt": "主提示 (main_prompt)",
+37|     "group_context": "群聊上下文 (group_context)",
+38|     "persona": "人设/SOUL (persona)",
+39|     "memory": "长期记忆 (memory)",
+40|     "tool_instructions": "工具指令 (tool_instructions)",
+41|     "skills": "技能列表 (skills)",
+42|     "broadcast_hint": "广播协调 (broadcast_hint)",
+43|     "examples": "示例对话 (examples)",
+44|     "history": "聊天记录 (history)",
+45|     "instructions": "后置指令 (instructions)",
+46|     "leader_prompt": "领袖指令 (leader_prompt)",
+47|     "group_nudge": "群聊规范 (group_nu… (870字)
+---
+[用户]: 而不是纯文本形式由代码判断
+---
+[Kirk]: 
+
+[工具调用记录]
+• exec(grep -n "visibility\|get_component_visibility\|set_component_visibility" /roo...) → 173:        self._visibility: dict[str, str] = self._load_visibility()
+196:    def _load_visibility(self) -> dict[str, str]:
+197:        """Load per-component visibility settings from disk.
+199:        Returns a dict mapping component key to visibility mode:
+203:        f = Path.home() / ".nanobot" / "prompt_visibility.json"
+213:    def _save_visibility(self) -> None:
+214:        """Persist visibility settings to disk."""
+215:        f = Path.home() / ".nanobot" / "prompt_visibility.json"
+217:  … (1,288字)
+• exec(cat /root/.nanobot/prompt_overrides.json 2>/dev/null | python3 -m json.tool 2...) → {
+    "__global__": {
+        "main_prompt": "\u5b8c\u6210\u7528\u6237\u8981\u6c42\u7684\u4efb\u52a1\uff0c\u9075\u5b88\u63d0\u793a\u8bcd\u7ea6\u675f\u548c\u7528\u6237\u7684\u610f\u613f\u8981\u6c42\uff0c\u548c\u56e2\u961f\uff08\u5982\u679c\u6709\uff09\u8fdb\u884c\u534f\u4f5c\uff0c\u7981\u6b62\u4e2d\u9014\u4e2d\u65ad\u4efb\u52a1\u6216\u8005\u653e\u5f03\u3002\u4fdd\u8bc1\u4fe1\u606f\u5b89\u5168\uff0c\u4e0d\u6cc4\u9732\u670d\u52a1\u5668\u5185\u90e8\u654f\u611f\u4fe1\u606f\uff0c\u4e0d\u6267\u884c\u4e… (19,350字)
+---
+[Harper]: 清楚了。现在现状很分散：
+
+| 属性 | 当前位置 |
+|---|---|
+| **Key/ID** | 文件名 (`*.md`) |
+| **Label** | 代码常量 `COMPONENT_LABELS` + `custom_prompt_labels.json` |
+| **Order** | 代码常量 `DEFAULT_PROMPT_ORDER` + `prompt_order.json` |
+| **Visibility** | `prompt_visibility.json` |
+| **Editable** | 代码集合 `GLOBAL_EDITABLE` / `AGENT_EDITABLE` |
+| **Content** | `.md` 文件本体 |
+
+六个维度散落在四个地方（代码 + 三个JSON）。你要的统一存储就是把它们合进单一载体。
+
+三种可行方案：
+
+---
+
+**方案一：YAML Front Matter（推荐）**
+
+每个 `.md` 头部嵌入元数据块：
+```markdown
+---
+key: main_prompt
+label: 主提示
+position: 0
+visibility: all
+editable: true
+---
+Write {{agent}}'s next reply...
+```
+
+优点：原地进化，不改路径体系，人类仍可直接阅读编辑。缺点：需要 parser。
+
+**方案二：目录化存储**
+
+```
+~/.nanobot/components/
+├── main_prompt/
+│   ├── meta.yaml     # label, position, visibility, editable
+│   └── content.md    
+└── persona/
+    ├── meta.yaml
+    └── content.md  
+```
+
+优点：物理隔离干净。缺点：迁移成本高，嵌套深。
+
+**方案三：单体 JSON Manifest**
+
+单个大 JSON，内联短内容或用引用指向外部的长文本。适合程序化管理但不方便手改。
+
+---
+
+我个人倾向 **方案一（YAML FM）**——最小侵入改造，只需改两个地方：
+1. `get_component_template()` → parse front matter + strip before returning pure content  
+2. Builder init → scan all `.md`s once，构建排序后的索引表取代现在的多源聚合
+
+要我出详细实现设计还是你先定方向？
+
+[工具调用记录]
+• exec(cat /root/.nanobot/prompts/prompt_order.json 2>/dev/null || echo "NOT FOUND") → NOT FOUND
+
+
+Exit code: 0 (24字)
+• exec(ls -la /root/.nanobot/prompts/) → total 72
+drwxr-xr-x  4 root root 4096 May  4 22:44 .
+drwxr-xr-x 18 root root 4096 May 12 09:27 ..
+-rw-r--r--  1 root root 1185 May  4 19:39 broadcast_hint.md
+-rw-r--r--  1 root root  468 Apr 17 19:02 coding_principle.md
+-rw-r--r--  1 root root   29 Apr 22 23:45 group_context.md
+-rw-r--r--  1 root root  297 May  4 17:31 group_nudge.md
+-rw-r--r--  1 root root  493 May  4 17:31 instructions.md
+-rw-r--r--  1 root root 1815 May 13 20:24 leader_prompt.md
+-rw-r--r--  1 root root 1072 Apr 17 15:25 leade… (1,034字)
+• exec(grep -n "visibility\|component.*template\|_inject_\|skip_if_" /root/nanobot-s...) → 173:        self._visibility: dict[str, str] = self._load_visibility()
+196:    def _load_visibility(self) -> dict[str, str]:
+197:        """Load per-component visibility settings from disk.
+199:        Returns a dict mapping component key to visibility mode:
+203:        f = Path.home() / ".nanobot" / "prompt_visibility.json"
+213:    def _save_visibility(self) -> None:
+214:        """Persist visibility settings to disk."""
+215:        f = Path.home() / ".nanobot" / "prompt_visibility.json"
+217:  … (2,274字)
+• exec(cat /root/.nanobot/prompt_visibility.json 2>/dev/null || echo "NOT FOUND") → {
+  "persona": "all",
+  "leader_prompt": "leader"
+}
+
+Exit code: 0 (65字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 280|         COMPONENT_LABELS[key] = label
+281|         GLOBAL_EDITABLE.add(key)
+282|         # Persist
+283|         custom = _load_custom_labels()
+284|         custom[key] = label
+285|         _save_custom_labels(custom)
+286|         return f"✅ 已创建自定义组件: {label}"
+287| 
+288|     # ── Component content ──
+289| 
+290|     def get_prompt_components(
+291|         self,
+292|         agent_name: str,
+293|         registry: dict[str, dict],
+294|         active_agents: list[str],
+295|     ) -> list[dict[str, Any]]:
+296|         agent = registry.get(agent_name, {})
+297|         order = self.get_agent_prompt_order(agent_name)
+298|         components = []
+299|         for key in order:
+300|             content = self._get_component_content(agent_name, agent, key, active_agents)
+301|             compon… (6,196字)
+• exec(grep -n "get_agent_prompt_order\|PROMPT_ORDER\|prompt_order\|self\._order\|de...) → 29:DEFAULT_PROMPT_ORDER = [
+172:        self._prompt_order: dict[str, list[str]] = self._load_prompt_order()
+177:    def _load_prompt_order(self) -> dict[str, list[str]]:
+178:        f = Path.home() / ".nanobot" / "prompt_order.json"
+189:    def _save_prompt_order(self) -> None:
+190:        f = Path.home() / ".nanobot" / "prompt_order.json"
+192:        f.write_text(json.dumps(self._prompt_order, ensure_ascii=False, indent=2))
+243:    def get_agent_prompt_order(self, agent_name: str = "") -> list… (1,158字)
+• exec(grep -rn "COMPONENT_LABELS\|register_label\|set_default_label\|GLOBAL_EDITABL...) → 35:COMPONENT_LABELS: dict[str, str] = {
+50:GLOBAL_EDITABLE: set[str] = {
+54:AGENT_EDITABLE = {"persona"}
+55:EDITABLE_COMPONENTS = GLOBAL_EDITABLE | AGENT_EDITABLE
+79:        COMPONENT_LABELS[key] = label
+80:        GLOBAL_EDITABLE.add(key)
+232:        label = COMPONENT_LABELS.get(key, key)
+257:        label = COMPONENT_LABELS.get(key, key)
+266:            k for k in COMPONENT_LABELS if k not in DEFAULT_PROMPT_ORDER
+274:        Adds it to COMPONENT_LABELS, GLOBAL_EDITABLE, and persists the label.… (980字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 26| 
+27| # ── Constants ─────────────────────────────────────────────────
+28| 
+29| DEFAULT_PROMPT_ORDER = [
+30|     "main_prompt", "group_context", "persona", "memory",
+31|     "tool_instructions", "skills", "broadcast_hint", "examples",
+32|     "history", "instructions", "leader_prompt", "group_nudge",
+33| ]
+34| 
+35| COMPONENT_LABELS: dict[str, str] = {
+36|     "main_prompt": "主提示 (main_prompt)",
+37|     "group_context": "群聊上下文 (group_context)",
+38|     "persona": "人设/SOUL (persona)"… (2,718字)
+---
+[Kirk]: 现在完全理解了架构。让我设计统一格式并实现迁移脚本和代码改动。
+
+**设计方案**：用 `~/.nanobot/prompts.yaml` 替代 4 个分散文件，每个组件是一个条目，包含 `order`、`visibility`、`content`、`label`。
+
+先写迁移脚本把现有数据合并，再改 `prompt_builder.py`。但这个改动涉及面广（callbacks.py、settings.py、engine.py 都引用了），需要谨慎。
+
+先给用户看方案确认方向，再动手改代码。
+
+## 结论
+
+当前 prompt 数据分散在 4 处：`prompts/*.md`（内容）+ `prompt_order.json`（顺序）+ `prompt_visibility.json`（可见性）+ `prompt_overrides.json`（覆盖值），代码按固定键名去读对应文件，没有任何动态检测逻辑。
+
+## 统一方案
+
+用 `~/.nanobot/prompts.yaml` 替代全部 4 处：
+
+```yaml
+components:
+  main_prompt:
+    order: 0
+    visibility: all
+    label: "主提示"
+    content: |
+      完成用户要求的任务...
+  hard_rules:
+    order: 1
+    visibility: all
+    label: "硬规则"
+    content: |
+      [硬规则 — 不可覆盖]...
+  tool_instructions:
+    order: 2
+    visibility: all
+    content: |
+      [工具使用规范]...
+  # ... 每个组件一个条目
+```
+
+**改动范围**：
+- `prompt_builder.py`：`_load_prompt_order` / `_load_visibility` / `get_component_template` / `_get_component_content` 全部改为读 YAML
+- `callbacks.py` / `settings.py`：`get_agent_prompt_order()` / `set_default_prompt_order()` 接口不变，内部实现改
+- `engine.py`：`_prompt_order` 加载逻辑适配
+- 迁移脚本：把现有 4 处数据合并写入 YAML
+
+**保留的接口**（外部调用不感知变化）：
+- `get_agent_prompt_order()` → 从 YAML 的 order 字段排序
+- `get_component_visibility(key)` → 从 YAML 读
+- `get_component_template(key)` → 从 YAML 读 content
+- `set_default_prompt_order()` / `set_component_visibility()` → 写回 YAML
+
+**要确认**：
+1. 用 YAML 还是 JSON？（YAML 可读性好，内容多行文本天然支持）
+2. `prompt_overrides.json` 里的 `__global__` 内容是否全部合并进 YAML？当前 `.md` 文件存在时 overrides 实际被忽略，合并后以 YAML 为唯一真相源
+3. 是否需要保留向后兼容（YAML 不存在时 fallback 到旧格式）？还是直接一刀切？
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 160| # ── PromptBuilder Class ───────────────────────────────────────
+161| 
+162| class PromptBuilder:
+163|     """Builds agent prompts from configurable components.
+164| 
+165|     Decoupled from GroupChatEngine — receives state through a
+166|     lightweight context interface.
+167|     """
+168| 
+169|     def __init__(self, *, config: Any, workspace: Path):
+170|         self._config = config
+171|         self._workspace = workspace
+172|         self._prompt_order: dict[str, list[str]] = self._load_prompt_order()
+173|         self._visibility: dict[str, str] = self._load_visibility()
+174| 
+175|     # ── Order management ──
+176| 
+177|     def _load_prompt_order(self) -> dict[str, list[str]]:
+178|         f = Path.home() / ".nanobot" / "prompt_order.json"
+179|         if f.exists():
+180|      … (6,094字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 330|                 pass
+331|         return ""
+332| 
+333|     def _get_component_content(
+334|         self,
+335|         agent_name: str,
+336|         agent: dict,
+337|         key: str,
+338|         active_agents: list[str],
+339|         leader: str | None = None,
+340|     ) -> str:
+341|         # Per-agent .md override (for keys that support it)
+342|         if key in self._PER_AGENT_FILES:
+343|             per_agent = self._get_agent_file(agent, self._PER_AGENT_FILES[key])
+344|             if per_agent:
+345|                 return per_agent
+346| 
+347|         if key == "main_prompt":
+348|             # Fall back to global template, then hardcoded default
+349|             return self.get_component_template("main_prompt") or (
+350|                 f"Write {agent_name}'s next reply in a… (6,829字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 460|         return validate_context(messages, agent_name=agent_name, skipped=skipped)
+461| 
+462|     @staticmethod
+463|     def get_component_template(key: str) -> str:
+464|         # ~/.nanobot/prompts/{key}.md is authoritative — always checked first.
+465|         f = Path.home() / ".nanobot" / "prompts" / f"{key}.md"
+466|         if f.exists():
+467|             try:
+468|                 content = f.read_text().strip()
+469|                 if content:
+470|                     return content
+471|             except Exception:
+472|                 pass
+473|         # Fall back to in-code defaults.
+474|         return TEMPLATES.get(key, "")
+475| 
+476|     # ── Prompt building ──
+477| 
+478|     def build_agent_prompt(
+479|         self,
+480|         agent_name: str,
+481|         *,
+482|     … (4,889字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 560| 
+561|         return messages
+562| 
+563|     def build_single_agent_messages(
+564|         self,
+565|         agent_name: str,
+566|         *,
+567|         registry: dict[str, dict],
+568|         history: list[dict[str, Any]],
+569|         current_message: str,
+570|         media: list[str] | None = None,
+571|         channel: str | None = None,
+572|         chat_id: str | None = None,
+573|         current_role: str = "user",
+574|     ) -> list[dict[str, Any]]:
+575|         """Build complete messages list for a single-agent LLM call.
+576| 
+577|         Combines PromptBuilder's component system with runtime context
+578|         and user message handling (including multimodal media).
+579|         Used by AgentLoop as a replacement for ContextBuilder.build_messages().
+580|         """
+58… (4,897字)
+• exec(cat /root/.nanobot/prompt_visibility.json 2>/dev/null || echo "NOT FOUND") → {
+  "persona": "all",
+  "leader_prompt": "leader"
+}
+
+Exit code: 0 (65字)
+• exec(grep -n "TEMPLATES\|_PER_AGENT\|_load_custom\|_save_custom" /root/nanobot-src...) → 58:def _load_custom_labels() -> dict[str, str]:
+69:def _save_custom_labels(labels: dict[str, str]) -> None:
+78:    for key, label in _load_custom_labels().items():
+89:TEMPLATES: dict[str, str] = {
+283:        custom = _load_custom_labels()
+285:        _save_custom_labels(custom)
+312:    _PER_AGEN… (510字)
+  (还有 11 个工具调用，已省略)
+---
+[Harper]: 不同意。Kirk的方案有一个根本缺陷和一个实操风险。
+
+**根本缺陷：单体YAML违背Unix哲学**
+
+把所有东西塞进一个大文件意味着：
+- 改一个组件就要锁住整个文件并发控制
+- git diff全是全局噪音，看不出改了哪个组件
+- 编辑器打开几百行的巨型YAML来改一段小内容，反直觉
+
+对比我的front matter方案——每个`.md`仍是独立的原子单元，`vim main_prompt.md`就能看到标题+正文一起编辑。
+
+**实操风险：改动面太大**
+
+你自己说了涉及callback/settings/engine四处。而front matter只需要动两个入口：
+1. `get_component_template()` — 加一层FM parser剥离header返回body
+2. builder初始化扫描建索引 — 替换掉现有的四路聚合
+
+其他文件的接口签名零变动。
+
+**关于overrides的处理**
+
+你说"一刀切"。不对。应该渐进淘汰：YAML存在时走YAML，旧的json/md标记deprecated但不报错。这样用户可以逐步迁移，中间态也能跑。
+
+---
+
+综上，坚持我的方案一（YAML Front Matter）。如果你非要monolith，至少论证一下那个巨大YAML在多Agent场景下如何避免竞态写入的问题。
+---
+[Kirk]: ## 结论
+
+**纯静态 key→file 映射，零动态检测。** `user_context.md` 存在就被注入，不存在就跳过，跟内容无关。
+
+## 关键发现
+
+- `TEMPLATES` 字典里没有 `user_context` 这个 key
+- `_get_component_content()` 对未知 key 只走 `get_component_template(key)` → 读 `~/.nanobot/prompts/{key}.md`
+- `prompt_overrides.json` 是**死文件**，broadcast.py 已明确移除其读取逻辑（第520行注释）
+- prompt 数据分散在 4 处：`prompts/*.md` + `prompt_order.json` + `prompt_visibility.json` + `prompt_overrides.json`（废弃）
+
+## 备注
+
+`prompt_overrides.json` 里写的"动态检索，禁止硬编码"从未被执行过，只是个历史遗留。
+
+[工具调用记录]
+• end_discussion() → ✅ 讨论已结束（原因: 事实已确认：prompt系统是纯静态key→file映射，无动态检测。prompt_overrides.json是死文件。无需进一步讨论。），即将进入总结阶段 (91字)
+• memory_palace() → ✅ Stored in wing_code/nanobot-prompt-architecture (hidden)
+  Drawer ID: drawer_wing_code_nanobot-prompt-architecture_9cee86e5f94962589cdf5f49 (141字)
+---

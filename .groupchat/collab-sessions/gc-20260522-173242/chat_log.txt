@@ -1,0 +1,554 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 我想就是配置仓库其实都是属于现在nanobot工程的一部分，但是git仓库是分割的，很突兀
+---
+[Harper]: 
+
+[工具调用记录]
+• memory_palace(nanobot 配置仓库 git仓库分割 monorepo) → 🔍 5 result(s) for 'nanobot 配置仓库 git仓库分割 monorepo':
+
+[1] wing_code/nanobot-git-setup (sim=0.379)
+  nanobot 有两个 git 仓库：
+1. /root/nanobot-src — 代码仓库，分支 dev
+2. /root/.nanobot — 配置仓库，分支 master
+
+.gitignore 已配置忽略运行时产物：workspace/、request_logs/、mempalace/、memory_rag/ 等。
+两个仓库均无 remote，仅本地提交。
+
+[2] wing_code/nanobot-git-status (sim=0.373)
+  nanobot代码仓库最新commit: 9ea0e76c, 时间 2026-05-09 12:54:59 +0800, 提交信息 "fix(groupchat): 打断系统两处权限漏洞", detached HEAD状态
+
+[3] wing_code/git-repos (sim=0.371)
+  Git 仓库结构：
+- /root/… (1,075字)
+• memory_palace() → Kirk - DeepSeek V4 Research Agent
+
+## L1 — ESSENTIAL STORY
+
+[ai-compression-diagnosis]
+  - ## nanobot AI压缩功能诊断 (2026-05-11)  ### 两个独立功能：  **功能1: 工具输出AI摘要 (summarizer.py)** - `summarize_tool_output()` 函数已实现，配置在 history_settings.json - **死代码**: 整个代码库无任何 import 或调用 - 配置项: summarize_threshol...
+
+[ai-compression-final]
+  - ## nanobot AI压缩功能诊断 — 最终结论 (2026-05-11)  ### 问题1: summarizer.py 死代码 - summarize_tool_output() 从未被 import 或调用 - 配置 summarize_threshold=20000 形同虚设 - 当前工具输出走 result_processor.py 机械截断 … (3,210字)
+• exec() → nanobots	git@github.com:l67077955-cyber/nanobots.git (fetch)
+nanobots	git@github.com:l67077955-cyber/nanobots.git (push)
+---
+61b466d refactor: remove dead code, extract synthesis retry helper, deduplicate import
+46cf083 fix(tool_loop): detect and break degenerate repetition loops
+f5f44dd fix(broadcast): end group chat when leader hits consecutive LLM errors
+===SIZE===
+201M	/root/nanobot-src
+---
+2.9G	/root/.nanobot
+
+
+Exit code: 0 (432字)
+• exec(cd /root/.nanobot && git remote -v && echo "---" && git log --oneline -3 && e...) → config	git@github.com:l67077955-cyber/nanobot-config.git (fetch)
+config	git@github.com:l67077955-cyber/nanobot-config.git (push)
+origin	git@github-nanobot-config:l67077955-cyber/nanobot-config.git (fetch)
+origin	git@github-nanobot-config:l67077955-cyber/nanobot-config.git (push)
+---
+4770392 fix: enable frequency/presence_penalty for Kirk (0.4/0.25) to suppress degenerate repetition
+0e1fc60 feat: enable frequency/presence penalty to suppress degenerate repetition
+f6e46b9 chore: update cron nextRu… (1,709字)
+• exec(cd /root/.nanobot && du -sh --exclude=.git * | sort -rh | head -15) → 883M	request_logs
+336M	workspace
+215M	gateway.log
+35M	collab-sessions
+29M	logs
+4.2M	media
+3.6M	gateway_new.log
+2.7M	memory_palace.bak.1776946110
+2.6M	mempalace
+624K	memory_rag
+412K	agents
+188K	palace
+132K	config.json.bak.1778304686
+112K	providers_models.json.bak
+96K	prompts
+
+
+Exit code: 0 (289字)
+• exec(cd /root/.nanobot && git check-ignore collab-sessions workspace request_logs ...) → collab-sessions
+workspace
+request_logs
+gateway.log
+gateway_new.log
+===
+__pycache__/
+*.pyc
+.env
+backups/
+collab-sessions/
+.backup_pre_vcs/
+*.log
+workspace/
+mempalace/
+memory_palace.bak.*/
+memory_rag/
+# git ls-files --others --exclude-from=.git/info/exclude
+# Lines that start with '#' are comments.
+# For a project mostly in C, the following would be a good set of
+# exclude patterns (uncomment them if you want to use them):
+# *.[oa]
+# *~
+
+# Top-level workspace submodule
+/workspace/
+request_logs/
+
+
+… (512字)
+• exec() → 412K	agents/
+112K	providers_models.json.bak
+96K	prompts/
+8.0K	providers_models.json
+8.0K	cron/
+8.0K	config.json
+4.0K	groups.json
+4.0K	groupchat_settings.json
+4.0K	custom_prompt_labels.json
+4.0K	chat_mode.txt
+4.0K	active_agents.json
+
+
+Exit code: 0 (246字)
+• exec(cd /root/.nanobot && git ls-files | wc -l && echo "===" && git ls-files | gre...) → 164
+===
+.gitignore
+active_agents.json
+agents/beholder/config.json
+agents/beholder/workspace/SOUL.md
+agents/benjamin/character.json
+agents/benjamin/config.json
+agents/benjamin/workspace/AGENTS.md
+agents/benjamin/workspace/HEARTBEAT.md
+agents/benjamin/workspace/MEMORY.md
+agents/benjamin/workspace/SOUL.md
+agents/benjamin/workspace/TOOLS.md
+agents/benjamin/workspace/USER.md
+agents/benjamin/workspace/memory/HISTORY.md
+agents/benjamin/workspace/memory/MEMORY.md
+agents/benjamin/workspace/sessions/teleg… (1,406字)
+• exec(cd /root/nanobot-src && grep -rn '\.nanobot' --include='*.py' --include='*.js...) → (2,659字)
+  (还有 3 个工具调用，已省略)
+---
+[Kirk]: 分析已输出在上方。核心结论：**应该合并，成本很低（配置仓库才 24 commits），收益明确（原子提交、版本一致、路径统一）**。等你决定走哪条路。
+
+[工具调用记录]
+• memory_palace(nanobot 配置仓库 git 仓库结构) → 🔍 5 result(s) for 'nanobot 配置仓库 git 仓库结构':
+
+[1] wing_code/nanobot-git-setup (sim=0.538)
+  nanobot 有两个 git 仓库：
+1. /root/nanobot-src — 代码仓库，分支 dev
+2. /root/.nanobot — 配置仓库，分支 master
+
+.gitignore 已配置忽略运行时产物：workspace/、request_logs/、mempalace/、memory_rag/ 等。
+两个仓库均无 remote，仅本地提交。
+
+[2] wing_code/git-repos (sim=0.499)
+  Git 仓库结构：
+- /root/nanobot-src — 代码仓库，dev 分支
+- /root/.nanobot — 配置仓库，master 分支（agent configs, prompts, cron jobs 等）
+两个仓库均无远程 remote，仅本地提交。
+
+[3] wing_code/git-hooks (sim=0.466)
+  为 nanobot… (1,036字)
+• memory_palace(nanobot project structure monorepo) → 🔍 5 result(s) for 'nanobot project structure monorepo':
+
+[1] wing_code/git-repos (sim=0.108)
+  2026-05-18: nanobots 仓库分支状态
+- 本地分支: dev(当前), main
+- 远程: nanobots/dev
+- main 比 dev 多一个 merge commit (3033072)，无实际代码差异
+- dev 比 main 多一个 bugfix (3890140, broadcast.py 4行改动)
+- 用户决定直接用 dev 的代码，丢弃 main 独有内容（仅一个 merge commit，零代码丢失）
+
+[2] wing_code/version-naming (sim=0.033)
+  版本号修正：2026-05-13 的提交从 v0.1.5 改为 v0.1.6。旧 v0.1.5 标签已删除（之前修复歧义时删的），不存在冲突。当前标签链：v0.1.4.post8-stable → v0.1.6 → v0.1.6-stable。nanobot-src: c… (1,131字)
+• memory_palace() → ## L2 — ON-DEMAND (3 drawers)
+  [nanobot-git-setup] nanobot 有两个 git 仓库： 1. /root/nanobot-src — 代码仓库，分支 dev 2. /root/.nanobot — 配置仓库，分支 master  .gitignore 已配置忽略运行时产物：workspace/、request_logs/、mempalace/、memory_rag/ 等。 两个仓库均无 remote，仅本地提交。
+  [nanobot-git-setup] workspace 目录是运行时软件（运行产生的文件），不应被 git 追踪。已加入 .gitignore 并从 git cached 中移除。
+  [nanobot-git-setup] 2026-05-17 稳定版提交：commit 9c7e253，tag stable-2026-05-17。包含：rank badges in broadcast banner、per-agent pool visualization、rank-based search credits、de… (516字)
+• exec() → === nanobot-src ===
+Branch: dev
+Commits: 1687
+Size: 66M	.git
+Top dirs:
+SillyTavern/
+bridge/
+case/
+docs/
+nanobot/
+tests/
+tools/
+
+
+Exit code: 0 (141字)
+• exec() → === .nanobot ===
+Branch: master
+Commits: 24
+Size: 153M	.git
+Top dirs:
+agents/
+backups/
+collab-sessions/
+cron/
+logs/
+media/
+memory/
+memory_palace.bak.1776946110/
+memory_rag/
+mempalace/
+palace/
+prompts/
+request_logs/
+skills/
+workspace/
+---
+Files:
+.
+./prompt_order.json
+./cron
+./cron/jobs.json
+./request_logs
+./prompt_v1_backup.json
+./leader.txt
+./prompts
+./prompts/memory.md
+./prompts/group_nudge.md
+./prompts/记忆补充.md
+./prompts/user_context.md
+./prompts/output_efficiency.md
+./prompts/group_context.md
+… (1,996字)
+• exec() → === .nanobot tracked files (non-runtime) ===
+"prompts/\350\256\260\345\277\206\350\241\245\345\205\205.md"
+.gitignore
+active_agents.json
+agents/beholder/config.json
+agents/benjamin/character.json
+agents/benjamin/config.json
+agents/harper/INSTRUCTIONS.md
+agents/harper/character.json
+agents/harper/character_v1_backup.json
+agents/harper/config.json
+agents/harper/config.json.bak.corrupted
+agents/kirk/INSTRUCTIONS.md
+agents/kirk/config.json
+agents/kirk/config.json.bak.20260512092758
+agents/kirk/confi… (2,139字)
+• exec(cd /root/.nanobot && echo "=== .gitignore ===" && cat .gitignore 2>/dev/null ...) → === .gitignore ===
+__pycache__/
+*.pyc
+.env
+backups/
+collab-sessions/
+.backup_pre_vcs/
+*.log
+workspace/
+mempalace/
+memory_palace.bak.*/
+memory_rag/
+# git ls-files --others --exclude-from=.git/info/exclude
+# Lines that start with '#' are comments.
+# For a project mostly in C, the following would be a good set of
+# exclude patterns (uncomment them if you want to use them):
+# *.[oa]
+# *~
+
+# Top-level workspace submodule
+/workspace/
+request_logs/
+
+
+Exit code: 0 (460字)
+• chatroom_send() → (50字)
+• wait() → (1,748字)
+• memory_palace() → ✅ Stored in wing_code/nanobot-monorepo-plan (hidden)
+  Drawer ID: drawer_wing_code_nanobot-monorepo-plan_c2ad5ee7e937738df4b5fcdd (129字)
+• end_discussion() → ✅ 讨论已结束（原因: 分析完成，已给出完整合并方案和过渡方案，等待用户决策），即将进入总结阶段 (48字)
+---
+[Kirk]: ## 结论
+
+配置仓库（`~/.nanobot`）应该合并进代码仓库（`nanobot-src`）。当前分裂是历史遗留，不是合理设计——版本标签要打两套、pre-push hook 要跨仓库检查、路径硬编码散落 29 个文件没人统一管，这些都是分裂的症状。
+
+## 关键发现
+
+**现状：**
+- `nanobot-src`：1687 commits，代码仓库，dev 分支
+- `~/.nanobot`：24 commits，配置仓库，master 分支
+- 29 个文件、~100 处硬编码 `Path.home() / ".nanobot"`，**没有统一路径入口**（`paths.py` 存在但大部分模块没用它）
+
+**配置仓库实际追踪的核心内容：**
+- `agents/` — 各 agent 的 character/config
+- `prompts/` — 系统提示词
+- `config.json`, `providers_models.json`, `hyperparams.json` 等全局配置
+- `cron/jobs.json`, `skills/`, `memory/`, `active_agents.json`, `groups.json` 等
+
+**运行时垃圾（不应进任何 git）：**
+- `request_logs/` 883MB、`workspace/` 336MB、`mempalace/`、`collab-sessions/`、`media/`、`logs/`
+
+## 推荐方案（三步走）
+
+| 步骤 | 内容 | 改动量 |
+|------|------|--------|
+| ① 引入 `NANOBOT_HOME` | `paths.py` 统一所有路径派生，fallback `~/.nanobot` | 29 文件，每处替换为函数调用 |
+| ② 配置迁入 monorepo | 核心配置文件移入 `nanobot-src/config/` | git mv + 路径调整 |
+| ③ 运行时分离 | workspace/、mempalace/ 等继续留在 `~/.nanobot/` 不进 git | 只改 .gitignore |
+
+**零改动过渡方案（不想动代码时）：**
+- `~/.nanobot` 的配置文件 symlink 到 `nanobot-src/config/`
+- 代码仓库 git 追踪 `config/`，运行时通过 symlink 读
+- 缺点：不解决路径混乱的根本问题
+
+## 备注
+
+- 配置仓库 .git 有 153M，大量是 .bak 文件，合并前建议清理
+- 配置仓库才 24 commits，合并历史成本极低
+- 要动手合并的话可以直接写迁移脚本
+---
+[用户]: 避免造成可能的报错，采取最稳妥的方案，确保工作区干净再修改
+---
+[Kirk]: 大量硬编码。但这里有个关键洞察——**最稳妥的方案不是改 29 个文件，而是利用已有的 `--config` 机制**。
+
+`paths.py` 的 `get_data_dir()` 返回的是 `get_config_path().parent`。如果 `--config` 指向 `nanobot-src/config/config.json`，那 `get_data_dir()` 就返回 `nanobot-src/config/`，所有通过 `paths.py` 派生的路径自动指向新位置。
+
+但问题是大量代码没用 `paths.py`，直接硬编码了 `~/.nanobot`。所以最稳妥的方案分两步：
+
+1. **先不改代码**——用 symlink 让 `~/.nanobot` 的配置文件指向 `nanobot-src/config/` 下的真实文件
+2. **后续逐步**把硬编码改成 `paths.py` 调用
+
+不对，用户说的是"配置仓库属于 nanobot 工程的一部分，git 仓库分割很突兀"。他要的是 git 层面的合并，不是运行时路径变更。
+
+重新理解：**最稳妥方案 = 把配置文件 git mv 进代码仓库，运行时通过 symlink 保持兼容，零代码改动**。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && echo "=== STATUS ===" && git status --short && echo "...) → === STATUS ===
+ M nanobot/providers/litellm_provider.py
+=== BRANCH ===
+dev
+=== STASH ===
+stash@{0}: WIP on (no branch): 3b630ad chore: remove dead methods and unused imports (phase 2, -319 lines)
+stash@{1}: WIP on dev: 312760b fix(groupchat): 用户消息即时中断 busy agent
+stash@{2}: WIP on main: 61a9ff5 fix: agent rank/model list corruption defense in mailbox, broadcast, agent_loader, litellm_provider
+stash@{3}: On feat/groupchat-optimization: WIP: streaming fix + leader standby mode (2026-04-03 15:52)
+
+
+… (512字)
+• exec(cd /root/.nanobot && echo "=== STATUS ===" && git status --short && echo "===...) → === STATUS ===
+ M cron/jobs.json
+=== BRANCH ===
+master
+=== STASH ===
+stash@{0}: On (no branch): unrelated dirty state pre-config-rework
+stash@{1}: WIP on (no branch): dbcba9e stable checkpoint before context compression fix
+stash@{2}: WIP on master: d6f8d73 chore: sync config files 2026-05-11
+
+
+Exit code: 0 (308字)
+• exec(cd /root/nanobot-src && echo "=== REMOTE ===" && git remote -v && echo "=== L...) → === REMOTE ===
+nanobots	git@github.com:l67077955-cyber/nanobots.git (fetch)
+nanobots	git@github.com:l67077955-cyber/nanobots.git (push)
+=== LAST COMMIT ===
+61b466d refactor: remove dead code, extract synthesis retry helper, deduplicate import
+
+
+Exit code: 0 (257字)
+• exec(cd /root/nanobot-src && git diff nanobot/providers/litellm_provider.py) → diff --git a/nanobot/providers/litellm_provider.py b/nanobot/providers/litellm_provider.py
+index 05b4c68..4f6d02e 100644
+--- a/nanobot/providers/litellm_provider.py
++++ b/nanobot/providers/litellm_provider.py
+@@ -698,6 +698,10 @@ class LiteLLMProvider(LLMProvider):
+         if metadata:
+             kwargs["metadata"] = metadata
+ 
++        # Hard timeout to prevent OpenRouter cold-start stalls (observed up to 135s).
++        # Existing retry logic handles the resulting Timeout error gracefully.
+… (762字)
+• exec(cd /root/.nanobot && git diff cron/jobs.json) → diff --git a/cron/jobs.json b/cron/jobs.json
+index 2f2c2ae..237fe67 100644
+--- a/cron/jobs.json
++++ b/cron/jobs.json
+@@ -20,7 +20,7 @@
+         "to": "8008274300"
+       },
+       "state": {
+-        "nextRunAtMs": 1779459417818,
++        "nextRunAtMs": 1779528735292,
+         "lastRunAtMs": 1779072217980,
+         "lastStatus": "ok",
+         "lastError": null,
+@@ -80,7 +80,7 @@
+         "to": "8008274300"
+       },
+       "state": {
+-        "nextRunAtMs": 1779977817818,
++        "nextRunAtMs"… (618字)
+• exec(cd /root/nanobot-src && git log --oneline -5 && echo "===" && git log --oneli...) → 61b466d refactor: remove dead code, extract synthesis retry helper, deduplicate import
+46cf083 fix(tool_loop): detect and break degenerate repetition loops
+f5f44dd fix(broadcast): end group chat when leader hits consecutive LLM errors
+8e58eb1 fix: end_discussion guard + display iterations label
+c734792 fix: restore head_indices/head_msgs recalculation in char-budget trimming
+===
+* 61b466d refactor: remove dead code, extract synthesis retry helper, deduplicate import
+* 46cf083 fix(tool_loop): det… (1,163字)
+• exec(cd /root/nanobot-src && git symbolic-ref HEAD 2>/dev/null || echo "DETACHED: ...) → refs/heads/dev
+
+
+Exit code: 0 (29字)
+• exec(cd /root/.nanobot && git symbolic-ref HEAD 2>/dev/null || echo "DETACHED: $(g...) → refs/heads/master
+
+
+Exit code: 0 (32字)
+• exec(cd /root/nanobot-src && grep -rn '\.nanobot' --include='*.py' -l | head -30) → test_mp3.py
+tools/migrate_to_manifest.py
+tests/test_groupchat.py
+tests/test_config_paths.py
+tests/test_tool_validation.py
+tests/test_prompt_robustness.py
+nanobot/providers/litellm_provider.py
+nanobot/providers/httpx_provider.py
+nanobot/groupchat/history/history_settings.py
+nanobot/groupchat/history/persistence.py
+nanobot/groupchat/history/prompt_builder.py
+nanobot/groupchat/history/raft/persistence.py
+nanobot/groupchat/orchestra/engine.py
+nanobot/groupchat/orchestra/tools/chatroom_tools.py
+nanob… (1,095字)
+• exec(cd /root/nanobot-src && cat nanobot/config/paths.py) → (1,712字)
+  (还有 7 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git status --porcelain && echo "===" && cd /root/.nan...) → M nanobot/providers/litellm_provider.py
+===
+ M cron/jobs.json
+
+
+Exit code: 0 (77字)
+• exec(du -sh /root/.nanobot/.git && echo "===" && cd /root/.nanobot && git gc --agg...) → 153M	/root/.nanobot/.git
+===
+62M	/root/.nanobot/.git
+
+
+Exit code: 0 (67字)
+• exec(cd /root/nanobot-src && git diff nanobot/providers/litellm_provider.py | head...) → diff --git a/nanobot/providers/litellm_provider.py b/nanobot/providers/litellm_provider.py
+index 05b4c68..4f6d02e 100644
+--- a/nanobot/providers/litellm_provider.py
++++ b/nanobot/providers/litellm_provider.py
+@@ -698,6 +698,10 @@ class LiteLLMProvider(LLMProvider):
+         if metadata:
+             kwargs["metadata"] = metadata
+ 
++        # Hard timeout to prevent OpenRouter cold-start stalls (observed up to 135s).
++        # Existing retry logic handles the resulting Timeout error gracefully.
+… (762字)
+• exec(cd /root/.nanobot && git diff cron/jobs.json | head -40) → diff --git a/cron/jobs.json b/cron/jobs.json
+index 2f2c2ae..237fe67 100644
+--- a/cron/jobs.json
++++ b/cron/jobs.json
+@@ -20,7 +20,7 @@
+         "to": "8008274300"
+       },
+       "state": {
+-        "nextRunAtMs": 1779459417818,
++        "nextRunAtMs": 1779528735292,
+         "lastRunAtMs": 1779072217980,
+         "lastStatus": "ok",
+         "lastError": null,
+@@ -80,7 +80,7 @@
+         "to": "8008274300"
+       },
+       "state": {
+-        "nextRunAtMs": 1779977817818,
++        "nextRunAtMs"… (618字)
+• exec(cd /root/.nanobot && echo "=== tracked, non-runtime ===" && git ls-files | gr...) → === tracked, non-runtime ===
+"prompts/\350\256\260\345\277\206\350\241\245\345\205\205.md"
+.gitignore
+active_agents.json
+agents/beholder/config.json
+agents/benjamin/character.json
+agents/benjamin/config.json
+agents/harper/INSTRUCTIONS.md
+agents/harper/character.json
+agents/harper/character_v1_backup.json
+agents/harper/config.json
+agents/kirk/INSTRUCTIONS.md
+agents/kirk/config.json
+agents/lucas/character.json
+agents/lucas/config.json
+agents/retriever/config.json
+agents/scholar/SOUL.md
+agents/scho… (3,449字)
+• chatroom_send() → (47字)
+• wait() → (555字)
+---
+[用户]: 我觉得改个目录名字，真没必要吧
+---
+[Harper]: 
+
+[工具调用记录]
+• chatroom_send() → (48字)
+• wait() → (21字)
+---
+[用户]: 为什么要迁移呢，有什么重大原因呢
+---
+[Harper]: 用户说得对。让我重新审视这个问题：
+
+**迁移的收益（真实但小）：**
+- 一次 commit 可以同时改代码和配置，不用跨两个仓库
+- 路径统一，新人少一个困惑
+- 24 commits 历史汇入主仓库
+
+**迁移的成本（真实且更大）：**
+- 要动 29 个文件的路径硬编码才能彻底解决，否则只是表面合并
+- 运行时垃圾（workspace/、mempalace/、logs/ 等 2.9G）天然就不该进代码仓库，强行合并反而污染
+- `~/.nanobot` 这个路径在 29 个文件里硬编码着，搬了没用，不搬等于白搬
+- 用户现在要问我「为什么要迁」，说明价值不够清晰
+
+**结论：不值得为「不突兀」去动。**
+
+真正的问题是「路径硬编码散落在 29 个文件」，而不是「两个 git 仓库」。路径统一（用 paths.py）才是值得做的事，但那跟 git 仓库合并是两回事。
+
+所以我不建议合并。两个 git 仓库作为事实存在，完全可行。如果你觉得突兀感可以接受、不想动，我就不推了。
+
+你怎么看？是到此为止，还是你觉得有某个具体痛点需要解决？
+---
+[Kirk]: ## 结论
+
+**不需要迁移。** 两个 git 仓库分割没有造成实际工程问题，强行合并的代价（改 29 个文件、symlink 桥接、迁移脚本）远大于收益（原子提交、统一 tag）。保持现状是最稳妥的方案。
+
+## 关键发现
+
+- `nanobot-src`：1687 commits，代码仓库
+- `~/.nanobot`：24 commits，配置仓库，.git 已从 153M 清理到 62M
+- 29 个文件硬编码 `Path.home() / ".nanobot"`，未统一走 `paths.py`
+- 合并的实际收益仅限于"观感统一"，无功能性痛点驱动
+
+## 备注
+
+如果未来出现实际痛点（如改代码必须同步改配置但经常遗漏），再考虑合并。届时最简路径是：先统一 `paths.py` 入口（阶段②），再 git 层面合并（阶段③），不需要改运行时目录结构。
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/nanobot-monorepo-plan (hidden)
+  Drawer ID: drawer_wing_code_nanobot-monorepo-plan_6084ebf669276d5657cd8edd (129字)
+• end_discussion() → ✅ 讨论已结束（原因: 用户质疑迁移必要性，经分析确认无重大工程原因必须合并两个 git 仓库，保持现状最稳妥。），即将进入总结阶段 (66字)
+---
+[用户]: 配置和代码确实应该
+---
+[Kirk]: 你的话好像没说完——"配置和代码确实应该"后面是什么？
+
+如果你是说"配置和代码确实应该在一起"，那回到 Harper 之前提的最简方案：
+
+**零代码改动，只动 git 结构：**
+1. 清洁两个工作区（commit litellm_provider.py 的改动，checkout 掉 cron 时间戳噪音）
+2. 把 `~/.nanobot` 的配置文件 `git mv` 进 `nanobot-src/config/`
+3. `~/.nanobot` 保留为运行时目录（workspace/、mempalace/、logs/ 继续原地）
+4. 代码里的 29 处 `Path.home() / ".nanobot"` 硬编码不动，运行时照常读 `~/.nanobot`
+
+这样 git 层面统一了，运行时零风险。后续有空再逐步把硬编码收敛到 `paths.py`。
+
+要动手的话说一声，我直接写迁移脚本。
+---

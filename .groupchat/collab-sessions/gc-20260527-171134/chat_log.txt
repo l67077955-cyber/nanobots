@@ -1,0 +1,182 @@
+[用户]: embedding也能改吗
+---
+[Harper]: Kirk 已经给出了清晰的升级路径。我来回答你的问题：
+
+**Embedding 模型当然能改。**
+
+mempalace v3.3.6 用的 ChromaDB，embedding function 是可替换的参数。当前默认是 ONNX MiniLM-L6-v2（纯英文），换成多语言模型只需：
+
+1. `pip install sentence-transformers`
+2. 在创建/获取 collection 时传入 `SentenceTransformerEmbeddingFunction("BAAI/bge-m3")`
+
+不过 Kirk 提到一个关键点——**v3.3.6 已经修复了负 sim 问题**（`clamp similarity to [0,1]`），并且内置了 **BM25 hybrid reranking**。这意味着：
+
+- **先升级到 v3.3.6** → 负 sim + hybrid search 两个问题一步到位
+- **再考虑换 embedding** → 如果升级后中文检索精度还不够，再动 embedding
+
+两步互不冲突，建议分阶段做。
+
+Kirk，要不要我先验证一下 v3.3.6 的 `tool_search`/`tool_store` API 签名是否兼容？这样升级前就知道会不会 break。
+---
+[Kirk]: 数据全了。直接给结论。
+
+[工具调用记录]
+• memory_palace(mempalace embedding model change chromadb BGE-M3 multilingual) → 🔍 5 result(s) for 'mempalace embedding model change chromadb BGE-M3 multilingual':
+
+[1] wing_code/tool-search-wing-filter-verification (sim=-0.192)
+  tool_search wing 过滤验证结论（2026-05-27）：无 bug。之前搜不到是因为用英文 query 搜中文内容，ChromaDB embedding 跨语言 sim 普遍偏低。用中文 query 后 wing 过滤正常命中。本地 mempalace 3.1.0，PyPI 最新 3.3.5，有 45 个定制 commit 在 /root/.nanobot/workspace/mempalace。
+
+[2] wing_code/mempalace-upgrade-plan (sim=-0.246)
+  MemPalace 升级方案（2026-05-27）：
+
+现状：本地 editable 安装 3.1.0（/root/.nanobot/workspace/mempalace）… (1,433字)
+• memory_palace(mempalace searcher.py embedding_function collection configuration) → 🔍 5 result(s) for 'mempalace searcher.py embedding_function collection configuration':
+
+[1] wing_code/mempalace-upgrade-plan (sim=0.058)
+  MemPalace 升级方案（2026-05-27）：
+
+现状：本地 editable 安装 3.1.0（/root/.nanobot/workspace/mempalace），develop 分支，落后 v3.3.6 共 904 commits。无本地修改（working tree clean），无 stash。nanobot 通过 `from mempalace.mcp_server import ...` 和 `from mempalace.layers import MemoryStack` 直接导入。
+
+v3.1.0→v3.3.6 关键搜索修复：
+- fix(layers): clamp similarity to [0,1] 避免负值
+- fix(searcher): clamp effective_… (1,845字)
+• exec() → mempalace/palace.py:40:def get_collection(
+mempalace/palace.py:46:    return _DEFAULT_BACKEND.get_collection(
+mempalace/backends/chroma.py:38:    def get_collection(self, palace_path: str, collection_name: str, create: bool = False):
+mempalace/backends/chroma.py:53:            collection = client.get_collection(collection_name)
+mempalace/searcher.py:12:from .palace import get_collection
+mempalace/searcher.py:27:        col = get_collection(palace_path, create=False)
+mempalace/searcher.py:100:   … (567字)
+• exec(cd /root/.nanobot/workspace/mempalace && grep -rn "embedding\|model_name\|sen...) → Exit code: 0 (13字)
+• exec(cd /root/.nanobot/workspace/mempalace && cat mempalace/backends/chroma.py) → """ChromaDB-backed MemPalace collection adapter."""
+
+import os
+
+import chromadb
+
+from .base import BaseCollection
+
+
+class ChromaCollection(BaseCollection):
+    """Thin adapter over a ChromaDB collection."""
+
+    def __init__(self, collection):
+        self._collection = collection
+
+    def add(self, *, documents, ids, metadatas=None):
+        self._collection.add(documents=documents, ids=ids, metadatas=metadatas)
+
+    def upsert(self, *, documents, ids, metadatas=None):
+        self._collection.… (1,631字)
+• exec(cd /root/.nanobot/workspace/mempalace && cat mempalace/palace.py) → """
+palace.py — Shared palace operations.
+
+Consolidates collection access patterns used by both miners and the MCP server.
+"""
+
+import os
+
+from .backends.chroma import ChromaBackend
+
+SKIP_DIRS = {
+    ".git",
+    "node_modules",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "env",
+    "dist",
+    "build",
+    ".next",
+    "coverage",
+    ".mempalace",
+    ".ruff_cache",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".cache",
+    ".tox",
+    ".nox",
+    ".idea",
+    ".vscode",
+    ".ipynb_checkpo… (1,843字)
+• exec() → STDERR:
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+Traceback (most recent call last):
+  File "<string>", line 4, in <module>
+  File "/usr/local/lib/python3.12/dist-packages/chromadb/api/client.py", line 171, in get_collection
+    model = self._server.get_collection(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/chromadb/telemetry/opentelemetry/__init__.py", line 150, in wrapper
+    return f(*a… (1,248字)
+• exec() → palace_path: /root/.nanobot/workspace/memory_palace
+46:_PALACE_PATH = os.environ.get(
+47:    "MEMPALACE_PALACE_PATH",
+51:os.environ.setdefault("MEMPALACE_PALACE_PATH", _PALACE_PATH)
+52:os.makedirs(_PALACE_PATH, exist_ok=True)
+356:                stack = mp["MemoryStack"](palace_path=_PALACE_PATH)
+362:                stack = mp["MemoryStack"](palace_path=_PALACE_PATH)
+432:                    path = result.get("palace_path", _PALACE_PATH)
+
+
+Exit code: 0 (455字)
+• exec() → (13字)
+  (还有 7 个工具调用，已省略)
+---
+[Harper]: 对，数据够了。直接给用户结论：
+
+---
+
+**Embedding 能改，但建议分两步走：**
+
+**Step 1：升级 mempalace v3.1.0 → v3.3.6**
+- 负 sim 已 clamp → **中文检索不再全负**
+- 内置 BM25 hybrid rerank → **#5 改进方向官方已做**
+- 命令：`git checkout v3.3.6 && pip install -e . --no-deps`
+
+**Step 2：如果精度还不够，换 embedding model**
+- `SentenceTransformerEmbeddingFunction("BAAI/bge-m3")`
+- 多语言模型，中文语义匹配显著优于 MiniLM-L6-v2
+
+**先升后换，互不冲突。**
+---
+[Kirk]: 
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/mempalace-embedding-model-switch (hidden)
+  Drawer ID: drawer_wing_code_mempalace-embedding-model-switch_00d737753a997576550b948a (151字)
+• end_discussion() → ✅ 讨论已结束（原因: 问题已回答：embedding 能改，v3.3.6 内置 embeddinggemma 多语言模型，一行配置切换。），即将进入总结阶段 (79字)
+---
+[Kirk]: ## 结论
+
+**能改。v3.3.6 内置了多语言 embedding 模型 `embeddinggemma`，一行配置切换，不需要装额外依赖。**
+
+## 关键发现
+
+v3.3.6 新增 `mempalace/embedding.py`，提供两个模型：
+
+| 模型 | 配置值 | 维度 | 语言 | 跨语言 cos |
+|------|--------|------|------|-----------|
+| `minilm`（默认） | `"minilm"` | 384 | 英文 | ~0.35 |
+| **embeddinggemma** | `"embeddinggemma"` | 384 | **100+ 语言** | **~0.88** |
+
+切换方式（二选一）：
+```bash
+# 环境变量
+export MEMPALACE_EMBEDDING_MODEL=embeddinggemma
+
+# 或配置文件
+echo '{"embedding_model": "embeddinggemma"}' > ~/.mempalace/config.json
+```
+
+切换后重建索引：
+```bash
+mempalace repair rebuild-index
+```
+
+## 备注
+
+- 模型首次使用自动从 HuggingFace 下载（~300MB ONNX），之后缓存
+- 支持 GPU 加速：`MEMPALACE_EMBEDDING_DEVICE=cuda`
+- 两个模型都是 384 维，ChromaDB schema 不需要改，只需 rebuild-index
+- 不需要手动装 `sentence-transformers` 或传 `embedding_function`，全部内置
+---

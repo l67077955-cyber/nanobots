@@ -1,0 +1,130 @@
+[用户]: 不要合并
+---
+[Harper]: **状态确认**：零合并，零冲突。
+
+| 仓库 | 分支 | 最新提交 | 状态 |
+|------|------|----------|------|
+| nanobot-src | `dev` | `acc34f8` stable: 移除废弃summarizer... | ✅ 干净 |
+| .nanobot | `master` | `73a7a26` stable: 默认模型切换... | ✅ 干净(extra CSV忽略) |
+
+两个 commit 各自在独立分支上，没有 merge/变基操作。
+
+[工具调用记录]
+• memory_palace() → Kirk - DeepSeek V4 Research Agent
+
+## L1 — ESSENTIAL STORY
+
+[config-version-audit-20260511]
+  - 配置版本记录对比结果 (2026-05-11): - config.json: VCS迁移后结构变更，模板→解析值，与.backup_pre_vcs一致 - prompt_order.json: 04-17→04-25修改，新增persona/memory/examples，删除hard_rules/user_context/output_efficiency - prompt_overri...
+
+[context-compression-architecture]
+  - ## 上下文压缩架构 — 双层设计  ### 层级一：跨轮压缩 (HistoryContext.maybe_compress) - 位置: groupchat/history/context.py:146-250 - 触发: engine.py:1137, engine.py:951 - 作用对象: master 消息列表（… (3,110字)
+• exec(git -C /root/nanobot-src log --oneline -3 && echo "---" && git -C /root/.nano...) → acc34f8 stable: 移除废弃的summarizer.py，清理其history_settings引用，修复broadcast中gc_settings变量引用
+abe90b4 perf: reduce conv_keep_turns to 3, append summary to last system msg
+6188597 fix: remove default model fallback and skip empty heartbeat
+---
+73a7a26 stable: 默认模型切换deepseek-v4-flash，移除kimi-k2.5，调整上下文窗口和历史保留策略，新增运维脚本
+4f8a991 snapshot: agent configs, cron jobs, prompts update (2026-05-15)
+ae61f2c harper: maxTokens 3000→8192, temp 0.2→0.1, penalties zeroed, maxToolIterations 10→50
+
+
+Exit code: 0 (487字)
+• exec() → === nanobot-src (dev) ===
+=== .nanobot (master) ===
+?? media/telegram/BQACAgEAAxkBAAEC.csv
+=== 分支 ===
+* dev
+  main
+* master
+
+
+Exit code: 0 (138字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git log --oneline -5 && echo "---STATUS---" && git st...) → acc34f8 stable: 移除废弃的summarizer.py，清理其history_settings引用，修复broadcast中gc_settings变量引用
+abe90b4 perf: reduce conv_keep_turns to 3, append summary to last system msg
+6188597 fix: remove default model fallback and skip empty heartbeat
+4eac88a fix: move user_question from stable prefix to volatile tail to preserve cache
+8d81ee9 feat: AI-summarized conversation pruning + anti-repeat dedup
+---STATUS---
+On branch dev
+nothing to commit, working tree clean
+
+
+Exit code: 0 (464字)
+• exec(cd /root/.nanobot && git log --oneline -5 && echo "---STATUS---" && git status) → 73a7a26 stable: 默认模型切换deepseek-v4-flash，移除kimi-k2.5，调整上下文窗口和历史保留策略，新增运维脚本
+4f8a991 snapshot: agent configs, cron jobs, prompts update (2026-05-15)
+ae61f2c harper: maxTokens 3000→8192, temp 0.2→0.1, penalties zeroed, maxToolIterations 10→50
+93f3c26 snapshot: agent hyperparams before tuning (Harper rep=1.3/freq=0.5/pres=0.4/maxTokens=3000, Kirk rep=1.12) -- baseline for 20260514 adjustment
+f482fac Pre-hyperparameter-adjustment backup (2026-05-14 20:30)
+---STATUS---
+On branch master
+Untracked files:… (695字)
+• exec(cd /root/nanobot-src && git reset --soft HEAD~1 && echo "=== staged diff ==="...) → === staged diff ===
+ nanobot/groupchat/history/history_settings.py |  18 +--
+ nanobot/groupchat/orchestra/broadcast.py      |   2 +-
+ nanobot/tools/summarizer.py                   | 187 --------------------------
+ 3 files changed, 2 insertions(+), 205 deletions(-)
+
+
+Exit code: 0 (279字)
+• exec(cd /root/.nanobot && git reset --soft HEAD~1 && echo "=== staged diff ===" &&...) → === staged diff ===
+ config.json           |  4 ++--
+ cron/jobs.json        |  4 ++--
+ history_settings.json | 12 +++++++-----
+ providers_models.json |  4 ++--
+ restart_nanobot.sh    | 17 +++++++++++++++++
+ safe_kill.sh          | 51 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 6 files changed, 81 insertions(+), 11 deletions(-)
+=== untracked ===
+M  config.json
+M  cron/jobs.json
+M  history_settings.json
+M  providers_models.json
+A  restart_nanobot.sh
+A  safe_kill.sh
+?? media/telegram/BQACA… (530字)
+• exec(cd /root/nanobot-src && git diff --cached -- nanobot/groupchat/history/histor...) → diff --git a/nanobot/groupchat/history/history_settings.py b/nanobot/groupchat/history/history_settings.py
+index 47a2189..be8fdd3 100644
+--- a/nanobot/groupchat/history/history_settings.py
++++ b/nanobot/groupchat/history/history_settings.py
+@@ -1,7 +1,7 @@
+ """Centralized history, summarization, and context-pruning settings.
+ 
+ Loads ``~/.nanobot/history_settings.json`` once and exposes typed getters
+-so that shell.py, summarizer.py, tool_loop.py, context_pruning.py,
++so that shell.py, tool_loop… (1,439字)
+• exec(cd /root/nanobot-src && git diff --cached -- nanobot/groupchat/orchestra/broa...) → diff --git a/nanobot/groupchat/orchestra/broadcast.py b/nanobot/groupchat/orchestra/broadcast.py
+index 5a18c16..99f1118 100644
+--- a/nanobot/groupchat/orchestra/broadcast.py
++++ b/nanobot/groupchat/orchestra/broadcast.py
+@@ -1279,7 +1279,7 @@ async def broadcast_round(
+                 # agent retains context of earlier discussion.
+                 from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
+                 from nanobot.groupchat.history.history_setti… (985字)
+• exec(cd /root/.nanobot && for f in config.json cron/jobs.json history_settings.jso...) → === config.json ===
+diff --git a/config.json b/config.json
+index 5e1e2da..eb66460 100644
+--- a/config.json
++++ b/config.json
+@@ -2,7 +2,7 @@
+   "agents": {
+     "defaults": {
+       "workspace": "~/.nanobot/workspace",
+-      "model": "kimi-k2.5",
++      "model": "deepseek-v4-flash",
+       "provider": "openrouter",
+       "maxTokens": 8192,
+       "contextWindowTokens": 200000,
+@@ -251,7 +251,7 @@
+     "host": "0.0.0.0",
+     "port": 18790,
+     "heartbeat": {
+-      "enabled": true,
++      "en… (2,900字)
+• exec(cd /root/nanobot-src && git reset HEAD && echo "=== unstage done ===" && git ...) → Unstaged changes after reset:
+M	nanobot/groupchat/history/histor… (310字)
+  (还有 9 个工具调用，已省略)
+---

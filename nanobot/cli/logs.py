@@ -9,23 +9,62 @@ from typing import Any
 from rich.console import Console
 from rich.table import Table
 
-_NANOBOT_DIR = Path.home() / ".nanobot"
-_SESSIONS_DIR = _NANOBOT_DIR / "collab-sessions"
+from nanobot.config.loader import load_config
+
+
+def _get_state_dir() -> Path:
+    """Get the groupchat state directory from config."""
+    config = load_config()
+    workspace = config.workspace_path
+    return workspace / ".groupchat"
+
+
+def _get_legacy_dir() -> Path:
+    """Get legacy nanobot directory for migration fallback."""
+    return Path.home() / ".nanobot"
+
+
+def _resolve_state_dir_with_fallback() -> Path:
+    """Resolve state dir, checking both new location and legacy."""
+    state_dir = _get_state_dir()
+    if state_dir.exists():
+        return state_dir
+
+    # Legacy fallback for read-only operations
+    legacy = _get_legacy_dir()
+    legacy_state = legacy / ".groupchat"
+    if legacy_state.exists():
+        return legacy_state
+
+    # Legacy flat structure (pre-5.2)
+    if (legacy / "active_agents.json").exists() or (legacy / "collab-sessions").exists():
+        return legacy
+
+    # Default to new location (will be created on write)
+    return state_dir
 
 
 def resolve_session_dir(session_id: str | None = None) -> Path | None:
     """Resolve a collab session directory from explicit id or known pointers."""
+    base_dir = _resolve_state_dir_with_fallback()
+    sessions_dir = base_dir / "collab-sessions" if base_dir.name != "collab-sessions" else base_dir.parent / "collab-sessions"
+
+    # Handle legacy flat structure
+    if (base_dir / "collab-sessions").exists():
+        sessions_dir = base_dir / "collab-sessions"
+
     if session_id:
-        explicit = _SESSIONS_DIR / session_id
+        explicit = sessions_dir / session_id
         if explicit.is_dir():
             return explicit
         if not session_id.startswith("gc-"):
-            prefixed = _SESSIONS_DIR / f"gc-{session_id}"
+            prefixed = sessions_dir / f"gc-{session_id}"
             if prefixed.is_dir():
                 return prefixed
         return None
 
-    current_file = _NANOBOT_DIR / "current_session.json"
+    # Check current_session.json in state dir
+    current_file = base_dir / "current_session.json"
     if current_file.exists():
         try:
             data = json.loads(current_file.read_text())
@@ -34,13 +73,14 @@ def resolve_session_dir(session_id: str | None = None) -> Path | None:
                 return path
             sid = str(data.get("session_id") or "")
             if sid:
-                candidate = _SESSIONS_DIR / sid
+                candidate = sessions_dir / sid
                 if candidate.is_dir():
                     return candidate
         except Exception:
             pass
 
-    history_file = _NANOBOT_DIR / "chat_history.json"
+    # Check chat_history.json for session pointer
+    history_file = base_dir / "chat_history.json"
     if history_file.exists():
         try:
             data = json.loads(history_file.read_text())
@@ -50,10 +90,11 @@ def resolve_session_dir(session_id: str | None = None) -> Path | None:
         except Exception:
             pass
 
-    if not _SESSIONS_DIR.is_dir():
+    # List most recent session
+    if not sessions_dir.is_dir():
         return None
     candidates = sorted(
-        (p for p in _SESSIONS_DIR.iterdir() if p.is_dir() and p.name.startswith("gc-")),
+        (p for p in sessions_dir.iterdir() if p.is_dir() and p.name.startswith("gc-")),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -98,8 +139,9 @@ def show_session_summary(console: Console, session_dir: Path) -> None:
     table.add_row("tool_calls", str(len(tool_calls)))
     table.add_row("session.jsonl", str(session_dir / "session.jsonl"))
     table.add_row("chat_log.txt", str(session_dir / "chat_log.txt"))
-    table.add_row("gateway.log", str(_NANOBOT_DIR / "logs" / "gateway.log"))
-    table.add_row("chat_history.json", str(_NANOBOT_DIR / "chat_history.json"))
+    base_dir = _resolve_state_dir_with_fallback()
+    table.add_row("gateway.log", str(_get_legacy_dir() / "logs" / "gateway.log"))
+    table.add_row("chat_history.json", str(base_dir / "chat_history.json"))
     console.print(table)
 
 
@@ -162,7 +204,7 @@ def recover_conversation(session_dir: Path) -> str:
         lines.append(content)
         lines.append("")
 
-    history_file = _NANOBOT_DIR / "chat_history.json"
+    history_file = _resolve_state_dir_with_fallback() / "chat_history.json"
     if history_file.exists():
         try:
             snapshot = json.loads(history_file.read_text())

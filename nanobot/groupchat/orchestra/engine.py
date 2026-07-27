@@ -284,6 +284,7 @@ class GroupChatEngine:
         # Persistence layer
         self._state = GroupChatState(
             registry=self.registry,
+            workspace=self.workspace,
         )
 
         # Restore persisted state

@@ -325,7 +325,6 @@ def gateway(
     from nanobot.cron.service import CronService
     from nanobot.cron.types import CronJob
     from nanobot.heartbeat.service import HeartbeatService
-    from nanobot.session.manager import SessionManager
     from loguru import logger
 
     if verbose:
@@ -354,7 +353,6 @@ def gateway(
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()
     provider = _make_provider(config)
-    session_manager = SessionManager(config.workspace_path)
 
     # Create cron service first (callback set after engine creation)
     cron_store_path = get_cron_dir() / "jobs.json"
@@ -416,17 +414,13 @@ def gateway(
 
     def _pick_heartbeat_target() -> tuple[str, str]:
         """Pick a routable channel/chat target for heartbeat-triggered messages."""
-        enabled = set(channels.enabled_channels)
-        # Prefer the most recently updated non-internal session on an enabled channel.
-        for item in session_manager.list_sessions():
-            key = item.get("key") or ""
-            if ":" not in key:
-                continue
-            channel, chat_id = key.split(":", 1)
-            if channel in {"cli", "system"}:
-                continue
-            if channel in enabled and chat_id:
-                return channel, chat_id
+        # Prefer the most recent Telegram chat that has interacted with the bot.
+        tg = channels.get_channel("telegram")
+        if tg and hasattr(tg, "_chat_ids") and tg._chat_ids:
+            # Get the most recent chat_id
+            for sender_id, chat_id in tg._chat_ids.items():
+                if chat_id and str(chat_id).isdigit():
+                    return "telegram", str(chat_id)
         # Fallback keeps prior behavior but remains explicit.
         return "cli", "direct"
 

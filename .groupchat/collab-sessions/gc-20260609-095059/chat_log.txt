@@ -1,0 +1,65 @@
+[用户]: 现在的代码版本是什么
+---
+[系统]: ## 🧠 自动记忆检索（群聊开始时触发）
+当前用户输入: 现在的代码版本是什么
+
+### 技术上下文 (wing_code) — 工具用法/方法/踩坑/技术结论
+## L2 — ON-DEMAND (5 drawers)
+  [tool-permissions-persistence] 工具权限设置持久化机制：Telegram /edit X tools 菜单切换后，写入本地JSON文件。单agent: ~/.nanobot/agents/<name>/config.json 的 tools 字段；全局默认: ~/.nanobot/nanobot_tools.json。重启后从文件读取，设置不丢失。
+  [context-compression-architecture] ## 上下文压缩架构 — 双层设计  ### 层级一：跨轮压缩 (HistoryContext.maybe_compress) - 位置: groupchat/history/context.py:146-250 - 触发: engine.py:1137, engine.py:951 - 作用对象: master 消息列表（破坏性操作） - 结构: Protected Head | Compressible Middle | Protected Tail - Head保护: _find_head_indices() 只保护 index_0 + first_user_msg - Tail保...
+  [nanobot-compression-thresholds] ## 压缩触发阈值（用户配置 ~/.nanobot/history_settings.json）  ### 工具输出摘要 (summarizer.py) - 触发条件：工具输出 > summarize_threshold 字符 - 用户配置：summarize_threshold = 20,000 字符 - 摘要输入上限：summarize_max_input_chars = 10,000 字符 (~4k tok) - 摘要输出上限：summarize_max_output_chars = 5,000 字符 - 模型：z-ai/glm-5.1  ### 历史上下文压缩 (context....
+  [nanobot-skills-inventory] nanobot 当前 skill 清单（2026-05-24确认）：共12个skill，位于 /root/nanobot-src/nanobot/skills/，全部完好。列表：clawhub, cron, debug, github, memory, settings, skill-creator, steve-jobs-perspective, summarize, testing, tmux, weather。另有 /root/.nanobot/skills/ 下 memory-palace 和 rag 两个旧 skill 未加载。workspace 下 skills/nuwa-s...
+  [send-photo-capability] 发图片能力确认（2026-05-24）：不存在独立的"发图片skill"。发图片功能通过 debug skill 的附属脚本 send_photo_cli.py 实现，位于 /root/nanobot-src/nanobot/skills/debug/scripts/send_photo_cli.py。5月3日创建（commit 11c678c），从未被删除。5月18日（commit 99eb8f6）将用法写入 debug/SKILL.md。使用方式：python3 send_photo_cli.py --chat-id $NANOBOT_CHAT_ID --image /path/to...
+
+---
+
+### 用户偏好 (wing_user) — 输出风格/交互习惯/格式偏好
+## L2 — ON-DEMAND (5 drawers)
+  [art-preferences] 用户艺术偏好：前卫×AI×材质感×极简。推荐5位核心艺术家：Refik Anadol（AI数据雕塑）、Mario Klingemann（GAN神经美学）、Sofia Crespo（AI生物纹理）、Memo Akten（生成艺术粒子物理）、Linda Dounia（AI推测性档案）。用户要求直接发图片不想自己搜索。
+  [preferences] 用户反馈：无法看到read_file的内容，只能看到直接发送到聊天的文本。以后发文件必须把内容直接输出在回复中，不能只给路径。
+  [file-transfer-limitation] 用户询问"发文件操作为什么不行"：当前agent环境没有文件传输/附件上传的原生能力，chatroom_send仅支持文本。替代方案：1)直接在回复中输出文件全文内容；2)上传到外部托管服务(pastebin/GitHub Gist)后给链接。
+  [memory-palace-search-issue] 用户反馈memory_palace搜索不到内容。诊断结果：搜索功能正常（60 drawers, 5 wings, ChromaDB 820KB）。常见原因：1)内容未store过 2)查询词与存储内容语义不匹配（ChromaDB是语义搜索非关键词匹配，部分结果sim为负数）3)recall指定room时可能返回空（已知bug）4)agent跳过store步骤。建议用户提供具体搜索关键词以便进一步诊断。
+  [system-capabilities-discussion] 用户自由讨论三个问题及结论（2026-05-23）：1)发文件操作不行：当前agent环境无文件传输/附件上传能力，chatroom_send仅支持文本，替代方案是直接在回复中输出文件全文或上传到外部托管服务；2)memory_palace搜索功能正常（60 drawers/5 wings/ChromaDB 820KB），搜不到的常见原因：内容未store过、语义不匹配、recall指定room的已知bug、agent跳过store步骤；3)用户说"发我"时agent会把搜索结果直接贴在聊天回复文本中，不会发送附件。
+
+---
+
+### 固定信息 (wing_agent) — 事实数据/发现/规则约定
+## L2 — ON-DEMAND (5 drawers)
+  [protocol-compliance] 用户反馈：agent工具调用时应严格遵守"先检索记忆再执行"协议，不能因为任务看起来是操作型就跳过记忆检索。2026-05-23用户明确指出此问题。正确流程：memory_palace search → 命中则直接用 → 未命中再走exec/read_file等。
+  [memory-search-sop] ## 记忆搜索标准操作流程（SOP）— 2026-05-24 用户制定  每个任务开始时，agent 必须按以下4个区块依次搜索记忆宫殿，全部完成后才开始执行任务：  ### 区块1：工具能力（Tool Capabilities） - 搜索词：`{任务关键词} skill tool 脚本 方法` - 目的：确认是否有现成 skill/脚本/工具可用，避免重复造轮子 - 例：用户要发图片 → 搜"图片发送 photo send" → 命中 send_photo_cli.py  ### 区块2：用户偏好（User Preferences） - 搜索词：`用户偏好 输出风格 交互习惯` - 目...
+  [protocol-compliance] ## Agent 协议遵守记录  2026-05-23：用户反馈 agent 跳过 memory_palace search 直接走 exec/read_file。 2026-05-24：用户制定记忆搜索SOP（4区块），存于 wing_agent/memory-search-sop。 解决方案：不再依赖 agent 自觉，改为结构化SOP强制执行。
+  [memory-store-protocol] ## 记忆存储协议（Store Protocol）— 2026-05-24 用户制定  ### 核心原则：存储即设计检索 记忆只能通过搜索获取。存入任何内容前，必须先回答：**"未来什么场景、用什么词能搜到这条？"** 如果答不上来，就不存。  ### 存储检查清单（每次 store 必须通过）  **1. 可搜索性验证** - 存入内容必须包含未来搜索时可能使用的关键词 - 必须同时覆盖中英文（ChromaDB embedding 对中英文都敏感） - 例：存"send_photo_cli.py"时，内容必须包含"发图片/图片发送/photo/send image/telegram图片...
+  [collaboration-lessons] 协作教训：end_discussion 前必须确保所有 agent 有过发言机会。如果 agent 刚创建还没进入 wait 状态，正确做法是等一轮让他们发言，而不是直接 disable 再 end。2026-05-26 发生过一次：用户说"看看是否能结束群聊"，Kirk 直接 disable 了 Harper 和 Lucas 然后强制 end_discussion，被用户指出错误。
+---
+[Kirk]: 当前代码版本：
+
+- **最新提交**: `f6842281` — `fix: wait() proactive nudge now respects rank hierarchy`
+- **版本标签**: `v-stable-20260523-9-gf6842281`（基于 v-stable-20260523 标签，之后9个提交）
+- **完整提交历史**（最近5条）:
+  1. `f6842281` fix: wait() proactive nudge now respects rank hierarchy
+  2. `b5c55386` chore: save current config and memory-palace state
+  3. `7e97d680` feat(groupchat): auto memory recall + store + synthesis fixes
+  4. `3f04c590` feat(groupchat): 工具可见性标注+跨agent工具调用压缩
+  5. `ae2c1a26` fix(groupchat): prevent content loss on leader end_discussion
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git log --oneline -5 && echo "---" && git describe --...) → f6842281 fix: wait() proactive nudge now respects rank hierarchy
+b5c55386 chore: save current config and memory-palace state
+7e97d680 feat(groupchat): auto memory recall + store + synthesis fixes
+3f04c590 feat(groupchat): 工具可见性标注+跨agent工具调用压缩
+ae2c1a26 fix(groupchat): prevent content loss on leader end_discussion
+---
+v-stable-20260523-9-gf6842281
+---
+f6842281
+
+
+Exit code: 0 (375字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• end_discussion() → ✅ 讨论已结束（原因: 用户问题已回答：代码版本为 v-stable-20260523-9-gf6842281，最新提交 f6842281），即将进入总结阶段 (79字)
+---
+[Kirk]: 当前代码版本：**v-stable-20260523-9-gf6842281**，最新提交 `f6842281`（fix: wait() proactive nudge now respects rank hierarchy）。
+---

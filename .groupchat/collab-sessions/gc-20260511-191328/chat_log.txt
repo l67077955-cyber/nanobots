@@ -1,0 +1,75 @@
+[用户]: 🔴 👑▸ Kirk · 🔧 set_tools(Kirk)
+    └ ✅ done
+为什么是红色的
+---
+[Kirk]: **🔴 原因：`set_tools(Kirk)` 实际执行失败了。**
+
+- `chatroom_tools.py:956` 检查 `agent not in _exec_agents`，Leader 不在列表中 → 返回 `Error:`
+- `broadcast_view.py:152` 判断 `result.startswith("Error:")` → 🔴
+- `display.py:407` brief 固定返回 `✅ done` → 所以看到 🔴 + ✅ done
+
+**结论：Kirk 的权限没有被 set_tools 修改。** 之前恢复是通过改 config 文件。这是 bug——`manage_agent` 没把 Leader 纳入可操作范围。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -rn "set_tools\|🔴\|🟢\|🟡" nanobot/channels/telegr...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && grep -rn "manage_agent\|set_tools" nanobot/channels/t...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && grep -rn "manage_agent\|set_tools\|🔴" nanobot/ --incl...) → nanobot/groupchat/orchestra/tools/chatroom_tools.py:871:        set_tools — Change an agent's tool permissions for this session
+nanobot/groupchat/orchestra/tools/chatroom_tools.py:898:        return "manage_agent"
+nanobot/groupchat/orchestra/tools/chatroom_tools.py:904:            "set_tools(改工具权限), set_status(修改agent状态消息)。仅当前轮有效。"
+nanobot/groupchat/orchestra/tools/chatroom_tools.py:914:                    "enum": ["disable", "enable", "restart", "set_tools", "set_status", "set_listener"],
+nanob… (2,255字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/broadcast_view.py) → 140|             
+141|         elif tool_name not in ("chatroom_send", "wait") and result:
+142|             brief = _d.tool_result_brief(name, tool_name, result)
+143|             if tool_name == "web_search" and self.search_pool:
+144|                 self.search_pool.on_output(name)
+145|                 brief += f"  🔧 {self.search_pool.status()}"
+146|             elif self.search_pool:
+147|                 self.search_pool.on_output(name)
+148|                 
+149|             pending = self.pending_tool_msgs.pop(tool_call_id, None)
+150|             if pending:
+151|                 msg_id, original_text = pending
+152|                 success = not (result or "").startswith("Error:")
+153|                 icon = "🟢" if success else "🔴"
+154|                 updated = original_text.replace("🟡"… (1,280字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 340|     elif tool_name in ("write_file", "edit_file"):
+341|         path = (args.get("path", "") or "").split("/")[-1]
+342|         return f"{prefix} {agent_name} · {label} {path}"
+343|     elif tool_name == "list_dir":
+344|         path = args.get("path", "") or "."
+345|         return f"{prefix} {agent_name} · {label} {path}"
+346|     elif tool_name == "transfer_credits":
+347|         fr = args.get("from_agent", "?")
+348|         to = args.get("to_agent", "?")
+349|         amt = args.get("amount", "?")
+350|         return f"{prefix} {agent_name} · {label} {fr}→{to} ×{amt}"
+351|     elif tool_name == "manage_agent":
+352|         action = args.get("action", "?")
+353|         target = args.get("agent", "?")
+354|         return f"{prefix} {agent_name} · {label} {action}({target})"
+355|     … (3,434字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 1010|                 self._mailbox.send("系统", active,
+1011|                     f"[系统通知] {agent} 已被 Leader 标记为激活")
+1012|             await self._engine._send(f"✅ Leader 已激活 {agent}（标记，未重启任务）")
+1013|             return f"✅ {agent} 已标记为 enable。如需重新参与讨论请用 restart。"
+1014| 
+1015|         elif action == "set_tools":
+1016|             if not tools or not isinstance(tools, dict):
+1017|                 return "Error: set_tools 需要 tools 参数，如 {\"web_search\": true}"
+1018|             if not hasattr(self._engine, "_session_tools_override"):
+1019|                 self._engine._session_tools_override = {}
+1020|             if agent not in self._engine._session_tools_override:
+1021|                 cfg = self._engine.registry.get(agent, {})
+1022|                 current = cfg.get("tools", {})
+1023|     … (2,407字)
+• exec(cd /root/nanobot-src && grep -n "manage_agent\|set_tools" nanobot/groupchat/o...) → 871:        set_tools — Change an agent's tool permissions for this session
+898:        return "manage_agent"
+904:            "set_tools(改工具权限), set_status(修改agent状态消息)。仅当前轮有效。"
+914:                    "enum": ["disable", "enable", "restart", "set_tools", "set_status", "set_listener"],
+920:                        "set_tools=修改工具权限, "
+931:                    "description": "工具权限 (仅 set_tools 时需要), 如 {\"web_search\": true, \"exec\": false}",
+1015:        elif action == "set_tools":
+1017:          … (583字)
+  (还有 6 个工具调用，已省略)
+---

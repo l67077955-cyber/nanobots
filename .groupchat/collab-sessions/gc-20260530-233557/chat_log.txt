@@ -1,0 +1,497 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 看看现在代码仓库和27号的前一个稳定版之间的逻辑有什么区别
+---
+[Kirk]: 数据已全部拿到，直接给结论。
+
+## 结论
+
+当前分支 `stable-20260517-plus-fixes`（基于5月17日稳定版 + cherry-pick修复）与 `v-stable-20260523`（27号前最后一个稳定版）之间存在 **17个commit的差异**，涉及21个文件，净减275行代码。核心逻辑变化集中在4个模块。
+
+## 关键发现
+
+### 1. broadcast.py — 合成重试 & 等待循环修复
+- **删除了 `build_tool_log` 注入**：旧版在合成重试时会把工具调用结果注入retry prompt，帮助LLM产出总结。新版去掉了这个机制，retry只发警告文本，不再附带工具数据
+- **新增连续等待超时保护**：`_consecutive_waits` 计数器，连续3次wait超时无消息则强制退出，防止agent死循环 wait→timeout→wait
+- **合成展示逻辑变更**：旧版始终展示leader合成文本；新版如果leader已通过 `chatroom_send` 发送过内容则跳过展示（`if content and not _used_chatroom_send`）
+- **删除了 `_inject_retry` 辅助函数**，改为内联处理
+
+### 2. mailbox.py — 消息槽泄漏修复 & 忙碌判断修正
+- **修复slot泄漏**：当释放的消息来自非agent发送者（如"User"）时，旧版会丢失槽位；新版fallback把槽还给agent
+- **修正忙碌判断**：`_get_busy_repliers` 新增 `_busy_agents` 检查——只有正在 `tool_loop` 内的agent才算忙碌回复者，idle等待中的agent不再被误判
+
+### 3. loader.py — 技能加载大幅简化
+- **删除了 static/dynamic 技能类型区分**：`get_skill_type()` 方法整个移除，`build_skills_section()` 不再按类型拆分技能，所有always-on技能统一放入static_content
+- **删除了 compact 模式**：不再有"描述+read_file指针"的紧凑展示
+- **删除了 `_discover_untracked_scripts()`**
+- **截断逻辑简化**：去掉了行边界对齐截断，改为简单字符截断
+- **修复 `_parse_bool` 逻辑bug**：非布尔字符串现在正确返回False（之前会穿透返回原字符串）
+
+### 4. callbacks.py & settings.py — Prompt管理UI重构
+- **删除了 manage_mode 切换**（`prmanage`回调）：旧版需要先点"管理"才显示排序/删除/可见性按钮；新版所有操作按钮始终可见
+- **删除了 `prrules` 规则说明页**
+- **布局从紧凑变展开**：每个组件一行，包含名称+排序+删除+可见性按钮
+- **标签中文化**：STATIC→⬛静态，DYNAMIC→⬜动态
+
+### 5. 其他
+- 6个SKILL.md删除了 `type: dynamic` 声明（与loader简化对应）
+- 删除了 `tests/test_broadcast_synthesis_fix.py`（189行测试）
+- engine.py 新增 `_find_head_indices` 辅助方法
+
+## 备注
+
+**方向性差异**：当前版本（基于05-17+修复）相比05-23稳定版，整体趋势是**简化**——去掉了工具数据注入重试、技能类型系统、compact模式、manage_mode UI。这些简化降低了复杂度，但也意味着：
+- 合成重试时LLM缺少工具数据上下文，可能产出质量下降
+- 技能不再区分static/dynamic，所有技能都在history前注入，volatile变量（如`{{datetime}}`）可能无法正确展开
+
+[工具调用记录]
+• memory_palace(代码仓库 稳定版 git repository) → 🔍 5 result(s) for '代码仓库 稳定版 git repository':
+
+[1] wing_code/round-20260530-自由讨论 (sim=0.359)
+  ## 工具与方法
+- 使用 `git log` 和 `git tag` 命令查找特定版本和标签（如稳定版、备份标签）
+- 通过 `git checkout` 切换到特定版本（标签或分支）
+- 使用 `git branch` 查看所有分支
+- 利用 `git diff` 比较版本差异
+- 通过 `exec()`函数调用上述命令实现自动化操作
+- 使用 `memory_palace()` 工具结合版本信息进行内容检索和确认
+- 通过 `git show` 查看特定版本的详细内容
+
+## 关键参数
+- 版本标签：`v-stable-20260517`（5月17日稳定版）
+- 备份标签：`backup-before-rollback-20260530-113325`
+- 目标分支：`dev`（最新版本所在分支）
+- 回滚标签：`rollback-to-stable-20260517`
+- 相关路径…
+
+[2]… (2,179字)
+• exec(cd /root && ls -la) → total 2196
+drwx------ 63 root root   4096 May 29 13:44 .
+drwxr-xr-x 23 root root   4096 Apr 12 15:08 ..
+drwxr-xr-x  3 root root   4096 Apr 13 22:53 .agents
+drwxr-xr-x  5 root root   4096 Apr  5 12:26 .ai_completion
+drwxr-xr-x  5 root root   4096 May  4 11:05 .antigravity-server
+drwxr-xr-x  2 root root   4096 Apr  5 20:53 .bash_completion.d
+-rw-------  1 root root  38218 May 19 13:01 .bash_history
+-rw-r--r--  1 root root   4817 Apr  7 02:49 .bashrc
+drwxr-xr-x  3 root root   4096 Mar 26 16:08 .bun… (4,796字)
+• exec(cd /root/nanobot-src && git branch -a && echo "---TAGS---" && git tag -l && e...) → dev
+  main
+  rollback-to-stable-20260517
+* stable-20260517-plus-fixes
+  remotes/nanobots/dev
+  remotes/nanobots/main
+---TAGS---
+015
+backup-before-rollback-20260530-113325
+stable-2026-05-16
+stable-2026-05-17
+stable-pre-config-change
+stable/pre-history-settings-defaults-update
+v-stable-20260511
+v-stable-20260517
+v-stable-20260517-plus-fixes
+v-stable-20260518
+v-stable-20260523
+v0.1.3.post4
+v0.1.3.post5
+v0.1.3.post6
+v0.1.3.post7
+v0.1.4
+v0.1.4.post1
+v0.1.4.post2
+v0.1.4.post3
+v0.1.4.post4
+v0.1.4.post5… (2,118字)
+• exec() → === v-stable-20260523 ===
+f0a51db feat(rank): rank-based tool call isolation for multi-agent context
+c5cfb74 chore: update litellm_provider
+61b466d refactor: remove dead code, extract synthesis retry helper, deduplicate import
+46cf083 fix(tool_loop): detect and break degenerate repetition loops
+f5f44dd fix(broadcast): end group chat when leader hits consecutive LLM errors
+=== current HEAD ===
+b6311a3 fix(loader): build_skills_section returns tuple[str, str] matching prompt_builder unpack
+=== dif… (47,721字)
+• exec(cd /root/nanobot-src && git log --oneline v-stable-20260523..HEAD) → b6311a3 fix(loader): build_skills_section returns tuple[str, str] matching prompt_builder unpack
+dc8ad94 feat(rank): rank-based tool call isolation for multi-agent context
+4e93d7f chore: update litellm_provider
+f1ff396 test: update localhost test to reflect loopback-allow policy
+c17977e feat: adapt /prompt display and edit UI to static/dynamic phase system
+664a919 docs: add send_photo_cli.py to debug SKILL.md
+f5add1c refactor: allow loopback URLs in exec guard, only block non-loopback private IP… (1,251字)
+• exec(cd /root/nanobot-src && git diff v-stable-20260523..HEAD -- nanobot/groupchat...) → diff --git a/nanobot/groupchat/orchestra/engine.py b/nanobot/groupchat/orchestra/engine.py
+index 0d22979..902b815 100644
+--- a/nanobot/groupchat/orchestra/engine.py
++++ b/nanobot/groupchat/orchestra/engine.py
+@@ -904,6 +904,16 @@ class GroupChatEngine:
+     def _session_dir(self, value: Path | None) -> None:
+         self._state.session_dir = value
+ 
++    @staticmethod
++    def _find_head_indices(history: list[dict]) -> set[int]:
++        """Identify head protection indices: index 0 + first user… (12,567字)
+• exec(cd /root/nanobot-src && git diff v-stable-20260523..HEAD -- nanobot/groupchat...) → diff --git a/nanobot/groupchat/orchestra/broadcast.py b/nanobot/groupchat/orchestra/broadcast.py
+index 962d75b..bceb9c4 100644
+--- a/nanobot/groupchat/orchestra/broadcast.py
++++ b/nanobot/groupchat/orchestra/broadcast.py
+@@ -730,6 +730,12 @@ async def broadcast_round(
+         # so we can prune conversation turns without touching the system prompt.
+         _sys_msg_count = len(messages)
+ 
++        # ── Consecutive wait-timeout tracker ──
++        # Prevents agents from looping wait→timeout→wait… (8,672字)
+  (还有 2 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git log --oneline --since="2026-05-26" --until="2026-...) → 68e702d auto_recall: show generated keywords in injected system message
+46331ca display: show memory_palace content preview in Telegram
+7e9a50a feat: show auto memory store summary in Telegram context
+54a5ca1 refactor: remove dead _mp_hidden code from engine.py (visible param was deleted)
+b4c439d refactor: remove unused 'visible' param from memory_palace tool
+39f1433 feat: auto recall uses LLM to generate wing-specific search queries
+7e97d68 feat(groupchat): auto memory recall + store + synthesi… (522字)
+• exec(cd /root/nanobot-src && git log --oneline -30) → b6311a3 fix(loader): build_skills_section returns tuple[str, str] matching prompt_builder unpack
+dc8ad94 feat(rank): rank-based tool call isolation for multi-agent context
+4e93d7f chore: update litellm_provider
+f1ff396 test: update localhost test to reflect loopback-allow policy
+c17977e feat: adapt /prompt display and edit UI to static/dynamic phase system
+664a919 docs: add send_photo_cli.py to debug SKILL.md
+f5add1c refactor: allow loopback URLs in exec guard, only block non-loopback private IP… (2,155字)
+• exec(cd /root/nanobot-src && git branch -a) → dev
+  main
+  rollback-to-stable-20260517
+* stable-20260517-plus-fixes
+  remotes/nanobots/dev
+  remotes/nanobots/main
+
+
+Exit code: 0 (133字)
+• exec(cd /root/nanobot-src && git log --oneline stable-20260517-plus-fixes ^rollbac...) → b6311a3 fix(loader): build_skills_section returns tuple[str, str] matching prompt_builder unpack
+dc8ad94 feat(rank): rank-based tool call isolation for multi-agent context
+4e93d7f chore: update litellm_provider
+f1ff396 test: update localhost test to reflect loopback-allow policy
+c17977e feat: adapt /prompt display and edit UI to static/dynamic phase system
+664a919 docs: add send_photo_cli.py to debug SKILL.md
+f5add1c refactor: allow loopback URLs in exec guard, only block non-loopback private IP… (1,202字)
+• exec(cd /root/nanobot-src && git diff --stat rollback-to-stable-20260517..stable-2...) → nanobot/channels/telegram/callbacks.py             |  27 ++-
+ nanobot/channels/telegram/commands/settings.py     |  19 +-
+ nanobot/cli/commands.py                            |  13 +-
+ nanobot/groupchat/display/display.py               |   2 +-
+ nanobot/groupchat/history/history_settings.py      |  16 --
+ nanobot/groupchat/history/message_converter.py     |  28 +++
+ nanobot/groupchat/history/prompt_builder.py        |  76 ++++++--
+ nanobot/groupchat/history/tool_pruning.py          |  20 --
+ nano… (1,456字)
+• exec(cd /root/nanobot-src && git diff rollback-to-stable-20260517..stable-20260517...) → diff --git a/nanobot/channels/telegram/callbacks.py b/nanobot/channels/telegram/callbacks.py
+index 8721a23..036714b 100644
+--- a/nanobot/channels/telegram/callbacks.py
++++ b/nanobot/channels/telegram/callbacks.py
+@@ -19,6 +19,7 @@ from nanobot.groupchat import display as _d
+ from nanobot.groupchat.history.prompt_builder import (
+     PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
+     GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
++    COMPONENT_PHASES as _COMPONE… (44,542字)
+• exec() → diff --git a/nanobot/cli/commands.py b/nanobot/cli/commands.py
+index 842fc04..0016308 100644
+--- a/nanobot/cli/commands.py
++++ b/nanobot/cli/commands.py
+@@ -283,7 +283,7 @@ def gateway(
+     """Start the nanobot gateway."""
+     from nanobot.bus.queue import MessageBus
+     from nanobot.channels.manager import ChannelManager
+-    from nanobot.config.paths import get_cron_dir
++    from nanobot.config.paths import get_cron_dir, get_logs_dir
+     from nanobot.cron.service import CronService
+     fr… (21,624字)
+• exec(cd /root/nanobot-src && git diff rollback-to-stable-20260517..stable-20260517...) → diff --git a/nanobot/groupchat/orchestra/tools/tool_loop.py b/nanobot/groupchat/orchestra/tools/tool_loop.py
+index 7a76984..81eb913 100644
+--- a/nanobot/groupchat/orchestra/tools/tool_loop.py
++++ b/nanobot/groupchat/orchestra/tools/tool_loop.py
+@@ -61,6 +61,9 @@ class ToolLoopResult:
+     tools_available: bool = False
+   … (4,701字)
+  (还有 3 个工具调用，已省略)
+---
+[Harper]: 以上是完整的分析结果。核心结论：当前分支比27号前稳定版**简化了约275行代码**，主要砍掉了合成重试的工具数据注入、技能类型系统、compact模式和manage_mode UI。如果你需要我深挖某个具体模块的diff细节，告诉我。
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/git-diff-analysis (hidden)
+  Drawer ID: drawer_wing_code_git-diff-analysis_628c2b8fdfdc7d926ee59142 (121字)
+---
+[Kirk]: 分析已全部交付，无新信息可补充。
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/repo-diff-20260523-vs-current (hidden)
+  Drawer ID: drawer_wing_code_repo-diff-20260523-vs-current_f699b096a742e5bebd1494a4 (145字)
+• end_discussion() → ✅ 讨论已结束（原因: 分析完成，已交付完整diff结论），即将进入总结阶段 (38字)
+---
+[Kirk]: ## 结论
+
+当前分支（基于05-17稳定版 + cherry-pick修复）与 `v-stable-20260523`（27号前最后一个稳定版）之间有 **17个commit差异、21个文件、净减275行代码**。核心逻辑变化集中在4个模块，整体方向是**简化**。
+
+## 关键发现
+
+### 1. broadcast.py — 合成重试 & 等待循环
+- **删除 `build_tool_log` 注入**：合成重试不再附带工具调用结果，只发警告文本，LLM重试时缺少数据上下文
+- **新增连续等待超时保护**：连续3次wait超时无消息则强制退出，防止agent死循环
+- **合成展示逻辑变更**：leader已通过 `chatroom_send` 发送过内容时跳过展示（`if content and not _used_chatroom_send`）
+- `_inject_retry` 辅助函数删除，改为内联
+
+### 2. mailbox.py — 消息槽泄漏 & 忙碌判断
+- **修复slot泄漏**：非agent发送者（如"User"）的消息释放时，旧版丢失槽位，新版fallback还给agent
+- **修正忙碌判断**：`_get_busy_repliers` 新增 `_busy_agents` 检查，idle等待中的agent不再被误判为忙碌回复者
+
+### 3. loader.py — 技能加载大幅简化
+- **删除 static/dynamic 技能类型区分**：`get_skill_type()` 整个移除，所有always-on技能统一放入static_content
+- **删除 compact 模式**（描述+read_file指针）和 `_discover_untracked_scripts()`
+- **截断逻辑简化**：去掉行边界对齐，改为简单字符截断
+- **修复 `_parse_bool` 穿透bug**：非布尔字符串现在正确返回False
+
+### 4. callbacks.py & settings.py — Prompt管理UI重构
+- **删除 manage_mode 切换**（`prmanage`回调）：操作按钮始终可见，无需先进入管理模式
+- **删除 `prrules` 规则说明页**
+- **布局展开**：每个组件一行含排序/删除/可见性按钮
+- **标签中文化**：STATIC→⬛静态，DYNAMIC→⬜动态
+
+### 5. 其他
+- 6个SKILL.md删除 `type: dynamic` 声明
+- 删除 `tests/test_broadcast_synthesis_fix.py`（189行）
+- engine.py 新增 `_find_head_indices` 辅助方法
+
+## 备注
+
+简化降低了复杂度，但有潜在风险：
+- 合成重试缺少工具数据，LLM产出质量可能下降
+- 技能不再区分static/dynamic，volatile变量（如 `{{datetime}}`）在history前注入时可能无法正确展开
+---
+[用户]: 看看这个分支是否是基于17和27之间的提交进行pick之后的提交
+---
+[Kirk]: ## 结论
+
+**是的，当前分支 `stable-20260517-plus-fixes` 确实是基于17号和27号之间的提交进行cherry-pick构建的**，但并非简单的1:1 pick，而是有选择性地pick了部分commit，并额外包含4个独有commit。
+
+## 关键发现
+
+### Patch-ID 精确比对结果
+
+**12个commit是17→23范围的精确cherry-pick**（patch-id完全一致）：
+| # | Commit | 说明 |
+|---|--------|------|
+| 1 | `dc8ad94` | feat(rank): rank-based tool call isolation |
+| 2 | `4e93d7f` | chore: update litellm_provider |
+| 3 | `f1ff396` | test: update localhost test |
+| 4 | `c17977e` | feat: adapt /prompt display to static/dynamic |
+| 5 | `664a919` | docs: add send_photo_cli.py |
+| 6 | `f5add1c` | refactor: allow loopback URLs in exec guard |
+| 7 | `d706c98` | fix(tool_loop): degenerate repetition loops |
+| 8 | `27e0109` | fix(broadcast): consecutive LLM errors |
+| 9 | `3535f5c` | fix: restore head_indices recalculation |
+| 10 | `c61a0b2` | fix: restore max_chars getters |
+| 11 | `3aea0d1` | fix: cap _request_log at 1000 |
+| 12 | `a40f0bd` | fix: end_discussion guard |
+
+**4个commit是当前分支独有**（patch-id不在17→23范围中）：
+| # | Commit | 说明 |
+|---|--------|------|
+| 1 | `ac1d306` | **合并cherry-pick commit**：一次性pick了10个修复（slot泄漏、deadlock、boolean parsing等），但diff内容与17→23中的同名commit**不完全相同** |
+| 2 | `eb7eab7` | fix(groupchat): eliminate deadlock — 与17→23中同名commit**内容有差异** |
+| 3 | `6752bf3` | fix(groupchat): slot泄漏 — 与17→23中同名commit**内容有差异** |
+| 4 | `b6311a3` | fix(loader): build_skills_section returns tuple — **当前分支独有**，17→23中无对应 |
+
+**16个commit被排除**（17→23范围中有但当前分支没有）：
+- static/dynamic技能系统（6个）：`12306db`, `cdba012`, `2363adb`, `93439b6`, `66091eb`, `75d0179`
+- UI重构（4个）：`3928204`, `261219e`, `fd9b9a6`, `47a5cd3`
+- 其他：memory_palace快照清理、safety guard修复、broadcast synthesis修复、phase alignment等
+
+## 备注
+
+关键发现：`ac1d306` 这个合并commit的commit message声称pick了10个修复，但其中部分修复（如slot泄漏、deadlock）在当前分支上又以**独立commit**（`6752bf3`、`eb7eab7`）重新出现，且这些独立commit的patch-id与17→23中的同名commit**不匹配**。说明这些修复在pick后经历了**二次修改**，不是纯粹的cherry-pick。
+
+[工具调用记录]
+• exec() → === Current branch ===
+stable-20260517-plus-fixes
+=== Commits on current branch since v-stable-20260517 ===
+b6311a3 fix(loader): build_skills_section returns tuple[str, str] matching prompt_builder unpack
+dc8ad94 feat(rank): rank-based tool call isolation for multi-agent context
+4e93d7f chore: update litellm_provider
+f1ff396 test: update localhost test to reflect loopback-allow policy
+c17977e feat: adapt /prompt display and edit UI to static/dynamic phase system
+664a919 docs: add send_photo_cli.… (3,453字)
+• exec() → === Patch-id comparison ===
+--- Current branch patches ---
+57087b6491ae7effa631261da803036673cae2cb b6311a33df9492120bae780568407b8502b91621 fix(loader): build_skills_section returns tuple[str, str] matching prompt_builder unpack
+2e90cea0dfdd0a09b1fb448392c2f1d26e43c9d6 dc8ad94f2f1758bf5e8b3a64c4868b3bfa314c12 feat(rank): rank-based tool call isolation for multi-agent context
+5d8660d40c4988a62b28ded1854678b7c32c37a8 4e93d7f6fd054208f4009f9ad4407d8119c24ff4 chore: update litellm_provider
+dd95bdfa… (6,656字)
+• exec() → === Cherry-pick markers ===
+b6311a33df9492120bae780568407b8502b91621 fix(loader): build_skills_section returns tuple[str, str] matching prompt_builder unpack dc8ad94f2f1758bf5e8b3a64c4868b3bfa314c12
+dc8ad94f2f1758bf5e8b3a64c4868b3bfa314c12 feat(rank): rank-based tool call isolation for multi-agent context 4e93d7f6fd054208f4009f9ad4407d8119c24ff4
+4e93d7f6fd054208f4009f9ad4407d8119c24ff4 chore: update litellm_provider f1ff396cf584a1a64c0bda249bf64c395622a67e
+f1ff396cf584a1a64c0bda249bf64c395622a67… (4,448字)
+• exec() → === Non-matching patch-ids (unique to current branch) ===
+03f851a8c8175379fcbe439dd12852611efebdd0
+3811a4fb5dc4f8ee388f7e70877ff2ccc48ff1f5
+57087b6491ae7effa631261da803036673cae2cb
+881e01dd9a49de7c82a9da58064fca1e3eb905a1
+=== Non-matching patch-ids (unique to 17-23 range) ===
+127aa05dca8e75b65f655873f1f170363bc1bb7e
+15eeaff0a7acd281d172f95fc0be70a1eb0367f1
+199f9188fa29155bd118c4a38ed2efeaaa37d878
+1f23f8ff9ab45f07601795e1f5068cdca7559d8c
+39a4869787a0f4a0be4150c9c97793dd4c92092d
+4dacd8374518f2c43e… (947字)
+• exec() → === Unique to current branch (with messages) ===
+6752bf3a3b7bcafdc5751d1df4d914e5984ddace fix(groupchat): 用户消息slot泄漏 — release时fallback到agent
+eb7eab731c4df5741070217d0b98ebc049c61530 fix(groupchat): eliminate agent deadlock from busy-replier misjudgment and infinite wait loops
+b6311a33df9492120bae780568407b8502b91621 fix(loader): build_skills_section returns tuple[str, str] matching prompt_builder unpack
+ac1d306744ef4c40c1e40b90299498768748cffd cherry-pick: 4 bugfixes from 05-17→05-27 (no new fe… (534字)
+• exec() → === Unique to 17-23 range (with messages) ===
+f9a319580c82dd85ab5ac3d3c82217846d5b4832 chore: remove memory_palace snapshot from source repo
+261219ec4b423c32fbcca7a474d8622147369520 refactor: move legend from main panel to 📖 rules button view
+3790223729d4ef21f6904148275be6b0b0f18421 fix: remove orphan 工程原则 from fallback phases, fix dynamic editable_by mismatches
+513acffc6e40613b6fe25f75c97b4c57a0b0b54c fix: add_custom_component writes phase field to manifest
+bede0b065911ddb595ee0a3e5bd717fd8f2b2… (1,848字)
+• memory_palace() → ✅ Stored in wing_code/branch-cherry-pick-analysis (hidden)
+  Drawer ID: drawer_wing_code_branch-cherry-pick-analysis_31903eac0395890347381220 (141字)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec() → === 17~27之间的所有commit ===
+f0a51db feat(rank): rank-based tool call isolation for multi-agent context
+c5cfb74 chore: update litellm_provider
+61b466d refactor: remove dead code, extract synthesis retry helper, deduplicate import
+46cf083 fix(tool_loop): detect and break degenerate repetition loops
+f5f44dd fix(broadcast): end group chat when leader hits consecutive LLM errors
+8e58eb1 fix: end_discussion guard + display iterations label
+c734792 fix: restore head_indices/head_msgs recalculation in char… (3,421字)
+• exec() → === cherry-pick commit 的内容 ===
+commit ac1d306744ef4c40c1e40b90299498768748cffd
+Author: nanobot-dev <dev@nanobot.local>
+Date:   Sat May 30 13:34:16 2026 +0800
+
+    cherry-pick: 4 bugfixes from 05-17→05-27 (no new features, no polling)
+    
+    Cherry-picked fixes:
+    1. bede0b0 - fix: prompt_builder fallback order/labels/phases alignment
+    2. ae2c1a2 - fix(groupchat): prevent content loss on leader end_discussion
+    3. 75d0179 - fix: boolean parsing bug + auto-discover undocumented scripts
+  … (2,366字)
+• exec() → === 检查每个commit是否在17~27之间 ===
+dc8ad94: NO (not in 17~27)
+4e93d7f: NO (not in 17~27)
+f1ff396: NO (not in 17~27)
+c17977e: NO (not in 17~27)
+f5add1c: NO (not in 17~27)
+d706c98: NO (not in 17~27)
+27e0109: NO (not in 17~27)
+3535f5c: NO (not in 17~27)
+c61a0b2: NO (not in 17~27)
+3aea0d1: NO (not in 17~27)
+6752bf3: NO (not in 17~27)
+eb7eab7: NO (not in 17~27)
+a40f0bd: NO (not in 17~27)
+
+=== 检查cherry-pick源SHA是否在17~27之间 ===
+bede0b0: YES (in 17~27)
+ae2c1a2: NO (not in 17~27)
+75d0179: YES (in 17~27)
+4ac4fda:… (683字)
+• exec() → === 检查cherry-pick源SHA的归属 ===
+ae2c1a2:   dev
+  remotes/nanobots/dev
+  remotes/nanobots/main
+
+19e9104:   dev
+  remotes/nanobots/dev
+  remotes/nanobots/main
+
+6b64165:   dev
+  remotes/nanobots/dev
+  remotes/nanobots/main
+
+1f8eac7: 
+
+=== 检查当前分支中非cherry-pick的commit的来源 ===
+dc8ad94 (rank):
+* stable-20260517-plus-fixes
+4e93d7f (litellm):
+* stable-20260517-plus-fixes
+f1ff396 (test):
+* stable-20260517-plus-fixes
+c17977e (phase UI):
+* stable-20260517-plus-fixes
+f5add1c (loopback):
+* stable-20260517-plus-fix… (517字)
+• exec() → === 1f8eac7 在哪 ===
+1f8eac7 fix(mailbox): break out of wait() when all agents idle — prevent busy-wait loop
+
+=== 检查当前分支独有的commit（不在dev也不在main）===
+dc8ad94: 4e93d7f: f1ff396: c17977e: f5add1c: d706c98: 27e0109: 3535f5c: c61a0b2: 3aea0d1: 6752bf3: eb7eab7: a40f0bd: b6311a3: 
+=== 检查cherry-pick commit ac1d306 的父节点 ===
+ac1d306 cherry-pick: 4 bugfixes from 05-17→05-27 (no new features, no polling)
+
+=== ac1d306的父节点 ===
+303307286cf36134504a7a7c0130129ae1eac46f
+
+
+Exit code: 0 (469字)
+• exec() → === ac1d306的父节点3033072是谁 ===
+3033072 release: merge dev for v-stable-20260517
+
+=== 完整commit图: 当前分支所有commit的拓扑顺序 ===
+* b6311a3 fix(loader): build_skills_section returns tuple[str, str] matching prompt_builder unpack
+* dc8ad94 feat(rank): rank-based tool call isolation for multi-agent context
+* 4e93d7f chore: update litellm_provider
+* f1ff396 test: update localhost test to reflect loopback-allow policy
+* c17977e feat: adapt /prompt display and edit UI to static/dynamic phase system
+* 664a919 docs:… (1,403字)
+---
+[Kirk]: ## 结论
+
+**是的，当前分支 `stable-20260517-plus-fixes` 确实是基于17号和27号之间的提交进行cherry-pick构建的**，但并非简单的1:1 pick，而是有选择性地pick了部分commit，并额外包含4个独有commit。
+
+## 关键发现
+
+### Patch-ID 精确比对结果
+
+**12个commit是17→23范围的精确cherry-pick**（patch-id完全一致）：
+| # | Commit | 说明 |
+|---|--------|------|
+| 1 | `dc8ad94` | feat(rank): rank-based tool call isolation |
+| 2 | `4e93d7f` | chore: update litellm_provider |
+| 3 | `f1ff396` | test: update localhost test |
+| 4 | `c17977e` | feat: adapt /prompt display to static/dynamic |
+| 5 | `664a919` | docs: add send_photo_cli.py |
+| 6 | `f5add1c` | refactor: allow loopback URLs in exec guard |
+| 7 | `d706c98` | fix(tool_loop): degenerate repetition loops |
+| 8 | `27e0109` | fix(broadcast): consecutive LLM errors |
+| 9 | `3535f5c` | fix: restore head_indices recalculation |
+| 10 | `c61a0b2` | fix: restore max_chars getters |
+| 11 | `3aea0d1` | fix: cap _request_log at 1000 |
+| 12 | `a40f0bd` | fix: end_discussion guard |
+
+**4个commit是当前分支独有**（patch-id不在17→23范围中）：
+| # | Commit | 说明 |
+|---|--------|------|
+| 1 | `ac1d306` | **合并cherry-pick commit**：一次性pick了10个修复，但diff内容与17→23中的同名commit**不完全相同** |
+| 2 | `eb7eab7` | fix(groupchat): eliminate deadlock — 与17→23中同名commit**内容有差异**（二次修改） |
+| 3 | `6752bf3` | fix(groupchat): slot泄漏 — 与17→23中同名commit**内容有差异**（二次修改） |
+| 4 | `b6311a3` | fix(loader): build_skills_section returns tuple — **当前分支独有**，17→23中无对应 |
+
+**16个commit被排除**（17→23范围中有但当前分支没有）：
+- static/dynamic技能系统（6个）：类型区分、phase跟踪、compact模式、boolean parsing等全部排除
+- UI重构（4个）：callback cleanup、legend迁移、规则说明页、视觉分隔符
+- 其他：memory_palace快照清理、safety guard修复、broadcast synthesis修复、phase alignment等
+
+## 备注
+
+1. **策略意图**：只pick修复，排除所有新特性。但存在矛盾——`c17977e`（phase UI）被pick了，然而它依赖的static/dynamic底层（`cdba012`、`12306db`、`2363adb`）全被排除，UI上能看到phase标签但底层逻辑不完整。
+2. **冗余问题**：`ac1d306`打包了10个修复后，部分修复（slot泄漏、deadlock）又以独立commit重新出现且内容不同，存在冗余和潜在冲突。
+3. **非纯cherry-pick**：3个同名修复commit的patch-id与17→23中不匹配，说明经历了二次修改，不是纯粹的cherry-pick。
+
+[工具调用记录]
+• end_discussion() → ✅ 讨论已结束（原因: 双方分析一致，patch-id精确比对完成，结论已交付），即将进入总结阶段 (49字)
+---

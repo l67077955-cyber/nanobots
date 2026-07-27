@@ -1,0 +1,94 @@
+[用户]: 可编辑的prompt点击进去后仍然应该是编辑prompt的界面
+---
+[Kirk]: ## 结论
+
+修改了 `callbacks.py` 第 91-145 行，将判断逻辑从 `phase == "dynamic"` 改为 `is_editable = key in GLOBAL_EDITABLE or key in AGENT_EDITABLE`。
+
+- **可编辑组件**（不管 static/dynamic）→ 编辑界面，设 `_edit_state`，可回复修改
+- **不可编辑组件** → 只读预览，显示运行时渲染内容
+
+## 关键发现
+
+- `examples` 是 dynamic + editable（在 `GLOBAL_EDITABLE` 中），之前被 `phase == "dynamic"` 误判为只读
+- `history`、`skills_overview` 是 dynamic + non-editable，正确走只读预览
+- 上一轮用 `phase` 做分支是错误的，正确标准是 `EDITABLE_COMPONENTS`
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 83|     async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+84|         """Show a single prompt component with pagination for long content."""
+85|         engine = self._groupchat_engine
+86|         chat_id = query.message.chat_id
+87|         label = _COMPONENT_LABELS.get(key, key)
+88|         phase = _COMPONENT_PHASES.get(key, "static")
+89|         phase_label = "STATIC" if phase == "static" else "DYNAMIC"
+90| 
+91|         if phase == "dynamic":
+92|             # Try to get runtime content from first active agent for per-agent fields
+93|             active = list(getattr(engine, "active_agents", []))
+94|             content = ""
+95|             preview_note = ""
+96|             if active:
+97|                 # Try with first active agent to get per-agent f… (4,442字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/commands/settings.py) → 395| 
+396|         buttons = []
+397|         for i, key in enumerate(order):
+398|             label = labels.get(key, key)
+399| 
+400|             # Name button (always shown)
+401|             if key == "history":
+402|                 buttons.append([InlineKeyboardButton(f"📜 {label}", callback_data=f"pre:__global__:{key}")])
+403|                 continue
+404| 
+405|             if key in global_editable:
+406|                 tpl = PromptBuilder.get_component_template(key)
+407|                 dot = "●" if tpl else "○"
+408|                 buttons.append([InlineKeyboardButton(f"✏️{dot} {label}", callback_data=f"pre:__global__:{key}")])
+409|             elif key in agent_editable:
+410|                 buttons.append([InlineKeyboardButton(f"📂 {label}", callback_data=f"pre:__global__:{key}")])
+4… (1,287字)
+• exec() → === DYNAMIC components ===
+  ✏️ examples [dynamic]
+  🔒 history [dynamic]
+  🔒 skills_overview [dynamic]
+
+=== STATIC components ===
+  ✏️ broadcast_hint [static]
+  ✏️ coding_principle [static]
+  ✏️ group_context [static]
+  ✏️ group_nudge [static]
+  🔒 hard_rules [static]
+  ✏️ instructions [static]
+  ✏️ leader_prompt [static]
+  ✏️ main_prompt [static]
+  ✏️ memory [static]
+  🔒 output_efficiency [static]
+  ✏️ persona [static]
+  ✏️ skills [static]
+  ✏️ tool_instructions [static]
+  🔒 user_context [static… (923字)
+• edit_file() → (76字)
+• edit_file() → (76字)
+• exec(cd /root/nanobot-src && python3 -c "import py_compile; py_compile.compile('na...) → OK
+
+
+Exit code: 0 (17字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 83|     async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+84|         """Show a single prompt component with pagination for long content."""
+85|         engine = self._groupchat_engine
+86|         chat_id = query.message.chat_id
+87|         label = _COMPONENT_LABELS.get(key, key)
+88|         phase = _COMPONENT_PHASES.get(key, "static")
+89|         phase_label = "STATIC" if phase == "static" else "DYNAMIC"
+90| 
+91|         is_editable = key in _GLOBAL_EDITABLE or key in _AGENT_EDITABLE
+92| 
+93|         if is_editable:
+94|             # Editable component — show template for editing
+95|             content = PromptBuilder.get_component_template(key)
+96|             vars_hint = (
+97|                 "{{agent}} {{members}} {{tools}} {{others}} {{identity}}"
+9… (3,980字)
+• memory_palace() → ✅ Stored in wing_code/prompt-component-view (hidden)
+  Drawer ID: drawer_wing_code_prompt-component-view_4256e1a57616951f7f1db619 (129字)
+• end_discussion() → ✅ 讨论已结束（原因: 修复完成），即将进入总结阶段 (26字)
+---

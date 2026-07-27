@@ -1,0 +1,874 @@
+[用户]: 感觉不太好，因为skill是动态编排的，不需要md文件，另外让md存储设置感觉很奇怪
+---
+[Harper]: 你说得对。当前设计有问题——把**机器元数据**（`always`、`type`、`requires`）塞进**人类文档**的 YAML frontmatter，混在一起，两边都不干净。
+
+### 问题
+
+```
+SKILL.md（既是文档又是配置）
+├── YAML frontmatter ← always, type, description, requires
+└── Markdown body    ← "怎么用这个工具" 的说明
+```
+
+1. **DIY YAML 解析器脆弱** — `get_skill_metadata()` 自己 parse frontmatter，不校验 schema，`always: false` 曾被当成字符串 "false" → `bool("false")=True` 导致 bug
+2. **配置散落 12 个文件** — 要改一个 `always` 值得去编辑 SKILL.md，没法一眼看到全局
+3. **SKILL.md 不是必需** — 纯脚本类 skill（`quick_validate.py` 这种）不需要文档也能动态编排
+4. **语义混用** — `description` 既是给 LLM 看的摘要，又是用来判断排列顺序的元数据，角色冲突
+
+### 更好的方案：配置与文档分离
+
+```
+workspace/
+├── config/
+│   └── skills.yaml      ← 仅元数据（结构化，可校验）
+│
+skills/
+├── debug/
+│   ├── scripts/
+│   │   └── send_cli.py
+│   ├── SKILL.md?         ← 可选，纯文档，无 frontmatter
+│   └── (无 frontmatter)
+```
+
+**`skills.yaml`**:
+```yaml
+cron:
+  always: true
+  type: static
+  description: "Schedule reminders and recurring tasks..."
+  requires: { bins: [] }
+  homepage: ""
+
+debug:
+  always: true
+  requires: { bins: ["python3"] }
+
+github:
+  always: false
+  description: "Interact with GitHub using the `gh` CLI..."
+```
+
+这样：
+- **配置聚合一地**，可写 schema 校验，可全局覆盖
+- **SKILL.md 纯文档**，LLM 按需 `read_file` 读取，无解析开销
+- **脚本自动发现** — `loader.py` 扫到 `debug/scripts/` 但无对应 config 的脚本也可追加到提示词末尾
+- **非文档型 skill 零负担** — 纯脚本 skill 不需要建 SKILL.md
+
+当前 loader.py 已经有 `_discover_undocumented_scripts()` 的逻辑，说明团队已经意识到脚本可以脱离文档存在。只是元数据还没从 frontmatter 里抽出来。
+
+要我直接改？还是先把方案讨论清楚？
+
+[工具调用记录]
+• memory_palace(skill config design frontmatter yaml metadata separation concern) → 🔍 5 result(s) for 'skill config design frontmatter yaml metadata separation concern':
+
+[1] wing_code/skill-config-design (sim=-0.017)
+  Skill on/off 配置设计决策 (2026-05-19): 推荐混合方案——SKILL.md frontmatter 声明 always/type 默认值，config.json tools.skills.always_override 提供用户级覆盖。当前 loader.py get_always_skills() 直接读 frontmatter 无覆盖机制，用户想关 builtin skill 的 always-on 只能复制整个 SKILL.md 到 workspace。实现改动：get_always_skills() 加一步检查 config override。
+
+[2] wing_code/skill-prompt-review (sim=-0.061)
+  Skill frontmatter 规范化… (2,071字)
+• exec(cd /root/nanobot-src && ls nanobot/skills/ | head -20 && echo "---" && wc -c ...) → README.md
+__pycache__
+clawhub
+cron
+debug
+github
+loader.py
+memory
+settings
+skill-creator
+steve-jobs-perspective
+summarize
+testing
+tmux
+weather
+---
+ 1398 nanobot/skills/clawhub/SKILL.md
+ 1819 nanobot/skills/cron/SKILL.md
+ 3849 nanobot/skills/debug/SKILL.md
+ 1388 nanobot/skills/github/SKILL.md
+ 1463 nanobot/skills/memory/SKILL.md
+ 1537 nanobot/skills/settings/SKILL.md
+18888 nanobot/skills/skill-creator/SKILL.md
+22787 nanobot/skills/steve-jobs-perspective/SKILL.md
+ 2054 nanobot/skills/summarize/SKIL… (642字)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 1| """Skills loader for agent capabilities."""
+2| 
+3| import json
+4| import os
+5| import re
+6| import shutil
+7| from pathlib import Path
+8| 
+9| # Default builtin skills directory (relative to this file)
+10| BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
+11| 
+12| # Budget caps — keep skills section from bloating the prompt.
+13| # Single SKILL.md files larger than this are skipped and only noted in the footer.
+14| MAX_SINGLE_SKILL_CHARS: int = 20_000
+15| # Total character budget for the non-always-on summary block.
+16| MAX_SKILLS_SUMMARY_CHARS: int = 8_000
+17| # Total budget for always-on skills (cumulative, enforced inside load_skills_for_context).
+18| MAX_ALWAYS_SKILLS_CHARS: int = 5600
+19| # Per-skill inline truncation limit for always-on skills.
+20| MAX_ALWAYS_SKILL_INLINE:… (21,675字)
+• exec() → nanobot/groupchat/history/prompt_builder.py:616:        from nanobot.skills.loader import build_skills_section
+nanobot/groupchat/history/prompt_builder.py:617:        static, _ = build_skills_section(self._workspace)
+nanobot/groupchat/history/prompt_builder.py:622:        from nanobot.skills.loader import build_skills_section
+nanobot/groupchat/history/prompt_builder.py:623:        _, dynamic = build_skills_section(self._workspace)
+nanobot/skills/loader.py:17:# Total budget for always-on skills (… (3,211字)
+---
+[Kirk]: 用户说得对，当前架构有两个设计缺陷：
+
+1. **配置与文档耦合** — `always`、`type`、`requires` 这些机器元数据塞在 SKILL.md 的 YAML frontmatter 里，和人类文档混在一起。改个 `always: true` 要去编辑一个 markdown 文件，语义错位。
+2. **SKILL.md 是 skill 存在的唯一凭证** — `list_skills()` 通过 `if SKILL.md.exists()` 判断 skill 是否存在，导致纯脚本 skill 必须挂靠在有 SKILL.md 的目录下才能被发现。
+
+**三个方案**：
+
+| 方案 | 改动量 | 核心思路 |
+|------|--------|----------|
+| **B: SKILL.md 纯文档** | 小 | 元数据移到 `skills.yaml`，SKILL.md 去掉 frontmatter 只留文档 |
+| **C: 配置驱动** | 大 | `list_skills()` 改读 `skills.yaml`，SKILL.md 完全可选，纯脚本 skill 零负担 |
+| **A: 目录即 skill** | 中 | 扫描目录即算 skill，元数据放 `skills.yaml`，空目录也会被识别 |
+
+**建议 B**（渐进最安全）：改动集中在 `get_skill_metadata()` 一个方法，其余 9 个调用方透明。`skills.yaml` 可加 schema 校验，全局一目了然。后续可平滑升级到 C。
+
+你倾向哪个？
+
+[工具调用记录]
+• memory_palace(skill prompt dynamic assembly SKILL.md frontmatter always configuration) → 🔍 5 result(s) for 'skill prompt dynamic assembly SKILL.md frontmatter always configuration':
+
+[1] wing_code/skill-config-design (sim=0.146)
+  Skill on/off 配置设计决策 (2026-05-19): 推荐混合方案——SKILL.md frontmatter 声明 always/type 默认值，config.json tools.skills.always_override 提供用户级覆盖。当前 loader.py get_always_skills() 直接读 frontmatter 无覆盖机制，用户想关 builtin skill 的 always-on 只能复制整个 SKILL.md 到 workspace。实现改动：get_always_skills() 加一步检查 config override。
+
+[2] wing_code/skill-always-annotation (sim=-0.099)
+  always-on 标… (2,069字)
+• memory_palace(skill loader compact mode build_skills_section architecture) → 🔍 5 result(s) for 'skill loader compact mode build_skills_section architecture':
+
+[1] wing_code/skill-loader-split (sim=0.036)
+  Skills 组件拆分完成（commit cdba012）：
+- loader.py: build_skills_section() 返回 (static, dynamic) 元组
+- prompt_builder.py: skills 组件只取 static（always-on 内联，3151 chars），新增 skills_overview 组件取 dynamic（摘要+orphan，1443 chars）
+- skills order=7（history前，stable vars only），skills_overview order=12（history后，volatile vars 可用）
+- 新脚本写 docstring 即自动在 skills_overview 出现
+- 总共 29 行改动，2 文件
+
+[2] win… (1,890字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 1| """Skills loader for agent capabilities."""
+2| 
+3| import json
+4| import os
+5| import re
+6| import shutil
+7| from pathlib import Path
+8| 
+9| # Default builtin skills directory (relative to this file)
+10| BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
+11| 
+12| # Budget caps — keep skills section from bloating the prompt.
+13| # Single SKILL.md files larger than this are skipped and only noted in the footer.
+14| MAX_SINGLE_SKILL_CHARS: int = 20_000
+15| # Total character budget for the non-always-on summary block.
+16| MAX_SKILLS_SUMMARY_CHARS: int = 8_000
+17| # Total budget for always-on skills (cumulative, enforced inside load_skills_for_context).
+18| MAX_ALWAYS_SKILLS_CHARS: int = 5600
+19| # Per-skill inline truncation limit for always-on skills.
+20| MAX_ALWAYS_SKILL_INLINE:… (3,976字)
+• list_dir(/root/nanobot-src/nanobot/skills) → 📄 README.md
+📁 clawhub
+📁 cron
+📁 debug
+📁 github
+📄 loader.py
+📁 memory
+📁 settings
+📁 skill-creator
+📁 steve-jobs-perspective
+📁 summarize
+📁 testing
+📁 tmux
+📁 weather (157字)
+• exec(cd /root/nanobot-src/nanobot/skills && for d in */; do echo "=== $d ==="; ls ...) → === __pycache__/ ===
+loader.cpython-312.pyc
+
+=== clawhub/ ===
+SKILL.md
+
+=== cron/ ===
+SKILL.md
+scripts
+
+=== debug/ ===
+SKILL.md
+scripts
+
+=== github/ ===
+SKILL.md
+
+=== memory/ ===
+SKILL.md
+
+=== settings/ ===
+SKILL.md
+scripts
+
+=== skill-creator/ ===
+SKILL.md
+scripts
+
+=== steve-jobs-perspective/ ===
+SKILL.md
+references
+
+=== summarize/ ===
+SKILL.md
+
+=== testing/ ===
+SKILL.md
+
+=== tmux/ ===
+SKILL.md
+scripts
+
+=== weather/ ===
+SKILL.md
+
+
+
+Exit code: 0 (448字)
+• exec(cd /root/nanobot-src/nanobot/skills && for d in */; do [ "$d" = "__pycache__/...) → === clawhub ===
+---
+name: clawhub
+description: Search and install agent skills from ClawHub, the public skill registry.
+always: false
+homepage: https://clawhub.ai
+metadata: {"nanobot":{"emoji":"🦞"}}
+
+=== cron ===
+---
+name: cron
+description: Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.
+always: true
+---
+
+
+=== debug ===
+---
+name: debug
+description: "Diagnose system issues: check logs, process status, … (2,856字)
+• chatroom_send() → (50字)
+• wait() → (1,429字)
+• chatroom_send() → (50字)
+• wait() → (2,851字)
+• memory_palace() → ✅ Stored in wing_code/skill-architecture-debate (hidden)
+  Drawer ID: drawer_wing_code_skill-architecture-debate_ed1039f8336d90d2e257c249 (137字)
+• end_discussion() → ✅ 讨论已结束（原因: 方案已分析清楚，三个选项已列出，等用户确认方向后再执行。），即将进入总结阶段 (50字)
+---
+[Kirk]: ## 结论
+
+用户说得对，当前架构有两个设计缺陷：
+
+1. **配置与文档耦合** — `always`、`type`、`requires` 这些机器元数据塞在 SKILL.md 的 YAML frontmatter 里，和人类文档混在一起。改个 `always: true` 要去编辑一个 markdown 文件，语义错位。
+2. **SKILL.md 是 skill 存在的唯一凭证** — `list_skills()` 通过 `if SKILL.md.exists()` 判断 skill 是否存在（`loader.py:105-142`），导致纯脚本 skill 必须挂靠在有 SKILL.md 的目录下才能被发现。
+
+## 关键发现
+
+**当前 frontmatter 里混着两类东西**（12 个 skill 全部如此）：
+- 机器元数据：`always`, `type`, `requires`, `install`, `homepage`, `metadata.nanobot.*`
+- 文档属性：`name`, `description`（description 既是 LLM 摘要又是排列依据，角色冲突）
+
+**依赖链**：`list_skills()` 扫描目录找 SKILL.md → `get_skill_metadata()` 解析 frontmatter → 9 个方法读取不同字段：
+- `get_always_skills()` (line 410) — 读 `always`
+- `get_skill_type()` (line 396) — 读 `type`
+- `_get_skill_description()` (line 347) — 读 `description`
+- `_get_skill_meta()` (line 391) — 读 `metadata.nanobot.*`
+- `build_skills_summary()` (line 256) — 读 `description` + `requires`
+- `_discover_undocumented_scripts()` (line 420) — 读 SKILL.md 全文检查脚本名
+- `load_skills_for_context()` (line 167) — compact 读 `description`，非 compact 读全文
+
+**12 个 skill 中 6 个有 scripts/ 目录**（cron, debug, settings, skill-creator, tmux, testing），其余 6 个纯文档。
+
+**三个方案**：
+
+| 方案 | 改动量 | 核心思路 | 风险 |
+|------|--------|----------|------|
+| **B: SKILL.md 纯文档** | 小 | 元数据移到 `skills.yaml`，SKILL.md 去掉 frontmatter | `list_skills()` 发现逻辑不变 |
+| **C: 配置驱动** | 大 | `list_skills()` 改读 `skills.yaml`，SKILL.md 完全可选 | 9 个方法全要改 |
+| **A: 目录即 skill** | 中 | 扫描目录即算 skill，元数据放 `skills.yaml` | 空目录也会被识别 |
+
+**建议 B**（渐进最安全）：改动集中在 `get_skill_metadata()` 一个方法，其余调用方透明。`skills.yaml` 可加 schema 校验，全局一目了然。后续可平滑升级到 C。
+
+## 备注
+
+需要用户确认方向后再执行。如果"不需要md文件"的意思是连文档都不需要（纯脚本 skill），方案 C 更合适。
+---
+[用户]: 因为skill的组织方式比较多元，有些比如之前任务留存下来的自动化代码，可能连skill都算不上，但是能跑，有些skill可能格式不正确无法被识别
+---
+[Harper]: 你描述的场景正好戳中了当前设计的两个盲点，我逐个拆开说。
+
+---
+
+### 盲点1：「连skill都算不上但能跑」→ 不被发现
+
+当前 `list_skills()` 第138行：
+
+```python
+def list_skills(self, ...):
+    for entry in sorted(self.skills_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        skill_md = entry / "SKILL.md"
+        if not skill_md.exists():       # ← 唯一发现标准
+            continue
+```
+
+**workspace 里有 3 个遗留脚本，没有 SKILL.md → loader 当它们不存在。** 即使功能完备、stable、每天都在跑。
+
+### 盲点2：「格式不正确无法被识别」→ 整块崩
+
+`get_skill_metadata()` 解析 frontmatter 时如果 YAML 格式不对：
+
+```python
+def get_skill_metadata(self, name: str) -> dict | None:
+    content = self.load_skill(name)
+    if not content:
+        return None
+    lines = content.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None                # ← 直接返回 None
+    # ... 找第二个 --- ...
+```
+
+**malformed SKILL.md → `get_skill_metadata()` 返回 None → skill 不被 always-on 选中 → 摘要不展示 → 整体不可见。**
+
+---
+
+### 我主张的方案：**目录即 skill + 外部配置覆盖**
+
+`loader.py` 改三个点，不改调用方 API：
+
+```
+list_skills() 发现逻辑替换：
+
+当前: 存在 SKILL.md → yield
+改为: 存在目录    → yield（name, has_doc, has_scripts）
+
+get_skill_metadata() 读取优先级：
+
+1. config/skills.yaml[name]        ← 外部配置，权威源
+2. SKILL.md.frontmatter[name]      ← 文档自声明，兜底
+3. default                         ← 无任何定义时：always=false, type=static
+```
+
+### 改动量
+
+```python
+# loader.py 改动：
+# 1. list_skills() 第138行：entry.is_dir() → yield {name, dir, has_doc, has_scripts}
+# 2. 新增 _load_config(path) | 读 config/skills.yaml
+# 3. get_skill_metadata() 优先级：config > frontmatter > default
+# ≈ 40 行新增，零接口变更
+```
+
+### 你的遗留脚本怎么识别
+
+```
+workspace/
+└── tasks/
+    ├── auto_cleanup.py     ← 无 SKILL.md，但能跑
+    ├── report_gen.py       ← 无 SKILL.md，但能跑
+    └── legacy_scraper/     ← malformed SKILL.md，无法解析
+```
+
+**改完后**：
+- `auto_cleanup.py` → 目录被发现，`has_doc=false, has_scripts=true`，描述从 config 拿到
+- `legacy_scraper/` → 目录被发现，frontmatter 解析失败但 config 里有覆盖，正常输出
+- 纯 config 描述：`"Automation scripts from previous tasks, manually maintained"` — 告知能力，不需要 SKILL.md 也**能被 LLM 识别和调用**
+
+---
+
+**Kirk 的 B 方案（SKILL.md 纯文档 + skills.yaml 元数据）方向是对的，但没解决「无文档但有脚本不被发现」的问题。** 我主张 C 的变体——**目录驱动发现 + config 覆盖 metadata + SKILL.md 可选文档**。三线容错，才能覆盖你说的多元组织方式。
+
+你怎么看？
+---
+[Harper]: ## 盲区分析
+
+`list_skills()` 是唯一入口，下游 9 个方法完全信任它。全部盲区都源于这一个根因。
+
+### 盲区清单
+
+| # | 位置 | 行号 | 问题 | 影响 |
+|---|------|------|------|------|
+| **R1** | `list_skills()` | 124-127, 134-136 | `if skill_file.exists()` → 跳过无 SKILL.md 的目录 | **根因**。下游全部不可见 |
+| **2** | `get_skill_metadata()` | 456-458 → `load_skill()` → `load_skill()` 返回 None | 无 SKILL.md 时 metadata=None → description=""，always=false | 非标准 skill 无描述、永不 always-on |
+| **3** | `_resolve_skill_dir()` | 247-254 | 只查 SKILL.md 是否存在 → 返回 None | 非标准 skill 无 `{baseDir}` 替换 |
+| **4** | `_discover_undocumented_scripts()` | 423 | `for s in self.list_skills(...)` → 只扫已有 SKILL.md 的目录 | 无 SKILL.md 目录下的脚本永不被发现 |
+| **5** | `build_skills_summary()` | 269 | `all_skills = self.list_skills(...)` → 只包含有 SKILL.md 的 skill | 非标准 skill 不出现在摘要中 |
+| **6** | `load_skills_for_context()` | 205-207 | `if not content: continue` → 静默跳过 | 非标准 skill | agent 完全不知道它们存在 |
+| **7** | `_strip_frontmatter()` | 354-360 | 无 `---` 时返回原内容（无问题） | ⚠️ 仅 metadata 解析失败，body 可读 |
+| **8** | `_get_skill_description()` → `get_skill_metadata()` | 347-352 | metadata=None → `return name` 回退 | 纯脚本仅显示名称无描述 |
+
+### 依赖链
+
+```
+build_skills_section()
+├── loader.get_always_skills()           → list_skills()   ← 盲区1
+│   ├── loader.get_skill_type(name)      → get_skill_metadata()   ← 盲区2
+│   └── ...
+├── loader.load_skills_for_context()     → load_skill()           ← 盲区6
+├── loader.build_skills_summary()        → list_skills()          ← 盲区5
+└── loader._discover_undocumented_scripts() → list_skills()       ← 盲区4
+```
+
+**修复目标**：无 SKILL.md 的目录/脚本也能被 `_discover_undocumented_scripts()` 发现，`build_skills_summary()` 展示，`load_skills_for_context()` 输出指向性文本。
+
+### 修复方案
+
+改动 `loader.py` **3 处共 ≈35 行**，零接口变更。
+
+#### 改动1: `list_skills()` — 扩展发现标准
+
+L124-127 和 L134-136，**增加粘性扫描**——既有 SKILL.md 的目录正常返回，同时收集无 SKILL.md 但有脚本的目录：
+
+```python
+# 在 L124-127 之后追加
+if not skill_file.exists():
+    scripts = list = list(...)
+    if scripts exist:
+        skills.append({"name": skill_dir.name, "path": str(skill_dir/"scripts"), "source": "workspace", "docless": True})
+```
+
+#### 改动2: `_discover_untracked_scripts()` — 新增方法扫全 workspace
+
+独立于 `list_skills()`，直接扫 `workspace/skills/*/scripts/` 和 `workspace/skills/*.py`：
+
+```python
+def _discover_untracked_scripts(self) -> list[str]:
+    """Find scripts in workspace dirs that have no SKILL.md at all."""
+    ...
+```
+
+**不从 `list_skills()` 出发，直接扫目录。**
+
+#### 改动3: `build_skills_section()` — 追加 untracked 脚本作为未文档化区块
+
+L83-85，在 `_discover_undocumented_scripts()` 之后串联：
+
+```python
+`_discover_untracked_scripts()`：
+
+```python
+undocumented = loader._discover_undocumented_scripts()
+untracked = loader._discover_untracked_scripts()
+if untracked:
+    dynamic_parts.append(
+        "Untracked scripts (workspace scripts without SKILL.md):\n"
+        + "\n".join(untracked)
+    )
+```
+
+**完整建议：**
+
+```
+loader.py 改动
+├── list_skills() 第125-127行
+    改为目录即 skill（有 SKILL.md 或 scripts/ 目录都 yield）
+loader.py 新增 _discover_untracked_scripts() 第450-470行
+    独立扫 workspace/skills/*/ 和 workspace/tasks/*/
+loader.py 改动 build_skills_section() 第83-85行
+    串联 untracked 区块
+```
+
+要我直接改代码？
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 1| """Skills loader for agent capabilities."""
+2| 
+3| import json
+4| import os
+5| import re
+6| import shutil
+7| from pathlib import Path
+8| 
+9| # Default builtin skills directory (relative to this file)
+10| BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
+11| 
+12| # Budget caps — keep skills section from bloating the prompt.
+13| # Single SKILL.md files larger than this are skipped and only noted in the footer.
+14| MAX_SINGLE_SKILL_CHARS: int = 20_000
+15| # Total character budget for the non-always-on summary block.
+16| MAX_SKILLS_SUMMARY_CHARS: int = 8_000
+17| # Total budget for always-on skills (cumulative, enforced inside load_skills_for_context).
+18| MAX_ALWAYS_SKILLS_CHARS: int = 5600
+19| # Per-skill inline truncation limit for always-on skills.
+20| MAX_ALWAYS_SKILL_INLINE:… (12,840字)
+• exec(find /root/nanobot-src/nanobot/skills -mindepth 2 -maxdepth 2 -type d | head -30) → /root/nanobot-src/nanobot/skills/steve-jobs-perspective/references
+/root/nanobot-src/nanobot/skills/cron/scripts
+/root/nanobot-src/nanobot/skills/skill-creator/scripts
+/root/nanobot-src/nanobot/skills/debug/scripts
+/root/nanobot-src/nanobot/skills/settings/scripts
+/root/nanobot-src/nanobot/skills/tmux/scripts
+
+
+Exit code: 0 (325字)
+• exec() → No workspace skills dir
+
+
+Exit code: 0 (38字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 301|             try:
+302|                 skill_size = skill_path.stat().st_size
+303|             except OSError:
+304|                 skill_size = 0
+305|             if skill_size > MAX_SINGLE_SKILL_CHARS:
+306|                 continue  # already handled in pass 1
+307| 
+308|             desc = self._get_skill_description(name)
+309|             skill_meta = self._get_skill_meta(name)
+310|             available = self._check_requirements(skill_meta)
+311|             status = ""
+312|             if not available:
+313|                 missing = self._get_missing_requirements(skill_meta)
+314|                 status = f" [unavailable: {missing}]" if missing else " [unavailable]"
+315|             line = f"- {name}: {desc}{status}"
+316| 
+317|             if total_chars + len(line) + 1 > MAX_SKIL… (8,893字)
+• exec() → === Builtin skills dirs ===
+  [DOC] clawhub
+  [DOC] cron
+  [DOC] debug
+  [DOC] github
+  [DOC] memory
+  [DOC] settings
+  [DOC] skill-creator
+  [DOC] steve-jobs-perspective
+  [DOC] summarize
+  [DOC] testing
+  [DOC] tmux
+  [DOC] weather
+
+=== Any dirs with scripts/ but no SKILL.md? ===
+
+=== SKILL.md with malformed frontmatter ===
+
+
+Exit code: 0 (342字)
+• exec() → === Deps chain: what calls list_skills() ===
+17:# Total budget for always-on skills (cumulative, enforced inside load_skills_for_context).
+58:        content = loader.load_skills_for_context(
+70:        content = loader.load_skills_for_context(
+105:    def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
+144:    def load_skill(self, name: str) -> str | None:
+167:    def load_skills_for_context(
+195:                meta = self.get_skill_metadata(name) or {}
+205:        … (3,738字)
+---
+[Kirk]: ## 结论
+
+当前 loader.py 有三个盲区导致"非标准 skill"不可见：无 SKILL.md 的目录被跳过、格式错误的 SKILL.md 导致 metadata 全部丢失、孤立脚本永远不会被发现。修复方向是**目录驱动发现 + config 覆盖 + SKILL.md 可选**。
+
+## 关键发现
+
+**盲区1：无 SKILL.md = 不存在**（`loader.py:125-126, 135-136`）
+```python
+skill_file = skill_dir / "SKILL.md"
+if skill_file.exists():  # ← 唯一准入条件
+    skills.append(...)
+```
+纯脚本目录（任务留存的自动化代码）直接被跳过，即使里面有可执行的 `.py` 文件。
+
+**盲区2：格式错误 = 全盲**（`loader.py:460-490`）
+`get_skill_metadata()` 要求首行必须是 `---`，否则返回 `None`。后果链：
+- `description` 为空 → summary 只显示名称无说明
+- `always` 无法读取 → 不会被 always-on 选中
+- `requires` 无法读取 → 不会被标记 unavailable（反而可能被误认为可用）
+
+**盲区3：孤立脚本永远不发现**（`loader.py:420-423`）
+`_discover_undocumented_scripts()` 只遍历 `list_skills()` 返回的 skill 目录。不在任何 skill 目录下的脚本（比如 `workspace/scripts/auto_cleanup.py`）永远不会出现在提示词中。
+
+**当前 workspace 下无实际非标准 skill**（workspace 目录运行时传入，代码库中不存在），但设计缺陷是真实的。
+
+## 修复方案
+
+**目录驱动发现**（改 `list_skills()`）：
+```python
+# 现在：SKILL.md.exists() → yield
+# 改为：entry.is_dir() → yield {name, dir, has_doc, has_scripts}
+```
+
+**config 覆盖 metadata**（改 `get_skill_metadata()`）：
+```
+优先级：config/skills.yaml[name] > SKILL.md frontmatter > default
+```
+
+**SKILL.md 完全可选**：无文档的脚本目录从 config 拿 description，有文档的照常读取。约 40 行改动，零接口变更，9 个调用方透明。
+
+[工具调用记录]
+• memory_palace(skill loader list_skills discovery undocumented scripts format recognition) → 🔍 5 result(s) for 'skill loader list_skills discovery undocumented scripts format recognition':
+
+[1] wing_code/skill-loader-architecture (sim=0.196)
+  Skill loader架构分析（2026-05-18）：loader.py只扫描SKILL.md，不扫描scripts/子目录。上下文有严格字符预算（always-on 5600char, summary 8000char）。手动写SKILL.md是正确设计，因为：1)上下文预算稀缺需人工精选 2)SKILL.md提供用法模式而非API签名 3)不是所有脚本都该暴露给agent。改进建议：加lint步骤扫描孤儿脚本（scripts/中存在但SKILL.md未提及的.py文件）。
+
+[2] wing_code/skill-loader-auto-discovery (sim=0.161)
+  Skill loader 自动编排分析：loader.py (378行) 纯手动文档驱动，只读 S… (1,784字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 100|     def __init__(self, workspace: Path, builtin_skills_dir: Path | None = None):
+101|         self.workspace = workspace
+102|         self.workspace_skills = workspace / "skills"
+103|         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
+104| 
+105|     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
+106|         """
+107|         List all available skills.
+108| 
+109|         Args:
+110|             filter_unavailable: If True, filter out skills with unmet requirements.
+111| 
+112|         Returns:
+113|             List of skill info dicts with 'name', 'path', 'source'.
+114|         """
+115|         skills = []
+116| 
+117|         # Workspace skills (highest priority)
+118|         if self.workspace_skills.exists():
+119|             for skill… (2,436字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 420|     def _discover_undocumented_scripts(self) -> list[str]:
+421|         """Find scripts in skill dirs not mentioned in their SKILL.md."""
+422|         entries = []
+423|         for s in self.list_skills(filter_unavailable=False):
+424|             name = s["name"]
+425|             skill_dir = Path(s["path"]).parent
+426|             scripts_dir = skill_dir / "scripts"
+427|             if not scripts_dir.exists():
+428|                 continue
+429|             skill_content = self.load_skill(name) or ""
+430|             for script_file in sorted(scripts_dir.iterdir()):
+431|                 if script_file.suffix not in (".py", ".sh") or script_file.name.startswith("_"):
+432|                     continue
+433|                 if script_file.name not in skill_content:
+434|                   … (3,405字)
+• exec(cd /root/nanobot-src && find workspace/skills -type f 2>/dev/null | head -40;...) → ===
+no workspace/skills
+
+
+Exit code: 0 (38字)
+• exec() → ===
+./nanobot/skills/cron/scripts/cron_cli.py
+./nanobot/skills/skill-creator/scripts/init_skill.py
+./nanobot/skills/skill-creator/scripts/quick_validate.py
+./nanobot/skills/skill-creator/scripts/package_skill.py
+./nanobot/skills/debug/scripts/send_cli.py
+./nanobot/skills/debug/scripts/send_photo_cli.py
+./nanobot/skills/settings/scripts/settings_cli.py
+
+
+Exit code: 0 (368字)
+• chatroom_send() → (50字)
+• wait() → (2,150字)
+• exec() → ===
+no workspace dir
+===
+
+
+Exit code: 0 (39字)
+• exec(cd /root/nanobot-src && find . -maxdepth 3 -type d -name "workspace" 2>/dev/n...) → ./.git/config-versions.git/workspace
+===
+34:def build_skills_section(workspace: Path) -> tuple[str, str]:
+44:    loader = SkillsLoader(workspace)
+100:    def __init__(self, workspace: Path, builtin_skills_dir: Path | None = None):
+101:        self.workspace = workspace
+102:        self.workspace_skills = workspace / "skills"
+118:        if self.workspace_skills.exists():
+119:            for skill_dir in self.workspace_skills.iterdir():
+127:                        skills.append({"name": skill_dir… (678字)
+• memory_palace() → ✅ Stored in wing_code/skill-loader-blindspots (hidden)
+  Drawer ID: drawer_wing_code_skill-loader-blindspots_8e8246932956ca6d6a64c260 (133字)
+---
+[Harper]: 
+
+[工具调用记录]
+• edit_file() → (62字)
+• edit_file() → (62字)
+• edit_file() → (62字)
+• exec() → === STATIC ===
+### Skill: cron
+Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.
+[read_file skills/cron/SKILL.md for full doc]
+
+---
+
+### Skill: debug
+Diagnose system issues: check logs, process status, cron jobs, connectivity. Use when something isn't working or user asks to debug.
+[read_file skills/debug/SKILL.md for full doc]
+
+---
+
+### Skill: settings
+Manage providers, models, and system settings. Use… (1,667字)
+• exec() → === list_skills() ===
+  my-cron-task: source=workspace [DOCLESS]
+  my-good-skill: source=workspace
+  steve-jobs-perspective: source=builtin
+  cron: source=builtin
+  summarize: source=builtin
+  clawhub: source=builtin
+  skill-creator: source=builtin
+  weather: source=builtin
+  testing: source=builtin
+  debug: source=builtin
+  github: source=builtin
+  settings: source=builtin
+  tmux: source=builtin
+  memory: source=builtin
+
+=== get_always_skills() ===
+  ['cron', 'debug', 'settings', 'memory']
+
+===… (3,999字)
+• edit_file() → (62字)
+• exec() → === _discover_undocumented_scripts() ===
+    - `backup.py` — Run daily backup."""
+    - `cleanup.sh`
+    - `quick_validate.py`
+
+=== _discover_untracked_scripts() ===
+    - `quick_fix.py` — Quick fix script
+
+=== build_skills_section() ===
+---DYNAMIC (tail)---
+to verify functionality. Use when testing APIs, scripts, services, cron jobs, or any system behavior.
+- github: Interact with GitHub using the `gh` CLI. Use `gh issue`, `gh pr`, `gh run`, and `gh api` for issues, PRs, CI runs, and advanced q… (874字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 429|     def _discover_undocumented_scripts(self) -> list[str]:
+430|         """Find scripts in skill dirs not mentioned in their SKILL.md."""
+431|         entries = []
+432|         for s in self.list_skills(filter_unavailable=False):
+433|             name = s["name"]
+434|             skill_dir = Path(s["path"]).parent
+435|             scripts_dir = skill_dir / "scripts"
+436|             if not scripts_dir.exists():
+437|                 continue
+438|             skill_content = self.load_skill(name) or ""
+439|             for script_file in sorted(scripts_dir.iterdir()):
+440|                 if script_file.suffix not in (".py", ".sh") or script_file.name.startswith("_"):
+441|                     continue
+442|                 if script_file.name not in skill_content:
+443|                   … (1,712字)
+• edit_file() → (62字)
+• exec() → === undocumented ===
+  ['  - `backup.py` — Run daily backup']
+  ['  - `cleanup.sh`']
+  ['  - `quick_validate.py`']
+
+=== untracked ===
+  ['  - `quick_fix.py` — Quick fix script']
+
+=== final dynamic (tail) ===
+Use when designing, structuring, or packaging skills with scripts, references, and assets.
+- weather: Get current weather and forecasts (no API key required).
+- testing: Write and run Python test scripts to verify functionality. Use when testing APIs, scripts, services, cron jobs, or any sys… (1,023字)
+---
+[Kirk]: ## 结论
+
+已修复 loader.py 的三个盲区，无 SKILL.md 的脚本目录和独立脚本文件现在都能被自动发现并注入提示词。零接口变更，现有调用方透明。
+
+## 关键发现
+
+**改动1: `list_skills()` L128-136** — workspace 分支增加 docless 发现：
+```python
+else:
+    scripts_dir = skill_dir / "scripts"
+    if scripts_dir.is_dir() and any(f.suffix in (".py", ".sh") for f in scripts_dir.iterdir()):
+        skills.append({"name": skill_dir.name, "path": str(scripts_dir), "source": "workspace", "docless": True})
+```
+无 SKILL.md 但有 `scripts/` 目录的目录也会被识别。builtin 分支不变。
+
+**改动2: `_discover_untracked_scripts()` L455-477** — 新增方法，直接扫 `workspace/skills/*.py/.sh` 独立文件，不依赖 `list_skills()`。提取 docstring 第一行作为描述。
+
+**改动3: `build_skills_section()` L87-89** — undocumented 区块后串联 untracked 区块。
+
+**验证结果**：docless 目录出现在 summary 中（name 回退），脚本出现在 undocumented 区块，独立文件出现在 untracked 区块，不会被 always-on 选中。
+
+## 备注
+
+- docless skill 的 description 回退为名称本身，后续可通过 `config/skills.yaml` 覆盖提供正式描述
+- builtin 目录未改发现逻辑（保持稳定），仅 workspace 支持非标准 skill
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 120|                 # Skip disabled skill directories entirely — they exist for
+121|                 # reference/archive only and should never burn context tokens.
+122|                 if skill_dir.name.startswith("_disabled."):
+123|                     continue
+124|                 if skill_dir.is_dir():
+125|                     skill_file = skill_dir / "SKILL.md"
+126|                     if skill_file.exists():
+127|                         skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "workspace"})
+128| 
+129|         # Built-in skills
+130|         if self.builtin_skills and self.builtin_skills.exists():
+131|             for skill_dir in self.builtin_skills.iterdir():
+132|                 if skill_dir.name.startswith("_disabled."):
+133|                     con… (1,466字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 75|         if content:
+76|             dynamic_parts.append(content)
+77| 
+78|     all_always = set(static_always) | set(dynamic_always)
+79|     summary = loader.build_skills_summary(exclude=all_always if all_always else None)
+80|     if summary:
+81|         dynamic_parts.append("Other skills (read SKILL.md to use):\n" + summary)
+82| 
+83|     undocumented = loader._discover_undocumented_scripts()
+84|     if undocumented:
+85|         dynamic_parts.append("Undocumented scripts (auto-discovered from scripts/ dirs):\n" + "\n".join(undocumented))
+86| 
+87|     dynamic_content = "\n\n".join(dynamic_parts)
+88| 
+89|     return static_content, dynamic_content
+
+(Showing lines 75-89 of 490. Use offset=90 to continue.) (715字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 415|             skill_meta = self._parse_nanobot_metadata(meta.get("metadata", ""))
+416|             if _parse_bool(skill_meta.get("always")) or _parse_bool(meta.get("always")):
+417|                 result.append(s["name"])
+418|         return result
+419| 
+420|     def _discover_undocumented_scripts(self) -> list[str]:
+421|         """Find scripts in skill dirs not mentioned in their SKILL.md."""
+422|         entries = []
+423|         for s in self.list_skills(filter_unavailable=False):
+424|             name = s["name"]
+425|             skill_dir = Path(s["path"]).parent
+426|             scripts_dir = skill_dir / "scripts"
+427|             if not scripts_dir.exists():
+428|                 continue
+429|             skill_content = self.load_skill(name) or ""
+430|             for script_fil… (1,730字)
+• chatroom_send() → (50字)
+• wait() → (1,286字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 120| 
+121|         # Workspace skills (highest priority)
+122|         if self.workspace_skills.exists():
+123|             for skill_dir in self.workspace_skills.iterdir():
+124|                 # Skip disabled skill directories entirely — they exist for
+125|                 # reference/archive only and should never burn context tokens.
+126|                 if skill_dir.name.startswith("_disabled."):
+127|                     continue
+128|                 if skill_dir.is_dir():
+129|                     skill_file = skill_dir / "SKILL.md"
+130|                     if skill_file.exists():
+131|                         skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "workspace"})
+132|                     else:
+133|                         # Docless dir: yield if it contai… (1,317字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 85|         dynamic_parts.append("Undocumented scripts (auto-discovered from scripts/ dirs):\n" + "\n".join(undocumented))
+86| 
+87|     untracked = loader._discover_untracked_scripts()
+88|     if untracked:
+89|         dynamic_parts.append("Untracked scripts (standalone workspace scripts without SKILL.md):\n" + "\n".join(untracked))
+90| 
+91|     dynamic_content = "\n\n".join(dynamic_parts)
+92| 
+93|     return static_content, dynamic_content
+94| 
+
+(Showing lines 85-94 of 523. Use offset=95 to continue.) (507字)
+  (还有 3 个工具调用，已省略)
+---

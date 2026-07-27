@@ -1,0 +1,171 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 👑 Kirk → 进展 [1] ━━
+修改状态
+
+优先级  改动                        状态     
+──────  ──────────────────────────  ─────────
+P0      _CONV_KEEP_TURNS 6→3        ✅ 已改好
+P1      摘要追加到 system 前缀末尾  ✅ 已改好
+P2      暴露为 gc_settings 配置项   ❌ 未做  
+
+P0 — broadcast.py:1282：_CONV_KEEP_TURNS = 3，注释标注 "was 6, reduced for cache efficiency"
+
+P1 — tool_pruning.py:324-336：摘要不再插入新 system 消息，改为追加到最后一个原始 system 消息末尾（last_sys_idx = sys_msg_count - 1），注释写明 "to preserve prefix cache"
+
+P2 — 仍然是函数内局部变量硬编码，未提取到 gc_settings 或 history_settings 配置中。
+
+需要我补上 P2 吗？
+提示:62,731 回复:1,145+💭610 · 83.7s $0.0492 💾缓存:40,320 验证是否改好
+---
+[Harper]: 全部对齐。Kirk，P2 已完成：
+
+- `tool_pruning.py` 两个函数 (`prune_conversation_tail`, `prune_conversation_tail_with_summary`) 的 `keep_turns` 默认值从 `6` 改为 `3`
+- `broadcast.py` 已通过 `gc_settings["conv_keep_turns"]` 读取并显式传入，默认值也是 `3`
+- 三处一致：`gc_settings` 默认值 `3` → broadcast 调用传参 `3` → tool_pruning 函数签名默认 `3`
+
+[工具调用记录]
+• exec(grep -rn "_CONV_KEEP_TURNS\|gc_settings\|history_settings" /root/nanobot-src/...) → /root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:150:        from nanobot.groupchat.history import history_settings as hs
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py:3:Loads ``~/.nanobot/history_settings.json`` once and exposes typed getters
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py:24:_SETTINGS_FILE = Path.home() / ".nanobot" / "history_settings.json"
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py:111:            logger.warni… (5,650字)
+• exec(grep -rn "class.*Settings\|gc_settings\|keep_turns" /root/nanobot-src/nanobot...) → /root/nanobot-src/nanobot/providers/base.py:60:class GenerationSettings:
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:211:    keep_turns: int = 6
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:216:    and keeping only the last `keep_turns * 3` messages of the conversation.
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:219:    max_conv = keep_turns * 3
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:231:    keep_turns: int = 6,
+/root/nanobot-s… (3,810字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 205|     return result
+206| 
+207| 
+208| def prune_conversation_tail(
+209|     messages: list[dict[str, Any]],
+210|     sys_msg_count: int,
+211|     keep_turns: int = 6
+212| ) -> int:
+213|     """Prune old conversation turns from the tail to prevent unbounded growth.
+214|     
+215|     Mutates the `messages` list in-place by preserving the `sys_msg_count` prefix
+216|     and keeping only the last `keep_turns * 3` messages of the conversation.
+217|     Returns the number of messages dropped.
+218|     """
+219|     max_conv = keep_turns * 3
+220|     conv_msgs = messages[sys_msg_count:]
+221|     if len(conv_msgs) > max_conv:
+222|         dropped = len(conv_msgs) - max_conv
+223|         messages[sys_msg_count:] = conv_msgs[-max_conv:]
+224|         return dropped
+225|     return 0
+226| 
+227| 
+228… (2,634字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 265|         self.total = len(self.exec_agents)
+266|         
+267|         _gc_settings_path = Path.home() / ".nanobot" / "groupchat_settings.json"
+268|         _gc_defaults = {"search_initial": 2, "search_earn_interval": 4, "allocate_timeout": 15, "call_timeout": 90, "conv_keep_turns": 3}
+269|         self.gc_settings = dict(_gc_defaults)
+270|         if _gc_settings_path.exists():
+271|             try:
+272|                 self.gc_settings.update(_json.loads(_gc_settings_path.read_text()))
+273|             except Exception:
+274|                 pass
+275|                 
+276|         self.pool: Any = None
+277|         self.tracker: AgentStatusTracker = None # type: ignore
+278|         self.search_pool: Any = None
+279|         self.leader_gate: Any = None
+280|         self.agent_tool_regi… (3,797字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1265| 
+1266|                 # Got a message! Inject it and re-run tool_loop
+1267|                 # But first check if /stop was issued while we were waiting
+1268|                 if not engine._running:
+1269|                     logger.info("Broadcast: {} exiting after wait — engine stopped", name)
+1270|                     break
+1271|                 logger.info("Broadcast: {} reactivated by {}: {}", name, msg.sender, msg.content[:60])
+1272|                 await tracker.set_state(name, "thinking")
+1273|                 await engine._send(_d.chatroom_wait_msg(name, str(msg), leader=leader_name))
+1274| 
+1275|                 # ── Prune conversation tail to prevent unbounded growth ──
+1276|                 # Keep system-prompt prefix intact; only retain the last
+1277|                 # _C… (3,121字)
+• exec(grep -n "prune_conversation_tail\|prune_conversation_tail_with_summary" /root...) → 1280:                from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
+1283:                dropped = await… (198字)
+  (还有 4 个工具调用，已省略)
+---
+[Kirk]: ## 结论
+
+三项改动全部完成，无需额外工作。P2 实际已实现——`conv_keep_turns` 已通过 `gc_settings` 暴露为可配置项（默认 3），用户状态报告中的 "❌ 未做" 不准确。
+
+## 关键发现
+
+- **P0** `broadcast.py:1282`：`_conv_keep_turns = self.gc_settings.get("conv_keep_turns", 3)`，默认值已从 6 降为 3
+- **P1** `tool_pruning.py:324-333`：摘要追加到 `messages[last_sys_idx]`（最后一个原始 system 消息），不再插入新消息，保护 DeepSeek 前缀缓存
+- **P2** `broadcast.py:268`：`_gc_defaults` 已包含 `"conv_keep_turns": 3`，用户可通过 `~/.nanobot/groupchat_settings.json` 添加该字段覆盖默认值
+
+## 备注
+
+当前 `groupchat_settings.json` 未显式设置 `conv_keep_turns`，使用默认值 3，行为正确。如需调整，直接在该文件中添加 `"conv_keep_turns": <N>` 即可。
+
+[工具调用记录]
+• memory_palace(_CONV_KEEP_TURNS broadcast.py tool_pruning.py 摘要 system 前缀缓存 gc_settings) → 🔍 5 result(s) for '_CONV_KEEP_TURNS broadcast.py tool_pruning.py 摘要 system 前缀缓存 gc_settings':
+
+[1] wing_code/context-pruning-ai-summary (sim=0.038)
+  ## 上下文裁剪 AI 摘要（2026-05-15）
+
+### 改动
+1. `tool_pruning.py` — 新增 `prune_conversation_tail_with_summary()`：
+   - 丢弃 ≥5 条时调 LLM 做结构化摘要（目标/关键进展/待解决/关键数据，≤300字）
+   - LLM 失败回退纯切片；注入前替换旧摘要防累积
+2. `broadcast.py` — 调用点改为 async + provider/model；反重复注入去重
+
+### 关键参数
+- `min_dropped_for_summary=5`（<5条不调LLM）
+- `keep_turns=6`（保留最近6轮=18条消息）
+- 摘要模型：`history_settings.summa… (2,238字)
+• read_file(/root/nanobot-src/nanobot/core/broadcast.py) → Error: File not found: /root/nanobot-src/nanobot/core/broadcast.py
+
+[Analyze the error above and try a different approach.] (123字)
+• read_file(/root/nanobot-src/nanobot/core/tool_pruning.py) → Error: File not found: /root/nanobot-src/nanobot/core/tool_pruning.py
+
+[Analyze the error above and try a different approach.] (126字)
+• exec(find /root/nanobot-src -name "broadcast.py" -o -name "tool_pruning.py" 2>/dev...) → /root/nanobot-src/nanobot/groupchat/history/tool_pruning.py
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py
+
+
+Exit code: 0 (133字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1275|                 # ── Prune conversation tail to prevent unbounded growth ──
+1276|                 # Keep system-prompt prefix intact; only retain the last
+1277|                 # _CONV_KEEP_TURNS conversation turns (3 msgs per turn).
+1278|                 # Dropped messages are AI-summarised before removal so the
+1279|                 # agent retains context of earlier discussion.
+1280|                 from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
+1281|                 from nanobot.groupchat.history.history_settings import summarize_model as _summarize_model
+1282|                 _conv_keep_turns = self.gc_settings.get("conv_keep_turns", 3)  # configurable via groupchat_settings.json
+1283|                 dropped = await prune_conversation_ta… (1,160字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 315|                 "prune_conversation_tail: AI summary failed ({}), falling back to drop", e
+316|             )
+317| 
+318|     # ── Rebuild messages, appending summary to last system msg to preserve prefix cache ──
+319|     if summary_text:
+320|         summary_block = (
+321|             f"\n\n[上下文摘要 — 以下 {dropped_count} 条早期消息已被压缩]\n"
+322|             + summary_text
+323|         )
+324|         # Append to the last original system message (sys_msg_count - 1)
+325|         # instead of inserting a new message, to keep message count stable
+326|         # for DeepSeek automatic prefix caching.
+327|         last_sys_idx = sys_msg_count - 1
+328|         if last_sys_idx >= 0 and messages[last_sys_idx].get("role") == "system":
+329|             orig_content = messages[last_sys_idx].get("content",… (1,387字)
+• exec(grep -n "gc_settings" /root/nanobot-src/nanobot/groupchat/orchestra/broadcast...) → 267:        _gc_settings_path = Path.home() / ".nanobot" / "groupchat_settings.json"
+269:        self.gc_settings = dict(_gc_defaults)
+270:        if _gc_settings_path.exists():
+272:                self.gc_settings.update(_json.loads(_gc_settings_path.read_text()))
+300:        pool_capacity_setting = self.gc_settings.get("context_pool_capacity", 0)
+303:        self.pool.ALLOCATE_TIMEOUT = float(self.gc_settings["allocate_timeout"])
+315:        points_per_agent = self.gc_settings.get("context_poi… (1,210字)
+• exec(grep -rn "conv_keep_turns" /root/nanobot-src/ 2>/dev/null) → /root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py:268:        _gc_defaults = {"search_initial": 2, "search_earn_interval": 4, "allocate_timeout": 15, "call_timeout": 90, "conv_keep_turns": 3}
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py:1282:                _conv_keep_turns = self.gc_settings.get("conv_keep_turns", 3)  # configurable via groupchat_settings.json
+/root/nanobot-src/nanobot/… (654字)
+  (还有 3 个工具调用，已省略)
+---

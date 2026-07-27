@@ -1,0 +1,787 @@
+[用户]: kirk人呢
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(grep -n "set_ranks\|agent_ranks\|_agent_ranks_cache" /root/nanobot-src/nanobo...) → 419:    if hasattr(broadcast_round, "_agent_ranks_cache"):
+420:        del broadcast_round._agent_ranks_cache
+444:    mailbox.set_ranks(ranks_map, leader=leader_name or "")
+491:    # ── Compute agent_ranks early (needed by BroadcastView and message_converter) ──
+492:    from nanobot.groupchat.display.visibility import compute_agent_ranks
+493:    if not hasattr(broadcast_round, "_agent_ranks_cache"):
+494:        broadcast_round._agent_ranks_cache = compute_agent_ranks(list(agents), engine.registr… (850字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 436|     # Wire leader info into mailbox for listener restriction feature
+437|     mailbox.set_leader_name(leader_name or "")
+438| 
+439|     # Push agent ranks into mailbox for interrupt hierarchy
+440|     ranks_map: dict[str, str] = {}
+441|     for ag in agents:
+442|         cfg = engine.registry.get(ag, {})
+443|         ranks_map[ag] = cfg.get("rank", "pawn")
+444|     mailbox.set_ranks(ranks_map, leader=leader_name or "")
+445| 
+446|     # ── Clear any leftover session tool overrides ──
+447|     if hasattr(engine, "_session_tools_override"):
+448|         engine._session_tools_override.clear()
+449| 
+450|     # All agents participate — leader included as active agent
+
+(Showing lines 436-450 of 1796. Use offset=451 to continue.) (736字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/agent_loader.py) → 45|                     try:
+46|                         _cfg = json.loads(cfg_file.read_text())
+47|                         if isinstance(_cfg.get("tools"), dict):
+48|                             agent_data["tools"] = _cfg["tools"]
+49|                         if _cfg.get("tools_enabled"):
+50|                             agent_data["tools_enabled"] = True
+51|                         if _cfg.get("rank"):
+52|                             agent_data["rank"] = _cfg["rank"]
+53|                         if _cfg.get("workspace"):
+54|                             agent_data["workspace_scope"] = _cfg["workspace"]
+55|                         if _cfg.get("agent_dir"):
+56|                             agent_data["agent_dir"] = _cfg["agent_dir"]
+57|                         hp = _cfg.get("hyperparams")
+58| … (2,529字)
+• exec(find /root/nanobot-src/config -name "*.json" -o -name "*.yaml" -o -name "*.ym...) → /root/nanobot-src/config/docs/skills/memory-palace/agents/openai.yaml
+/root/nanobot-src/config/frontend/package-lock.json
+/root/nanobot-src/config/frontend/package.json
+/root/nanobot-src/config/frontend/tsconfig.typecheck.json
+/root/nanobot-src/config/backend/tests/benchmark/rrf_calibration_results.json
+/root/nanobot-src/config/backend/tests/benchmark/thresholds_v1.json
+/root/nanobot-src/config/backend/tests/benchmark/vitality_decay_baseline.json
+/root/nanobot-src/config/backend/tests/benchmark/… (1,384字)
+• exec(find /root/nanobot-src -name "*.json" -exec grep -l "bishop\|knight\|pawn" {}...) → /root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/agents/kirk/config.json
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/agents/harper/config.json
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/agents/verifier/config.json
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/agents/retriever/config.json
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/agents/scholar/config.json
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/agents/behol… (837字)
+• exec(find /root/nanobot-src/agents -name "config.json" 2>/dev/null | head -10) → Exit code: 0 (13字)
+• exec(find /root/nanobot-src/config -name "*group*" -o -name "*chat*" 2>/dev/null |...) → /root/nanobot-src/config/backend/tests/test_chat_json_parser.py
+__init__.py
+compression_engine.py
+facade.py
+forgetting_engine.py
+layering_engine.py
+procedural_engine.py
+
+
+Exit code: 0 (183字)
+• exec(find /root -maxdepth 4 -name "*.yaml" -o -name "*.yml" 2>/dev/null | xargs gr...) → /root/hermes-agent/.github/workflows/tests.yml
+/root/repos/openclaw/pnpm-lock.yaml
+/root/.hermes/state-snapshots/2026… (192字)
+---
+[Kirk]: chatroom_send 是在 engine.py 里注册的工具。让我看它的实现：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 213| async def _trigger_realtime_interrupts(
+214|     sender: str,
+215|     targets: list[str],
+216|     mailbox: MailboxHub,
+217|     engine: BroadcastContext,
+218|     leader_name: str | None,
+219| ) -> None:
+220|     """Handle bi-directional real-time interrupts after a successful chatroom_send.
+221|     
+222|     Teammate -> Leader: Make leader aware of the report immediately.
+223|     Leader -> Teammate: Make teammate respond to instructions without waiting for poll.
+224|     """
+225|     _targets_lower = [t.lower() for t in targets]
+226|     
+227|     # Check if the target set effectively includes someone we want to interrupt
+228|     # (someone other than the sender).
+229|     has_others = "all" in _targets_lower or any(t != sender.lower() for t in _targets_lower)
+230|     if not ha… (2,714字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 418|     def _can_interrupt(self, sender: str, target: str) -> bool:
+419|         """Check if sender has sufficient rank to interrupt target.
+420|         
+421|         Rules:
+422|         - Leader CAN interrupt anyone (highest implicit priority)
+423|         - Higher rank CAN interrupt lower rank
+424|         - Equal rank CANNOT interrupt each other (they queue)
+425|         - Unknown rank defaults to 0 (lowest)
+426|         """
+427|         s_rank = self._ranks.get(sender, 0)
+428|         t_rank = self._ranks.get(target, 0)
+429|         return s_rank > t_rank
+430| 
+431|     def _try_interrupt(self, target: str, sender: str) -> bool:
+432|         """Attempt to interrupt a busy agent.
+433| 
+434|         Returns True if the interrupt was triggered, False if skipped
+435|         (agent not b… (3,941字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 399|     def set_ranks(self, ranks: dict[str, str], leader: str = "") -> None:
+400|         """Store agent ranks for interrupt permission checking.
+401|         
+402|         Args:
+403|             ranks: Mapping of agent_name -> rank_string ("pawn", "knight", "bishop", "queen")
+404|             leader: Leader agent name — always gets highest priority regardless of rank.
+405|         """
+406|         order = {"pawn": 0, "knight": 1, "bishop": 2, "queen": 3}
+407|         self._ranks.clear()
+408|         self._leader = leader
+409|         for name, r in ranks.items():
+410|             # Leader always gets highest rank (bishop + 1)
+411|             if name == leader:
+412|                 val = max(order.values()) + 1
+413|             else:
+414|                 val = order.get(r, 0)
+415|      … (1,044字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 436|     # Wire leader info into mailbox for listener restriction feature
+437|     mailbox.set_leader_name(leader_name or "")
+438| 
+439|     # Push agent ranks into mailbox for interrupt hierarchy
+440|     ranks_map: dict[str, str] = {}
+441|     for ag in agents:
+442|         cfg = engine.registry.get(ag, {})
+443|         ranks_map[ag] = cfg.get("rank", "pawn")
+444|     mailbox.set_ranks(ranks_map, leader=leader_name or "")
+445| 
+446|     # ── Clear any leftover session tool overrides ──
+447|     if hasattr(engine, "_session_tools_override"):
+448|         engine._session_tools_override.clear()
+449| 
+450|     # All agents participate — leader included as active agent
+451|     exec_agents = list(agents)
+452|     non_leader_agents = [a for a in agents if a != leader_name] if leader_name else … (950字)
+• exec(grep -rn '"rank"' /root/nanobot-src/nanobot/groupchat/history/agent_loader.py) → 51:                        if _cfg.get("rank"):
+52:                            agent_data["rank"] = _cfg["rank"]
+170:                    rank = _cfg.get("rank", "pawn")
+175:                        "rank": rank,
+232:        rank = acfg.get("rank", "pawn") if config_file.exists() else "pawn"
+234:        agent_data: dict[str, Any] = {"model": model, "prompt": prompt, "tools_enabled": tools_enabled, "rank": rank}
+
+
+Exit code: 0 (427字)
+  (还有 10 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cat /root/.hermes/config.yaml 2>/dev/null | head -60) → model:
+  provider: openrouter
+  model: z-ai/glm-5.1
+providers:
+  openrouter:
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+fallback_providers: []
+credential_pool_strategies: {}
+toolsets:
+- hermes-cli
+agent:
+  max_turns: 90
+  gateway_timeout: 1800
+  restart_drain_timeout: 60
+  api_max_retries: 3
+  service_tier: ''
+  tool_use_enforcement: auto
+  gateway_timeout_warning: 900
+  gateway_notify_interval: 600
+  gateway_auto_continue_freshness: 3600
+  image_input_mode: a… (1,507字)
+• exec(ls /root/nanobot-src/config/backend/ 2>/dev/null; find /root/nanobot-src -nam...) → api
+core
+db
+main.py
+mcp
+mcp_server.py
+mcp_wrapper.py
+models
+requirements-dev.txt
+requirements.txt
+run_sse.py
+runtime
+runtime_bootstrap.py
+runtime_state.py
+scripts
+security
+shared_utils.py
+tests
+
+
+Exit code: 0 (208字)
+• exec(grep -n "rank\|bishop\|knight\|pawn" /root/nanobot-src/config/backend/runtime...) → Exit code: 0 (13字)
+• exec(grep -rn "bishop\|knight\|pawn" /root/nanobot-src/config --include="*.py" 2>/...) → /root/nanobot-src/config/backend/mcp_wrapper.py:344:def spawn_backend_process() -> subprocess.Popen[bytes]:
+/root/nanobot-src/config/backend/mcp_wrapper.py:411:    process = spawn_backend_process()
+/root/nanobot-src/config/backend/tests/test_week4_compact_context_gist.py:131:def _spawn_compact_context_worker(
+/root/nanobot-src/config/backend/tests/test_week4_compact_context_gist.py:387:    first = _spawn_compact_context_worker(
+/root/nanobot-src/config/backend/tests/test_week4_compact_context_gi… (1,571字)
+---
+[Retriever]: 
+
+[工具调用记录]
+• memory_palace(interrupt rank level agent 打断 等级 bishop knight pawn can_interrupt) → 🔍 15 result(s) for 'interrupt rank level agent 打断 等级 bishop knight pawn can_interrupt':
+
+[1] wing_code/groupchat-pool-credits-config (sim=0.336)
+  对话池点数配置机制（broadcast.py L295-338）：
+- groupchat_settings.json 中 context_pool_capacity=0 时走 rank-based 分配
+- rank_cap: pawn=2, knight=3, bishop=4, queen=5，leader 额外+1
+- context_points_per_agent=0 时搜索额度也走 rank-based（复用 per_agent_cap）
+- 统一改值：设 context_pool_capacity=N 或 context_points_per_agent=N
+- 当前 agent rank: kirk=bishop, harper=knight, retriever=pawn, s… (4,369字)
+• chatroom_send() → (47字)
+• wait() → (50字)
+---
+[Harper]: [工具调用记录]
+• exec(grep -n "is_interrupted\|finish_reason.*interrupt" /root/nanobot-src/nanobot/...) → 873:                is_interrupted = result.finish_reason == "interrupted"
+1063:                if is_interrupted:
+
+Exit code: 0 (129字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1055|                             sender=name,
+1056|                             targets=_implicit_targets,
+1057|                             mailbox=mailbox,
+1058|                             engine=engine,
+1059|                             leader_name=leader_name,
+1060|                         )
+1061| 
+1062|                 # ── Handle forced interrupt ──
+1063|                 if is_interrupted:
+1064|                     # Clear the event so it can be set again by a future message
+1065|                     _interrupt_event.clear()
+1066|                     # Reset interrupt counter so newer messages can re-interrupt
+1067|                     # this agent in subsequent cycles (freshness guarantee).
+1068|                     mailbox._interrupt_counts[name] = 0
+1069|                     # (… (3,176字)
+• exec(grep -n "registry\s*=\|self\.registry\|engine\.registry" /root/nanobot-src/na...) → 304:            cfg = self.engine.registry.get(ag, {})
+354:            registry = ToolRegistry()
+442:        cfg = engine.registry.get(ag, {})
+494:        broadcast_round._agent_ranks_cache = compute_agent_ranks(list(agents), engine.registry, leader_name)
+526:        if name not in engine.registry:
+529:        agent_cfg = engine.registry[name]
+768:                                tool_registry=reg,
+787:                _live_cfg = engine.registry.get(name, agent_cfg)
+838:                        to… (659字)
+• exec(grep -n "registry\s*=\|\.registry\s*=" /root/nanobot-src/nanobot/groupchat/or...) → 155:        registry = ToolRegistry()
+257:            registry=self.registry,
+756:        tool_registry = self.direct_tools if is_direct else self._get_agent_registry(agent_name)
+778:            tool_registry=tool_registry,
+982:            registry=self.registry,
+1078:        registry=engine.registry,
+1490:            tool_registry=tool_registry,
+
+Exit code: 0 (363字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 250|     def _init_state(self) -> None:
+251|         """Load agent registry, persistence layer, and initialize runtime state."""
+252|         # Agent registry: all known agents {name: {model, prompt}}
+253|         self.registry: dict[str, dict[str, Any]] = load_agents(self.config, self.workspace)
+254| 
+255|         # Persistence layer
+256|         self._state = GroupChatState(
+257|             registry=self.registry,
+258|         )
+259| 
+260|         # Restore persisted state
+261|         self._active_agents: list[str] = self._state.load_active()
+262|         self._leader: str | None = self._state.load_leader()
+263|         self._round: int = 0
+264| 
+265|         # ── History: fully managed by HistoryContext (history module) ──
+266|         self.history: HistoryContext = HistoryContext(
+26… (1,545字)
+• exec(git -C /root/nanobot-src log --oneline -1) → b937240c remove agent wait guard from end_discussion - leader can now end discussion without waiting for other agents
+
+Exit code: 0 (132字)
+• exec(grep -n "chatroom_send\|to.*all\|_trigger_realtime" /root/nanobot-src/nanobot...) → 4:Agents can communicate with each other via chatroom_send/wait tools.
+36:    "chatroom_send": "sending",
+159:        elif tool_name == "chatroom_send":
+167:        if tool_name == "chatroom_send" and "BLOCKED:" in _r:
+169:        elif tool_name == "chatroom_send" and "你已发过 1 条消息" in _r:
+213:async def _trigger_realtime_interrupts(
+220:    """Handle bi-directional real-time interrupts after a successful chatroom_send.
+288:    async def setup_tools_and_pools(self, spawn_fn: Callable[[str, int], as… (2,339字)
+
+[工具调用记录]
+• exec(find /root/nanobot-src -name "engine.py" | head -5) → /root/nanobot-src/nanobot/groupchat/orchestra/engine.py
+
+
+Exit code: 0 (70字)
+• exec(grep -n "chatroom_send\|def.*chatroom\|_trigger_realtime" /root/nanobot-src/n...) → 127:        self._chatroom_send_tool = ChatroomSendTool(mailbox=self._mailbox)
+129:        self.tools.register(self._chatroom_send_tool)
+760:        if hasattr(self, '_chatroom_send_tool'):
+761:            self._chatroom_send_tool.set_agent(agent_name)
+1557:        "chatroom_send": 200,
+1612:        elif name in ("chatroom_send", "wait", "write_file", "edit_file"):
+
+
+Exit code: 0 (382字)
+• exec(grep -n "class ChatroomSendTool\|def do_execute\|async def do_execute\|_trigg...) → /root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py:600:class ChatroomSendTool(Tool):
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py:213:async def _trigger_realtime_interrupts(
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py:1054:                        await _trigger_realtime_interrupts(
+/root/nanobot-src/nanobot/groupchat/display/broadcast_view.py:6:from nanobot.groupchat.orchestra.broadcast import _trigger_realtime_interrupts
+/root/nanobot-src/nanobot/… (724字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 600| class ChatroomSendTool(Tool):
+601|     """Send a message to one or more agents in the group chat.
+602| 
+603|     Supports sending to specific agents by name, broadcasting
+604|     to all agents with ``"All"``, or sending a summary to the
+605|     user with ``"User"``.
+606|     """
+607| 
+608|     def __init__(self, mailbox: MailboxHub, agent_name: str = "", pool: ConversationPool | None = None,
+609|                  search_pool: "SearchPool | None" = None,
+610|                  leader_gate: LeaderGate | None = None) -> None:
+611|         self._mailbox = mailbox
+612|         self._agent_name = agent_name  # Set per-round by the engine
+613|         self._pool = pool
+614|         self._search_pool = search_pool  # for credit recovery on successful sends
+615|         self._last_received_fr… (3,815字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 680| 
+681|         # Reject "User" target — agent text response is auto-displayed
+682|         targets = [t for t in targets if t.lower() != "user"]
+683|         if not targets:
+684|             return "⚠️ 不支持发送给 User。你的文字回复会自动展示给用户，直接写在回复里即可。"
+685| 
+686|         # Deduplicate: "All" already includes everyone, strip individual names
+687|         if any(t.lower() == "all" for t in targets):
+688|             targets = ["All"]
+689| 
+690|         # Expand "All" to actual agent names for slot counting
+691|         if "All" in targets:
+692|             actual_recipients = [a for a in self._mailbox.agent_names if a != self._agent_name]
+693|         else:
+694|             actual_recipients = [t for t in targets if t != self._agent_name]
+695| 
+696|         # Allocate conversation slots (blocks if p… (3,688字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1040|                     if content:
+1041|                         search_pool.on_output(name)
+1042| 
+1043|                     if not _used_chatroom_send and content:
+1044|                         # Implicitly broadcast text to wake up waiting teammates (like the Leader).
+1045|                         # Without this, if an agent forgets to use chatroom_send, its text is only
+1046|                         # added to history and teammates hang in wait() until a full timeout.
+1047|                         
+1048|                         _implicit_targets = ["All"]
+1049|                         if leader_name and name != leader_name:
+1050|                             # 队友未用 chatroom_send 时，默认只汇报给 Leader，避免唤醒其他正在 wait 的队友导致死循环
+1051|                             _implicit_targets = [leader_name]… (2,486字)
+• exec(grep -n "_used_chatroom_send\|_trigger_realtime\|chatroom_send" /root/nanobot...) → 213:async def _trigger_realtime_interrupts(
+220:    """Handle bi-directional real-time interrupts after a succ… (2,512字)
+---
+[Kirk]: **第 440 行：`if target not in self._busy_agents: return False`**
+
+这是关键！如果 Retriever 不在 `_busy_agents` 集合里，打断根本不会发生——不是因为 rank 不够，而是因为目标不在 busy 状态。
+
+但用户说的是"2打断不了1"，意思是 Harper(knight=1) 打断不了 Retriever(pawn=0)。如果 Retriever 不在 busy 状态，那确实打不断——但这不是 bug，这是预期行为。
+
+**但用户明确说"应该是高等级能打断低等级"，暗示 Retriever 确实在 busy 状态。**
+
+那问题可能在于：**`_trigger_realtime_interrupts` 根本没被调用**。让我看 chatroom_send 工具执行后，是谁调用这个函数的：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 418|     def _can_interrupt(self, sender: str, target: str) -> bool:
+419|         """Check if sender has sufficient rank to interrupt target.
+420|         
+421|         Rules:
+422|         - Leader CAN interrupt anyone (highest implicit priority)
+423|         - Higher rank CAN interrupt lower rank
+424|         - Equal rank CANNOT interrupt each other (they queue)
+425|         - Unknown rank defaults to 0 (lowest)
+426|         """
+427|         s_rank = self._ranks.get(sender, 0)
+428|         t_rank = self._ranks.get(target, 0)
+429|         return s_rank > t_rank
+430| 
+431|     def _try_interrupt(self, target: str, sender: str) -> bool:
+432|         """Attempt to interrupt a busy agent.
+433| 
+434|         Returns True if the interrupt was triggered, False if skipped
+435|         (agent not b… (3,941字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 399|     def set_ranks(self, ranks: dict[str, str], leader: str = "") -> None:
+400|         """Store agent ranks for interrupt permission checking.
+401|         
+402|         Args:
+403|             ranks: Mapping of agent_name -> rank_string ("pawn", "knight", "bishop", "queen")
+404|             leader: Leader agent name — always gets highest priority regardless of rank.
+405|         """
+406|         order = {"pawn": 0, "knight": 1, "bishop": 2, "queen": 3}
+407|         self._ranks.clear()
+408|         self._leader = leader
+409|         for name, r in ranks.items():
+410|             # Leader always gets highest rank (bishop + 1)
+411|             if name == leader:
+412|                 val = max(order.values()) + 1
+413|             else:
+414|                 val = order.get(r, 0)
+415|      … (1,507字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 439|     # Push agent ranks into mailbox for interrupt hierarchy
+440|     ranks_map: dict[str, str] = {}
+441|     for ag in agents:
+442|         cfg = engine.registry.get(ag, {})
+443|         ranks_map[ag] = cfg.get("rank", "pawn")
+444|     mailbox.set_ranks(ranks_map, leader=leader_name or "")
+445| 
+446|     # ── Clear any leftover session tool overrides ──
+447|     if hasattr(engine, "_session_tools_override"):
+448|         engine._session_tools_override.clear()
+449| 
+450|     # All agents participate — leader included as active agent
+451|     exec_agents = list(agents)
+452|     non_leader_agents = [a for a in agents if a != leader_name] if leader_name else list(agents)
+453|     total = len(exec_agents)
+454| 
+455|     # Announce broadcast start
+456|     engine._save_event("round_start", … (1,363字)
+• exec(grep -n "registry\[" /root/nanobot-src/nanobot/groupchat/orchestra/engine.py ...) → 520:            del self.registry[matched]
+1057:    agent = engine.registry[agent_name]
+
+
+Exit code: 0 (102字)
+• exec(grep -n "self.registry\[" /root/nanobot-src/nanobot/groupchat/orchestra/engin...) → 520:            del self.registry[matched]
+
+
+Exit code: 0 (57字)
+• exec(grep -n "registry" /root/nanobot-src/nanobot/groupchat/orchestra/engine.py | ...) → 6:- Agent registry: all available agents (loaded from config/directory)
+95:        agent_cfg = self.registry.get(agent_name, {})
+116:        """Register default tool registries and per-agent registry cache."""
+118:        from nanobot.tools.registry import ToolRegistry
+123:        self.tools = self._build_tool_registry(ws)
+125:        # Register chatroom tools on default registry
+133:        self.direct_tools = self._build_tool_registry(ws)
+135:        # Per-agent registry cache {workspace_path_… (2,025字)
+• exec(grep -n "self\.registry\s*=" /root/nanobot-src/nanobot/groupchat/orchestra/en...) → Exit code: 1 (13字)
+• exec(grep -n "registry" /root/nanobot-src/nanobot/groupchat/orchestra/engine.py | ...) → 6:- Agent registry: all available agents (loaded from config/directory)
+95:        agent_cfg = self.registry.get(agent_name, {})
+116:        """Register default tool registries and per-agent registry cache."""
+125:        # Register chatroom tools on default registry
+157:        registry… (2,962字)
+  (还有 4 个工具调用，已省略)
+---
+[Retriever]: 
+
+[工具调用记录]
+• wait() → (18字)
+• wait() → (399字)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 920|                                     tool_defs=None,             # text-only, no tools
+921|                                     call_timeout=60.0,          # hard cap for retry
+922|                                 )
+923|                                 if _r.content:
+924|                                     content = _r.content
+925|                                     total_latency += _r.latency
+926|                                     engine._add_message(name, content)
+927|                                     search_pool.on_output(name)
+928|                                     mailbox.send(name, ["All"], content[:300])
+929|                                     await engine._send(
+930|                                         _d.chatroom_send_msg(
+931|                                    … (3,310字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 990|                             if is_leader:
+991|                                 _reason = f"Leader {name} 连续 {_consecutive_error_count} 次 LLM 错误"
+992|                                 engine._leader_end_reason = _reason
+993|                                 engine._running = False
+994|                                 leader_end_event.set()
+995|                                 logger.warning(
+996|                                     "Broadcast: leader %s force-exited, ending group chat: %s",
+997|                                     name, _reason,
+998|                                 )
+999|                             break
+1000| 
+1001|                         # Keep agent alive instead of killing it (mirrors timeout recovery)
+1002|                         _placeholder = (
+1003|           … (3,586字)
+• exec(grep -n "_trigger_realtime\|chatroom.*interrupt\|interrupt.*chatroom" /root/n...) → 213:async def _trigger_realtime_interrupts(
+220:    """Handle bi-directional real-time interrupts after a successful chatroom_send.
+1054:                        await _trigger_realtime_interrupts(
+
+
+Exit code: 0 (211字)
+• exec(grep -n "tool_loop\|_trigger_realtime\|chatroom_send\|interrupt" /root/nanobo...) → 127:        self._chatroom_send_tool = ChatroomSendTool(mailbox=self._mailbox)
+129:        self.tools.register(self._chatroom_send_tool)
+760:        if hasattr(self, '_chatroom_send_tool'):
+761:            self._chatroom_send_tool.set_agent(agent_name)
+1018:user "interrupts" before the agent finishes or sends a follow-up right
+1200:- Stats packaging from tool_loop result
+1214:    """Create a full snapshot of messages for logging (before tool_loop mutates them)."""
+1242:    """Package tool_loop r… (910字)
+• exec(grep -n "class ChatroomSendTool\|def execute\|async def execute\|_trigger_rea...) → 223:    async def execute(self, query: str = "", queries: list | None = None,
+283:    async def execute(self, **kwargs) -> str:
+419:    async def execute(self, **kwargs) -> str:
+600:class ChatroomSendTool(Tool):
+667:    async def execute(self, to: str | list[str] = "All", message: str = "", **kwargs: Any) -> str:
+780:    async def execute(
+857:    async def execute(self, to: str = "", reason: str = "", **kwargs: Any) -> str:
+952:    async def execute(
+1114:    async def execute(self, reason: str… (807字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 600| class ChatroomSendTool(Tool):
+601|     """Send a message to one or more agents in the group chat.
+602| 
+603|     Supports sending to specific agents by name, broadcasting
+604|     to all agents with ``"All"``, or sending a summary to the
+605|     user with ``"User"``.
+606|     """
+607| 
+608|     def __init__(self, mailbox: MailboxHub, agent_name: str = "", pool: ConversationPool | None = None,
+609|                  search_pool: "SearchPool | None" = None,
+610|                  leader_gate: LeaderGate | None = None) -> None:
+611|         self._mailbox = mailbox
+612|         self._agent_name = agent_name  # Set per-round by the engine
+613|         self._pool = pool
+614|         self._search_pool = search_pool  # … (4,771字)
+  (还有 2 个工具调用，已省略)
+---
+[Retriever]: 
+
+[工具调用记录]
+• wait() → (863字)
+---
+[Kirk]: 验证修改：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1030|                 if content or result.tool_calls_detail:
+1031|                     if content:
+1032|                         logger.info(
+1033|                             "broadcast [{}] cycle {} output ({}c): {}",
+1034|                             name, cycle, len(content), content,
+1035|                         )
+1036|                     history_content = (content or "") + build_tool_log(result.tool_calls_detail)
+1037|                     engine._add_message(name, history_content)
+1038| 
+1039|                     # Track output for search pool credit recovery
+1040|                     if content:
+1041|                         search_pool.on_output(name)
+1042| 
+1043|                     if not _used_chatroom_send and content:
+1044|                         # Implicitly broadcast tex… (3,738字)
+• exec(grep -n "_trigger_realtime_interrupts\|_used_chatroom_send\|chatroom_send" /r...) → 4:Agents can communicate with each other via chatroom_send/wait tools.
+36:    "chatroom_send": "sending",
+159:        elif tool_name == "chatroom_send":
+167:        if tool_name == "chatroom_send" and "BLOCKED:" in _r:
+169:        elif tool_name == "chatroom_send" and "你已发过 1 条消息" in _r:
+213:async def _trigger_realtime_interrupts(
+220:    """Handle bi-directional real-time interrupts after a successful chatroom_send.
+360:                    elif tool_name not in ("chatroom_send", "wait"):
+406:  … (2,287字)
+• exec(grep -n "def chatroom_send\|async def chatroom_send\|chatroom_send.*tool\|_ch...) → 4:Agents can communicate with each other via chatroom_send/wait tools.
+1022:                _used_chatroom_send = result.tools_used and "chatroom_send" in result.tools_used
+1181:                elif not content and (set(result.tools_used or []) & _substantive_tools) and "chatroom_send" not in (result.tools_used or []):
+1197:                        and "chatroom_send" not in (result.tools_used or []) \
+1211:                # If chatroom_send was used, the content was already shown at tool-call
+
+
+… (512字)
+• exec() → Exit code: 1 (13字)
+• exec(grep -rn "chatroom_send" /root/nanobot-src/nanobot/groupchat/ --include="*.py...) → /root/nanobot-src/nanobot/groupchat/history/tool_pruning.py
+/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py
+/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py
+/root/nanobot-src/nanobot/groupchat/display/broadcast_view.py
+/root/nan… (560字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 1| """Chatroom communication tools for inter-agent messaging.
+2| 
+3| Provides ``chatroom_send`` and ``wait`` tools that agents use
+4| to communicate with each other during broadcast group chat rounds.
+5| Also contains ``CachedSearchTool`` with search-tree resource management.
+6| """
+7| 
+8| from __future__ import annotations
+9| 
+10| import asyncio
+11| import re
+12| import threading
+13| from pathlib import Path
+14| from typing import Any
+15| 
+16| from nanobot.tools.base import Tool
+17| from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool, SpeakQueue
+18| 
+19| 
+20| class SearchPool:
+21|     """Per-agent tool-call credit pool for broadcast mode.
+22| 
+23|     - Each agent gets individual credits (initial_per_agent)
+24|     - Each tool call costs 1 credit from the agent's … (13,155字)
+• exec(grep -n "class.*ChatroomSend\|class.*chatroom_send\|def.*chatroom_send\|_trig...) → 600:class ChatroomSendTool(Tool):
+
+
+Exit code: 0 (48字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 600| class ChatroomSendTool(Tool):
+601|     """Send a message to one or more agents in the group chat.
+602| 
+603|     Supports sending to specific agents by name, broadcasting
+604|     to all agents with ``"All"``, or sending a summary to the
+605|… (5,817字)
+  (还有 3 个工具调用，已省略)
+---
+[Harper]: [工具调用记录]
+• exec(grep -n "is_interrupted\|finish_reason.*interrupt" /root/nanobot-src/nanobot/...) → 873:                is_interrupted = result.finish_reason == "interrupted"
+1063:                if is_interrupted:
+
+Exit code: 0 (129字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1055|                             sender=name,
+1056|                             targets=_implicit_targets,
+1057|                             mailbox=mailbox,
+1058|                             engine=engine,
+1059|                             leader_name=leader_name,
+1060|                         )
+1061| 
+1062|                 # ── Handle forced interrupt ──
+1063|                 if is_interrupted:
+1064|                     # Clear the event so it can be set again by a future message
+1065|                     _interrupt_event.clear()
+1066|                     # Reset interrupt counter so newer messages can re-interrupt
+1067|                     # this agent in subsequent cycles (freshness guarantee).
+1068|                     mailbox._interrupt_counts[name] = 0
+1069|                     # (… (3,176字)
+• exec(grep -n "registry\s*=\|self\.registry\|engine\.registry" /root/nanobot-src/na...) → 304:            cfg = self.engine.registry.get(ag, {})
+354:            registry = ToolRegistry()
+442:        cfg = engine.registry.get(ag, {})
+494:        broadcast_round._agent_ranks_cache = compute_agent_ranks(list(agents), engine.registry, leader_name)
+526:        if name not in engine.registry:
+529:        agent_cfg = engine.registry[name]
+768:                                tool_registry=reg,
+787:                _live_cfg = engine.registry.get(name, agent_cfg)
+838:                        to… (659字)
+• exec(grep -n "registry\s*=\|\.registry\s*=" /root/nanobot-src/nanobot/groupchat/or...) → 155:        registry = ToolRegistry()
+257:            registry=self.registry,
+756:        tool_registry = self.direct_tools if is_direct else self._get_agent_registry(agent_name)
+778:            tool_registry=tool_registry,
+982:            registry=self.registry,
+1078:        registry=engine.registry,
+1490:            tool_registry=tool_registry,
+
+Exit code: 0 (363字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 250|     def _init_state(self) -> None:
+251|         """Load agent registry, persistence layer, and initialize runtime state."""
+252|         # Agent registry: all known agents {name: {model, prompt}}
+253|         self.registry: dict[str, dict[str, Any]] = load_agents(self.config, self.workspace)
+254| 
+255|         # Persistence layer
+256|         self._state = GroupChatState(
+257|             registry=self.registry,
+258|         )
+259| 
+260|         # Restore persisted state
+261|         self._active_agents: list[str] = self._state.load_active()
+262|         self._leader: str | None = self._state.load_leader()
+263|         self._round: int = 0
+264| 
+265|         # ── History: fully managed by HistoryContext (history module) ──
+266|         self.history: HistoryContext = HistoryContext(
+26… (1,545字)
+• exec(git -C /root/nanobot-src log --oneline -1) → b937240c remove agent wait guard from end_discussion - leader can now end discussion without waiting for other agents
+
+Exit code: 0 (132字)
+• exec(grep -n "chatroom_send\|to.*all\|_trigger_realtime" /root/nanobot-src/nanobot...) → 4:Agents can communicate with each other via chatroom_send/wait tools.
+36:    "chatroom_send": "sending",
+159:        elif tool_name == "chatroom_send":
+167:        if tool_name == "chatroom_send" and "BLOCKED:" in _r:
+169:        elif tool_name == "chatroom_send" and "你已发过 1 条消息" in _r:
+213:async def _trigger_realtime_interrupts(
+220:    """Handle bi-directional real-time interrupts after a successful chatroom_send.
+288:    async def setup_tools_and_pools(self, spawn_fn: Callable[[str, int], as… (2,339字)
+
+[工具调用记录]
+• exec(grep -n "class ChatroomSendTool\|def __init__\|self._mailbox" /root/nanobot-s...) → 29:    def __init__(self, agents: list[str], initial_per_agent: int | dict[str, int] = 2,
+138:    def __init__(self, original: Tool, agent_name: str, cache: dict,
+269:    def __init__(self, original: Tool, reader_model: str = "openai/gpt-4.1-nano",
+399:    def __init__(self, original: Tool, reader_model: str = "openai/gpt-4.1-nano",
+576:    def __init__(self, leader_name: str) -> None:
+600:class ChatroomSendTool(Tool):
+608:    def __init__(self, mailbox: MailboxHub, agent_name: str = "", pool: C… (1,110字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 708|                 self._pool.mark_replied(self._agent_name, self._last_received_from)
+709| 
+710|         delivered = self._mailbox.send(self._agent_name, targets, message)
+711| 
+712|         # Trigger rank-based interrupts for busy agents targeted by this message
+713|         if delivered > 0:
+714|             self._mailbox.interrupt_busy_agents(self._agent_name)
+715| 
+716|         # Count successful sends as "output" for search credit recovery
+717|         if delivered > 0 and self._search_pool:
+718|             self._search_pool.on_output(self._agent_name)
+719| 
+720|         avail_hint = ""
+721|         if self._pool:
+722|             avail_hint = f" [{self._pool.used}/{self._pool.capacity} threads]"
+723|         search_hint = ""
+724|         if self._search_pool:
+725|             c =… (1,201字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 471|     def interrupt_busy_agents(self, sender: str) -> int:
+472|         """Set the interrupt event for every currently-busy agent.
+473| 
+474|         Used for high-priority signals (e.g. user messages) that should
+475|         wake up all active tool_loops immediately.  Unlike ``_try_interrupt``,
+476|         this does **not** increment ``_interrupt_counts`` so it doesn't
+477|         consume the per-round agent—agent interrupt quota.
+478| 
+479|         Also resets each interrupted agent's interrupt count so that
+480|         subsequent messages can still trigger fresh interrupts — this
+481|         ensures the agent always responds to the *latest* high-priority
+482|         message, not a stale one.
+483| 
+484|         Returns:
+485|             Number of agents whose interrupt event was… (1,787字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 418|     def _can_interrupt(self, sender: str, target: str) -> bool:
+419|         """Check if sender has sufficient rank to interrupt target.
+420|         
+421|         Rules:
+422|         - Leader CAN interrupt anyone (highest implicit priority)
+423|         - Higher rank CAN interrupt lower rank
+424|         - Equal rank CANNOT interrupt each other (they queue)
+425|         - Unknown rank defaults to 0 (lowest)
+426|         """
+427|         s_rank = self._ranks.get(sender, 0)
+428|         t_rank = self._ranks.get(target, 0)
+429|         return s_rank > t_rank
+430| 
+431|     def _try_interrupt(self, target: str, sender: str) -> bool:
+432|         """Attempt to interrupt a busy agent.
+433| 
+434|         Returns True if the interrupt was triggered, False if skipped
+435|         (agent not b… (1,486字)
+• exec(grep -n "set_ranks\|_ranks" /root/nanobot-src/nanobot/groupchat/orchestra/bro...) → 419:    if hasattr(broadcast_round, "_agent_ranks_cache"):
+420:        del broadcast_round._agent_ranks_cache
+444:    mailbox.set_ranks(ranks_map, leader=leader_name or "")
+491:    # ── Compute agent_ranks early (needed by BroadcastView and message_converter) ──
+492:    from nanobot.groupchat.display.visibility import compute_agent_ranks
+493:    if not hasattr(broadcast_round, "_agent_ranks_cache"):
+494:        broadcast_round._agent_ranks_cache = compute_agent_ranks(list(agents), engine.registr… (850字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 439|     # Push agent ranks into mailbox for interrupt hierarchy
+440|     ranks_map: dict[str, str] = {}
+441|     for ag in agents:
+442|     … (776字)
+  (还有 1 个工具调用，已省略)
+---
+[Kirk]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 708|                 self._pool.mark_replied(self._agent_name, self._last_received_from)
+709| 
+710|         delivered = self._mailbox.send(self._agent_name, targets, message)
+711| 
+712|         # Trigger rank-based interrupts for busy agents targeted by this message
+713|         if delivered > 0:
+714|             self._mailbox.interrupt_busy_agents(self._agent_name)
+715| 
+716|         # Count successful sends as "output" for search credit recovery
+717|         if delivered > 0 and self._search_pool:
+718|             self._search_pool.on_output(self._agent_name)
+719| 
+720|         avail_hint = ""
+721|         if self._pool:
+722|             avail_hint = f" [{self._pool.used}/{self._pool.capacity} threads]"
+723|         search_hint = ""
+724|         if self._search_pool:
+725|             c =… (999字)
+• exec() → [stable-20260527 3c6e1eb2] fix: trigger rank-based interrupts on explicit chatroom_send
+ 1 file changed, 4 insertions(+)
+
+
+Exit code: 0 (135字)
+• memory_palace() → ✅ Stored in wing_code/interrupt-chatroom-send-fix-20260608 (hidden)
+  Drawer ID: drawer_wing_code_interrupt-chatroom-send-fix-20260608_3efee17afbd30268691bf707 (159字)
+• end_discussion() → ✅ 讨论已结束（原因: 根因已确认并修复：ChatroomSendTool.execute() 缺少 interrupt_busy_agents 调用。已 commit 3c6e1eb2。），即将进入总结阶段 (104字)
+---
+[Kirk]: 修复已完成。一行代码解决问题——`ChatroomSendTool.execute()` 发消息后没调 `interrupt_busy_agents()`，现在加了。rank 逻辑本身没问题，是调用路径断了。
+---
+[Retriever]: 
+
+[工具调用记录]
+• wait() → (18字)
+• wait() → (43字)
+---

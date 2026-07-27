@@ -1,0 +1,47 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 1
+---
+[Kirk]: 收到。需要什么？
+---
+[Harper]: 
+
+[工具调用记录]
+• memory_palace(自由讨论 team collaboration Harper Kirk) → 🔍 5 result(s) for '自由讨论 team collaboration Harper Kirk':
+
+[1] wing_code/end-discussion-wait-requirement (sim=0.263)
+  ## end_discussion wait 状态要求验证（2026-06-07）
+
+**结论**：end_discussion 要求所有活跃 agent 处于 wait() 状态才能成功调用。
+
+**实测证据链**（2026-06-07 当轮）：
+1. Kirk 调 end_discussion → ❌ "以下 agent 尚未进入等待状态：Harper"
+2. disable Harper → ❌ "以下 agent 尚未进入等待状态：Retriever"
+3. disable Retriever → ✅ 成功
+
+**规则细节**：
+- 活跃 agent 必须处于 wait() 状态
+- 已 disable 的 agent 跳过检查
+- 逐个检查，第一个不满足即报错终止
+- 系统层硬约束，非 prompt 层建议
+
+**已知缺陷**：
+- 无幂等性（… (1,977字)
+---
+[Harper]: 
+
+[工具调用记录]
+• chatroom_send(待命。你分配任务。) → (47字)
+• wait() → (35字)
+---
+[Harper]: 待命中。等用户明确请求。
+---
+[Kirk]: 用户只发了"1"，无法判断意图。请补充说明你需要什么。
+
+[工具调用记录]
+• chatroom_send(用户请求不明确（只发了"1"），暂无任务可分配。待命。) → (49字)
+---
+[Kirk]: 等待用户补充。
+---
+[用户]: 后台重启nanobot
+---

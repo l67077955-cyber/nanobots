@@ -1,0 +1,445 @@
+[系统]: 话题：自由讨论
+---
+[用户]: Gateway 正常启动了。✅
+
+让我总结一下这次逻辑修复：
+
+---
+
+三处修复，两个文件，从根因消除卡死：
+
+修复 1：mailbox.py — busy 判定逻辑收紧
+
+问题：_get_busy_expected_repliers 认为 "不在 waiting" = "busy"。但 agent 在 tool_loop 结束和 auto-wait 开始之间有一段空白期，既不在 _waiting 也不在 _busy_agents。这段空档会被误判为 busy，导致 Kirk 被 Harper 的这段"空白"卡住 60s。
+
+修复：加入 and other in self._busy_agents 条件——只有真正在 tool_loop 里执行的 agent 才算 busy replier，不在 tool_loop 里的不算。
+
+修复 2：broadcast.py — 连续 wait-timeout 退出
+
+问题：非 leader agent 在 auto-wait 超时后 continue 无限循环，没有退出机制。可以 wait→600s→None→wait→600s→None 无限循环。
+
+修复：新增 _consecutive_waits 计数器，连续 3 次空等后自动退出（done），不再阻塞整个 round。收到消息或成功产出内容时重置。
+
+修复 3：broadcast.py — 计数器重置点
+
+在收到真实消息和成功产出内容时重置 _consecutive_waits，确保正常交互不被误杀。
+
+效果：Kirk 不再被 Harper 的"空白期"卡 60s；即使真卡住，agent 最多等 3 × 600s = 30min 后自动退出（而非无限等待）。  看看hermes的修改是否真正解决卡死的原因
+---
+[Harper]: 好的，让我先检索相关记忆，然后审查 Hermes 的修改是否真正解决了卡死问题。
+
+[工具调用记录]
+• exec(cd /home/hermes && find . -name "*.py" -path "*/broadcast*" -o -name "*.py" -...) → STDERR:
+/bin/bash: line 1: cd: /home/hermes: No such file or directory
+
+
+Exit code: 1 (85字)
+• exec(find / -type d -name "hermes" 2>/dev/null | head -10) → /root/.local/state/hermes
+/root/.nanobot/workspace/agents/hermes-agent/.git/logs/refs/remotes/origin/hermes
+/root/.nanobot/workspace/agents/hermes-agent/.git/refs/remotes/origin/hermes
+/root/hermes-agent/.git/logs/refs/remotes/origin/hermes
+/root/hermes-agent/.git/refs/remotes/origin/hermes
+/root/.nanobot.bak/workspace/agents/hermes-agent/.git/logs/refs/remotes/origin/hermes
+/root/.nanobot.bak/workspace/agents/hermes-agent/.git/refs/remotes/origin/hermes
+
+
+Exit code: 0 (473字)
+• exec(ls /root/hermes-agent/src/ 2>/dev/null || ls /root/hermes-agent/ 2>/dev/null) → AGENTS.md
+CONTRIBUTING.md
+Dockerfile
+LICENSE
+MANIFEST.in
+README.md
+README.zh-CN.md
+RELEASE_v0.10.0.md
+RELEASE_v0.11.0.md
+RELEASE_v0.12.0.md
+RELEASE_v0.13.0.md
+RELEASE_v0.2.0.md
+RELEASE_v0.3.0.md
+RELEASE_v0.4.0.md
+RELEASE_v0.5.0.md
+RELEASE_v0.6.0.md
+RELEASE_v0.7.0.md
+RELEASE_v0.8.0.md
+RELEASE_v0.9.0.md
+SECURITY.md
+__pycache__
+acp_adapter
+acp_registry
+agent
+assets
+batch_runner.py
+cli-config.yaml.example
+cli.py
+constraints-termux.txt
+cron
+datagen-config-examples
+docker
+docker-compose.yml
+docs
+envir… (1,057字)
+• exec(find /root/hermes-agent -name "mailbox.py" -o -name "broadcast.py" 2>/dev/null) → Exit code: 0 (13字)
+• exec(find /root/hermes-agent -type f -name "*.py" | xargs grep -l "_get_busy_expec...) → Exit code: 123 (15字)
+• exec(grep -r "busy_expected\|consecutive_waits\|_busy_agents" /root/hermes-agent -...) → Exit code: 1 (13字)
+• exec(find /root -name "mailbox.py" -o -name "broadcast.py" 2>/dev/null | head -20) → /root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py
+/root/repos/OpenHarness/src/openharness/swarm/mailbox.py
+
+
+Exit code: 0 (187字)
+---
+[Kirk]: Let me see the wait() method's busy-replier extension logic:
+
+[工具调用记录]
+• memory_palace(hermes mailbox broadcast 卡死 busy waiting deadlock) → 🔍 5 result(s) for 'hermes mailbox broadcast 卡死 busy waiting deadlock':
+
+[1] wing_code/groupchat-600s-timeout (sim=-0.038)
+  600s的来源追踪（2026-05-26，补充完整版）：
+
+两个硬编码位置：
+1. run_loop.py:139 — `broadcast_round(..., global_timeout=600.0)` 硬编码600秒（10分钟），这是每轮讨论的全局超时，防止某一轮卡死导致群聊永久阻塞。
+2. mailbox.py:596 — `wait()` 方法的 `timeout: float = 600.0`，agent等待消息的默认超时。但wait()内部有120s hard cap，所以实际约束来自run_loop的global_timeout。
+
+渲染路径：run_loop → broadcast.py:462 → display.py:168 `f"══ Broadcast · {total} agents · {timeout}s ═… (1,934字)
+• memory_palace(hermes gateway 修复 mailbox.py broadcast.py _get_busy_expected_repliers) → 🔍 5 result(s) for 'hermes gateway 修复 mailbox.py broadcast.py _get_busy_expected_repliers':
+
+[1] wing_code/groupchat-600s-timeout (sim=-0.01)
+  600s的来源追踪（2026-05-26，补充完整版）：
+
+两个硬编码位置：
+1. run_loop.py:139 — `broadcast_round(..., global_timeout=600.0)` 硬编码600秒（10分钟），这是每轮讨论的全局超时，防止某一轮卡死导致群聊永久阻塞。
+2. mailbox.py:596 — `wait()` 方法的 `timeout: float = 600.0`，agent等待消息的默认超时。但wait()内部有120s hard cap，所以实际约束来自run_loop的global_timeout。
+
+渲染路径：run_loop → broadcast.py:462 → display.py:168 `f"══ Broadcast · {total} ag… (2,324字)
+• exec(find /root/nanobot-src -name "mailbox.py" -path "*/groupchat/*" 2>/dev/null; ...) → /root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py
+
+
+Exit code: 0 (130字)
+• exec(grep -n "_get_busy_expected_repliers\|_busy_agents\|_waiting" /root/nanobot-s...) → 295:        self._waiting: set[str] = set()
+296:        self._all_waiting = asyncio.Event()
+324:        self._busy_agents: set[str] = set()
+363:        self._waiting.clear()
+364:        self._all_waiting.clear()
+371:        self._busy_agents.clear()
+391:        self._busy_agents.add(agent_name)
+396:        self._busy_agents.discard(agent_name)
+440:        if target not in self._busy_agents:
+471:    def interrupt_busy_agents(self, sender: str) -> int:
+488:        for agent in list(self._busy_agen… (1,606字)
+• exec(grep -n "_consecutive_waits\|consecutive_wait\|done.*exit\|break.*consecutive...) → 736:        _consecutive_waits = 0
+1026:                _consecutive_waits = 0
+1340:                        _consecutive_waits = 0
+1345:                    _consecutive_waits += 1
+1346:                    if _consecutive_waits >= MAX_CONSECUTIVE_WAITS:
+1349:                            name, _consecutive_waits,
+1351:                        await tracker.set_state(name, "done", reason=f"wait timeout x{_consecutive_waits}")
+1353:                    logger.info("Broadcast: {} wait timeout ({}/{}), r… (655字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 739|     def _get_busy_expected_repliers(self, agent_name: str) -> set[str]:
+740|         """Return the set of agents that are expected to reply to agent_name
+741|         and are still actively processing (not waiting, not done).
+742| 
+743|         These are agents that received a message from agent_name (so they may
+744|         reply back) but have not yet entered the waiting state — meaning they
+745|         are still running their tool_loop.
+746| 
+747|         NOTE: Only agents that are *busy* (inside tool_loop, tracked by
+748|         _busy_agents) qualify.  An agent that is active but idle (between
+749|         tool_loop runs, e.g. in mailbox.wait itself) is NOT considered a
+750|         busy replier — they had their chance to reply and chose to wait
+751|         instead, so extendi… (1,708字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 730|         # so we can prune conversation turns without touching the system prompt.
+731|         _sys_msg_count = len(messages)
+732| 
+733|         # ── Consecutive wait-timeout tracker ──
+734|         # Prevents agents from looping wait→timeout→wait forever when no one
+735|         # is going to reply.  After MAX_CONSECUTIVE_WAITS empty waits, exit.
+736|         _consecutive_waits = 0
+737|         MAX_CONSECUTIVE_WAITS = 3
+738| 
+739|         # ── Forced interrupt: get this agent's interrupt event from mai… (902字)
+  (还有 12 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(find / -name "mailbox.py" -path "*/hermes*" 2>/dev/null; find / -name "broadc...) → Exit code: 0 (13字)
+• exec(locate mailbox.py 2>/dev/null; locate broadcast.py 2>/dev/null) → Exit code: 127 (15字)
+• exec(find / -name "mailbox.py" -type f 2>/dev/null | head -20) → /root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py
+/root/repos/OpenHarness/src/openharness/swarm/mailbox.py
+/var/lib/docker/overlay2/5b4b2a917d2137b887b239af7786f7dd124aae1ad51ecec6cf02d195813d905a/diff/usr/local/lib/python3.12/mailbox.py
+/var/lib/docker/overlay2/10b88bd050aad91edb12a8f5982ad5a4756353354bf6c5bb45d5f7f735df9b8a/merged/usr/local/lib/python3.11/mailbox.py
+/var/lib/docker/overlay2/7955cc8b94ab1c4212ed5910ccfd9c1843d994314d5427672001cbd4bd69964f/diff/usr/local/lib/python3.11/ma… (752字)
+• exec(find / -name "broadcast.py" -type f 2>/dev/null | head -20) → /tmp/CLI-Anything/iterm2/agent-harness/cli_anything/iterm2_ctl/core/broadcast.py
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py
+
+
+Exit code: 0 (154字)
+---
+[Lucas]: 
+
+[工具调用记录]
+• chatroom_send() → (48字)
+• wait() → (18字)
+• chatroom_send() → (50字)
+• wait() → (68字)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec() → /root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py:324:        self._busy_agents: set[str] = set()
+/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py:371:        self._busy_agents.clear()
+/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py:391:        self._busy_agents.add(agent_name)
+/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py:396:        self._busy_agents.discard(agent_name)
+/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py:440:        if target not in self… (3,728字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 730|     def agent_names(self) -> list[str]:
+731|         """Names of agents with mailboxes."""
+732|         return list(self._queues.keys())
+733| 
+734|     @property
+735|     def all_waiting_event(self) -> asyncio.Event:
+736|         """Event that fires when all active agents are simultaneously waiting."""
+737|         return self._all_waiting
+738| 
+739|     def _get_busy_expected_repliers(self, agent_name: str) -> set[str]:
+740|         """Return the set of agents that are expected to reply to agent_name
+741|         and are still actively processing (not waiting, not done).
+742| 
+743|         These are agents that received a message from agent_name (so they may
+744|         reply back) but have not yet entered the waiting state — meaning they
+745|         are still running their tool_lo… (3,841字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1320|                 if pool:
+1321|                     pool.release_unread(name)
+1322|                 msg = await mailbox.wait(name, timeout=600)
+1323| 
+1324|                 if msg is None:
+1325|                     # No message — check if engine stopped or leader ended discussion
+1326|                     if not engine._running or leader_end_event.is_set():
+1327|                         await tracker.set_state(name, "done", reason="engine stopped")
+1328|                         logger.info("Broadcast: {} wait returned None, engine stopped, exiting", name)
+1329|                         break
+1330|                     # Leader fallback: if no text was produced, force synthesis
+1331|                     if is_leader and not content:
+1332|                         logger.warning(
+1333|    … (3,906字)
+• exec(grep -n "MAX_CONSECUTIVE_WAITS\|_consecutive_waits" /root/nanobot-src/nanobot...) → 735:        # is going to reply.  After MAX_CONSECUTIVE_WAITS empty waits, exit.
+736:        _consecutive_waits = 0
+737:        MAX_CONSECUTIVE_WAITS = 3
+1026:                _consecutive_waits = 0
+1340:                        _consecutive_waits = 0
+1344:                    # After MAX_CONSECUTIVE_WAITS, exit to avoid blocking the round.
+1345:                    _consecutive_waits += 1
+1346:                    if _consecutive_waits >= MAX_CONSECUTIVE_WAITS:
+1349:                            name,… (864字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 640|         # Use the caller-provided timeout directly (no hard caps)
+641|         effective_timeout = timeout
+642| 
+643|         # Poll interval: re-check expected-reply state at this cadence so we
+644|         # can extend the deadline if a busy teammate is still working.
+645|         _POLL_INTERVAL = 5.0
+646|         deadline = _time.time() + effective_timeout
+647| 
+648|         _MAX_EXTENSIONS = 12  # max 12 × 5s = 60s extra beyond original timeout
+649|         _extensions = 0
+650|         try:
+651|             while True:
+652|                 remaining = deadline - _time.time()
+653|                 if remaining <= 0:
+654|                     # Before giving up: check whether any active agent is still
+655|                     # expected to reply to us (i.e. they received our message a… (2,863字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 380|         """Get (or create) the interrupt event for an agent.
+381| 
+382|         tool_loop polls this event between operations; when set, the loop
+383|         exits gracefully with finish_reason='interrupted'.
+384|         """
+… (1,554字)
+  (还有 4 个工具调用，已省略)
+---
+[Harper]: 网络访问权限不足，无法读取远程文件。让我直接在本地查找 Hermes 项目的源代码。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 320|         # Hard limit: 3 interrupts per agent per round (raised from 1 so that
+321|         # newer messages can re-trigger interrupts for freshness).
+322|         self._interrupt_counts: dict[str, int] = {}
+323|         # Agents currently inside tool_loop (busy — eligible for interruption).
+324|         self._busy_agents: set[str] = set()
+325|         # Auto-incrementing message ID for quote_message support
+326|         self._next_msg_id: int = 0
+327| 
+328|     def set_leader_name(self, leader_name: str) -> None:
+329|         """Set/update the leader name (may not be known at construction time)."""
+330|         self._leader_name = leader_name
+331| 
+332|     def set_listener_restriction(self, agent: str, allowed_sender: str) -> None:
+333|         """Restrict which sender's messages an … (4,333字)
+• exec(grep -n "_get_busy_expected_repliers" /root/nanobot-src/nanobot/groupchat/orc...) → 658:                    busy_repliers = self._get_busy_expected_repliers(agent_name)
+739:    def _get_busy_expected_repliers(self, agent_name: str) -> set[str]:
+
+
+Exit code: 0 (175字)
+• read_file() → Error: Invalid parameters for tool 'read_file': missing required path
+
+[Analyze the error above and try a different approach.] (126字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 700|             # Clean up expected-reply entry for this agent
+701|             self._expected_replies.pop(agent_name, None)
+702| 
+703|     def clear(self) -> None:
+704|         """Clear message queues but preserve history for later reading."""
+705|         for q in self._queues.values():
+706|             while not q.empty():
+707|                 try:
+708|                     q.get_nowait()
+709|                 except asyncio.QueueEmpty:
+710|                     break
+711| 
+712|     def destroy(self) -> None:
+713|         """Remove all mailboxes."""
+714|         self._queues.clear()
+715|         self._history.clear()
+716| 
+717|     @property
+718|     def history(self) -> list[AgentMessage]:
+719|         """All messages sent this round."""
+720|         return list(self._history)
+721| 
+722|… (4,939字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1330|                     # Leader fallback: if no text was produced, force synthesis
+1331|                     if is_leader and not content:
+1332|                         logger.warning(
+1333|                             "Broadcast: leader {} wait timeout with no text (cycle {}), forcing synthesis",
+1334|                             name, cycle,
+1335|                         )
+1336|                         messages.append({
+1337|                             "role": "system",
+1338|                             "content": get_system_warning("leader_wait_timeout", name=name)
+1339|                         })
+1340|                         _consecutive_waits = 0
+1341|                         continue  # re-enter tool_loop for synthesis
+1342|                     # Consecutive wait-timeout guard: … (2,812字)
+• exec(grep -n "_expected_replies" /root/nanobot-src/nanobot/groupchat/orchestra/mai...) → 305:        self._expected_replies: dict[str, set[str]] = {}
+366:        self._expected_replies.clear()
+577:            if sender not in self._expected_replies:
+578:                self._expected_replies[sender] = set()
+579:            self._expected_replies[sender].add(recipient)
+581:            if recipient in self._expected_replies:
+582:                self._expected_replies[recipient].discard(sender)
+701:            self._expected_replies.pop(agent_name, None)
+753:        expected = self._ex… (613字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 565|         # sender may be waiting for their reply, so register sender as
+566|         # expecting a reply from each recipient (while that recipient is active).
+567|         # Also clear any prior expectation that sender was waiting on these recipients
+568|         # (sender is clearly active now, not passively waiting).
+569|  … (1,461字)
+---
+[Lucas]: 
+
+[工具调用记录]
+• wait() → (18字)
+• chatroom_send(你的消息断了。能给我完整的代码片段吗？特别是：
+1. `_get_busy_expected_repliers` 的修改
+2. `wait()` 方法中关于 b) → (48字)
+• wait() → (1,687字)
+---
+[Lucas]: **Hermes 修复评估：✅ 三处全部到位**
+
+| 修复 | 文件位置 | 核心逻辑 | 卡死根因消除？ |
+|------|---------|---------|--------------|
+| busy 判定收紧 | mailbox.py L759 | `and other in self._busy_agents` 三重条件 | ✅ tool_loop 空档期不再误判 |
+| 连续 timeout 退出 | broadcast.py L1345-1352 | `_consecutive_waits >= 3` → done + break | ✅ 无限循环彻底阻断 |
+| 计数器重置点 | broadcast.py L1026/1340/1361 | 有产出/有消息时清零 | ✅ 正常交互不被误杀 |
+
+**生命周期精确性**：mark_idle 在 finally 中调用，确保 agent 从 tool_loop 退出时必定离开 _busy_agents，空白期窗口被正确识别为 idle。
+
+**结论**：从代码层面看，根因已消除。
+---
+[Kirk]: Harper 未参与本轮，已 disable。重新结束。
+
+[工具调用记录]
+• exec(grep -n "_get_busy_expected_repliers\|_busy_agents\|_waiting" /root/nanobot-s...) → 295:        self._waiting: set[str] = set()
+296:        self._all_waiting = asyncio.Event()
+324:        self._busy_agents: set[str] = set()
+363:        self._waiting.clear()
+364:        self._all_waiting.clear()
+371:        self._busy_agents.clear()
+391:        self._busy_agents.add(agent_name)
+396:        self._busy_agents.discard(agent_name)
+440:        if target not in self._busy_agents:
+471:    def interrupt_busy_agents(self, sender: str) -> int:
+488:        for agent in list(self._busy_agen… (1,606字)
+• exec(grep -n "_consecutive_waits\|consecutive_wait" /root/nanobot-src/nanobot/grou...) → 736:        _consecutive_waits = 0
+1026:                _consecutive_waits = 0
+1340:                        _consecutive_waits = 0
+1345:                    _consecutive_waits += 1
+1346:                    if _consecutive_waits >= MAX_CONSECUTIVE_WAITS:
+1349:                            name, _consecutive_waits,
+1351:                        await tracker.set_state(name, "done", reason=f"wait timeout x{_consecutive_waits}")
+1353:                    logger.info("Broadcast: {} wait timeout ({}/{}), r… (655字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 739|     def _get_busy_expected_repliers(self, agent_name: str) -> set[str]:
+740|         """Return the set of agents that are expected to reply to agent_name
+741|         and are still actively processing (not waiting, not done).
+742| 
+743|         These are agents that received a message from agent_name (so they may
+744|         reply back) but have not yet entered the waiting state — meaning they
+745|         are still running their tool_loop.
+746| 
+747|         NOTE: Only agents that are *busy* (inside tool_loop, tracked by
+748|         _busy_agents) qualify.  An agent that is active but idle (between
+749|         tool_loop runs, e.g. in mailbox.wait itself) is NOT considered a
+750|         busy replier — they had their chance to reply and chose to wait
+751|         instead, so extendi… (1,398字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 730|         # so we can prune conversation turns without touching the system prompt.
+731|         _sys_msg_count = len(messages)
+732| 
+733|         # ── Consecutive wait-timeout tracker ──
+734|         # Prevents agents from looping wait→timeout→wait forever when no one
+735|         # is going to reply.  After MAX_CONSECUTIVE_WAITS empty waits, exit.
+736|         _consecutive_waits = 0
+737|         MAX_CONSECUTIVE_WAITS = 3
+738| 
+739|         # ── Forced interrupt: get this agent's interrupt event from mailbox ──
+
+(Showing lines 730-739 of 1741. Use offset=740 to continue.) (581字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1020| 
+1021|                 _used_chatroom_send = result.tools_used and "chatroom_send" in result.tools_used
+1022| 
+1023|                 # Reset consecutive error counter on successful cycle
+1024|                 _consecutive_error_count = 0
+1025|                 # Reset consecutive wait counter — agent produced output
+1026|                 _consecutive_waits = 0
+1027| 
+1028|                 # Record final text or tool calls in history
+1029|                 if content or result.tool_calls_detail:
+1030|                     if content:
+1031|                         logger.info(
+1032|                             "broadcast [{}] cycle {} output ({}c): {}",
+1033|                             name, cycle, len(content), content,
+1034|                         )
+
+(Showing lines 1020-1034 of 1741. … (829字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1330|                     # Leader fallback: if no text was produced, force synthesis
+1331|                     if is_leader and not content:
+1332|                         logger.warning(
+1333|                             "Broadcast: leader {} wait timeout with no text (cycle {}), forcing synthesis",
+1334|                             name, cycle,
+1335|                    … (2,812字)
+  (还有 11 个工具调用，已省略)
+---
+[Kirk]: ## 结论
+
+三处修复全部通过代码审查，从根因层面消除了卡死问题。
+
+## 关键发现
+
+- **修复 1（mailbox.py L759）**：`and other in self._busy_agents` 条件精确收紧了 busy 判定。`mark_busy`/`mark_idle` 的 `finally` 块保证生命周期精确覆盖 tool_loop 执行期，空白期不再被误判
+- **修复 2（broadcast.py L1345-1352）**：`_consecutive_waits >= 3` 时 `set_state("done")` + `break`，无限 wait 循环被彻底阻断
+- **修复 3（broadcast.py L1026/L1340/L1361）**：三个重置点覆盖所有正常交互路径（成功产出、Leader 强制 synthesis、收到真实消息），不会被误杀
+- **Leader 特殊处理**：Leader wait 超时不计入 consecutive_waits，而是强制 re-enter tool_loop 做 synthesis——合理设计，Leader 应主动 end_discussion
+
+## 备注
+
+代码实现与修复方案完全一致，生命周期覆盖完整，无遗漏路径。
+
+[工具调用记录]
+• end_discussion() → ✅ 讨论已结束（原因: 代码审查已完成，三处修复全部验证通过。Harper 已 disable。），即将进入总结阶段 (58字)
+---

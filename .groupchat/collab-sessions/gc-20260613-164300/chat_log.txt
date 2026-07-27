@@ -1,0 +1,453 @@
+[用户]: hermes不是nanobot这个工程
+---
+[Harper]: **状态汇总：**
+- **nanobot**: `0d06c83d` ✅ 已提交，无未跟踪文件
+- **hermes**: `57a94b4f0` ✅ 已提交，未跟踪的 `tinker-atropos/` 是独立子项目（自有.git），正常
+
+两个仓库forget触发场景已同步完成。
+
+[工具调用记录]
+• exec(cd ~/agents/nanobot && git log -1 --oneline && echo "---" && cd ~/agents/herm...) → STDERR:
+/bin/bash: line 1: cd: /root/agents/nanobot: No such file or directory
+
+
+Exit code: 1 (93字)
+• exec(find ~ -type d -name "nanobot" -o -type d -name "hermes*" 2>/dev/null | head -10) → /root/.local/state/hermes
+/root/nanobot-src/webui/node_modules/hermes-estree
+/root/nanobot-src/webui/node_modules/hermes-parser
+/root/nanobot-src/nanobot
+/root/.nanobot/workspace/agents/hermes-agent
+/root/.nanobot/workspace/agents/hermes-agent/ui-tui/packages/hermes-ink
+/root/.nanobot/workspace/agents/hermes-agent/plugins/hermes-achievements
+/root/.nanobot/workspace/agents/hermes-agent/apps/desktop/public/hermes-frames
+/root/.nanobot/workspace/agents/hermes-agent/.git/logs/refs/remotes/origin/he… (596字)
+• exec() → 0d06c83d feat: add 'bad results → forget' trigger to forget_guidance
+---NANOBOT STATUS---
+---
+57a94b4f0 feat: add 'bad results → forget' trigger to FORGET_GUIDANCE
+---HERMES STATUS---
+?? tinker-atropos/
+
+
+Exit code: 0 (217字)
+• exec(cd /root/.nanobot/workspace/agents/hermes-agent && ls -la tinker-atropos/) → total 48
+drwxr-xr-x  4 root root 4096 May 27 10:21 .
+drwxr-xr-x 35 root root 4096 Jun 12 12:04 ..
+-rw-r--r--  1 root root   39 May 27 10:21 .git
+-rw-r--r--  1 root root  363 May 27 10:21 .gitignore
+-rw-r--r--  1 root root  477 May 27 10:21 .pre-commit-config.yaml
+-rw-r--r--  1 root root 6372 May 27 10:21 README.md
+drwxr-xr-x  2 root root 4096 May 27 10:21 configs
+-rwxr-xr-x  1 root root 5240 May 27 10:21 launch_training.py
+-rw-r--r--  1 root root 1146 May 27 10:21 pyproject.toml
+drwxr-xr-x  5 ro… (555字)
+• exec(cd /root/.nanobot/workspace/agents/hermes-agent && git status --short) → ?? tinker-atropos/
+
+
+Exit code: 0 (33字)
+---
+[Kirk]: hermes独立仓库（`/root/hermes-agent/`）里**没有**forget_guidance相关代码。之前的改动全做在了nanobot workspace下的副本里，那个不是hermes工程本身。
+
+现在需要在hermes独立仓库里加入forget_guidance。让我先看hermes的prompt_builder结构：
+
+[工具调用记录]
+• exec(find /root -maxdepth 4 -name ".git" -type d 2>/dev/null | head -20) → /root/nanobot-src/.git
+/root/nanobot-src/.git/config-versions.git/.git
+/root/nanobot-src/SillyTavern/.git
+/root/.nanobot/.git
+/root/.nanobot/workspace/claude-code-leak/.git
+/root/.nanobot/workspace/AI-Researcher/.git
+/root/.nanobot/workspace/.git
+/root/.nanobot/workspace/opencli/.git
+/root/.nanobot/workspace/RAG-Anything/.git
+/root/.nanobot/workspace/markitdown/.git
+/root/.nanobot/workspace/mempalace/.git
+/root/.nvm/.git
+/root/claude-code-source/.git
+/root/.nanobot-official/workspace/.git
+/root/… (682字)
+• exec(ls -la /root/.nanobot/workspace/agents/hermes-agent/ 2>/dev/null | head -5) → total 3360
+drwxr-xr-x 35 root root   4096 Jun 12 12:04 .
+drwxr-xr-x  3 root root   4096 Mar 31 10:07 ..
+-rw-r--r--  1 root root    936 Jun  5 13:08 .dockerignore
+-rw-r--r--  1 root root  23228 Jun  5 13:08 .env.example
+
+
+Exit code: 0 (233字)
+• exec(cd /root/hermes-agent && git log --oneline -3 && echo "---" && git status --s...) → 439f53cab fix(desktop): gate OAuth remote connect on AT-or-RT, not access token alone
+899ee8c23 fix(gateway): tolerate non-UTF-8 status/pid files in gateway status reads
+7309f3bef fix(line): map inbound message types to the correct MessageType
+---
+
+
+Exit code: 0 (262字)
+• exec(cd /root/nanobot-src && git log --oneline -3 && echo "---" && git status --short) → 0d06c83d feat: add 'bad results → forget' trigger to forget_guidance
+5d871a71 feat: forget-compression integration — warn before auto-compress, strengthen forget_guidance
+2d95790c feat: add forget tool, refactor callbacks & context compression
+---
+
+
+Exit code: 0 (262字)
+• exec(cd /root/hermes-agent && git diff --stat HEAD) → Exit code: 0 (13字)
+• exec(cd /root/hermes-agent && grep -rn "FORGET_GUIDANCE\|forget_guidance" --includ...) → Exit code: 1 (13字)
+• exec(cd /root/hermes-agent && ls -la && echo "===" && find . -maxdepth 3 -name "*....) → total 3364
+drwxr-xr-x 35 root root   4096 Jun  5 13:23 .
+drwx------ 70 root root   4096 Jun 12 11:27 ..
+-rw-r--r--  1 root root    936 Jun  5 13:22 .dockerignore
+-rw-r--r--  1 root root    894 Apr 29 10:46 .env
+-rw-r--r--  1 root root  23228 Jun  5 13:22 .env.example
+-rw-r--r--  1 root root    328 Jun  5 13:22 .envrc
+drwxr-xr-x  8 root root   4096 Jun 13 16:43 .git
+-rw-r--r--  1 root root    418 Jun  5 13:22 .gitattributes
+drwxr-xr-x  6 root root   4096 Jun  5 13:22 .github
+-rw-r--r--  1 root ro… (5,332字)
+• exec(cd /root/hermes-agent && grep -rn "FORGET_GUIDANCE\|forget_guidance\|forget" ...) → agent/title_generator.py
+agent/codex_responses_adapter.py
+agent/agent_init.py
+agent/lsp/manager.py
+agent/async_utils.py
+
+
+Exit code: 0 (134字)
+• exec(cd /root/hermes-agent && ls agent/) → __init__.py
+__pycache__
+account_usage.py
+agent_init.py
+agent_runtime_helpers.py
+anthropic_adapter.py
+async_utils.py
+auxiliary_client.py
+azure_identity_adapter.py
+background_review.py
+bedrock_adapter.py
+browser_provider.py
+browser_registry.py
+chat_completion_helpers.py
+codex_responses_adapter.py
+codex_runtime.py
+context_compressor.py
+context_engine.py
+context_references.py
+conversation_compression.py
+conversation_loop.py
+copilot_acp_client.py
+credential_persistence.py
+credential_pool.py
+credentia… (1,698字)
+• exec(cd /root/hermes-agent && grep -n "forget\|FORGET\|compress" agent/prompt_buil...) → Exit code: 0 (13字)
+• exec(cd /root/hermes-agent && grep -n "forget\|FORGET\|compress" agent/system_prom...) → 4:turns — only context compression triggers a rebuild.  This keeps the
+327:    # on every rebuild path (compression boundary, fresh-agent gateway turns,
+351:    only rebuilt after context compression events. This ensures the system
+369:    Called after context compression events. Also reloads memory from disk
+
+
+Exit code: 0 (325字)
+• exec(cd /root/hermes-agent && wc -l agent/prompt_builder.py && head -80 agent/prom...) → 1521 agent/prompt_builder.py
+"""System prompt assembly -- identity, platform hints, skills index, context files.
+
+All functions are stateless. AIAgent._build_system_prompt() calls these to
+assemble pieces, then combines them with memory and ephemeral prompts.
+"""
+
+im… (3,007字)
+  (还有 6 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(find /root -maxdepth 2 -type d -name "hermes-agent" 2>/dev/null | grep -v nan...) → /root/hermes-agent
+
+
+Exit code: 0 (33字)
+• exec(cd /root/hermes-agent && find . -name "prompt_builder.py" 2>/dev/null | head -5) → ./agent/prompt_builder.py
+
+
+Exit code: 0 (40字)
+• exec(cd /root/hermes-agent && grep -n "FORGET\|forget" agent/prompt_builder.py | h...) → Exit code: 0 (13字)
+• read_file(/root/hermes-agent/agent/prompt_builder.py) → 1| """System prompt assembly -- identity, platform hints, skills index, context files.
+2| 
+3| All functions are stateless. AIAgent._build_system_prompt() calls these to
+4| assemble pieces, then combines them with memory and ephemeral prompts.
+5| """
+6| 
+7| import json
+8| import logging
+9| import os
+10| import threading
+11| from collections import OrderedDict
+12| from pathlib import Path
+13| 
+14| from hermes_constants import get_hermes_home, get_skills_dir, is_wsl
+15| from typing import Optional
+16| 
+17| from agent.runtime_cwd import resolve_agent_cwd
+18| from agent.skill_utils import (
+19|     extract_skill_conditions,
+20|     extract_skill_description,
+21|     get_all_skills_dirs,
+22|     get_disabled_skill_names,
+23|     iter_skill_index_files,
+24|     parse_frontmatter,
+25|     skill_ma… (3,332字)
+• exec(cd /root/hermes-agent && grep -n "GUIDANCE\|CONSTANTS\|PROMPT" agent/prompt_b...) → 132:HERMES_AGENT_HELP_GUIDANCE = (
+143:MEMORY_GUIDANCE = (
+166:SESSION_SEARCH_GUIDANCE = (
+172:SKILLS_GUIDANCE = (
+181:KANBAN_GUIDANCE = (
+257:TOOL_USE_ENFORCEMENT_GUIDANCE = (
+292:TASK_COMPLETION_GUIDANCE = (
+315:OPENAI_MODEL_EXECUTION_GUIDANCE = (
+376:# Injected alongside TOOL_USE_ENFORCEMENT_GUIDANCE when the model is Gemini or Gemma.
+377:GOOGLE_MODEL_OPERATIONAL_GUIDANCE = (
+400:COMPUTER_USE_GUIDANCE = (
+891:_SKILLS_PROMPT_CACHE_MAX = 8
+892:_SKILLS_PROMPT_CACHE: OrderedDict[tuple, str] = Ord… (1,098字)
+• read_file(/root/hermes-agent/agent/prompt_builder.py) → 257| TOOL_USE_ENFORCEMENT_GUIDANCE = (
+258|     "# Tool-use enforcement\n"
+259|     "You MUST use your tools to take action — do not describe what you would do "
+260|     "or plan to do without actually doing it. When you say you will perform an "
+261|     "action (e.g. 'I will run the tests', 'Let me check the file', 'I will create "
+262|     "the project'), you MUST immediately make the corresponding tool call in the same "
+263|     "response. Never end your turn with a promise of future action — execute it now.\n"
+264|     "Keep working until the task is actually complete. Do not stop with a summary of "
+265|     "what you plan to do next time. If you have tools available that can accomplish "
+266|     "the task, use them instead of telling the user what you would do.\n"
+267|     "Every… (2,791字)
+• exec(cd /root/hermes-agent && grep -n "GUIDANCE" agent/prompt_builder.py | grep -v...) → 132:HERMES_AGENT_HELP_GUIDANCE = (
+143:MEMORY_GUIDANCE = (
+166:SESSION_SEARCH_GUIDANCE = (
+172:SKILLS_GUIDANCE = (
+181:KANBAN_GUIDANCE = (
+257:TOOL_USE_ENFORCEMENT_GUIDANCE = (
+292:TASK_COMPLETION_GUIDANCE = (
+315:OPENAI_MODEL_EXECUTION_GUIDANCE = (
+376:# Injected alongside TOOL_USE_ENFORCEMENT_GUIDANCE when the model is Gemini or Gemma.
+377:GOOGLE_MODEL_OPERATIONAL_GUIDANCE = (
+400:COMPUTER_USE_GUIDANCE = (
+
+
+Exit code: 0 (426字)
+• exec(cd /root/hermes-agent && grep -n "_build_system_prompt\|GUIDANCE\[" agent/pro...) → 3:All functions are stateless. AIAgent._build_system_prompt() calls these to
+
+
+Exit code: 0 (91字)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/hermes-agent && grep -n "HERMES_AGENT_HELP_GUIDANCE\|MEMORY_GUIDANCE...) → 132:HERMES_AGENT_HELP_GUIDANCE = (
+143:MEMORY_GUIDANCE = (
+257:TOOL_USE_ENFORCEMENT_GUIDANCE = (
+376:# Injected alongside TOOL_USE_ENFORCEMENT_GUIDANCE when the model is Gemini or Gemma.
+
+
+Exit code: 0 (201字)
+• exec(cd /root/hermes-agent && grep -rn "HERMES_AGENT_HELP_GUIDANCE\|MEMORY_GUIDANC...) → agent/system_prompt.py:32:    HERMES_AGENT_HELP_GUIDANCE,
+agent/system_prompt.py:34:    MEMORY_GUIDANCE,
+agent/system_prompt.py:102:    stable_parts.append(HERMES_AGENT_HELP_GUIDANCE)
+agent/system_prompt.py:116:        tool_guidance.append(MEMORY_GUIDANCE)
+agent/prompt_builder.py:132:HERMES_AGENT_HELP_GUIDANCE = (
+agent/prompt_builder.py:143:MEMORY_GUIDANCE = (
+tests/run_agent/test_run_agent.py:1075:        from agent.prompt_builder import MEMORY_GUIDANCE
+tests/run_agent/test_run_agent.py:1078: … (734字)
+• read_file(/root/hermes-agent/agent/system_prompt.py) → 1| """System-prompt assembly for :class:`AIAgent`.
+2| 
+3| The agent's system prompt is built once per session and reused across all
+4| turns — only context compression triggers a rebuild.  This keeps the
+5| upstream prefix cache warm.  See ``hermes-agent-dev``'s
+6| ``references/system-prompt-invariant.md`` for the invariants and
+7| ``references/self-improvement-loop.md`` for how the background-review
+8| fork inherits the cached prompt verbatim.
+9| 
+10| Three tiers are joined with ``\\n\\n``:
+11| 
+12| * ``stable``   — identity (SOUL.md or DEFAULT_AGENT_IDENTITY), tool
+13|   guidance, computer-use guidance, nous subscription block, tool-use
+14|   enforcement guidance + per-model operational guidance, skills prompt,
+15|   alibaba model-name workaround, environment hints, platform hints.
+16| *… (7,291字)
+• exec(cd /root/nanobot-src/nanobot && grep -A 50 "FORGET_GUIDANCE\|forget_guidance"...) → STDERR:
+grep: nanobot/prompt_builder.py: No such file or directory
+
+
+Exit code: 0 (81字)
+• exec(cd /root/nanobot-src/nanobot && find . -name "prompt_builder.py" 2>/dev/null) → ./groupchat/history/prompt_builder.py
+
+
+Exit code: 0 (52字)
+• exec(cd /root/nanobot-src/nanobot && grep -A 50 "FORGET_GUIDANCE" groupchat/histor...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src/nanobot && grep -n "forget" groupchat/history/prompt_bui...) → 33:    "main_prompt", "persona", "hard_rules", "tool_instructions", "forget_guidance", "skills",
+45:    "forget_guidance": "主动压缩 (forget_guidance)",
+66:    "forget_guidance": "static",
+241:    "forget_guidance": (
+242:        "### ⚡ 主动压缩 (forget) — 强制规则\n"
+244:        "你必须主动用 forget 工具清理低价值输出，保护重要内容不被自动压缩丢失。\n\n"
+245:        "#### 🔴 必须立即 forget 的场景\n"
+246:        "- 搜索结果已提取完关键信息 → forget(indices=[0,1,2])\n"
+247:        "- 长文件已读完并记了笔记 → forget(keywords=\"read_file\")\n"
+248:        "- exec 输出冗长但只… (541字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 241|     "forget_guidance": (
+242|         "### ⚡ 主动压缩 (forget) — 强制规则\n"
+243|         "上下文空间有限。系统会在接近容量时自动压缩（摘要替换中间消息），但自动压缩不区分重要与否，可能吞掉关键信息。\n"
+244|         "你必须主动用 forget 工具清理低价值输出，保护重要内容不被自动压缩丢失。\n\n"
+245|         "#### 🔴 必须立即 forget 的场景\n"
+246|         "- 搜索结果已提取完关键信息 → forget(indices=[0,1,2])\n"
+247|         "- 长文件已读完并记了笔记 → forget(keywords=\"read_file\")\n"
+248|         "- exec 输出冗长但只需结论 → forget(indices=0)\n"
+249|         "- 同一工具连续调用多次，早期结果已过时 → forget(keywords=\"web_search\")\n"
+250|         "- 任何超过500字的工具输出，提取完信息后立即 forget\n"
+251|         "- 工具返回错误/异常/空结果 → forget(indices=0)，不要让失败结果占空间\n"
+252|         "- 工具结果与预期不符（格式错、内容无关、部分截断）→ 提取可用部分后 forget 原始输出\n"
+253|         "- 重试后得到正确结果 → forget 之前的失败结果，只保留最终正确的\n\n"
+254|         "#### 🟢 不要 forget\n"
+255|         "- 结果还需要在后续步骤中引用（文件路径、URL… (3,746字)
+---
+[Kirk]: 现在在`system_prompt.py`中注入FORGET_GUIDANCE：
+
+[工具调用记录]
+• exec(cd /root/hermes-agent && grep -rn "FORGET_GUIDANCE\|forget_guidance" agent/ -...) → Exit code: 0 (13字)
+• exec(cd /root/hermes-agent && git log --oneline -5) → 439f53cab fix(desktop): gate OAuth remote connect on AT-or-RT, not access token alone
+899ee8c23 fix(gateway): tolerate non-UTF-8 status/pid files in gateway status reads
+7309f3bef fix(line): map inbound message types to the correct MessageType
+736dc0fd8 fix(nix): use fetchNpmDeps hash for npmDepsHash, not prefetch-npm-deps
+6b77fd2a0 fix(nix): bump npmDepsHash for react-router 7.17.0 lockfile
+
+
+Exit code: 0 (409字)
+• exec(cd /root/hermes-agent && grep -n "FORGET_GUIDANCE\|forget" agent/prompt_build...) → Exit code: 0 (13字)
+• exec(cd /root/hermes-agent && grep -n "stable_parts.append\|context_parts.append\|...) → 94:            stable_parts.append(_soul_content)
+99:        stable_parts.append(DEFAULT_AGENT_IDENTITY)
+102:    stable_parts.append(HERMES_AGENT_HELP_GUIDANCE)
+111:        stable_parts.append(TASK_COMPLETION_GUIDANCE)
+132:        stable_parts.append(" ".join(tool_guidance))
+138:        stable_parts.append(COMPUTER_USE_GUIDANCE)
+142:        stable_parts.append(nous_subscription_prompt)
+165:            stable_parts.append(TOOL_USE_ENFORCEMENT_GUIDANCE)
+170:                stable_parts.append(GOOG… (1,304字)
+• exec(cd /root/hermes-agent && sed -n '190,260p' agent/system_prompt.py) → available_toolsets=avail_toolsets,
+        )
+    else:
+        skills_prompt = ""
+    if skills_prompt:
+        stable_parts.append(skills_prompt)
+
+    # Alibaba Coding Plan API always returns "glm-4.7" as model name regardless
+    # of the requested model. Inject explicit model identity into the system prompt
+    # so the agent can correctly report which model it is (workaround for API bug).
+    # Stable for the lifetime of an agent instance — model and provider are fixed
+    # at construction … (3,527字)
+• exec(cd /root/hermes-agent && grep -n "forget\|forget_tool\|context_clean\|compres...) → Exit code: 0 (13字)
+• exec(cd /root/hermes-agent && wc -l agent/prompt_builder.py && head -30 agent/prom...) → 1521 agent/prompt_builder.py
+"""System prompt assembly -- identity, platform hints, skills index, context files.
+
+All functions are stateless. AIAgent._build_system_prompt() calls these to
+assemble pieces, then combines them with memory and ephemeral prompts.
+"""
+
+import json
+import logging
+import os
+import threading
+from collections import OrderedDict
+from pathlib import Path
+
+from hermes_constants import get_hermes_home, get_skills_dir, is_wsl
+from typing import Optional
+
+from agent.runtime_cw… (875字)
+• exec(cd /root/hermes-agent && grep -n "GUIDANCE\|_GUIDANCE" agent/prompt_builder.p...) → 132:HERMES_AGENT_HELP_GUIDANCE = (
+143:MEMORY_GUIDANCE = (
+166:SESSION_SEARCH_GUIDANCE = (
+172:SKILLS_GUIDANCE = (
+181:KANBAN_GUIDANCE = (
+257:TOOL_USE_ENFORCEMENT_GUIDANCE = (
+292:TASK_COMPLETION_GUIDANCE = (
+315:OPENAI_MODEL_EXECUTION_GUIDANCE = (
+376:# Injected alongside TOOL_USE_ENFORCEMENT_GUIDANCE when the model is Gemini or Gemma.
+377:GOOGLE_MODEL_OPERATIONAL_GUIDANCE = (
+400:COMPUTER_USE_GUIDANCE = (
+
+
+Exit code: 0 (426字)
+• exec(cd /root/hermes-agent && sed -n '143,200p' agent/prompt_builder.py) → MEMORY_GUIDANCE = (
+    "You have persistent memory across sessions. Save durable facts using the memory "
+    "tool: user preferences, environment details, tool quirks, and stable conventions. "
+    "Memory is injected into every turn, so keep it compact and focused on facts that "
+    "will still matter later.\n"
+    "Prioritize what reduces future user steering — the most valuable memory is one "
+    "that prevents the user from having to correct or remind you again. "
+    "User preferences a… (3,422字)
+• exec(cd /root/hermes-agent && grep -n "forget" agent/system_prompt.py) → Exit code: 1 (13字)
+• exec(cd /root/hermes-agent && sed -n '100,145p' agent/system_prompt.py) → # Pointer to the hermes-agent skill + docs for user questions about Hermes itself.
+    stable_parts.append(HERMES_AGENT_HELP_GUIDANCE)
+
+    # Universal task-completion / no-fabrication guidance.  Applied to ALL
+… (2,445字)
+  (还有 4 个工具调用，已省略)
+---
+[Harper]: ✅ **hermes独立仓库已添加FORGET_GUIDANCE**
+
+改动：
+- `prompt_builder.py`: +52行 FORGET_GUIDANCE常量（与nanobot同步的8条触发场景）
+- `system_prompt.py`: +6行（import + 注入逻辑，当agent有forget工具时自动注入）
+
+语法验证通过，待提交。
+
+[工具调用记录]
+• read_file(/root/hermes-agent/agent/prompt_builder.py) → 143| MEMORY_GUIDANCE = (
+144|     "You have persistent memory across sessions. Save durable facts using the memory "
+145|     "tool: user preferences, environment details, tool quirks, and stable conventions. "
+146|     "Memory is injected into every turn, so keep it compact and focused on facts that "
+147|     "will still matter later.\n"
+148|     "Prioritize what reduces future user steering — the most valuable memory is one "
+149|     "that prevents the user from having to correct or remind you again. "
+150|     "User preferences and recurring corrections matter more than procedural task details.\n"
+151|     "Do NOT save task progress, session outcomes, completed-work logs, or temporary TODO "
+152|     "state to memory; use session_search to recall those from past transcripts. "
+153|   … (2,061字)
+• edit_file() → (62字)
+• edit_file() → (61字)
+• edit_file() → (61字)
+• exec(cd /root/hermes-agent && python3 -c "import ast; ast.parse(open('agent/prompt...) → Syntax OK
+
+
+Exit code: 0 (24字)
+• exec(cd /root/hermes-agent && git status --short && git diff --stat) → M agent/prompt_builder.py
+ M agent/system_prompt.py
+ agent/prompt_builder.py | 52 +++++++++++++++++++++++++++++++++++++++++++++++++
+ agent/system_prompt.py  |  6 ++++++
+ 2 files changed, 58 insertions(+)
+
+
+Exit code: 0 (219字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• exec(cd /root/hermes-agent && git diff --stat) → agent/prompt_builder.py | 52 +++++++++++++++++++++++++++++++++++++++++++++++++
+ agent/system_prompt.py  |  6 ++++++
+ 2 files changed, 58 insertions(+)
+
+
+Exit code: 0 (166字)
+• exec(cd /root/hermes-agent && git add -A && git commit -m "feat: add FORGET_GUIDAN...) → [main b0a674153] feat: add FORGET_GUIDANCE with bad-result→forget triggers, inject via system_prompt
+ 2 files changed, 58 insertions(+)
+
+
+Exit code: 0 (150字)
+• memory_palace() → ✅ Stored in wing_code/hermes-vs-nanobot (hidden)
+  Drawer ID: drawer_wing_code_hermes-vs-nanobot_b311fe52feb98a365c1e275e (121字)
+• end_discussion() → ✅ 讨论已结束（原因: hermes独立仓库已添加FORGET_GUIDANCE并提交，记忆已更新标注hermes≠nanobot），即将进入总结阶段 (75字)
+---
+[Kirk]: ## 结论
+hermes是独立仓库（`/root/hermes-agent`），不是nanobot工程。已纠正混淆，FORGET_GUIDANCE已正确添加到hermes并提交。
+
+## 关键发现
+- hermes仓库路径：`/root/hermes-agent`，与nanobot（`/root/nanobot-src`）完全独立
+- hermes的FORGET_GUIDANCE注入方式：`system_prompt.py`中检查`agent.valid_tool_names`是否包含`"forget"`，有则import并append到tool_guidance
+- 提交：`b0a674153` — 2文件58行新增
+- 记忆已更新，标注hermes≠nanobot，避免后续再混淆
+
+## 备注
+之前把hermes当作nanobot子目录操作是错误的。两个仓库各自有独立的`prompt_builder.py`和`system_prompt.py`，修改时必须分别处理。
+---

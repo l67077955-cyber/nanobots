@@ -1,0 +1,1126 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 👑 Kirk → 进展 [2] ━━
+结论
+
+callbacks.py 第1206-1252行已修改。点击 dynamic 组件的编辑按钮时，现在会调用 _get_component_content() 获取运行时渲染内容，以只读模式展示（👁图标 + "↩️ 返回"按钮），不进入编辑状态。
+
+关键发现
+
+• 修改文件：callbacks.py pre: 回调
+• 分支逻辑：phase == "dynamic" → 只读预览；phase == "static" → 原有编辑流程
+• 内容来源：engine.prompt_builder._get_component_content("__preview__", {}, key, active_agents) — 运行时实际渲染结果
+• 来源标注：复用上一轮添加的 PromptBuilder.get_component_source(key) 显示生成函数/文件名
+• 不设 _edit_state：用户无法回复修改，只有"↩️ 返回"按钮
+
+备注
+
+• examples 组件在全局预览下（agent dict 为空）会返回空字符串，因为它是 per-agent 字段。这是预期行为——全局上下文下没有特定 agent 的 examples。
+• 编译验证通过。
+提示:161,406 回复:2,035+💭58 · 32.3s $0.0568 💾缓存:151,296
+
+现在动态生成的prompt，点击进去还是空内容，然后有些带锁图标的按钮点击后没反应
+---
+[Kirk]: 现在看回调中调用 `_get_component_content` 时传的参数——`agent_name="__preview__"`, `agent={}`, `active_agents`：
+
+[工具调用记录]
+• memory_palace(callbacks.py dynamic component preview _get_component_content prompt builder) → 🔍 5 result(s) for 'callbacks.py dynamic component preview _get_component_content prompt builder':
+
+[1] wing_code/prompt-pipeline-display-fix (sim=-0.098)
+  ## Dynamic 组件来源改为运行时推断（2026-05-24）
+
+问题：settings.py 中 _DYN_SOURCE 是硬编码字典，新增组件容易忘记同步。
+
+修复：在 PromptBuilder 上新增 get_component_source(key) 静态方法，运行时推断来源：
+1. 有 _build_{key}() 方法 → 显示函数名
+2. 有 ~/.nanobot/prompts/{key}.md → 显示文件名
+3. 是已知 agent 字段 → 显示 agent.{key}
+4. 兜底 → "runtime"
+
+settings.py 删除硬编码字典，改调 PromptBuilder.get_component_source(key)。
+
+文件：
+- p… (2,259字)
+• memory_palace(dynamic prompt 编辑按钮 锁图标 只读预览) → 🔍 5 result(s) for 'dynamic prompt 编辑按钮 锁图标 只读预览':
+
+[1] wing_code/prompt-pipeline-display-fix (sim=0.167)
+  ## Dynamic 组件来源改为运行时推断（2026-05-24）
+
+问题：settings.py 中 _DYN_SOURCE 是硬编码字典，新增组件容易忘记同步。
+
+修复：在 PromptBuilder 上新增 get_component_source(key) 静态方法，运行时推断来源：
+1. 有 _build_{key}() 方法 → 显示函数名
+2. 有 ~/.nanobot/prompts/{key}.md → 显示文件名
+3. 是已知 agent 字段 → 显示 agent.{key}
+4. 兜底 → "runtime"
+
+settings.py 删除硬编码字典，改调 PromptBuilder.get_component_source(key)。
+
+文件：
+- prompt_builder.py: get_component_source() 方法（在 get… (2,209字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1190|                 buttons = []
+1191|                 for p in available:
+1192|                     buttons.append([InlineKeyboardButton(f"➕ {p}", callback_data=f"ahp_new:{a_name}:{p}")])
+1193|                 buttons.append([InlineKeyboardButton("✏️ 自定义参数名", callback_data=f"ahp_custom:{a_name}")])
+1194|                 buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ahp_back:{a_name}")])
+1195|                 await query.edit_message_text(
+1196|                     f"➕ 为 {a_name} 添加参数:",
+1197|                     reply_markup=InlineKeyboardMarkup(buttons)
+1198|                 )
+1199| 
+1200|             elif data.startswith("ahp_new:"):
+1201|                 # ahp_new:AgentName:key
+1202|                 parts = data.split(":", 2)
+1203|                 if len(parts) < 3:
+1… (6,831字)
+• exec(grep -n "_prompt_show_component_page\|_COMPONENT_PHASES\|_get_component_conte...) → 22:    COMPONENT_PHASES as _COMPONENT_PHASES,
+83:    async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+88:        phase = _COMPONENT_PHASES.get(key, "static")
+89:        phase_label = "STATIC" if phase == "static" else "DYNAMIC"
+91:        if phase == "dynamic":
+92:            content = engine.prompt_builder._get_component_content(
+103:                if phase == "static"
+124:        if phase != "dynamic":
+1277:                    await self._prompt_show_compon… (930字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 83|     async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+84|         """Show a single prompt component with pagination for long content."""
+85|         engine = self._groupchat_engine
+86|         chat_id = query.message.chat_id
+87|         label = _COMPONENT_LABELS.get(key, key)
+88|         phase = _COMPONENT_PHASES.get(key, "static")
+89|         phase_label = "STATIC" if phase == "static" else "DYNAMIC"
+90| 
+91|         if phase == "dynamic":
+92|             content = engine.prompt_builder._get_component_content(
+93|                 "__preview__", {}, key,
+94|                 list(getattr(engine, "active_agents", [])),
+95|             )
+96|             source = PromptBuilder.get_component_source(key)
+97|             header = f"👁 预览动态组件 - {label} [{phase… (4,328字)
+• exec(grep -n "_get_component_content\|def _build_\|def get_component" /root/nanobo...) → STDERR:
+grep: /root/nanobot-src/nanobot/engine/prompt_builder.py: No such file or directory
+
+
+Exit code: 0 (106字)
+• exec(find /root/nanobot-src -name "prompt_builder.py" -type f 2>/dev/null) → /root/nanobot-src/nanobot/groupchat/history/prompt_builder.py
+
+
+Exit code: 0 (76字)
+• exec(grep -n "_get_component_content\|def _build_\|def get_component" /root/nanobo...) → 394:    def get_component_visibility(self, key: str) -> str:
+485:            content = self._get_component_c… (544字)
+  (还有 4 个工具调用，已省略)
+---
+[Kirk]: Let me look at the settings.py to find where lock icons appear on buttons:
+
+[工具调用记录]
+• exec(grep -n "_get_component_content\|__preview__\|phase.*dynamic\|只读\|readonly\|👁...) → 91:        if phase == "dynamic":
+92:            content = engine.prompt_builder._get_component_content(
+93:                "__preview__", {}, key,
+97:            header = f"👁 预览动态组件 - {label} [{phase_label}]\n⚡ 来源: {source}"
+98:            buttons = [[InlineKeyboardButton("↩ 返回", callback_data="pr:refresh")]]
+124:        if phase != "dynamic":
+149:        buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{agent_name}")])
+272:                    buttons.append([InlineKeyboardBut… (2,613字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 80|             chunk += "…"
+81|         return chunk, page, total_pages
+82| 
+83|     async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+84|         """Show a single prompt component with pagination for long content."""
+85|         engine = self._groupchat_engine
+86|         chat_id = query.message.chat_id
+87|         label = _COMPONENT_LABELS.get(key, key)
+88|         phase = _COMPONENT_PHASES.get(key, "static")
+89|         phase_label = "STATIC" if phase == "static" else "DYNAMIC"
+90| 
+91|         if phase == "dynamic":
+92|             content = engine.prompt_builder._get_component_content(
+93|                 "__preview__", {}, key,
+94|                 list(getattr(engine, "active_agents", [])),
+95|             )
+96|             source = PromptBuilder.g… (4,294字)
+• exec(grep -n "def _get_component_content" /root/nanobot-src/nanobot/groupchat/hist...) → 518:    def _get_component_content(
+
+
+Exit code: 0 (50字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 518|     def _get_component_content(
+519|         self,
+520|         agent_name: str,
+521|         agent: dict,
+522|         key: str,
+523|         active_agents: list[str],
+524|         leader: str | None = None,
+525|     ) -> str:
+526|         # Per-agent .md override (for keys that support it)
+527|         if key in self._PER_AGENT_FILES:
+528|             per_agent = self._get_agent_file(agent, self._PER_AGENT_FILES[key])
+529|             if per_agent:
+530|                 return per_agent
+531| 
+532|         if key == "main_prompt":
+533|             # Fall back to global template, then hardcoded default
+534|             return self.get_component_template("main_prompt") or (
+535|                 f"Write {agent_name}'s next reply in a fictional group chat. "
+536|                 f"Write 1… (4,185字)
+• exec(grep -n "🔒\|🔒\|lock\|🔒" /root/nanobot-src/nanobot/channels/telegram/callbacks...) → 578:                        # Content blocks
+579:                        for block in content[:3]:
+580:                            if isinstance(block, dict):
+581:                                lines.append(str(block.get("text", ""))[:400])
+1397:                    "  🔒 代码生成 — 不可编辑（history、skills_overview）\n\n"
+
+
+Exit code: 0 (328字)
+• exec(grep -n "🔒\|🔒\|🔒\|🔒" /root/nanobot-src/nanobot/channels/telegram/callbacks.py...) → 1397:                    "  🔒 代码生成 — 不可编辑（history、skills_overview）\n\n"
+
+
+Exit code: 0 (86字)
+• exec() → STDERR:
+/bin/bash: -c: line 1: unexpected EOF while looking for matching `"'
+
+
+Exit code: 2 (91字)
+• exec(grep -n '🔒' /root/nanobot-src/nanobot/channels/telegram/callbacks.py | head -20) → 1397:                    "  🔒 代码生成 — 不可编辑（history、skills_overview）\n\n"
+
+
+Exit code: 0 (86字)
+• exec() → STDERR:
+/bin/bash: -c: line 1: unexpected EOF while looking for matching `''
+
+
+Exit code: 2 (91字)
+• exec(grep -n "lock\|🔒" /root/nanobot-src/nanobot/channels/telegram/callbacks.py | ...) → 578:                        # Content blocks
+579:                        for block in content[:3]:
+580:                            if isinstance(block, dict):
+581:                                lines.append(str(block.get("text", ""))[:400])
+1397:                    "  🔒 代码生成 — 不可编辑（history、skills_overview）\n\n"
+
+
+Exit code: 0 (328字)
+• exec() → STDERR:
+/bin/bash: -c: line 1: unexpected EOF whil… (91字)
+---
+[Kirk]: Now I see the full picture. The dynamic components are: `history`, `skills_overview`, `group_context`, `examples`, `group_nudge`, `coding_principle`, `记忆补充`. Let me check what happens when we call `_get_component_content` for each of these with empty agent:
+
+[工具调用记录]
+• exec(grep -rn "lock\|🔒" /root/nanobot-src/nanobot/channels/telegram/settings.py 2>...) → Exit code: 0 (13字)
+• exec(grep -rn "lock\|🔒" /root/nanobot-src/nanobot/channels/telegram/ 2>/dev/null |...) → /root/nanobot-src/nanobot/channels/telegram/callbacks.py:578:                        # Content blocks
+/root/nanobot-src/nanobot/channels/telegram/callbacks.py:579:                        for block in content[:3]:
+/root/nanobot-src/nanobot/channels/telegram/callbacks.py:580:                            if isinstance(block, dict):
+/root/nanobot-src/nanobot/channels/telegram/callbacks.py:581:                                lines.append(str(block.get("text", ""))[:400])
+/root/nanobot-src/nanobot/chan… (2,911字)
+• exec(sed -n '1190,1260p' /root/nanobot-src/nanobot/channels/telegram/callbacks.py) → buttons = []
+                for p in available:
+                    buttons.append([InlineKeyboardButton(f"➕ {p}", callback_data=f"ahp_new:{a_name}:{p}")])
+                buttons.append([InlineKeyboardButton("✏️ 自定义参数名", callback_data=f"ahp_custom:{a_name}")])
+                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ahp_back:{a_name}")])
+                await query.edit_message_text(
+                    f"➕ 为 {a_name} 添加参数:",
+                    reply_markup=InlineKeyboard… (3,613字)
+• exec(sed -n '340,430p' /root/nanobot-src/nanobot/channels/telegram/commands/settin...) → labels = _COMPONENT_LABELS
+        global_editable = _GLOBAL_EDITABLE
+        agent_editable = _AGENT_EDITABLE
+        conditional_tags = self._CONDITIONAL_TAGS
+
+        phases = _COMPONENT_PHASES
+
+        lines = ["📋 PROMPT PIPELINE\n"]
+        lines.append("▸ STATIC · before history · cache-friendly")
+        lines.append("  → 💬 HISTORY · runtime")
+        lines.append("▸ DYNAMIC · after history · per-turn\n")
+        lines.append("🔒 auto · ✏️ global · 📂 agent · ● full · ○ empty · 👁 all · 👑 le… (3,587字)
+• exec(grep -n "pr:refresh\|pr:edit\|pr:view\|pr:back\|pr:save\|pr:cancel" /root/nan...) → 98:            buttons = [[InlineKeyboardButton("↩ 返回", callback_data="pr:refresh")]]
+117:        nav_buttons.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="pr:refresh"))
+1267:            elif data in ("pr:refresh", "pr:"):
+1343:                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="pr:refresh")])
+1409:                        [InlineKeyboardButton("⬅️ 返回组件列表", callback_data="pr:refresh")]
+1473:                buttons.append([InlineKeyboardButton("⬅️… (554字)
+• exec(sed -n '1200,1280p' /root/nanobot-src/nanobot/channels/telegram/callbacks.py) → elif data.startswith("ahp_new:"):
+                # ahp_new:AgentName:key
+                parts = data.split(":", 2)
+                if len(parts) < 3:
+                    return
+                a_name, key = parts[1], parts[2]
+                self._edit_state[chat_id] = {"field": "ahp_value", "agent": a_name, "hp_key": key, "hp_is_new": True}
+                await query.edit_message_text(f"➕ 为 {a_name} 添加 {key}\n\n请输入值 (数字):")
+
+            elif data.startswith("ahp_custom:"):
+                # … (4,049字)
+• exec(grep -n "_prompt_show_component_page\|_get_component_content\|phase.*dynamic\...) → 83:    async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+91:        if phase == "dynamic":
+92:            content = engine.prompt_builder._get_component_content(
+124:        if phase != "dynamic":
+1277:                    await self._prompt_show_component_page(query, key, page=0)
+1288:                    await self._prompt_show_component_page(query, key, page=page)
+1437:                    if phase == "dynamic" and (i == 0 or phases.get(order[i - 1], "static") … (528字)
+• exec(sed -n '83,160p' /root/nanobot-src/nanobot/channels/telegram/callbacks.py) → async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+        """Show a single prompt component with pagination for long content."""
+        engine = self._groupchat_engine
+        chat_id = query.message.chat_id
+        label = _COMPONENT_LABELS.get(key, key)
+     … (3,840字)
+  (还有 8 个工具调用，已省略)
+---
+[Kirk]: Now let me check the component list view to see how the edit buttons are rendered — specifically the lock icon buttons:
+
+[工具调用记录]
+• exec(sed -n '1190,1260p' /root/nanobot-src/nanobot/channels/telegram/callbacks.py) → buttons = []
+                for p in available:
+                    buttons.append([InlineKeyboardButton(f"➕ {p}", callback_data=f"ahp_new:{a_name}:{p}")])
+                buttons.append([InlineKeyboardButton("✏️ 自定义参数名", callback_data=f"ahp_custom:{a_name}")])
+                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ahp_back:{a_name}")])
+                await query.edit_message_text(
+                    f"➕ 为 {a_name} 添加参数:",
+                    reply_markup=InlineKeyboard… (3,613字)
+• exec() → 68:    _PROMPT_PAGE_SIZE = 3500  # chars per page for prompt component preview
+91:        if phase == "dynamic":
+92:            content = engine.prompt_builder._get_component_content(
+93:                "__preview__", {}, key,
+97:            header = f"👁 预览动态组件 - {label} [{phase_label}]\n⚡ 来源: {source}"
+124:        if phase != "dynamic":
+654:                                    "content_preview": (m.get("content") or "")[:300],
+710:                preview = r.get("reply_preview", "")
+711:        … (2,096字)
+• exec(sed -n '80,140p' /root/nanobot-src/nanobot/channels/telegram/callbacks.py) → chunk += "…"
+        return chunk, page, total_pages
+
+    async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+        """Show a single prompt component with pagination for long content."""
+        engine = self._groupchat_engine
+        chat_id = query.message.chat_id
+        label = _COMPONENT_LABELS.get(key, key)
+        phase = _COMPONENT_PHASES.get(key, "static")
+        phase_label = "STATIC" if phase == "static" else "DYNAMIC"
+
+        if phase == "dynamic"… (2,808字)
+• exec(sed -n '518,660p' /root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → def _get_component_content(
+        self,
+        agent_name: str,
+        agent: dict,
+        key: str,
+        active_agents: list[str],
+        leader: str | None = None,
+    ) -> str:
+        # Per-agent .md override (for keys that support it)
+        if key in self._PER_AGENT_FILES:
+            per_agent = self._get_agent_file(agent, self._PER_AGENT_FILES[key])
+            if per_agent:
+                return per_agent
+
+        if key == "main_prompt":
+            # Fall back to global tem… (7,120字)
+• exec() → STDERR:
+2026-05-24 15:47:54.691 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 18 components, 13 editable
+Traceback (most recent call last):
+  File "<string>", line 3, in <module>
+TypeError: PromptBuilder.__init__() takes 1 positional argument but 2 were given
+
+
+Exit code: 1 (330字)
+• exec() → STDERR:
+2026-05-24 15:47:57.580 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 18 components, 13 editable
+Traceback (most recent call last):
+  File "<string>", line 3, in <module>
+TypeError: PromptBuilder.__init__() missing 2 required keyword-only arguments: 'config' and 'workspace'
+
+
+Exit code: 1 (353字)
+• exec(grep -n "def __init__" /root/nanobot-src/nanobot/groupchat/history/prompt_bui...) → 306:    def __init__(self, *, config: Any, workspace: Path):
+
+
+Exit code: 0 (75字)
+• exec() → history: '[聊天记录 — 自动插入]'
+skills_overview: (None)
+group_context: '[Group members: {{members}}]'
+examples: (None)
+group_nudge: '只写{{agent}}的回复。不代写他人对话。不前缀角色名。\n\n禁止在文本中模拟工具调用：无XML标签（`<web_search>`、`<tool>`）、无伪调'
+coding_principle: '[Coding Principle — 最小变更原则]\n\n只做直接请求或明确必要的变更，保持方案简单聚焦。\n\n- 仅修改与任务直接相关的代码，保持周围代码不动\n'
+记忆补充: '- 任何时刻，达成新成果时，则进行记忆优化，优化记忆结构，去除老旧方法，改成新方法。为确保后续无忧一步到位，请编写对应任务脚本，确保后续能直接运行。\n- 用户要'
+
+STDERR:
+2026-05-24 15:48:03.642 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_f… (582字)
+• exec() → history: '[聊天记录 — 动态插入]'
+skills_overview: 'Other skills (read SKILL.md to use):\n- steve-jobs-perspective: Steve Jobs的思维框架与表达方式，用于以乔布斯视角分析产品和决策。'
+group_context: '[Group members: {{members}}]'
+examples: (empty)
+group_nudge: '只写{{agent}}的回复。不代写他人对话。不前缀角色名。\n\n禁止在文本中模拟工具调用：无XML标签（… (740字)
+  (还有 2 个工具调用，已省略)
+---
+[Kirk]: The issue is clear now. Let me verify by checking what `active_agents` returns when no groupchat is running:
+
+[工具调用记录]
+• exec() → 83:    async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+98:            buttons = [[InlineKeyboardButton("↩ 返回", callback_data="pr:refresh")]]
+141:                buttons.append([InlineKeyboardButton(f"✏️ {k} = {v}", callback_data=f"ahp:{agent_name}:{k}"),
+329:                        buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=f"em_manual:{name}")])
+1082:                buttons.append([InlineKeyboardButton("✏️ 自定义参数名", callback_data="hp_custom… (1,620字)
+• exec(grep -n "_prompt_show_components" /root/nanobot-src/nanobot/channels/telegram...) → 1265:                await self._prompt_show_components(query, manage_mode=self._prompt_manage_mode)
+1270:                await self._prompt_show_components(query)
+1293:                await self._prompt_show_components(query, manage_mode=getattr(self, '_prompt_manage_mode', False))
+1305:                await self._prompt_show_components(query, manage_mode=getattr(self, '_prompt_manage_mode', False))
+1319:                await self._prompt_show_components(query, manage_mode=getattr(self, '_promp… (721字)
+• exec(grep -rn "_prompt_show_components" /root/nanobot-src/nanobot/ --include="*.py...) → /root/nanobot-src/nanobot/channels/telegram/commands/settings.py:440:    async def _prompt_show_components(self, query, manage_mode: bool = False) -> None:
+
+
+Exit code: 0 (170字)
+• exec(sed -n '440,560p' /root/nanobot-src/nanobot/channels/telegram/commands/settin...) → async def _prompt_show_components(self, query, manage_mode: bool = False) -> None:
+        """Helper: refresh global prompt order view via callback."""
+        from telegram.error import BadRequest
+        engine = self._groupchat_engine
+        text, markup = self._build_prompt_order_view(engine, manage_mode=manage_mode)
+        try:
+            await query.edit_message_text(text[:4096], reply_markup=markup)
+        except BadRequest as e:
+            if "Message is not modified" not in str(e):… (6,257字)
+• exec(grep -n "_build_prompt_order_view" /root/nanobot-src/nanobot/channels/telegra...) → 325:        text, markup = self._build_prompt_order_view(engine)
+333:    def _build_prompt_order_view(self, engine, manage_mode: bool = False) -> tuple[str, "InlineKeyboardMarkup"]:
+444:        text, markup = self._build_prompt_order_view(engine, manage_mode=manage_mode)
+
+
+Exit code: 0 (286字)
+• exec(sed -n '333,440p' /root/nanobot-src/nanobot/channels/telegram/commands/settin...) → def _build_prompt_order_view(self, engine, manage_mode: bool = False) -> tuple[str, "InlineKeyboardMarkup"]:
+        """Build the global prompt component order view.
+
+        manage_mode=False: compact — one button per component (name only).
+        manage_mode=True:  full — name + reorder/delete/visibility buttons.
+        """
+        order = engine.prompt_builder.get_agent_prompt_order()
+        labels = _COMPONENT_LABELS
+        global_editable = _GLOBAL_EDITABLE
+        agent_editable = _AGE… (4,575字)
+• exec(grep -n "_GLOBAL_EDITABLE\|_AGENT_EDITABLE\|_COMPONENT_PHASES\|_COMPONENT_LAB...) → 17:    PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
+18:    GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
+19:    COMPONENT_PHASES as _COMPONENT_PHASES,
+340:        labels = _COMPONENT_LABELS
+341:        global_editable = _GLOBAL_EDITABLE
+342:        agent_editable = _AGENT_EDITABLE
+345:        phases = _COMPONENT_PHASES
+
+
+Exit code: 0 (370字)
+• exec(grep -n "GLOBAL_EDITABLE\|AGENT_EDITABLE\|COMPONENT_PHASES" /root/nanobot-src...) → 54:_FALLBACK_GLOBAL_EDITABLE: set[str] = {
+59:_FALLBACK_AGENT_EDITABLE: set[str] = {"persona"}
+89:COMPONENT_PHASES: dict[str, str] = dict(_FALLBACK_PHASES)
+90:GLOBAL_EDITABLE: set[str] = set(_FALLBACK_GLOBAL_EDITABLE)
+91:AGENT_EDITABLE: set[str] = set(_FALLBACK_AGENT_EDITABLE)
+92:EDITABLE_COMPONENTS: set[str] = GLOBAL_EDITABLE | AGENT_EDITABLE
+127:    Fallback to GLOBAL_EDITABLE/AGENT_EDITABLE if manifest absent.
+134:    if key in GLOBAL_EDITABLE:
+136:    if key in AGENT_EDITABLE:
+181:    global… (1,086字)
+  (还有 3 个工具调用，已省略)
+---
+[Kirk]: Now I see both root causes clearly. Let me verify the `_get_component_content` logic for dynamic components:
+
+[工具调用记录]
+• exec(grep -n "🔒\|EDITABLE_COMPONENTS\|_COMPONENT_LABELS\|_COMPONENT_PHASES\|prcan\...) → 20:    PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
+22:    COMPONENT_PHASES as _COMPONENT_PHASES,
+87:        label = _COMPONENT_LABELS.get(key, key)
+88:        phase = _COMPONENT_PHASES.get(key, "static")
+108:            buttons = [[InlineKeyboardButton("❌ 取消", callback_data="prcan")]]
+116:            nav_buttons.append(InlineKeyboardButton("⬅️ 上一页", callback_data=f"prep:{key}:{page - 1}"))
+119:            nav_buttons.append(InlineKeyboardButton("下一页 ➡️", callback_data=f"prep:{key}:{pag… (983字)
+• exec(sed -n '1275,1295p' /root/nanobot-src/nanobot/channels/telegram/callbacks.py) → if len(parts) == 2:
+                    _, key = parts
+                    await self._prompt_show_component_page(query, key, page=0)
+
+            elif data.startswith("prep:"):
+                # Paginate prompt component view: prep:<key>:<page>
+                parts = data[5:].rsplit(":", 1)
+                if len(parts) == 2:
+                    key, page_str = parts
+                    try:
+                        page = int(page_str)
+                    except ValueError:
+                   … (928字)
+• exec(sed -n '83,130p' /root/nanobot-src/nanobot/channels/telegram/callbacks.py) → async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+        """Show a single prompt component with pagination for long content."""
+        engine = self._groupchat_engine
+        chat_id = query.message.chat_id
+        label = _COMPONENT_LABELS.get(key, key)
+        phase = _COMPONENT_PHASES.get(key, "static")
+        phase_label = "STATIC" if phase == "static" else "DYNAMIC"
+
+        if phase == "dynamic":
+            content = engine.prompt_builder._get_compone… (2,368字)
+• exec(sed -n '1320,1440p' /root/nanobot-src/nanobot/channels/telegram/callbacks.py) → elif data.startswith("prdel:"):
+                # Delete component: prdel:<idx>
+                idx = int(data[6:])
+                engine = self._groupchat_engine
+                result = engine.prompt_builder.remove_prompt_component(idx)
+                await query.answer(result, show_alert=True)
+                await self._prompt_show_components(query, manage_mode=getattr(self, '_prompt_manage_mode', False))
+
+            elif data == "pradd":
+                # Show available components to add… (5,524字)
+• exec(grep -n "🔒\|_prompt_show_components" /root/nanobot-src/nanobot/channels/teleg...) → 1265:                await self._prompt_show_components(query, manage_mode=self._prompt_manage_mode)
+1270:                await self._prompt_show_components(query)
+1293:                await self._prompt_show_components(query, manage_mode=getattr(self, '_prompt_manage_mode', False))
+1305:                await self._prompt_show_components(query, manage_mode=getattr(self, '_prompt_manage_mode', False))
+1319:                await self._prompt_show_components(query, manage_mode=getattr(self, '_promp… (793字)
+• exec(grep -n "_prompt_show_components" /root/nanobot-src/nanobot/channels/telegram...) → 1265:                await self._prompt_show_components(query, manage_mode=self._prompt_manage_mode)
+1270:                await self._prompt_show_components(query)
+1293:                await self._prompt_show_components(query, manage_mode=getattr(self, '_prompt_manage_mode', False))
+1305:                await self._prompt_show_components(query, manage_mode=getattr(self, '_prompt_manage_mode', False))
+1319:                await self._prompt_show_components(query, manage_mode=getattr(self, '_promp… (538字)
+• exec(grep -n "def _prompt_show_components" /root/nanobot-src/nanobot/channels/tele...) → Exit code: 1 (13字)
+• exec(grep -rn "def _prompt_show_components" /root/nanobot-src/nanobot/channels/tel...) → /root/nanobot-src/nanobot/channels/telegram/commands/settings.py:440:    async def _prompt_show_components(self, query, manage_mode: bool = False) -> None:
+
+
+Exit code: 0 (170字)
+• exec(sed -n '440,580p' /root/nanobot-src/nanobot/channels/telegram/commands/settin...) → (7,078字)
+  (还有 2 个工具调用，已省略)
+---
+[Kirk]: ```python
+sed -n '518,620p' /root/nanobot-src/nanobot/groupchat/history/prompt_builder.py
+```
+
+[工具调用记录]
+• exec(grep -n "pre:" /root/nanobot-src/nanobot/channels/telegram/callbacks.py | hea...) → 1272:            elif data.startswith("pre:"):
+1273:                # View/edit global template: pre:__global__:component_key
+
+
+Exit code: 0 (140字)
+• exec(sed -n '1270,1360p' /root/nanobot-src/nanobot/channels/telegram/callbacks.py) → await self._prompt_show_components(query)
+
+            elif data.startswith("pre:"):
+                # View/edit global template: pre:__global__:component_key
+                parts = data[4:].split(":", 1)
+                if len(parts) == 2:
+                    _, key = parts
+                    await self._prompt_show_component_page(query, key, page=0)
+
+            elif data.startswith("prep:"):
+                # Paginate prompt component view: prep:<key>:<page>
+                parts = data[5:]… (4,552字)
+• exec(grep -n "_prompt_show_component_page" /root/nanobot-src/nanobot/channels/tele...) → 83:    async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+1277:                    await self._prompt_show_component_page(query, key, page=0)
+1288:                    await self._prompt_show_component_page(query, key, page=page)
+
+
+Exit code: 0 (277字)
+• exec(sed -n '83,200p' /root/nanobot-src/nanobot/channels/telegram/callbacks.py) → async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+        """Show a single prompt component with pagination for long content."""
+        engine = self._groupchat_engine
+        chat_id = query.message.chat_id
+        label = _COMPONENT_LABELS.get(key, key)
+        phase = _COMPONENT_PHASES.get(key, "static")
+        phase_label = "STATIC" if phase == "static" else "DYNAMIC"
+
+        if phase == "dynamic":
+            content = engine.prompt_builder._get_compone… (5,447字)
+• exec(sed -n '333,440p' /root/nanobot-src/nanobot/channels/telegram/commands/settin...) → def _build_prompt_order_view(self, engine, manage_mode: bool = False) -> tuple[str, "InlineKeyboardMarkup"]:
+        """Build the global prompt component order view.
+
+        manage_mode=False: compact — one button per component (name only).
+        manage_mode=True:  full — name + reorder/delete/visibility buttons.
+        """
+        order = engine.prompt_builder.get_agent_prompt_order()
+        labels = _COMPONENT_LABELS
+        global_editable = _GLOBAL_EDITABLE
+        agent_editable = _AGE… (4,575字)
+• exec(grep -n "_COMPONENT_PHASES\|_GLOBAL_EDITABLE\|_AGENT_EDITABLE\|_COMPONENT_LAB...) → 17:    PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
+18:    GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
+19:    COMPONENT_PHASES as _COMPONENT_PHASES,
+340:        labels = _COMPONENT_LABELS
+341:        global_editable = _GLOBAL_EDITABLE
+342:        agent_editable = _AGENT_EDITABLE
+345:        phases = _COMPONENT_PHASES
+
+
+Exit code: 0 (370字)
+• exec(grep -n "COMPONENT_PHASES\|GLOBAL_EDITABLE\|AGENT_EDITABLE\|COMPONENT_LABELS"...) → STDERR:
+grep: /root/nanobot-src/nanobot/engine/prompt_builder.py: No such file or directory
+
+
+Exit code: 0 (106字)
+• exec(grep -rn "COMPONENT_PHASES\|GLOBAL_EDITABLE\|AGENT_EDITABLE" /root/nanobot-sr...) → /root/nanobot-src/nanobot/groupchat/history/prompt_builder.py:54:_FALLBACK_GLOBAL_EDITABLE: set[str] = {
+/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py:59:_FALLBACK_AGENT_EDITABLE: set[str] = {"persona"}
+/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py:89:COMPONENT_PHASES: dict[str, str] = dict(_FALLBACK_PHASES)
+/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py:90:GLOBAL_EDITABLE: set[str] = set(_FALLBACK_GLOBAL_EDITABLE)
+/root/nanobot-src/nanobot/groupcha… (4,097字)
+• exec(sed -n '40,95p' /root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → "main_prompt": "主提示 (main_prompt)",
+    "group_context": "群聊上下文 (group_context)",
+    "persona": "人设/SOUL (persona)",
+    "memory": "长期记忆 (memory)",
+    "tool_instructions": "工具指令 (tool_instructions)",
+    "skills": "技能列表 (skills)",
+    "broadcast_hint": "广播协调 (broadcast_hint)",
+    "examples": "示例对话 (examples)",
+    "hi… (2,144字)
+  (还有 2 个工具调用，已省略)
+---
+[Kirk]: That's just a help text. Let me find the actual lock icon in the keyboard buttons:
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 518|     def _get_component_content(
+519|         self,
+520|         agent_name: str,
+521|         agent: dict,
+522|         key: str,
+523|         active_agents: list[str],
+524|         leader: str | None = None,
+525|     ) -> str:
+526|         # Per-agent .md override (for keys that support it)
+527|         if key in self._PER_AGENT_FILES:
+528|             per_agent = self._get_agent_file(agent, self._PER_AGENT_FILES[key])
+529|             if per_agent:
+530|                 return per_agent
+531| 
+532|         if key == "main_prompt":
+533|             # Fall back to global template, then hardcoded default
+534|             return self.get_component_template("main_prompt") or (
+535|                 f"Write {agent_name}'s next reply in a fictional group chat. "
+536|                 f"Write 1… (6,971字)
+• exec(grep -n "active_agents" /root/nanobot-src/nanobot/channels/telegram/callbacks...) → 94:                list(getattr(engine, "active_agents", [])),
+622:                    active = engine.active_agents
+632:                    context_snapshot["active_agents"] = active
+677:                agent_count = len(context_snapshot.get("active_agents", []))
+1238:                    agents = self._groupchat_engine.active_agents
+1252:                    agents = self._groupchat_engine.active_agents
+1259:                    await self._send_order_keyboard(chat_id, self._groupchat_engine.acti… (790字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1200|             elif data.startswith("ahp_new:"):
+1201|                 # ahp_new:AgentName:key
+1202|                 parts = data.split(":", 2)
+1203|                 if len(parts) < 3:
+1204|                     return
+1205|                 a_name, key = parts[1], parts[2]
+1206|                 self._edit_state[chat_id] = {"field": "ahp_value", "agent": a_name, "hp_key": key, "hp_is_new": True}
+1207|                 await query.edit_message_text(f"➕ 为 {a_name} 添加 {key}\n\n请输入值 (数字):")
+1208| 
+1209|             elif data.startswith("ahp_custom:"):
+1210|                 # ahp_custom:AgentName
+1211|                 a_name = data[11:]
+1212|                 self._edit_state[chat_id] = {"field": "ahp_add_custom", "agent": a_name}
+1213|                 await query.edit_message_text("✏️ 请输入参数名:")… (4,511字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1279|             elif data.startswith("prep:"):
+1280|                 # Paginate prompt component view: prep:<key>:<page>
+1281|                 parts = data[5:].rsplit(":", 1)
+1282|                 if len(parts) == 2:
+1283|                     key, page_str = parts
+1284|                     try:
+1285|                         page = int(page_str)
+1286|                     except ValueError:
+1287|                         page = 0
+1288|                     await self._prompt_show_component_page(query, key, page=page)
+1289| 
+1290|             elif data == "prcan":
+1291|                 # Cancel edit
+1292|                 self._edit_state.pop(chat_id, None)
+1293|                 await self._prompt_show_components(query, manage_mode=getattr(self, '_prompt_manage_mode', False))
+1294| 
+1295|     … (6,749字)
+• exec(grep -n "_prompt_show_component_page" /root/nanobot-src/nanobot/channels/tele...) → 83:    async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+1277:                    await self._prompt_show_component_page(query, key, page=0)
+1288:                    await self._prompt_show_component_page(query, key, page=page)
+
+
+Exit code: 0 (277字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 83|     async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+84|         """Show a single prompt component with pagination for long content."""
+85|         engine = self._groupchat_engine
+86|         chat_id = query.message.chat_id
+87|         label = _COMPONENT_LABELS.get(key, key)
+88|         phase = _COMPONENT_PHASES.get(key, "static")
+89… (10,449字)
+  (还有 5 个工具调用，已省略)
+---
+[Kirk]: Now I see the two problems clearly:
+
+**Problem 1: Dynamic components show empty content**
+- `examples` → `agent.get("examples", "")` with `{}` → `""`
+- `instructions` → `agent.get("instructions", "")` with `{}` → `""`
+- These are per-agent fields that only exist in the agent dict at runtime. With empty `{}`, they're empty.
+
+**Problem 2: Lock icon buttons not responding**
+Let me find where lock icons appear in the keyboard:
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 518|     def _get_component_content(
+519|         self,
+520|         agent_name: str,
+521|         agent: dict,
+522|         key: str,
+523|         active_agents: list[str],
+524|         leader: str | None = None,
+525|     ) -> str:
+526|         # Per-agent .md override (for keys that support it)
+527|         if key in self._PER_AGENT_FILES:
+528|             per_agent = self._get_agent_file(agent, self._PER_AGENT_FILES[key])
+529|             if per_agent:
+530|                 return per_agent
+531| 
+532|         if key == "main_prompt":
+533|             # Fall back to global template, then hardcoded default
+534|             return self.get_component_template("main_prompt") or (
+535|                 f"Write {agent_name}'s next reply in a fictional group chat. "
+536|                 f"Write 1… (4,185字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1200|             elif data.startswith("ahp_new:"):
+1201|                 # ahp_new:AgentName:key
+1202|                 parts = data.split(":", 2)
+1203|                 if len(parts) < 3:
+1204|                     return
+1205|                 a_name, key = parts[1], parts[2]
+1206|                 self._edit_state[chat_id] = {"field": "ahp_value", "agent": a_name, "hp_key": key, "hp_is_new": True}
+1207|                 await query.edit_message_text(f"➕ 为 {a_name} 添加 {key}\n\n请输入值 (数字):")
+1208| 
+1209|             elif data.startswith("ahp_custom:"):
+1210|                 # ahp_custom:AgentName
+1211|                 a_name = data[11:]
+1212|                 self._edit_state[chat_id] = {"field": "ahp_add_custom", "agent": a_name}
+1213|                 await query.edit_message_text("✏️ 请输入参数名:")… (4,511字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1279|             elif data.startswith("prep:"):
+1280|                 # Paginate prompt component view: prep:<key>:<page>
+1281|                 parts = data[5:].rsplit(":", 1)
+1282|                 if len(parts) == 2:
+1283|                     key, page_str = parts
+1284|                     try:
+1285|                         page = int(page_str)
+1286|                     except ValueError:
+1287|                         page = 0
+1288|                     await self._prompt_show_component_page(query, key, page=page)
+1289| 
+1290|             elif data == "prcan":
+1291|                 # Cancel edit
+1292|                 self._edit_state.pop(chat_id, None)
+1293|                 await self._prompt_show_components(query, manage_mode=getattr(self, '_prompt_manage_mode', False))
+1294| 
+1295|     … (6,749字)
+• exec(grep -n "_prompt_show_component_page" /root/nanobot-src/nanobot/channels/tele...) → 83:    async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+1277:                    await self._prompt_show_component_page(query, key, page=0)
+1288:                    await self._prompt_show_component_page(query, key, page=page)
+
+
+Exit code: 0 (277字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 83|     async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+84|         """Show a single prompt component with pagination for long content."""
+85|         engine = self._groupchat_engine
+86|         chat_id = query.message.chat_id
+87|         label = _COMPONENT_LABELS.get(key, key)
+88|         phase = _COMPONENT_PHASES.get(key, "static")
+89|         phase_label = "STATIC" if phase == "static" else "DYNAMIC"
+90| 
+91|         if phase == "dynamic":
+92|             content = engine.prompt_builder._get_component_content(
+93|                 "__preview__", {}, key,
+94|                 list(getattr(engine, "active_agents", [])),
+95|             )
+96|             source = PromptBuilder.get_component_source(key)
+97|             header = f"👁 预览动态组件 - {label} [{phase… (6,188字)
+• exec(grep -n "_COMPONENT_PHASES" /root/nanobot-src/nanobot/channels/telegram/callb...) → 22:    COMPONENT_PHASES as _COMPONENT_PHASES,
+88:        phase = _COMPONENT_PHASES.get(key, … (164字)
+  (还有 5 个工具调用，已省略)
+---
+[Kirk]: It's probably in a mixin or imported. Let me search more broadly:
+
+[工具调用记录]
+• exec(grep -n "🔒\|lock\|_LOCKED\|locked\|_LOCK" /root/nanobot-src/nanobot/channels/...) → 578:                        # Content blocks
+579:                        for block in content[:3]:
+580:                            if isinstance(block, dict):
+581:                                lines.append(str(block.get("text", ""))[:400])
+1397:                    "  🔒 代码生成 — 不可编辑（history、skills_overview）\n\n"
+
+
+Exit code: 0 (328字)
+• exec(grep -n "🔒" /root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1397:                    "  🔒 代码生成 — 不可编辑（history、skills_overview）\n\n"
+
+
+Exit code: 0 (86字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1380|                     "  STATIC\n"
+1381|                     "    位于聊天记录之前，所有 agent 共享\n"
+1382|                     "    仅可使用 stable vars（不随轮次变化）\n"
+1383|                     "    适合: 人设、工具指令、硬规则等固定内容\n"
+1384|                     "    缓存友好，LLM 可复用前缀\n\n"
+1385|                     "  DYNAMIC\n"
+1386|                     "    位于聊天记录之后，每轮刷新\n"
+1387|                     "    可使用 stable + volatile vars\n"
+1388|                     "    适合: 群聊上下文、示例、技能概览等时效内容\n\n"
+1389|                     "▸ 可用变量\n"
+1390|                     "  stable（通用）:\n"
+1391|                     "    {{agent}} {{members}} {{tools}} {{others}} {{identity}}\n\n"
+1392|                     "  volatile（仅 dynamic 可用）:\n"
+1393|                     "    {{datetime}} {{round}} {{agent_idx}} {{total}} {{teammates}}\n\n"
+1394|  … (3,115字)
+• exec(grep -n "InlineKeyboardButton.*🔒\|InlineKeyboardButton.*lock\|InlineKeyboardB...) → Exit code: 1 (13字)
+• exec(grep -n "InlineKeyboardButton" /root/nanobot-src/nanobot/channels/telegram/ca...) → Exit code: 0 (13字)
+• exec(grep -n "InlineKeyboardButton" /root/nanobot-src/nanobot/channels/telegram/ca...) → 13:from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+59:            row.append(InlineKeyboardButton(f"+ {label}", callback_data=cb))
+98:            buttons = [[InlineKeyboardButton("↩ 返回", callback_data="pr:refresh")]]
+108:            buttons = [[InlineKeyboardButton("❌ 取消", callback_data="prcan")]]
+116:            nav_buttons.append(InlineKeyboardButton("⬅️ 上一页", callback_data=f"prep:{key}:{page - 1}"))
+117:        nav_buttons.append(InlineKeyboardButton(f"{page + 1}/{tota… (3,784字)
+• exec(grep -n "InlineKeyboardButton" /root/nanobot-src/nanobot/channels/telegram/ca...) → 98:            buttons = [[InlineKeyboardButton("↩ 返回", callback_data="pr:refresh")]]
+117:        nav_buttons.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="pr:refresh"))
+1343:                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="pr:refresh")])
+1409:                        [InlineKeyboardButton("⬅️ 返回组件列表", callback_data="pr:refresh")]
+1473:                buttons.append([InlineKeyboardButton("⬅️ 返回组件列表", callback_data="pr:refresh")])
+
+
+Exit code: … (501字)
+• exec(grep -n "pr:refresh\|prc:\|pre:\|_prompt_show_component_list\|_prompt_show_co...) → 83:    async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+98:            buttons = [[InlineKeyboardButton("↩ 返回", callback_data="pr:refresh")]]
+117:        nav_buttons.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="pr:refresh"))
+1267:            elif data in ("pr:refresh", "pr:"):
+1272:            elif data.startswith("pre:"):
+1273:                # View/edit global template: pre:__global__:component_key
+1277:                    await se… (943字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1267|             elif data in ("pr:refresh", "pr:"):
+1268|                 # Refresh global prompt order view (exits manage mode)
+1269|                 self._prompt_manage_mode = False
+1270|                 await self._prompt_show_components(query)
+1271| 
+1272|             elif data.startswith("pre:"):
+1273|                 # View/edit global template: pre:__global__:component_key
+1274|                 parts = data[4:].split(":", 1)
+1275|                 if len(parts) == 2:
+1276|                   … (4,662字)
+  (还有 2 个工具调用，已省略)
+---
+[Kirk]: Now I see the root cause. When `agent_name="__preview__"` and `agent={}` (empty dict), the function falls through to the bottom for most dynamic components:
+
+- `persona` → `agent.get("prompt", "")` → empty
+- `examples` → `agent.get("examples", "")` → empty  
+- `instructions` → `agent.get("instructions", "")` → empty
+
+These are **per-agent** fields that only exist in actual agent dicts. The preview passes an empty dict, so they all return empty.
+
+The fix: for dynamic components that are per-agent, we need to show the **template** content instead, or show content from the first active agent. Let me check what `get_component_template` returns for these:
+
+[工具调用记录]
+• exec(grep -rn "_prompt_show_components\|_prompt_show_component_page" /root/nanobot...) → /root/nanobot-src/nanobot/channels/telegram/callbacks.py:83:    async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+/root/nanobot-src/nanobot/channels/telegram/callbacks.py:1265:                await self._prompt_show_components(query, manage_mode=self._prompt_manage_mode)
+/root/nanobot-src/nanobot/channels/telegram/callbacks.py:1270:                await self._prompt_show_components(query)
+/root/nanobot-src/nanobot/channels/telegram/callbacks.py:1277:           … (1,710字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/commands/settings.py) → 440|     async def _prompt_show_components(self, query, manage_mode: bool = False) -> None:
+441|         """Helper: refresh global prompt order view via callback."""
+442|         from telegram.error import BadRequest
+443|         engine = self._groupchat_engine
+444|         text, markup = self._build_prompt_order_view(engine, manage_mode=manage_mode)
+445|         try:
+446|             await query.edit_message_text(text[:4096], reply_markup=markup)
+447|         except BadRequest as e:
+448|             if "Message is not modified" not in str(e):
+449|                 raise
+450| 
+451|     # ── Group Config Commands ───────────────────────────────
+452| 
+453|     async def _on_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+454|         """Display history management as… (6,848字)
+• exec(grep -n "_build_prompt_order_view" /root/nanobot-src/nanobot/channels/telegra...) → 325:        text, markup = self._build_prompt_order_view(engine)
+333:    def _build_prompt_order_view(self, engine, manage_mode: bool = False) -> tuple[str, "InlineKeyboardMarkup"]:
+444:        text, markup = self._build_prompt_order_view(engine, manage_mode=manage_mode)
+
+
+Exit code: 0 (286字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/commands/settings.py) → 333|     def _build_prompt_order_view(self, engine, manage_mode: bool = False) -> tuple[str, "InlineKeyboardMarkup"]:
+334|         """Build the global prompt component order view.
+335| 
+336|         manage_mode=False: compact — one button per component (name only).
+337|         manage_mode=True:  full — name + reorder/delete/visibility buttons.
+338|         """
+339|         order = engine.prompt_builder.get_agent_prompt_order()
+340|         labels = _COMPONENT_LABELS
+341|         global_editable = _GLOBAL_EDITABLE
+342|         agent_editable = _AGENT_EDITABLE
+343|         conditional_tags = self._CONDITIONAL_TAGS
+344| 
+345|         phases = _COMPONENT_PHASES
+346| 
+347|         lines = ["📋 PROMPT PIPELINE\n"]
+348|         lines.append("▸ STATIC · before history · cache-friendly")
+349|      … (5,558字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1270|                 await self._prompt_show_components(query)
+1271| 
+1272|             elif data.startswith("pre:"):
+1273|                 # View/edit global template: pre:__global__:component_key
+1274|                 parts = data[4:].split(":", 1)
+1275|                 if len(parts) == 2:
+1276|                     _, key = parts
+1277|                     await self._prompt_show_component_page(query, key, page=0)
+1278| 
+1279|             elif data.startswith("prep:"):
+1280|                 # Paginate prompt component view: prep:<key>:<page>
+1281|                 parts = data[5:].rsplit(":", 1)
+1282|                 if len(parts) == 2:
+1283|                     key, page_str = parts
+1284|                     try:
+1285|                         page = int(page_str)
+1286|                   … (2,969字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 83|     async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+84|         """Show a single prompt component with pagination for long content."""
+85|         engine = self._groupchat_engine
+86|         chat_id = query.message.chat_id
+87|         label = _COMPONENT_LABELS.get(key, key)
+88|         phase = _COMPONENT_PHASES… (4,328字)
+  (还有 5 个工具调用，已省略)
+---
+[Kirk]: Lock icon isn't in callbacks.py as a button. Let me check the prompt list rendering where buttons are built:
+
+[工具调用记录]
+• exec() → STDERR:
+grep: /root/nanobot-src/nanobot/groupchat/orchestra/callbacks.py: No such file or directory
+
+
+Exit code: 1 (114字)
+• exec(find /root/nanobot-src -name "callbacks.py" -path "*/groupchat/*" 2>/dev/null) → Exit code: 0 (13字)
+• exec(find /root/nanobot-src -name "callbacks.py" 2>/dev/null) → /root/nanobot-src/nanobot/channels/telegram/callbacks.py
+
+
+Exit code: 0 (71字)
+• exec(grep -n "dynamic\|_get_component_content\|__preview__\|active_agents\|只读\|pre...) → 68:    _PROMPT_PAGE_SIZE = 3500  # chars per page for prompt component preview
+91:        if phase == "dynamic":
+92:            content = engine.prompt_builder._get_component_content(
+93:                "__preview__", {}, key,
+94:                list(getattr(engine, "active_agents", [])),
+124:        if phase != "dynamic":
+622:                    active = engine.active_agents
+632:                    context_snapshot["active_agents"] = active
+654:                                    "content_previ… (2,008字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 80|             chunk += "…"
+81|         return chunk, page, total_pages
+82| 
+83|     async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+84|         """Show a single prompt component with pagination for long content."""
+85|         engine = self._groupchat_engine
+86|         chat_id = query.message.chat_id
+87|         label = _COMPONENT_LABELS.get(key, key)
+88|         phase = _COMPONENT_PHASES.get(key, "static")
+89|         phase_label = "STATIC" if phase == "static" else "DYNAMIC"
+90| 
+91|         if phase == "dynamic":
+92|             content = engine.prompt_builder._get_component_content(
+93|                 "__preview__", {}, key,
+94|                 list(getattr(engine, "active_agents", [])),
+95|             )
+96|             source = PromptBuilder.g… (4,294字)
+• exec(grep -n "_COMPONENT_PHASES\|_COMPONENT_LABELS" /root/nanobot-src/nanobot/chan...) → 20:    PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
+22:    COMPONENT_PHASES as _COMPONENT_PHASES,
+87:        label = _COMPONENT_LABELS.get(key, key)
+88:        phase = _COMPONENT_PHASES.get(key, "static")
+1334:                labels = _COMPONENT_LABELS
+1418:                labels = _COMPONENT_LABELS
+1420:                phases = _COMPONENT_PHASES
+
+
+Exit code: 0 (372字)
+• exec(grep -n "COMPONENT_PHASES\|COMPONENT_LABELS" /root/nanobot-src/nanobot/groupc...) → 88:COMPONENT_LABELS: dict[str, str] = dict(_FALLBACK_LABELS)
+89:COMPONENT_PHASES: dict[str, str] = dict(_FALLBACK_PHASES)
+116:    """Get component label from manifest, fallback to COMPONENT_LABELS."""
+122:    return COMPONENT_LABELS.get(key, key)
+181:    global DEFAULT_PROMPT_ORDER, COMPONENT_LABELS, COMPONENT_PHASES, GLOBAL_EDITABLE, AGENT_EDITABLE, EDITABLE_COMPONENTS
+195:    COMPONENT_LABELS = {}
+196:    COMPONENT_PHASES = {}
+203:            COMPONENT_LABELS[key] = label
+206:        COMPONENT… (1,252字)
+• exec(grep -n "AGENT_EDITABLE\|GLOBAL_EDITABLE\|per.agent\|per_agent" /root/nanobot...) → 54:_FALLBACK_GLOBAL_EDITABLE: set[str] = {
+59:_FALLBACK_AGENT_EDITABLE: set[str] = {"persona"}
+90:GLOBAL_EDITABLE: set[str] = set(_FALLBACK_GLOBAL_EDITABLE)
+91:AGENT_EDITABLE: set[str] = set(_FALLBACK_AGENT_EDITABLE)
+92:EDITABLE_COMPONENTS: set[str] = GLOBAL_EDITABLE | AGENT_EDITABLE
+127:    Fallback to GLOBAL_EDITABLE/AGENT_EDITABLE if manifest absent.
+134:    if key in GLOBAL_EDITABLE:
+136:    if key in AGENT_EDITABLE:
+181:    global DEFAULT_PROMPT_ORDER, COMPONENT_LABELS, COMPONENT_PHASES, GL… (1,143字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 518|     def _get_component_content(
+519|         self,
+520|         agent_name: str,
+521|         agent: dict,
+522|         key: str,
+523|         active_agents: list[str],
+524|         leader: str | None = None,
+525|     ) -> str:
+526|         # Per-agent .md override (for keys that support it)
+527|         if key in self._PER_AGENT_FILES:
+528|             per_agent = self._get_agent_file(agent, self._PER_AGENT_FILES[key])
+529|             if per_agent:
+530|… (6,178字)
+  (还有 2 个工具调用，已省略)
+---
+[Kirk]: Now I see both problems clearly:
+
+**Problem 1 — Empty dynamic content**: Line 1206-1252 in callbacks.py calls `_get_component_content("__preview__", {}, key, active_agents)` with `agent={}`. Per-agent components (`persona`, `examples`, `instructions`) all do `agent.get("xxx", "")` → empty.
+
+**Problem 2 — Lock icon buttons do nothing**: Lines 411-412 — `🔒` buttons have `callback_data="pr:refresh"` which just refreshes the list view. They should show the dynamic component's rendered content in read-only mode, same as the fix for problem 1.
+
+Let me now read the current callback handler code to fix both:
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1195|                 await query.edit_message_text(
+1196|                     f"➕ 为 {a_name} 添加参数:",
+1197|                     reply_markup=InlineKeyboardMarkup(buttons)
+1198|                 )
+1199| 
+1200|             elif data.startswith("ahp_new:"):
+1201|                 # ahp_new:AgentName:key
+1202|                 parts = data.split(":", 2)
+1203|                 if len(parts) < 3:
+1204|                     return
+1205|                 a_name, key = parts[1], parts[2]
+1206|                 self._edit_state[chat_id] = {"field": "ahp_value", "agent": a_name, "hp_key": key, "hp_is_new": True}
+1207|                 await query.edit_message_text(f"➕ 为 {a_name} 添加 {key}\n\n请输入值 (数字):")
+1208| 
+1209|             elif data.startswith("ahp_custom:"):
+1210|                 # ahp_custom:AgentName… (4,489字)
+• exec(grep -n "🔒\|lock\|不可编辑\|non.editable\|no.edit" /root/nanobot-src/nanobot/chan...) → 578:                        # Content blocks
+579:                        for block in content[:3]:
+580:                            if isinstance(block, dict):
+581:                                lines.append(str(block.get("text", ""))[:400])
+1397:                    "  🔒 代码生成 — 不可编辑（history、skills_overview）\n\n"
+
+
+Exit code: 0 (328字)
+• exec(grep -n "AGENT_EDITABLE\|GLOBAL_EDITABLE\|editable\|phase.*dynamic\|phase.*st...) → 21:    GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
+88:        phase = _COMPONENT_PHASES.get(key, "static")
+89:        phase_label = "STATIC" if phase == "static" else "DYNAMIC"
+91:        if phase == "dynamic":
+103:                if phase == "static"
+124:        if phase != "dynamic":
+1429:                    phase = phases.get(key, "static")
+1437:                    if phase == "dynamic" and (i == 0 or phases.get(order[i - 1], "static") == "static"):
+1453:          … (581字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1272|             elif data.startswith("pre:"):
+1273|                 # View/edit global template: pre:__global__:component_key
+1274|                 parts = data[4:].split(":", 1)
+1275|                 if len(parts) == 2:
+1276|                     _, key = parts
+1277|                     await self._prompt_show_component_page(query, key, page=0)
+1278| 
+1279|             elif data.startswith("prep:"):
+1280|                 # Paginate prompt component view: prep:<key>:<page>
+1281|                 parts = data[5:].rsplit(":", 1)
+1282|                 if len(parts) == 2:
+1283|                     key, page_str = parts
+1284|                     try:
+1285|                         page = int(page_str)
+1286|                     except ValueError:
+1287|                         page = 0
+1288|      … (6,676字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 75|         page = max(0, min(page, total_pages - 1))
+76|         start = page * page_size
+77|         end = min(start + page_size, total)
+78|         chunk = text[start:end]
+79|         if end < total:
+80|             chunk += "…"
+81|         return chunk, page, total_pages
+82| 
+83|     async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+84|         """Show a single prompt component with pagination for long content."""
+85|         engine = self._groupchat_engine
+86|         chat_id = query.message.chat_id
+87|         label = _COMPONENT_LABELS.get(key, key)
+88|         phase = _COMPONENT_PHASES.get(key, "static")
+89|         phase_label = "STATIC" if phase == "static" else "DYNAMIC"
+90| 
+91|         if phase == "dynamic":
+92|             content = engine.pr… (3,108字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 490|                 "chars": len(content) if content else 0,
+491|                 "editable": key in GLOBAL_EDITABLE or key in AGENT_EDITABLE,
+492|                 "visibility": self.get_component_visibility(key),  # "all" or "leader"
+493|             })
+494|         return components
+495| 
+496|     # Per-agent .md file names … (3,896字)
+  (还有 9 个工具调用，已省略)
+---
+[用户]: ok
+---
+[Kirk]: ## 结论
+
+修了两个 bug：
+
+**1. 动态组件点击进去空内容**
+- **根因**：`_prompt_show_component_page` 对 dynamic 组件传 `agent={}` 空字典，per-agent 字段（`persona`、`examples`、`instructions`）全返回空
+- **修复**：三级回退 — ① 第一个 active agent 的实际 dict（标注"以 xxx 为例展示"）→ ② `__preview__` + `{}` → ③ global template
+
+**2. 🔒/📂/📜 按钮点击无反应**
+- **根因**：`callback_data` 全是 `"pr:refresh"` 只刷新列表
+- **修复**：统一改为 `f"pre:__global__:{key}"`，点击进入只读预览
+
+**修改文件**：`callbacks.py` 第 91-118 行、`commands/settings.py` 第 401-412 行。编译通过。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 83|     async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+84|         """Show a single prompt component with pagination for long content."""
+85|         engine = self._groupchat_engine
+86|         chat_id = query.message.chat_id
+87|         label = _COMPONENT_LABELS.get(key, key)
+88|         phase = _COMPONENT_PHASES.get(key, "static")
+89|         phase_label = "STATIC" if phase == "static" else "DYNAMIC"
+90| 
+91|         if phase == "dynamic":
+92|             content = engine.prompt_builder._get_component_content(
+93|                 "__preview__", {}, key,
+94|                 list(getattr(engine, "active_agents", [])),
+95|             )
+96|             source = PromptBuilder.get_component_source(key)
+97|             header = f"👁 预览动态组件 - {label} [{phase… (4,328字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/commands/settings.py) → 395| 
+396|         buttons = []
+397|         for i, key in enumerate(order):
+398|             label = labels.get(key, key)
+399| 
+400|             # Name button (always shown)
+401|             if key == "history":
+402|                 buttons.append([InlineKeyboardButton(f"📜 {label}", callback_data="pr:refresh")])
+403|                 continue
+404| 
+405|             if key in global_editable:
+406|                 tpl = PromptBuilder.get_component_template(key)
+407|                 dot = "●" if tpl else "○"
+408|                 buttons.append([InlineKeyboardButton(f"✏️{dot} {label}", callback_data=f"pre:__global__:{key}")])
+409|             elif key in agent_editable:
+410|                 buttons.append([InlineKeyboardButton(f"📂 {label}", callback_data="pr:refresh")])
+411|             else:
+… (2,790字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 518|     def _get_component_content(
+519|         self,
+520|         agent_name: str,
+521|         agent: dict,
+522|         key: str,
+523|         active_agents: list[str],
+524|         leader: str | None = None,
+525|     ) -> str:
+526|         # Per-agent .md override (for keys that support it)
+527|         if key in self._PER_AGENT_FILES:
+528|             per_agent = self._get_agent_file(agent, self._PER_AGENT_FILES[key])
+529|             if per_agent:
+530|                 return per_agent
+531| 
+532|         if key == "main_prompt":
+533|             # Fall back to global template, then hardcoded default
+534|             return self.get_component_template("main_prompt") or (
+535|                 f"Write {agent_name}'s next reply in a fictional group chat. "
+536|                 f"Write 1… (6,971字)
+• edit_file() → (76字)
+• edit_file() → (84字)
+• exec() → STDERR:
+/bin/bash: line 1: python: command not found
+
+
+Exit code: 127 (69字)
+• exec() → OK
+
+
+Exit code: 0 (17字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 91|         if phase == "dynamic":
+92|             # Try to get runtime content from first active agent for per-agent fields
+93|             active = list(getattr(engine, "active_agents", []))
+94|             content = ""
+95|             preview_note = ""
+96|             if active:
+97|                 # Try with first active agent to get per-agent fields (persona, examples, instructions)
+98|                 first_agent = active[0]
+99|                 agent_dict = {}
+100|                 gc = getattr(engine, "groupchat", None)
+101|                 if gc and hasattr(gc, "agents"):
+102|                     agent_dict = gc.agents.get(first_agent, {})
+103|                 content = engine.prompt_builder._get_component_content(
+104|                     first_agent, agent_dict, key, active,
+105| … (1,768字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/commands/settings.py) → 396|         buttons = []
+397|         for i, key in enumerate(order):
+398|             label = labels.get(key, key)
+399| 
+400|             # Name button (always shown)
+401|             if key == "history":
+402|                 buttons.append([InlineKeyboardButton(f"📜 {label}", callback_data=f"pr… (1,084字)
+  (还有 2 个工具调用，已省略)
+---

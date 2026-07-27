@@ -1,0 +1,374 @@
+[用户]: 客观不可避免的因素忽略，看看是否有导致前缀变化的问题
+---
+[Kirk]: 
+
+[工具调用记录]
+• exec() → === SiliconFlow DeepSeek Pro: HIT→MISS 详细分析 ===
+2026-05-15 07:19:31.539 → 2026-05-15 07:19:21.447 | gap=-10s
+  prompt: 10478→9438 (Δ-1040)
+  cached: 9600→0
+  generation_id: gen-1778829571-WLimc... → gen-1778829561-cbcwB...
+
+2026-05-15 07:14:40.758 → 2026-05-15 07:14:30.411 | gap=-10s
+  prompt: 20380→18792 (Δ-1588)
+  cached: 19072→0
+  generation_id: gen-1778829280-0Pev8... → gen-1778829270-D90MA...
+
+2026-05-15 07:08:43.866 → 2026-05-15 07:08:33.884 | gap=-10s
+  prompt: 20707→16558 (Δ-4149)
+  cach… (9,421字)
+• exec() → === prompt增加但仍MISS的情况 ===
+2026-05-15 07:08:14.544 → 2026-05-15 04:08:29.511
+  prompt: 13756→30096 (Δ+16340)
+  prev_cached: 768, cur_cached: 0
+
+2026-05-15 03:07:04.123 → 2026-05-15 03:06:40.838
+  prompt: 24067→27690 (Δ+3623)
+  prev_cached: 16768, cur_cached: 0
+
+2026-05-15 03:06:06.106 → 2026-05-15 03:05:40.130
+  prompt: 23223→30388 (Δ+7165)
+  prev_cached: 17792, cur_cached: 0
+
+2026-05-15 03:05:08.488 → 2026-05-15 03:04:59.725
+  prompt: 24925→25910 (Δ+985)
+  prev_cached: 18304, cur_cached: 0
+
+2026… (1,911字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 680|         agent_max_iters = 12 if is_leader else 8
+681|         max_cycles = 30 if is_leader else 20  # hard cap to prevent runaway agents
+682|         _substantive_tools = {"web_search", "web_fetch", "exec", "read_file", "write_file"}
+683|         # Separate system-prompt messages (stable prefix) from conversation messages
+684|         # so we can prune conversation turns without touching the system prompt.
+685|         _sys_msg_count = len(messages)
+686| 
+687|         # ── Forced interrupt: get this agent's interrupt event from mailbox ──
+688|         _interrupt_event = mailbox.get_interrupt_event(name)
+689|         # Tracks how many timeout-recovery attempts this agent has made.
+690|         # Hard cap at 1 to prevent recovery loops.
+691|         _timeout_recovery_count = 0
+692|     … (4,618字)
+• exec(cd /root/nanobot-src && grep -n "cache_control\|_sys_msg_count\|prompt_cache\...) → 172:    def _supports_cache_control(self, model: str) -> bool:
+173:        """Return True when the provider supports cache_control on content blocks.
+180:        explicit cache_control breakpoints — injecting them would alter the
+190:                if native_spec.cache_control_mode == "automatic":
+196:        return spec.cache_control_mode == "explicit"
+198:    def _apply_cache_control(
+203:        """Return copies of messages and tools with cache_control injected.
+205:        Anthropic (and Az… (1,164字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 759|                 # Append to the volatile user message (the last message)
+760|                 # This ensures the system messages remain stable and cacheable.
+761|                 orig_volatile = messages[volatile_msg_idx]["content"]
+762|                 if "### [本轮状态汇总]" in orig_volatile:
+763|                     # Strip previous summary if retrying/looping
+764|                     orig_volatile = orig_volatile.split("### [本轮状态汇总]")[0].strip()
+765|                 
+766|                 messages[volatile_msg_idx]["content"] = orig_volatile + status_summary
+767| 
+768|                 _cycle_t0 = _t.time()
+769|                 _cycle_usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+770| 
+771|                 async def _on_iter_usage(usage: dict) -> … (3,523字)
+• read_file(/root/nanobot-src/nanobot/providers/litellm_provider.py) → 198|     def _apply_cache_control(
+199|         self,
+200|         messages: list[dict[str, Any]],
+201|         tools: list[dict[str, Any]] | None,
+202|     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
+203|         """Return copies of messages and tools with cache_control injected.
+204| 
+205|         Anthropic (and Azure) support at most 4 cache_control breakpoints total.
+206|         tools gets 1 breakpoint, leaving at most 3 for system messages.
+207|         We mark only the last N system messages to stay within this limit.
+208|         """
+209|         _MAX_CACH… (2,431字)
+  (还有 12 个工具调用，已省略)
+---
+[Harper]: <｜DSML｜tool_calls>
+<｜DSML｜invoke name="read_file">
+<｜DSML｜parameter name="offset" string="false">1130</｜DSML｜parameter>
+<｜DSML｜parameter name="path" string="true">/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py</｜DSML｜parameter>
+<｜DSML｜parameter name="limit" string="false">100</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 670|                 reg.get(tn) for tn in broadcast_tool_names
+671|             ]
+672|             if t is not None
+673|         ]
+674| 
+675|         all_tools_used: list[str] = []
+676|         total_iterations = 0
+677|         total_latency = 0.0
+678|         cycle = 0
+679|         content = ""  # last cycle's text output
+680|         agent_max_iters = 12 if is_leader else 8
+681|         max_cycles = 30 if is_leader else 20  # hard cap to prevent runaway agents
+682|         _substantive_tools = {"web_search", "web_fetch", "exec", "read_file", "write_file"}
+683|         # Separate system-prompt messages (stable prefix) from conversation messages
+684|         # so we can prune conversation turns without touching the system prompt.
+685|         _sys_msg_count = len(messages)
+686| 
+687|     … (2,668字)
+• exec(cd /root/nanobot-src && grep -n "_sys_msg_count\|_build_messages\|build_prefi...) → 685:        _sys_msg_count = len(messages)
+1284:                    messages, _sys_msg_count, _CONV_KEEP_TURNS,
+
+
+Exit code: 0 (126字)
+• exec(cd /root/nanobot-src && grep -rn "cache_control\|_apply_cache_control\|_suppo...) → 172:    def _supports_cache_control(self, model: str) -> bool:
+173:        """Return True when the provider supports cache_control on content blocks.
+180:        explicit cache_control breakpoints — injecting them would alter the
+190:                if native_spec.cache_control_mode == "automatic":
+196:        return spec.cache_control_mode == "explicit"
+198:    def _apply_cache_control(
+203:        """Return copies of messages and tools with cache_control injected.
+205:        Anthropic (and Az… (1,093字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1270|                     break
+1271|                 logger.info("Broadcast: {} reactivated by {}: {}", name, msg.sender, msg.content[:60])
+1272|                 await tracker.set_state(name, "thinking")
+1273|                 await engine._send(_d.chatroom_wait_msg(name, str(msg), leader=leader_name))
+1274| 
+1275|                 # ── Prune conversation tail to prevent unbounded growth ──
+1276|                 # Keep system-prompt prefix intact; only retain the last
+1277|                 # _CONV_KEEP_TURNS conversation turns (3 msgs per turn).
+1278|                 # Dropped messages are AI-summarised before removal so the
+1279|                 # agent retains context of earlier discussion.
+1280|                 from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_wi… (2,543字)
+• read_file(/root/nanobot-src/nanobot/providers/litellm_provider.py) → 195|             return False
+196|         return spec.cache_control_mode == "explicit"
+197| 
+198|     def _apply_cache_control(
+199|         self,
+200|         messages: list[dict[str, Any]],
+201|         tools: list[dict[str, Any]] | None,
+202|     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
+203|         """Return copies of messages and tools with cache_control injected.
+204| 
+205|         Anthropic (and Azure) support at most 4 cache_control breakpoints total.
+206|         tools gets 1 breakpoint, leaving at most 3 for system messages.
+207|         We mark only the last N system messages to stay within this limit.
+208|         """
+209|         _MAX_CACHE_BLOCKS = 4
+210|         sys_quota = _MAX_CACHE_BLOCKS - (1 if tools else 0)
+211| 
+212|         # Collect indices of… (3,683字)
+• exec(cd /root/nanobot-src && grep -rn "prompt_builder\|build_system_prompt\|_build...) → nanobot/groupchat/orchestra/engine.py:27:from nanobot.groupchat.history.prompt_builder import PromptBuilder
+nanobot/groupchat/orchestra/engine.py:72:        self._prompt_builder = PromptBuilder(config=config, workspace=workspace)
+nanobot/groupchat/orchestra/engine.py:292:        self._prompt_order: dict[str, list[str]] = self._prompt_builder._load_prompt_order()
+nanobot/groupchat/orchestra/engine.py:303:    def prompt_builder(self) -> PromptBuilder:
+nanobot/groupchat/orchestra/engine.py:305:    … (1,632字)
+  (还有 10 个工具调用，已省略)
+---
+[Kirk]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 200|         tool_name, tool_args = tool_map.get(tcid, ("unknown_tool", ""))
+201|         
+202|         summary = _summarize_tool_result(tool_name, tool_args, content)
+203|         result[i] = {**result[i], "content": summary}
+204| 
+205|     return result
+206| 
+207| 
+208| def prune_conversation_tail(
+209|     messages: list[dict[str, Any]],
+210|     sys_msg_count: int,
+211|     keep_turns: int = 6
+212| ) -> int:
+213|     """Prune old conversation turns from the tail to prevent unbounded growth.
+214|     
+215|     Mutates the `messages` list in-place by preserving the `sys_msg_count` prefix
+216|     and keeping only the last `keep_turns * 3` messages of the conversation.
+217|     Returns the number of messages dropped.
+218|     """
+219|     max_conv = keep_turns * 3
+220|     conv_msgs = mes… (2,476字)
+• exec(cd /root/nanobot-src && grep -n "def prune\|sys_msg_count\|_sys_msg" nanobot/...) → 135:def prune_messages(
+208:def prune_conversation_tail(
+210:    sys_msg_count: int,
+215:    Mutates the `messages` list in-place by preserving the `sys_msg_count` prefix
+220:    conv_msgs = messages[sys_msg_count:]
+223:        messages[sys_msg_count:] = conv_msgs[-max_conv:]
+228:async def prune_conversation_tail_with_summary(
+230:    sys_msg_count: int,
+244:    4. Injects the summary as a system message right after ``sys_msg_count``
+251:    conv_msgs = messages[sys_msg_count:]
+261:        messa… (1,263字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 135| def prune_messages(
+136|     messages: list[dict[str, Any]],
+137|     context_window_tokens: int,
+138|     *,
+139|     soft_ratio: float | None = None,
+140|     keep_recent: int | None = None,
+141|     max_chars: int | None = None,
+142| ) -> list[dict[str, Any]]:
+143|     """Prune old tool-result messages to fit within the context window.
+144| 
+145|     Returns a new list (shallow copy) with pruned messages. User/assistant messages
+146|     are never modified. Only tool results before the last ``keep_recent`` assistant
+147|     turns are pruned by substituting large outputs with a single generic summary line.
+148|     """
+149|     try:
+150|         from nanobot.groupchat.history import history_settings as hs
+151|         if soft_ratio is None:
+152|             soft_ratio = hs.pruning_… (2,487字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 740|                             tool_defs.append(bd)
+741|                 else:
+742|                     tool_defs = list(broadcast_defs)
+743| 
+744|                 # ── Update volatile status summary (Permissions + Credits) ──
+745|                 perm_lines = []
+746|                 for a in exec_agents:
+747|                     on = engine.get_agent_enabled_tool_names(a)
+748|                     extra = " ← 你" if a == name else (" 👑Leader" if a == leader_name else "")
+749|                     perm_lines.append(f"  {a}: {', '.join(on) if on else '(无工具)'}{extra}")
+750|                 
+751|                 status_summary = (
+752|                     f"\n\n### [本轮状态汇总]\n"
+753|                     f"**搜索额度**: {search_pool.status()}\n"
+754|                     f"**工具权限**:\n" + "\n".join(per… (2,303字)
+• exec(cd /root/nanobot-src && grep -n "_sys_msg_count\|sys_msg_count" nanobot/group...) → 685:        _sys_msg_count = len(messages)
+1284:                    messages, _sys_msg_count, _CONV_KEEP_TURNS,
+
+
+Exit code: 0 (126字)
+• exec(cd /root/nanobot-src && grep -n "cache_control_mode\|supports_prompt_caching"...) → 62:    supports_prompt_caching: bool = False
+69:    cache_control_mode: str = "explicit"
+118:        supports_prompt_caching=True,
+247:        supports_prompt_caching=True,
+318:        supports_prompt_caching=True,
+319:        cache_control_mode="automatic",
+355:        supports_prompt_caching=True,
+
+
+Exit code: 0 (315字)
+• exec(cd /root/nanobot-src && grep -A5 "deepseek" nanobot/providers/registry.py | h...) → # DeepSeek: needs "deepseek/" prefix for LiteLLM routing.
+    ProviderSpec(
+        name="deepseek",
+       … (499字)
+  (还有 6 个工具调用，已省略)
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Harper]: <｜DSML｜tool_calls>
+<｜DSML｜invoke name="wait">
+<｜DSML｜parameter name="timeout" string="false">60</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "def _build_agent_prompt" nanobot/groupchat/o...) → 978:    def _build_agent_prompt(
+
+
+Exit code: 0 (47字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 978|     def _build_agent_prompt(
+979|         self,
+980|         agent_name: str,
+981|         relevant_agents: list[str] | None = None,
+982|         *,
+983|         agent_idx: int | None = None,
+984|         total: int | None = None,
+985|         teammates: list[str] | None = None,
+986|         user_question: str = "",
+987|     ) -> list[dict[str, Any]]:
+988|         """Build prompt — delegates entirely to PromptBuilder."""
+989|         messages = self._prompt_builder.build_agent_prompt(
+990|             agent_name,
+991|             registry=self.registry,
+992|             active_agents=self._active_agents,
+993|             history=self._history,
+994|             leader=self._leader,
+995|             round_num=self._round,
+996|             relevant_agents=relevant_agents,
+997|           … (3,278字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 625|         return TEMPLATES.get(key, "")
+626| 
+627|     # ── Prompt building ──
+628| 
+629|     def build_agent_prompt(
+630|         self,
+631|         agent_name: str,
+632|         *,
+633|         registry: dict[str, dict],
+634|         active_agents: list[str],
+635|         history: list[dict[str, str]],
+636|         leader: str | None = None,
+637|         round_num: int = 0,
+638|         relevant_agents: list[str] | None = None,
+639|         agent_idx: int | None = None,
+640|         total: int | None = None,
+641|         teammates: list[str] | None = None,
+642|         user_question: str = "",
+643|     ) -> list[dict[str, Any]]:
+644|         """Build the full prompt messages list for an agent turn."""
+645|         agent = registry[agent_name]
+646|         order = self.get_agent_prompt… (6,079字)
+• exec(cd /root/nanobot-src && grep -n "user_question" nanobot/groupchat/history/pro...) → 212:        "用户请求: {{user_question}}\n\n"
+642:        user_question: str = "",
+664:            "{{user_question}}": user_question,
+
+
+Exit code: 0 (145字)
+• exec(cd /root/nanobot-src && grep -n "broadcast_hint" nanobot/groupchat/history/pr...) → 34:    "tool_instructions", "skills", "broadcast_hint", "examples",
+44:    "broadcast_hint": "广播协调 (broadcast_hint)",
+53:    "broadcast_hint", "examples", "instructions", "leader_prompt", "group_nudge",
+208:    "broadcast_hint": (
+532:        elif key in ("broadcast_hint", "group_nudge"):
+
+
+Exit code: 0 (304字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 208|     "broadcast_hint": (
+209|         "[广播模式 — 多Agent协作]\n"
+210|         "你是 {{agent_idx}}/{{total}} 号成员，代号 {{agent}}\n"
+211|         "队友: {{teammates}}\n\n"
+212|         "用户请求: {{user_question}}\n\n"
+213|         "## 聊天记录说明\n"
+214|         "历史记录仅包含：你自己的发言、用户消息、系统消息。\n"
+215|         "队友的历史发言不在历史里——他们本轮的消息通过 chatroom_send/wait 实时传达。\n"
+216|         "若历史中出现 [早期对话摘要]，表示早期消息已被压缩为摘要；\n"
+217|         "若出现 [...N 条历史消息已省略...]，表示受上下文限制部分记录不可见，以最近内容为准。\n\n"
+218|         "## 群聊工具\n"
+219|         "- chatroom_send(to, message): 给队友发消息。to 可以是具体名字或 \"All\"\n"
+220|         "- wait(timeout=30): 等待队友消息，不要超过60s\n\n"
+221|         "### 协作通信协议\n"
+222|         "chatroom_send(to=\"Harper\", message=\"搜索结果...\")\n"
+223|         "chatroom_send(to=\"All\", message=\"关键发现...\")\n\n"
+224|         "### 收到消息后的响应规则（关… (1,458字)
+• chatroom_send() → (48字)
+• wait() → (106字)
+---
+[Harper]: ## 前缀缓存变化根因 — 结论
+
+**数据**：892条日志，命中率56.1%
+
+### 三大原因
+
+| 原因 | 占比 | 详情 |
+|------|------|------|
+| **Provider 切换** | 72% | OpenRouter 路由到6个不同Provider，缓存各自独立。Fireworks 17次全miss |
+| **Agent 前缀不同** | 21% | Worker~9K vs Leader~14.5K tokens，切换即miss |
+| **OpenAI nano** | 1% | 119次仅1次命中，基本不支持 |
+
+### 代码级根因
+
+**`user_question` 被错误放在 stable_tpl_vars**（`prompt_builder.py:664`）— 每轮用户问题不同却注入到 history 之前的系统提示词中，导致缓存前缀每轮变化。这是唯一可控的软件缺陷。
+
+### 优化方向
+
+1. **短期**：把 `{{user_question}}` 从 stable_tpl_vars 移到 volatile 或 history 之后注入
+2. **中期**：固定 provider（SiliconFlow 83%→95%+）
+3. **长期**：同一 agent 连续调用路由到同一 provider 节点
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_team/prefix-cache-optimization (hidden)
+  Drawer ID: drawer_wing_team_prefix-cache-optimization_3e5648bf6d2b59b72272c765 (137字)
+---
+[Harper]: 分析已完成，结论已发给 Kirk 并存入记忆。等待 Kirk 恢复后确认或指示下一步。
+---
+[Harper]: 已满足退出条件（结果已发给Leader + 连续多轮无新信息）。等待 Kirk 恢复或系统自动结束。
+
+[工具调用记录]
+• wait() → (92字)
+---

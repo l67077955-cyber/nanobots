@@ -1,0 +1,194 @@
+[用户]: 换页功能应该以前代码有相关逻辑，不要新写
+---
+[Kirk]: 完全明白了。`prv:` 是**全局模板预览**（所有组件拼在一起的分页），`prep:` 是**单组件预览**的分页。两者分页逻辑完全一样（`page_size=3500`，`⬅️上页/下页➡️`），但用途不同。
+
+用户的意思是：不要新写分页逻辑，应该提取一个通用方法复用。现在 `_prompt_show_component_page` 里的分页代码和 `prv:` 里的分页代码是重复的。
+
+提取通用文本分页方法：
+
+[工具调用记录]
+• memory_palace(pagination 分页 callback page telegram existing logic) → 🔍 5 result(s) for 'pagination 分页 callback page telegram existing logic':
+
+[1] wing_code/prompt-pipeline-display-fix (sim=-0.078)
+  ## Prompt 组件预览分页功能（2026-05-24）
+
+问题：prompt 组件内容过长时（>3500字），用户无法查看完整内容。
+
+修复：callbacks.py 新增 `_prompt_show_component_page(query, key, page)` 方法，支持分页浏览：
+- 每页 3500 字（`_PROMPT_PAGE_SIZE`）
+- 底部导航栏：⬅️上一页 | 页码 | 下一页➡️
+- callback_data 格式：`prep:<key>:<page>`
+- Dynamic 组件：只读预览 + 返回按钮
+- Static 组件：编辑模式 + 取消按钮 + 分页
+
+重构：原 `pre:` 回调中的内联逻辑提取为独立方法，`pre:` 和 `prep:` 都调用 `_prompt_show_com… (2,095字)
+• exec(grep -rn "def.*page\|pagination\|_build.*page\|split_message\|page_size\|PAGE...) → 68:    _PROMPT_PAGE_SIZE = 3500  # chars per page for prompt component preview
+70:    async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+71:        """Show a single prompt component with pagination for long content."""
+98:        page_size = self._PROMPT_PAGE_SIZE
+99:        total_pages = max(1, (total + page_size - 1) // page_size) if total else 1
+100:        page = max(0, min(page, total_pages - 1))
+101:        start = page * page_size
+102:        end = start … (2,962字)
+• exec(grep -n "def _build_log_page\|def _paginate\|def _show_page\|def _page_text" ...) → Exit code: 1 (13字)
+• exec(sed -n '440,560p' /root/nanobot-src/nanobot/channels/telegram/callbacks.py) → cfg = {}
+                    if cfg_path.exists():
+                        try:
+                            cfg = json.loads(cfg_path.read_text())
+                        except Exception:
+                            pass
+                    cfg["tools"] = tools_cfg
+                    try:
+                        cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+                    except Exception:
+                        pass
+
+                # Refresh buttons by re-triggerin… (5,785字)
+• exec(grep -n "_build_log_page_v2\|def _build_log_page" /root/nanobot-src/nanobot/c...) → 515:                text, markup = self._build_log_page_v2(logs, page)
+521:                text, markup = self._build_log_page_v2(logs, page)
+531:                text, markup = self._build_log_page_v2(logs, page, keyword=kw)
+
+
+Exit code: 0 (239字)
+• exec(grep -rn "_build_log_page_v2" /root/nanobot-src/nanobot/channels/telegram/ --...) → /root/nanobot-src/nanobot/channels/telegram/callbacks.py:515:                text, markup = self._build_log_page_v2(logs, page)
+/root/nanobot-src/nanobot/channels/telegram/callbacks.py:521:                text, markup = self._build_log_page_v2(logs, page)
+/root/nanobot-src/nanobot/channels/telegram/callbacks.py:531:                text, markup = self._build_log_page_v2(logs, page, keyword=kw)
+/root/nanobot-src/nanobot/channels/telegram/commands/log.py:52:        text, markup = self._build_log_pa… (695字)
+• exec(sed -n '117,180p' /root/nanobot-src/nanobot/channels/telegram/commands/log.py) → def _build_log_page_v2(self, logs: list[dict], page: int, keyword: str = ""):
+        """Build a log page grouped by session, 8 items per page."""
+        per_page = 8
+        total = len(logs)
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        page = max(0, min(page, total_pages - 1))
+        start = page * per_page
+        end = min(start + per_page, total)
+        page_logs = logs[start:end]
+
+        header = f"📊 LLM 请求日志 (第{page+1}/{total_pages}页, 共{total}条)"
+        if… (2,587字)
+• exec(sed -n '180,210p' /root/nanobot-src/nanobot/channels/telegram/commands/log.py) → cb_prefix = "rlogs_pg" if keyword else "rlog_pg"
+            nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"{cb_prefix}:{page-1}"))
+        if page < total_pages - 1:
+            cb_prefix = "rlogs_pg" if keyword else "rlog_pg"
+            nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"{cb_prefix}:{page+1}"))
+        if nav:
+            buttons.append(nav)
+
+        text = "\n".join(lines)
+        if len(text) > 4000:
+            text = text[:4000] + "…"
+        return text, I… (1,376字)
+  (还有 6 个工具调用，已省略)
+---
+[Kirk]: [end_discussion(reason='任务完成：分页逻辑已提取为通用 _paginate 方法，两处复用，编译通过。')]
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1407|             elif data.startswith("prv:"):
+1408|                 # Preview full template: prv:<page>
+1409|                 page = int(data[4:])
+1410|                 engine = self._groupchat_engine
+1411|                 order = engine.prompt_builder.get_agent_prompt_order()
+1412|                 labels = _COMPONENT_LABELS
+1413| 
+1414|                 phases = _COMPONENT_PHASES
+1415|                 lines: list[str] = [
+1416|                     "📌 组装规则: STATIC → 💬聊天记录 → DYNAMIC",
+1417|                     "   stable vars only      stable + volatile vars",
+1418|                     "",
+1419|                 ]
+1420|                 display_num = 0
+1421|                 for i, key in enumerate(order):
+1422|                     label = labels.get(key, key)
+1423|                     phase … (3,702字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 68|     _PROMPT_PAGE_SIZE = 3500  # chars per page for prompt component preview
+69| 
+70|     async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+71|         """Show a single prompt component with pagination for long content."""
+72|         engine = self._groupchat_engine
+73|         chat_id = query.message.chat_id
+74|         label = _COMPONENT_LABELS.get(key, key)
+75|         phase = _COMPONENT_PHASES.get(key, "static")
+76|         phase_label = "STATIC" if phase == "static" else "DYNAMIC"
+77| 
+78|         if phase == "dynamic":
+79|             content = engine.prompt_builder._get_component_content(
+80|                 "__preview__", {}, key,
+81|                 list(getattr(engine, "active_agents", [])),
+82|             )
+83|             source = PromptBu… (3,064字)
+• exec(grep -n "prep:" /root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 110:            nav_buttons.append(InlineKeyboardButton("⬅️ 上一页", callback_data=f"prep:{key}:{page - 1}"))
+113:            nav_buttons.append(InlineKeyboardButton("下一页 ➡️", callback_data=f"prep:{key}:{page + 1}"))
+1273:            elif data.startswith("prep:"):
+1274:                # Paginate prompt component view: prep:<key>:<page>
+
+
+Exit code: 0 (349字)
+• exec(sed -n '1273,1285p' /root/nanobot-src/nanobot/channels/telegram/callbacks.py) → elif data.startswith("prep:"):
+                # Paginate prompt component view: prep:<key>:<page>
+                parts = data[5:].rsplit(":", 1)
+                if len(parts) == 2:
+                    key, page_str = parts
+                    try:
+                        page = int(page_str)
+                    except ValueError:
+                        page = 0
+                    await self._prompt_show_component_page(query, key, page=page)
+
+            elif data == "prcan":
+                … (540字)
+• edit_file() → (76字)
+• edit_file() → (76字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1460| 
+1461|                 full_text = "\n".join(lines)
+1462|                 page_size = 3500
+1463|                 total_pages = max(1, (len(full_text) + page_size - 1) // page_size)
+1464|                 start = page * page_size
+1465|                 end = min(start + page_size, len(full_text))
+1466|                 page_text = f"🔍 全局 Prompt 模板预览 (第{page+1}/{total_pages}页)\n\n" + full_text[start:end]
+1467| 
+1468|                 nav = []
+1469|                 if page > 0:
+1470|                     nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"prv:{page-1}"))
+1471|                 if page < total_pages - 1:
+1472|                     nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"prv:{page+1}"))
+1473|                 buttons = []
+1474|                 if nav:
+1475| … (1,173字)
+• edit_file() → (76字)
+• exec(python3 -c "import py_compile; py_compile.compile('/root/nanobot-src/nanobot/...) → OK
+
+
+Exit code: 0 (17字)
+• exec(grep -n "_paginate\|page_size = 3500\|total_pages = max" /root/nanobot-src/na...) → 71:    def _paginate(text: str, page: int, page_size: int = 3500) -> tuple[str, int, int]:
+74:        total_pages = max(1, (total + page_size -… (717字)
+  (还有 1 个工具调用，已省略)
+---
+[Kirk]: ## 结论
+
+提取了 `_paginate(text, page, page_size)` 通用方法，`prv:`（全局模板预览）和 `prep:`（单组件预览）两处分页逻辑统一复用，消除了重复代码。
+
+## 关键发现
+
+- `_paginate` 是 `@staticmethod`，返回 `(chunk, clamped_page, total_pages)`
+- `prv:` 回调（第1462行）和 `_prompt_show_component_page`（第110行）都已改用
+- 其他分页（日志列表等）是 list 分页，数据结构不同，不适用
+- 编译验证通过
+
+[工具调用记录]
+• end_discussion() → ✅ 讨论已结束（原因: 任务完成：分页逻辑已提取为通用 _paginate 方法，两处复用，编译通过，记忆已存储。），即将进入总结阶段 (67字)
+---
+[Kirk]: ## 结论
+
+提取了 `_paginate(text, page, page_size)` 通用方法，`prv:`（全局模板预览）和 `prep:`（单组件预览）两处分页逻辑统一复用，消除了重复代码。
+
+## 关键发现
+
+- `_paginate` 是 `@staticmethod`，返回 `(chunk, clamped_page, total_pages)`
+- `prv:` 回调（第1462行）和 `_prompt_show_component_page`（第110行）都已改用
+- 其他分页（日志列表等）是 list 分页，数据结构不同，不适用
+- 编译验证通过
+---
+[Kirk]: 已完成。`callbacks.py` 中提取了 `_paginate(text, page, page_size=3500)` 静态方法，`prv:`（全局模板预览第1462行）和 `prep:`（单组件预览第110行）两处统一复用，不再各自重复分页逻辑。编译通过。
+---
+[用户]: 提交一下最新修改
+---

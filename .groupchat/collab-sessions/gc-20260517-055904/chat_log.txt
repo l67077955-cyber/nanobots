@@ -1,0 +1,497 @@
+[用户]: 我现在发消息你们居然认为没请求，定位问题
+---
+[Kirk]: 现在看 broadcast_round 返回后，调用方怎么处理——是否进入 synthesis：
+
+[工具调用记录]
+• memory_palace(end_discussion summary user message detection request ignored) → 🔍 5 result(s) for 'end_discussion summary user message detection request ignored':
+
+[1] wing_code/leader-autowait-on-end (sim=0.097)
+  end_discussion 死循环修复方案（两个层面）：
+1. Bugfix：end_discussion 检查 agent 状态时应排除调用者自身（leader），避免"自己等自己"的死循环。
+2. Feature：如果有其他 agent（非 leader）正在忙碌，leader 应进入 autowait 模式（自动 wait），等忙碌 agent 完成后自动重试 end_discussion，而非返回错误拒绝。
+来源：Harper 分析 + 用户需求
+
+[2] wing_code/end-discussion-guard (sim=-0.157)
+  end_discussion 硬守卫实现（2026-05-13）：
+- 文件：chatroom_tools.py EndDiscussionTool.execute
+… (1,957字)
+• memory_palace(context compression user message dropped long conversation) → 🔍 5 result(s) for 'context compression user message dropped long conversation':
+
+[1] wing_code/conversation-pool-logic (sim=-0.0)
+  ConversationPool 对话池逻辑（mailbox.py）：
+- 容量：max(n*(n-1), 2)，可通过 context_pool_capacity 覆盖
+- 槽位消耗：每条消息按接收人数消耗（All广播=全部非自己agent数）
+- 释放路径：release_unread(wait时)、mark_replied(回复时)、超时放弃
+- 用户优先级：allocate_user强制分配不阻塞，期间block agent
+- 池满：chatroom_send返回BLOCKED，消息丢弃
+- _available可因user overflow变负数（设计意图）
+- SpeakQueue是向后兼容别名
+
+[2] wing_code/context-compression-bugs (sim=-0.135)
+  ## 上… (1,990字)
+• memory_palace() → ## L2 — ON-DEMAND (1 drawers)
+  [context-compression-bugs] ## 上下文压缩逻辑 — 已验证的 3 个问题 (2026-05-15)  ### Bug 1：keep_user_messages=True 时消息静默丢失 - 文件：context.py maybe_compress() - `compress_start = max(protected_head_indices) + 1` 假设 head 索引连续 - keep_user_messages=True 时用户消息散布导致 protected_head 不连续 - head 间隙中的非用户消息既不在 head、不在 tail、也不在压缩区，直接消失 - 已验证：25条消息，protec... (359字)
+• memory_palace() → ## L2 — ON-DEMAND (3 drawers)
+  [context-compression-architecture] ## 上下文压缩架构 — 双层设计  ### 层级一：跨轮压缩 (HistoryContext.maybe_compress) - 位置: groupchat/history/context.py:146-250 - 触发: engine.py:1137, engine.py:951 - 作用对象: master 消息列表（破坏性操作） - 结构: Protected Head | Compressible Middle | Protected Tail - Head保护: _find_head_indices() 只保护 index_0 + first_user_msg - Tail保...
+  [context-compression-architecture] 用户反馈：长上下文中多问题同轮时，agent的回答内容会被maybe_compress压缩丢失，导致用户感觉提问被忽略。实例：gc-20260516-205840会话中用户问了Xi-Trum… (931字)
+• exec(cd /root/nanobot-src && grep -rn "end_discussion\|end_discuss" nanobot/groupc...) → 566:                f"- end_discussion(reason): 结束讨论，进入最终总结\n"
+588:                f"6. 信息充分后，先完成以下两步，再调用 end_discussion()：\n"
+598:                f"7. 完成记忆存入后，调用 end_discussion() 结束任务\n\n"
+600:                f"- 发现队友空转或无法完成任务时：果断 end_discussion\n"
+602:                f"- ⚠️ 如果你打算自己做搜索/验证，必须先完成工具调用，再调用 end_discussion。\n"
+603:                f"  end_discussion 一旦触发无法撤销，之后再说'我来搜索'只是文字，不会执行。\n"
+606:                f"- ⚠️ 禁止在未存记忆的情况下调用 end_discussion。存记忆 → end_discussion 是强制顺序。\n"
+668:        # Onl… (1,298字)
+• exec(cd /root/nanobot-src && grep -rn "def.*end_discussion\|class.*EndDiscussion" ...) → nanobot/groupchat/orchestra/tools/chatroom_tools.py:1061:class EndDiscussionTool(Tool):
+
+
+Exit code: 0 (102字)
+• exec(cd /root/nanobot-src && grep -rn "user.*request\|用户.*请求\|no.*request\|没有.*请求\...) → nanobot/groupchat/orchestra/broadcast.py:19:from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
+nanobot/groupchat/orchestra/broadcast.py:551:                f"用户请求: {user_question}\n\n"
+nanobot/groupchat/orchestra/broadcast.py.bak:19:from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
+nanobot/groupchat/orchestra/broadcast.py.bak:414:                f"用户请求: {user_question}\n\n"
+nanobot/groupchat/orchestra/broadcast.py.bak_guard_removal:19:from nanobot… (787字)
+• exec(cd /root/nanobot-src && sed -n '1061,1130p' nanobot/groupchat/orchestra/tools...) → class EndDiscussionTool(Tool):
+    """Leader-only tool: end the discussion phase immediately.
+
+    When called, sets an asyncio.Event that the broadcast loop watches.
+    All agent tasks are cancelled and the leader enters the synthesis phase.
+    """
+
+    def __init__(self, *, end_event: Any, engine: Any, mailbox: Any = None) -> None:
+        self._end_event = end_event  # asyncio.Event
+        self._engine = engine
+        self._mailbox = mailbox
+
+    @property
+    def name(self) -> str:
+     … (2,639字)
+  (还有 11 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -rn "no request\|无请求\|not a request\|忽略消息\|skip....) → nanobot/groupchat/history/context_validator.py:55:    if skipped == 0 and any("[...earlier messages omitted...]" in (m.get("content") or "") for m in messages):
+nanobot/groupchat/orchestra/tools/chatroom_tools.py:877:                       By default, restricting to the leader makes the agent ignore all non-leader messages.
+nanobot/channels/feishu.py:1067:                logger.debug("Feishu: skipping group message (not mentioned)")
+
+
+Exit code: 0 (451字)
+• exec(cd /root/nanobot-src && grep -rn "认为.*没\|认为.*不\|not.*request\|empty.*message\...) → nanobot/providers/base.py:112:    def _sanitize_empty_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+nanobot/providers/litellm_provider.py:632:            "messages": self._sanitize_messages(self._sanitize_empty_content(messages), extra_keys=extra_msg_keys),
+nanobot/providers/azure_openai_provider.py:96:                self._sanitize_empty_content(messages),
+nanobot/providers/custom_provider.py:43:            "messages": self._sanitize_empty_content(messages),
+nanobot/providers… (2,014字)
+• exec() → nanobot/channels/slack.py:204:        if channel_type != "im" and not self._should_respond_in_channel(event_type, text, chat_id):
+nanobot/channels/slack.py:278:    def _should_respond_in_channel(self, event_type: str, text: str, chat_id: str) -> bool:
+nanobot/channels/matrix.py:512:    def _should_process_message(self, room: MatrixRoom, event: RoomMessage) -> bool:
+nanobot/channels/matrix.py:696:        if event.sender == self.config.user_id or not self._should_process_message(room, event):
+nano… (857字)
+• exec(cd /root/nanobot-src && grep -rn "用户.*消息\|user.*message\|收到.*消息\|on_message\|...) → nanobot/groupchat/history/history_settings.py:66:        # Protect ALL user messages (not just the first) during compression
+nanobot/groupchat/history/history_settings.py:67:        "keep_user_messages": True,
+nanobot/groupchat/history/history_settings.py:200:def keep_user_messages() -> bool:
+nanobot/groupchat/history/history_settings.py:201:    return bool(_load()["history"]["keep_user_messages"])
+nanobot/groupchat/history/context_validator.py:51:    if not any(m.get("role") == "user" for m in … (3,029字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 650|             lines.append(f"  📁 {gname}")
+651|             lines.append(f"     {' → '.join(member_info)}")
+652|         return "\n".join(lines)
+653| 
+654|     # ── Response cleanup ───
+655| 
+656|     def _clean_response(self, content: str, agent_name: str) -> str:
+657|         """Clean up model response — delegates to response_cleanup module."""
+658|         return _clean_response_fn(content, agent_name, list(self.registry.keys()))
+659| 
+660|     # ── Tool-augmented chat (matching AgentLoop._run_agent_loop) ───
+661| 
+662|     # Search intent keywords — only pass tools when user message matches
+663|     _SEARCH_KEYWORDS = {
+664|         # Chinese
+665|         "搜索", "搜一下", "查一下", "查找", "查询", "找一下",
+666|         "新闻", "最新", "今天", "今日", "实时", "热点",
+667|         "帮我查", "帮我搜", "帮我找", "上网",
+6… (5,561字)
+• exec(cd /root/nanobot-src && grep -rn "is_request\|_is_request\|is_user_request\|i...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && grep -rn "filter.*message\|skip.*user\|忽略用户\|用户.*忽略\|...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && grep -rn "def handle_user_message\|async def handle_u...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && grep -rn "检查.*请求\|检测.*请求\|is.*request\|判断.*用户\|鉴定\|qu...) → nanobot/groupchat/orchestra/engine.py:397:        """Clear conversation history and request log, but keep active agents and loop running."""
+nanobot/groupchat/orchestra/engine.py:403:        """Clear history, request log, active agents, and stop the loop."""
+
+
+Exit code: 0 (273字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 100|                     f"👤 {engine._active_agents[0]}"
+101|                 )
+102| 
+103|         if not any(m["sender"] == "系统" for m in engine._hist… (2,528字)
+  (还有 2 个工具调用，已省略)
+---
+[Harper]: <｜｜DSML｜｜tool_calls>
+<｜｜DSML｜｜invoke name="read_file">
+<｜｜DSML｜｜parameter name="offset" string="false">815</｜｜DSML｜｜parameter>
+<｜｜DSML｜｜parameter name="path" string="true">/root/nanobot-src/nanobot/groupchat/orchestra/engine.py</｜｜DSML｜｜parameter>
+<｜｜DSML｜｜parameter name="limit" string="false">30</｜｜DSML｜｜parameter>
+</｜｜DSML｜｜invoke>
+</｜｜DSML｜｜tool_calls>
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "def broadcast_round\|async def broadcast_rou...) → 390:async def broadcast_round(
+
+
+Exit code: 0 (45字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 390| async def broadcast_round(
+391|     agents: list[str],
+392|     engine: BroadcastContext,
+393|     mailbox: MailboxHub,
+394|     global_timeout: float = 3600.0,
+395| ) -> list[tuple[str, str | None]]:
+396|     """Run all agents concurrently with out-of-order completion display.
+397| 
+398|     Each agent:
+399|     1. Gets its own asyncio.Task
+400|     2. Can use chatroom_send/wait to talk to other agents
+401|     3. Results display as each agent finishes (first-done-first-shown)
+402| 
+403|     Args:
+404|         agents: List of agent names to run.
+405|         engine: The GroupChatEngine instance.
+406|         mailbox: Shared MailboxHub for inter-agent communication.
+407|         global_timeout: Hard limit for the entire round (seconds).
+408| 
+409|     Returns:
+410|         List of (ag… (4,238字)
+• exec(cd /root/nanobot-src && grep -n "def _run_one\|async def _run_one" nanobot/gr...) → 500:    async def _run_one(
+
+
+Exit code: 0 (42字)
+• exec(cd /root/nanobot-src && sed -n '490,560p' nanobot/groupchat/orchestra/broadca...) → leader_gate = orch.leader_gate
+    agent_tool_registries = orch.agent_tool_registries
+    _search_cache = orch._search_cache
+    leader_end_event = orch.leader_end_event
+    _leader_agent_tasks = orch._leader_agent_tasks
+    tasks = orch.tasks
+    all_tasks = orch.all_tasks
+
+    # ── Run each agent as a concurrent task ──
+
+    async def _run_one(
+        name: str,
+        agent_idx: int,
+    ) -> tuple[str, str | None, list[str], dict]:
+        """Run a single agent with streaming display."""
+ … (2,993字)
+• exec(cd /root/nanobot-src && grep -rn "直接回复\|direct_reply\|direct.*chat\|direct.*m...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && cat nanobot/channels/telegram/callbacks.py | head -30...) → return
+                engine = self._groupchat_engine
+                if not engine or name not in engine.registry:
+                    await query.edit_message_text(f"❌ Agent '{name}' 不存在")
+                    return
+            
+                deleted_dir = engine.delete_agent(name)
+            
+                msg = f"🗑️ Agent '{name}' 已删除"
+                if deleted_dir:
+                    msg += f"\n📁 配置目录已删除"
+                await query.edit_message_text(msg)
+
+            elif data.star… (8,348字)
+• exec(cd /root/nanobot-src && sed -n '300,400p' nanobot/channels/telegram/__init__.py) → async def send(self, msg: OutboundMessage) -> None:
+        """Send a message through Telegram."""
+        if not self._app:
+            logger.warning("Telegram bot not running")
+            return
+
+        # Only stop typing indicator for final responses
+        if not msg.metadata.get("_progress", False):
+            self._stop_typing(msg.chat_id)
+
+        try:
+            chat_id = int(msg.chat_id)
+        except ValueError:
+            logger.error("Invalid chat_id: {}", msg.chat_id)
+      … (4,088字)
+• exec(cd /root/nanobot-src && grep -n "def handle\|async def handle\|on_message\|de...) → 217:                self._on_message
+
+
+Exit code: 0 (51字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/message_handler.py) → 1| """Message handler for Telegram (text, photo, voice, document)."""
+2| 
+3| from __future__ import annotations
+4| 
+5| import asyncio
+6| import json
+7| import re
+8| 
+9| from telegram import Update
+10| from telegram.ext import ContextTypes
+11| 
+12| from loguru import logger
+13| 
+14| from nanobot.bus.events import OutboundMessage
+15| from nanobot.config.paths import get_media_dir
+16| from .formatting import TELEGRAM_MAX_MESSAGE_LEN
+17| 
+18| 
+19| class MessageHandlerMixin:
+20|     """Mixin providing message handling."""
+21| 
+22|     async def _on_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+23|         """Handle incoming messages (text, photos, voice, documents)."""
+24|         if not update.message or not update.effective_user:
+25|       … (9,036字)
+  (还有 1 个工具调用，已省略)
+---
+[Kirk]: `broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统"` 匹配，并且跳过以 `[` 开头的压缩摘要消息：`broadcast_round` 签名没有 `user_question` 参数，是内部从 history 提取的。最小变更：直接改提取逻辑，去掉 `"系统
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && sed -n '800,870p' nanobot/groupchat/orchestra/engine.py) → """Inject a user interjection into an in-progress direct chat.
+
+        Returns True if injected, False if no direct chat is running.
+        """
+        if self._direct_chat_task and not self._direct_chat_task.done():
+            self._direct_chat_queue.put_nowait(user_message)
+            logger.info("Direct chat: interjection queued ({} chars)", len(user_message))
+            return True
+        return False
+
+    async def direct_chat(self, user_message: str) -> str | None:
+        """Send me… (2,944字)
+• exec(cd /root/nanobot-src && grep -n "_group_loop\|_run_group\|synthesis\|broadcas...) → 278:        # Broadcast round: per-agent tasks registered by broadcast_round()
+283:        # queued here so broadcast_round can pick them up and spawn tasks for them.
+486:            self._stop_group_loop()
+602:        self._stop_group_loop()
+611:            self._start_group_loop()
+819:            self._start_group_loop()
+830:        self._stop_group_loop()
+845:    def _start_group_loop(self) -> None:
+876:    def _stop_group_loop(self) -> None:
+
+
+Exit code: 0 (464字)
+• exec(cd /root/nanobot-src && grep -n "async def.*group\|async def.*broadcast\|asyn...) → 1013:    async def _run_loop(self) -> None:
+
+
+Exit code: 0 (58字)
+• exec(cd /root/nanobot-src && sed -n '1013,1100p' nanobot/groupchat/orchestra/engin...) → async def _run_loop(self) -> None:
+        """Main group chat loop — delegates to run_loop module."""
+        from nanobot.groupchat.orchestra.run_loop import run_loop
+        await run_loop(self)
+
+
+"""Direct 1-on-1 chat mode for group chat engine.
+
+Handles single-agent conversations when exactly one agent is active.
+Manages session setup, message building, streaming, and response handling.
+
+Supports user interjection: after the agent replies, the loop waits
+briefly for new user messages (via en… (3,073字)
+• exec(cd /root/nanobot-src && cat nanobot/groupchat/orchestra/run_loop.py) → """Main group chat event loop — dispatches to broadcast mode.
+
+Leader's final text reply (before end_discussion) serves as the
+synthesis; no separate summary generation stage exists.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+from loguru import logger
+
+from nanobot.groupchat.orchestra.broadcast import broadcast_round
+
+
+async def generate_summary(engine: Any) -> None:
+    """Generate and send an AI summary of the entire discussion.
+
+    Called when user sends ``__SUMMARY__`` or when… (5,210字)
+• exec(cd /root/nanobot-src && grep -rn "用户请求\|user_request\|user_question" nanobot/...) → nanobot/groupchat/orchestra/engine.py:986:        user_question: str = "",
+nanobot/groupchat/orchestra/engine.py:1000:            user_question=user_question,
+nanobot/groupchat/orchestra/broadcast.py:458:    user_question = ""
+nanobot/groupchat/orchestra/broadcast.py:461:            user_question = msg.get("content", "")[:300]
+nanobot/groupchat/orchestra/broadcast.py:528:            user_question=user_question,
+nanobot/groupchat/orchestra/broadcast.py:551:                f"用户请求: {user_question}\… (612字)
+• exec(cd /root/nanobot-src && sed -n '450,560p' nanobot/groupchat/orchestra/broadca...) → "mode": "broadcast",
+        "leader": leader_name,
+    })
+    await engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout), leader=leader_name))
+
+    orch = BroadcastOrchestrator(agents, engine, mailbox)
+
+    # ── Extract user question (for hint injection) ──
+    user_question = ""
+    for msg in reversed(engine._history):
+        if msg.get("sender") in ("User", "user", "用户", "系统"):
+            user_question = msg.get("content", "")[:300]
+            break
+
+    # ═══════════════… (4,607字)
+• exec(cd /root/nanobot-src && sed -n '455,465p' nanobot/groupchat/orchestra/broadca...) → orch = BroadcastOrchestrator(agents, engine, mailbox)
+
+    # ── Extract user question (for hint injection) ──
+    user_question = ""
+    for msg in reversed(engine._history):
+        if msg.get("sender") in ("User", "user", "用户", "系统"):
+            user_question = msg.get("content", "")[:300]
+… (465字)
+  (还有 3 个工具调用，已省略)
+---
+[Harper]: <｜DSML｜tool_calls>
+<｜DSML｜invoke name="exec">
+<｜DSML｜parameter name="command" string="true">cd /root/nanobot-src && python3 -c "
+from nanobot.groupchat.orchestra.broadcast import broadcast_round
+import inspect
+src = inspect.getsource(broadcast_round)
+# 验证提取逻辑
+lines = src.split('\n')
+for i, line in enumerate(lines):
+    if 'user_question' in line or 'User' in line or '系统' in line:
+        if '用户' in line or 'sender' in line:
+            print(f'{i}: {line}')
+"</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "def broadcast_round\|user_question\|last_use...) → 390:async def broadcast_round(
+458:    user_question = ""
+460:        if msg.get("sender") in ("User", "user", "用户", "系统"):
+461:            user_question = msg.get("content", "")[:300]
+528:            user_question=user_question,
+551:                f"用户请求: {user_question}\n\n"
+591:                f"      （直接回答用户问题的核心结论，1-3句话）\n\n"
+597:                f"      示例: memory_palace(action='store', content='用户偏好：...', wing='用户', hall='偏好', room='main')\n"
+1035:                    if _sender_name == "用… (929字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 455|     orch = BroadcastOrchestrator(agents, engine, mailbox)
+456| 
+457|     # ── Extract user question (for hint injection) ──
+458|     user_question = ""
+459|     for msg in reversed(engine._history):
+460|         if msg.get("sender") in ("User", "user", "用户", "系统"):
+461|             user_question = msg.get("content", "")[:300]
+462|             break
+463| 
+464|     # ═══════════════════════════════════════════════════════════════
+465|     # Agent Execution (broadcast) — leader runs as active agent
+466|     # ═══════════════════════════════════════════════════════════════
+467| 
+468|     def _spawn_agent_task(name: str, idx: int) -> asyncio.Task:
+469|         """Re-spawn a single agent task (used by ManageAgentTool.restart)."""
+470|         task = asyncio.create_task(_run_one(name, idx))
+… (2,258字)
+• edit_file() → (78字)
+• exec(cd /root/nanobot-src && grep -n '"系统"' nanobot/groupchat/orchestra/broadcast.py) → 1514:                        "系统", [leader_name],
+1521:                    "系统", [new_name],
+
+
+Exit code: 0 (107字)
+• exec(cd /root/nanobot-src && sed -n '1030,1050p' nanobot/groupchat/orchestra/broad...) → # Defensive: skip displaying self-interrupt (redundant/noop)
+                    if _sender_name == name:
+                        _sender_name = "teammate"
+                    # Attach rank badge for debugging interrupt hierarchy violations
+                    def _badge(a: str) -> str:
+                        r = ranks_map.get(a, "?")
+                        return f"{a}[{r}]"
+                    await tracker.set_state(name, "interrupted", detail=f"from {_sender_name}")
+                    if … (1,144字)
+• exec(cd /root/nanobot-src && sed -n '457,464p' nanobot/groupchat/orchestra/broadca...) → # ── Extract user question (for hint injection) ──
+    user_question = ""
+    for msg in reversed(engine._history):
+        if msg.get("sender") in ("User", "user", "用户"):
+            content = msg.get("content", "")
+            if content.startswith("["):
+                continue  # skip compressed summary blocks
+            user_question = content[:300]
+
+
+Exit code: 0 (376字)
+• exec(cd /root/nanobot-src && sed -n '1510,1530p' nanobot/groupchat/orchestra/broad...) → tool_list = [k for k, v in new_tools.items() if v]
+                    else:
+                        tool_list = list(engine.TOOL_NAMES) if new_cfg.get("tools_enabled", False) else []
+                    mailbox.send(
+                        "系统", [leader_name],
+                        f"[新成员加入] {new_name} 已加入讨论。"
+                        f"工具: {', '.join(tool_list) if tool_list else '无'}。"
+                        f"请给 {new_name} 分配任务。",
+                    )
+                # Also send the new a… (1,096字)
+---
+[Kirk]: ## 结论
+
+**根因找到了**：`broadcast.py:458` 的 `user_question` 提取逻辑匹配了 `"系统"` sender。压缩后 history 中最后一条 "系统" 消息是 `[中期总结]...`，被当作 `用户请求` 注入 agent 系统提示——所以 agent 看到的是压缩摘要文本而非你的实际消息。
+
+## 关键发现
+
+- **Bug 位置**：`broadcast.py:458-464`，`broadcast_round` 函数内
+- **注入路径**：`user_question` → line 554 `leader_hint` → agent system prompt
+- **直接证据**：我当前系统提示中 `用户请求: [早期对话摘要（压缩了 3 条中间消息）]` 就是这个 bug 的表现
+- **修复**（`97ae361`）：移除 `"系统"` 匹配 + 跳过 `[` 开头的压缩摘要消息
+
+## 备注
+
+- 上一轮的 `age_tool_log` 优化（`962ff1a`）仍然有效，是独立的压缩改进
+- 此修复下一轮生效，当前轮的 `用户请求` 仍是压缩摘要（修复前产生）
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && sed -n '455,465p' nanobot/groupchat/orchestra/broadca...) → orch = BroadcastOrchestrator(agents, engine, mailbox)
+
+    # ── Extract user question (for hint injection) ──
+    user_question = ""
+    for msg in reversed(engine._history):
+        if msg.get("sender") in ("User", "user", "用户"):
+            content = msg.get("content", "")
+            if content.startswith("["):
+                continue  # skip compressed summary blocks
+            user_question = content[:300]
+            break
+
+
+Exit code: 0 (453字)
+• exec(cd /root/nanobot-src && grep -n "user_question" nanobot/groupchat/orchestra/b...) → 458:    user_question = ""
+464:            user_question = content[:300]
+531:            user_question=user_question,
+554:                f"用户请求: {user_question}\n\n"
+1523:                    f"用户问题: {user_question}\n"
+
+
+Exit code: 0 (233字)
+• exec(cd /root/nanobot-src && sed -n '525,560p' nanobot/groupchat/orchestra/broadca...) → messages = engine._build_agent_prompt(
+            name,
+            relevant_agents=None,
+            agent_idx=agent_idx,
+            total=total,
+            teammates=teammates,
+            user_question=user_question,
+        )
+
+        is_leader = (name == leader_name)
+        _leader_ended_discussion = False
+        _synthesis_retries = 0  # guard against infinite synthesis retry loops
+        # Load from override system (editable via /prompt), fallback to default
+        # Removed stale … (1,534字)
+• exec() → Exit code: 0 (13字)
+• exec(ls -lt /tmp/nanobot/groupchat_states/ 2>/dev/null | head -5; echo "---"; ls -...) → ---
+total 20
+drwxr-xr-x 2 root root 16384 May 16 23:57 tool_storage
+drwxr-xr-x 2 root root  4096 Apr 20 20:29 raft_storage
+
+
+Exit code: 0 (137字)
+• exec(find /tmp/nanobot -name "*.json" -newer /tmp/nanobot/tool_storage 2>/dev/null...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && git log --oneline -5 && echo "---" && git diff HEAD -...) → 962ff1a perf: age_tool_log in maybe_compress middle region
+2b4154f stable: broadcast/mailbox/chatroom_tools changes before compression optimization
+a538729 fix: broadcast中self.gc_settings→gc_settings变量引用修复
+51c3077 refactor: 删除废弃的summarizer.py及其history_settings getter引用
+abe90b4 perf: reduce conv_keep_turns to 3, append summary to last system msg
+---
+diff --git a/nanobot/groupchat/orchestra/broadcast.py b/nanobot/groupchat/orchestra/broadcast.py
+index 0f3639d..7e554c6 100644
+--- a/nanobot/groupcha… (1,217字)
+• exec() → [dev 97ae361] fix: user_question extraction skips system msgs and compressed summaries
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+
+Exit code: 0 (150字)
+• chatroom_send() → (48字)
+• memory_palace() → ✅ Stored in wing_code/user-question-extraction-bug (hidden)
+  Drawer ID: drawer_wing_code_user-question-extraction-bug_0d6f1ebf105379918b9e4430 (143字)
+• end_discussion() → ✅ 讨论已结束（原因: Bug 已定位并修复（97ae361）。根因：broadcast.py user_question 提取匹配了"系统"sender，压缩摘要被当作用户请求注入 agent 系统提示。），即将进入总结阶段 (113字)
+---

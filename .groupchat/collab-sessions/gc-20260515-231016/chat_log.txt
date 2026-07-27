@@ -1,0 +1,40 @@
+[用户]: ✗ Harper error: name 'self' is not defined这是什么报错
+---
+[Harper]: ## 原因
+
+`NameError: name 'self' is not defined` 表示你在**没有定义 `self` 的作用域**里用了 `self`。
+
+**三种最常见场景：**
+
+### 1. 方法定义少了 `self` 参数
+```python
+class Foo:
+    def bar():        # ❌ 没写 self
+        print(self.x)  # → NameError
+
+    def bar(self):    # ✅ 有 self
+        print(self.x)
+```
+
+### 2. 在类方法/静态方法里用了 `self`
+```python
+class Foo:
+    @staticmethod
+    def bar():
+        print(self.x)  # ❌ staticmethod 没有 self
+
+    @classmethod
+    def baz(cls):
+        print(self.x)  # ❌ classmethod 只有一个 cls，没有 self
+```
+
+### 3. 在普通函数或全局作用域里用了 `self`
+```python
+def foo():
+    print(self)  # ❌ 没有任何地方定义过 self
+```
+
+---
+
+**快速排查：** 检查报错行所在函数/方法的签名，确认 `self` 是否作为第一个参数传入。
+---

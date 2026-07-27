@@ -1,0 +1,88 @@
+[用户]: 12000字符应该不只有200token吧
+---
+[Kirk]: 不是 12000 字符只传了 200 token。是 **web_fetch 只抓到了 590-843 字符的网页内容**，根本没到 12000 的截断线。
+
+实际数据：
+- gettyimages.fr → 抓到 590 chars → 241 tok
+- gettyimages.com → 抓到 676 chars → 259 tok  
+- bbc.com → 抓到 639 chars → 256 tok
+
+正常抓到内容的对比：apnews.com → 3,486 chars → 853 tok，forbes.com → 5,186 chars → 1,325 tok。chars→tok 比率稳定在 ~2.5:1。
+
+这些网站大概率有反爬或返回了空壳页面，跟压缩逻辑无关。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "max_extract_chars" nanobot/groupchat/orchest...) → 395:                 provider: Any = None, max_extract_chars: int = 12000) -> None:
+399:        self._max_extract_chars = max_extract_chars
+477:        input_text = raw_text[:self._max_extract_chars]
+
+
+Exit code: 0 (214字)
+• exec(cd /root/nanobot-src && sed -n '390,410p' nanobot/groupchat/orchestra/tools/c...) → "Fetch URL and extract readable content. "
+        "Content is automatically processed by an AI reader for clean extraction."
+    )
+
+    def __init__(self, original: Tool, reader_model: str = "openai/gpt-4.1-nano",
+                 provider: Any = None, max_extract_chars: int = 12000) -> None:
+        self._original = original
+        self._reader_model = reader_model
+        self._provider = provider  # LiteLLMProvider instance
+        self._max_extract_chars = max_extract_chars
+
+    @property
+… (888字)
+• exec(cd /root/nanobot-src && sed -n '468,530p' nanobot/groupchat/orchestra/tools/c...) → async def _extract_content(self, url: str, raw_text: str,
+                               focus: str = "") -> tuple[str | None, dict]:
+        """Use cheap LLM to extract key content from raw fetched text.
+
+        Returns (extracted_text, usage_dict).
+        """
+        from loguru import logger
+
+        # Truncate input to avoid excessive token usage
+        input_text = raw_text[:self._max_extract_chars]
+
+        # Build context-aware extraction prompt
+        focus_hint = ""
+        if focus… (2,378字)
+• exec(# Look at actual GLM 5.1 request logs to see what was really sent
+cd /root/na...) → Exit code: 0 (13字)
+• exec(# Find the actual request logs
+find /tmp/nanobot -name "*.jsonl" -newer /tmp/...) → Exit code: 0 (13字)
+• exec() → /root/.nanobot/request_logs/2026-05-10.jsonl
+/root/.nanobot/request_logs/2026-05-11.jsonl
+/root/.nanobot/request_logs/2026-05-09.jsonl
+/root/.nanobot/collab-sessions/gc-20260510-124015/session.jsonl
+/root/.nanobot/collab-sessions/gc-20260511-144504/session.jsonl
+/root/.nanobot/collab-sessions/gc-20260510-123450/session.jsonl
+/root/.nanobot/collab-sessions/gc-20260511-175112/session.jsonl
+/root/.nanobot/collab-sessions/gc-20260511-115554/session.jsonl
+/root/.nanobot/collab-sessions/gc-20260511-11… (989字)
+• exec() → Exit code: 0 (13字)
+• exec(# Maybe the model name is different in logs
+grep -i "glm" /root/.nanobot/requ...) → {"ts": "2026-05-11 10:26:40", "agent": "Kirk", "session": null, "topic": null, "mode": "broadcast", "model": "openrouter/z-ai/glm-5-turbo", "api_base": "https://openrouter.ai/api/v1", "max_tokens": 3000, "stream": false, "params": {"temperature": 0.2, "top_p": 0.9, "top_k": 40, "min_p": 0.07, "repetition_penalty": 1.15, "frequency_penalty": 0.2, "presence_penalty": 0.1, "top_a": 0}, "tools_count": 7, "messages": [{"role": "system", "content": "完成任务、遵守约束、团队协作不放弃。用记忆和skill提效减错，主动理解意图避免额外提问。保护信息安全。… (44,893字)
+• exec() → ['openrouter/z-ai/glm-5-turbo', 'openrouter/z-ai/glm-5.1']
+
+
+Exit code: 0 (73字)
+• exec() → ts=2026-05-11 16:16:35 model=openrouter/z-ai/glm-5.1 msgs=1 chars=33127 prompt_tok=10109 out_tok=582
+  [0] user: 33127c | 以下是群聊的一段中期历史记录（共 17 条）。
+请用简洁的中文摘要这些内容，重点保留核心发现、关键决策、重要事实以及已经完成的进度。
+如果有具体的数值、文件路径或关键结论，请务必保留。
+摘要不超过 500 字。
+
+[Kirk]: 问题定位清楚了。让我确认主provider是什么。
+
+[工具调用记录]
+• memory_palace(AI压缩功能 compress) → 🔍 5 result(s) for 'AI压缩功能 compress':
+
+[1] wing_code/context-compression-fixes (sim=0.08)
+  上下文压缩逻辑三处修复已验证通过：1) kee
+
+ts=2026-05-11 17:15:15 model=openrouter/z-ai/glm-5.1 msgs=1 chars=28527 prom… (5,061字)
+• memory_palace() → ✅ Stored in wing_code/glm51-low-token-investigation
+  Drawer ID: drawer_wing_code_glm51-low-token-investigation_51015248415997b0ca1e0f4f
+  Chars: 326
+  Hall: hall_discoveries (174字)
+• end_discussion() → ✅ 讨论已结束（原因: 问题已完全解答：低 token 不是截断问题，是网页内容本身就抓得少），即将进入总结阶段 (56字)
+---

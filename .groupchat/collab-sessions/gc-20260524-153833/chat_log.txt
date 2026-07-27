@@ -1,0 +1,129 @@
+[用户]: 嗯，是否有文本过长后增加换页按钮
+---
+[Kirk]: 在 `_on_callback` 方法之前加新方法：
+
+[工具调用记录]
+• memory_palace(prompt component edit pagination long text telegram message split) → 🔍 5 result(s) for 'prompt component edit pagination long text telegram message split':
+
+[1] wing_user/prompt-optimization-interest (sim=-0.39)
+  用户再次确认groupchat prompt参数冗余问题。记忆中已有2026-05-24的完整分析（wing_code/groupchat-prompt-optimization），结论不变：4个输出规范区块重叠+Leader说明重复，总计可省~1500 tok/轮。用户对此问题持续关注。
+
+[2] wing_code/prompt-pipeline-display-fix (sim=-0.395)
+  修复 prompt pipeline 显示问题：dynamic 组件（skills_overview, examples）显示"○空"是因为 pipeline 视图用 get_component_template() 查静态模板，但 dynamic 组件是运行时生成的，没有静态模板文件。修复：对 ph… (1,992字)
+• memory_palace(telegram message length limit 4096 pagination callback) → 🔍 5 result(s) for 'telegram message length limit 4096 pagination callback':
+
+[1] wing_code/context-compression-architecture (sim=-0.371)
+  ## 上下文压缩架构 — 双层设计
+
+### 层级一：跨轮压缩 (HistoryContext.maybe_compress)
+- 位置: groupchat/history/context.py:146-250
+- 触发: engine.py:1137, engine.py:951
+- 作用对象: master 消息列表（破坏性操作）
+- 结构: Protected Head | Compressible Middle | Protected Tail
+- Head保护: _find_head_indices() 只保护 index_0 + first_user_msg
+- Tail保护: keep_recent=6 (硬编码 context.py:171)
+- 触发阈值: msg_count >= max_m… (2,092字)
+• exec() → 88:            chat_id=int(chat_id), text=text[:4096],
+301:                    await query.edit_message_text(full[:4096])
+453:                page = int(data[7:])
+455:                text, markup = self._build_log_page_v2(logs, page)
+459:                page = int(data[8:])
+461:                text, markup = self._build_log_page_v2(logs, page)
+465:                # Search-filtered pagination
+466:                page = int(data[9:])
+471:                text, markup = self._build_log_page_v2(logs,… (2,100字)
+• exec(grep -rn "4096\|pagination\|分页\|split_message\|MAX_MSG_LEN\|TG_MAX\|telegram....) → /root/nanobot-src/nanobot/channels/telegram/callbacks.py:88:            chat_id=int(chat_id), text=text[:4096],
+/root/nanobot-src/nanobot/channels/telegram/callbacks.py:301:                    await query.edit_message_text(full[:4096])
+/root/nanobot-src/nanobot/channels/telegram/callbacks.py:465:                # Search-filtered pagination
+/root/nanobot-src/nanobot/channels/telegram/callbacks.py:537:                await query.edit_message_text(text[:4096], reply_markup=InlineKeyboardMarkup(butt… (2,947字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 1206|             elif data.startswith("pre:"):
+1207|                 # View/edit global template: pre:__global__:component_key
+1208|                 parts = data[4:].split(":", 1)
+1209|                 if len(parts) == 2:
+1210|                     _, key = parts
+1211|                     engine = self._groupchat_engine
+1212|                     label = _COMPONENT_LABELS.get(key, key)
+1213|                     phase = _COMPONENT_PHASES.get(key, "static")
+1214|                     phase_label = "STATIC" if phase == "static" else "DYNAMIC"
+1215| 
+1216|                     if phase == "dynamic":
+1217|                         # Dynamic components are rendered at runtime — show
+1218|                         # actual content read-only (no edit state).
+1219|                         content = engi… (5,147字)
+• exec(grep -n "split_message\|TELEGRAM_MAX" /root/nanobot-src/nanobot/utils/helpers...) → 100:def split_message(content: str, max_len: int = 2000) -> list[str]:
+
+
+Exit code: 0 (85字)
+• exec(sed -n '95,130p' /root/nanobot-src/nanobot/utils/helpers.py) → def safe_filename(name: str) -> str:
+    """Replace unsafe path characters with underscores."""
+    return _UNSAFE_CHARS.sub("_", name).strip()
+
+
+def split_message(content: str, max_len: int = 2000) -> list[str]:
+    """
+    Split content into chunks within max_len, preferring line breaks.
+
+    Args:
+        content: The text content to split.
+        max_len: Maximum length per chunk (default 2000 for Discord compatibility).
+
+    Returns:
+        List of message chunks, each within max_len.
+   … (1,078字)
+• exec(grep -rn "TELEGRAM_MAX_MESSAGE_LEN" /root/nanobot-src/nanobot/ --include="*.p...) → /root/nanobot-src/nanobot/channels/telegram/message_han… (1,074字)
+  (还有 7 个工具调用，已省略)
+---
+[Kirk]: ## 结论
+
+已实现。prompt 组件预览现在支持分页浏览。
+
+## 关键发现
+
+- **每页 3500 字**，超过自动分页
+- **导航栏**：`⬅️ 上一页` | `1/3` | `下一页 ➡️`
+- **Dynamic 组件**：只读预览 + 分页 + 返回按钮
+- **Static 组件**：编辑模式 + 分页 + 取消按钮
+- **实现方式**：提取 `_prompt_show_component_page(query, key, page)` 方法，`pre:` 和 `prep:<key>:<page>` 两个回调共用
+
+## 修改文件
+
+`callbacks.py`：
+- 第68行：`_PROMPT_PAGE_SIZE = 3500`
+- 第70-126行：新增 `_prompt_show_component_page()` 方法
+- 第1271-1282行：`pre:` 和 `prep:` 回调入口
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 60|             if len(row) == 2:
+61|                 buttons.append(row)
+62|                 row = []
+63|         if row:
+64|             buttons.append(row)
+65|         return buttons
+66| 
+67| 
+68|     async def _send_agent_hyperparams_keyboard(self, chat_id: str, agent_name: str, agent_hp) -> None:
+69|         if not isinstance(agent_hp, dict):
+70|             agent_hp = {}
+71|         """Send per-agent hyperparams keyboard."""
+72|         buttons = []
+73|         if agent_hp:
+74|             for k, v in agent_hp.items():
+
+(Showing lines 60-74 of 2967. Use offset=75 to continue.) (589字)
+• edit_file() → (76字)
+• exec(python3 -c "import py_compile; py_compile.compile('/root/nanobot-src/nanobot/...) → OK
+
+
+Exit code: 0 (17字)
+• exec(grep -n "prep:\|_prompt_show_component_page\|_PROMPT_PAGE_SIZE\|total_pages\|...) → 68:    _PROMPT_PAGE_SIZE = 3500  # chars per page for prompt component preview
+70:    async def _prompt_show_component_page(self, query, key: str, page: int = 0) -> None:
+98:        page_size = self._PROMPT_PAGE_SIZE
+99:        total_pages = max(1, (total + page_size - 1) // page_size) if total else 1
+100:        page = max(0, min(page, total_pages - 1))
+108:        nav_buttons = []
+110:            nav_buttons.append(InlineKeyboardButton("⬅️ 上一页", callback_data=f"prep:{key}:{page - 1}"))
+111:   … (2,671字)
+• memory_palace() → ✅ Stored in wing_code/prompt-pipeline-display-fix (hidden)
+  Drawer ID: drawer_wing_code_prompt-pipeline-display-fix_16adb908387ce21cb818ee74 (141字)
+• end_discussion() → ✅ 讨论已结束（原因: 任务完成：prompt组件预览已支持分页，编译通过。），即将进入总结阶段 (48字)
+---

@@ -1,0 +1,43 @@
+[系统]: 话题：自由讨论
+---
+[用户]: ⚡️ Harper[knight] 被 Kirk[bishop] 的消息打断，正在立即响应...
+
+这个提示能不能用别的，感觉现在这个很尬
+---
+[Harper]: 这类系统提示词目前是固定模板化的，你觉得尬是正常的。可以换成几种不同风格：
+
+1. **极简型**：`收到 Kirk 的消息` / `→ 处理中`
+2. **科技感**：`📨 From Kirk | ⏳ Processing...`
+3. **自然对话**：`Kirk 说：` / `← Kirk 的发现`
+4. **emoji组合**：`💬 Kirk → ⚡ Harper`
+
+你想用哪种风格？还是你有自己的想法？确定后我去改配置文件。
+
+[工具调用记录]
+• memory_palace(prompt 提示词 系统配置 chatroom) → 🔍 5 result(s) for 'prompt 提示词 系统配置 chatroom':
+
+[1] wing_code/output-x-display-behavior (sim=0.396)
+  ## Output [X] 显示行为解析
+
+### 现象
+用户看到消息显示为 `Output [8]`、`Output [7]` 等格式，看不到实际文本内容。
+
+### 根因（非bug）
+这是系统的**设计行为**。当 agent 在同一 cycle 内调用了 `chatroom_send`，系统认为内容已通过 chatroom_send 展示过了，就跳过重复显示，只显示 `Output [X]`（X=cycle编号）作为占位标签。
+
+### 关键代码位置
+文件：`/root/nanobot-src/nanobot/groupchat/broadcast.py:1215-1239`
+逻辑：
+```python
+if content and not (is_leader and _leader_ended_discussion):
+    if not _used_chatroom_sen… (2,319字)
+• memory_palace(角色设定 knight bishop 团队配置) → 🔍 5 result(s) for '角色设定 knight bishop 团队配置':
+
+[1] wing_code/groupchat-pool-credits-config (sim=0.416)
+  对话池点数配置机制（broadcast.py L295-338）：
+- groupchat_settings.json 中 context_pool_capacity=0 时走 rank-based 分配
+- rank_cap: pawn=2, knight=3, bishop=4, queen=5，leader 额外+1
+- context_points_per_agent=0 时搜索额度也走 rank-based（复用 per_agent_cap）
+- 统一改值：设 context_pool_capacity=N 或 context_points_per_agent=N
+- 当前 agent rank: kirk=bishop, harper=knight, retriever=pawn, scholar=knight, verifier=knight, beholder/be… (1,674字)
+---

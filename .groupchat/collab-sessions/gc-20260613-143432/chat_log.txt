@@ -1,0 +1,1410 @@
+[用户]: 我想就是现在的历史压缩能和forget功能集成联系，让agetn知道什么时候需要forget
+---
+[Harper]: 
+
+[工具调用记录]
+• memory_palace(forget tool implementation history compression integrate) → 🔍 5 result(s) for 'forget tool implementation history compression integrate':
+
+[1] wing_code/forget-tool-commit-status (sim=0.337)
+  forget工具提交状态（2026-06-13）
+
+未提交文件9个：
+- nanobot/tools/forget.py — 新文件(untracked)，整个forget工具实现
+- nanobot/groupchat/orchestra/tools/tool_loop.py — +91行（prev_tool_calls保存、forget哨兵处理、forgot标记、_forgot_ids追踪）
+- 其余6文件是之前提交遗留的无关改动（telegram回调、history_settings、broadcast、engine、2个测试）
+
+建议拆commit：
+1. feat: add forget tool — forget.py + tool_loop.py
+2. 其余文件单独提交
+
+已知未修复：_shared类变量并发竞… (2,047字)
+• read_file(nanobot/tools/forget.py) → Error: File not found: nanobot/tools/forget.py
+
+[Analyze the error above and try a different approach.] (103字)
+• read_file(nanobot/groupchat/history/compression.py) → Error: File not found: nanobot/groupchat/history/compression.py
+
+[Analyze the error above and try a different approach.] (120字)
+• exec(find . -name "forget.py" -o -name "*.py" | xargs grep -l "compression\|compre...) → ./AI-Researcher/research_agent/inno/tools/rag_code_tree.py
+./AI-Researcher/research_agent/inno/tools/rag_code.py
+./AI-Researcher/research_agent/inno/io_utils.py
+./_archive/orphan_tests/test_history_realtime.py
+./_archive/orphan_tests/test_compress_fixes.py
+./agents/hermes-agent/providers/base.py
+./agents/hermes-agent/scripts/sample_and_compress.py
+./agents/hermes-agent/scripts/release.py
+./agents/hermes-agent/mini_swe_runner.py
+./agents/hermes-agent/trajectory_compressor.py
+./agents/hermes-agent… (1,003字)
+• read_file(nanobot/tools/forget.py) → [重复调用,已跳过]
+• exec(find nanobot -name "*.py" | xargs grep -l "history\|History\|compress\|Compre...) → STDERR:
+find: ‘nanobot’: No such file or directory
+
+
+Exit code: 0 (65字)
+• exec(ls -la && pwd) → total 1208
+drwxr-xr-x 23 root root  20480 Jun  5 22:09 .
+drwxr-xr-x 22 root root   4096 Jun  7 17:56 ..
+drwxr-xr-x  2 root root   4096 May 15 21:58 .deepseek
+drwxr-xr-x  8 root root   4096 Jun 13 14:32 .git
+-rw-r--r--  1 root root    277 May 23 10:22 .gitignore
+-rw-r--r--  1 root root    814 May 23 10:22 .gitmodules
+-rw-r--r--  1 root root    891 May  9 15:21 AGENTS.md
+drwxr-xr-x 10 root root   4096 May 27 10:22 AI-Researcher
+-rw-r--r--  1 root root    370 May  9 15:21 HEARTBEAT.md
+drwxr-xr-x 10… (2,138字)
+• exec(git status) → On branch master
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+  (commit or discard the untracked or modified content in submodules)
+	modified:   agents/hermes-agent (new commits, modified content, untracked content)
+	modified:   memory_palace/2b1082f9-bb0e-45ff-ac72-ffca9c0b5bf2/data_level0.bin
+	modified:   memory_palace/2b1082f9-bb0e-45ff-ac72-ffca9c0b5bf2/header.bin
+	modified:… (1,053字)
+• exec(find agents/hermes-agent -name "forget.py" 2>/dev/null) → Exit code: 0 (13字)
+• list_dir(agents/hermes-agent) → 📄 .dockerignore
+📄 .env.example
+📄 .envrc
+📄 .gitattributes
+📁 .github
+📄 .gitignore
+📄 .hadolint.yaml
+📄 .mailmap
+📁 .plans
+📄 AGENTS.md
+📄 CONTRIBUTING.md
+📄 Dockerfile
+📄 LICENSE
+📄 MANIFEST.in
+📄 README.md
+📄 README.zh-CN.md
+📄 SECURITY.md
+📁 acp_adapter
+📁 acp_registry
+📁 agent
+📁 apps
+📁 assets
+📄 batch_runner.py
+📄… (1,081字)
+• exec(find agents/hermes-agent -name "*.py" -exec grep -l "forget\|Forget" {} \; 2>...) → agents/hermes-agent/cron/scheduler.py
+agents/hermes-agent/tui_gateway/ws.py
+agents/hermes-agent/plugins/platforms/discord/adapter.py
+agents/hermes-agent/plugins/disk-cleanup/__init__.py
+agents/hermes-agent/plugins/disk-cleanup/disk_cleanup.py
+agents/hermes-agent/plugins/memory/retaindb/__init__.py
+agents/hermes-agent/plugins/memory/supermemory/__init__.py
+agents/hermes-agent/plugins/google_meet/node/cli.py
+agents/hermes-agent/acp_adapter/events.py
+agents/hermes-agent/tools/skill_manager_tool.py
+… (514字)
+• exec(find agents/hermes-agent -name "*.py" -exec grep -l "compress\|history\|Histo...) → agents/hermes-agent/providers/base.py
+agents/hermes-agent/scripts/sample_and_compress.py
+agents/hermes-agent/scripts/discord-voice-doctor.py
+agents/hermes-agent/scripts/contributo… (729字)
+  (还有 4 个工具调用，已省略)
+---
+[Kirk]: 现在我清楚了。让我看看 `agent` 的 `system prompt` 是如何构建的，以及 `forget` 在哪里被描述：
+
+[工具调用记录]
+• memory_palace(forget tool 压缩 compression 集成) → 🔍 5 result(s) for 'forget tool 压缩 compression 集成':
+
+[1] wing_code/forget-tool-commit-status (sim=0.397)
+  forget工具提交状态（2026-06-13）
+
+未提交文件9个：
+- nanobot/tools/forget.py — 新文件(untracked)，整个forget工具实现
+- nanobot/groupchat/orchestra/tools/tool_loop.py — +91行（prev_tool_calls保存、forget哨兵处理、forgot标记、_forgot_ids追踪）
+- 其余6文件是之前提交遗留的无关改动（telegram回调、history_settings、broadcast、engine、2个测试）
+
+建议拆commit：
+1. feat: add forget tool — forget.py + tool_loop.py
+2. 其余文件单独提交
+
+已知未修复：_shared类变量并发竞争条件（多agent场景会覆盖），单agent无影响
+… (1,766字)
+• memory_palace(history compression context pruning agent) → 🔍 5 result(s) for 'history compression context pruning agent':
+
+[1] wing_code/compression-algorithm-review (sim=0.349)
+  ## 历史压缩算法代码审查（2026-06-11）
+
+### 两套压缩系统
+1. **HistoryContext**（群聊历史压缩）— groupchat/history/context.py (306行)
+   - 双层：add_message（每条插入时裁剪）+ maybe_compress（达阈值时AI摘要）
+   - 三段式：Protected Head | Compressible Middle | Protected Tail
+   - 之前9个bug全部已修复（贪心break→continue、age_tool_log、正则跨行、就地修改、时序重建等）
+   
+2. **CompressionEngine**（记忆数据库压缩预览）— config/backend/core/compression_engine.py (471行)
+ … (2,369字)
+• read_file(nanobot/tools/forget.py) → Error: File not found: nanobot/tools/forget.py
+
+[Analyze the error above and try a different approach.] (103字)
+• exec(find /root/nanobot-src -name "forget.py" -o -name "tool_loop.py" -o -name "to...) → /root/nanobot-src/nanobot/groupchat/history/tool_pruning.py
+/root/nanobot-src/nanobot/groupchat/history/context.py
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py
+/root/nanobot-src/nanobot/tools/forget.py
+
+
+Exit code: 0 (236字)
+• read_file(/root/nanobot-src/nanobot/tools/forget.py) → 1| """Forget tool — delete previous tool call results from context.
+2| 
+3| Allows the agent to selectively remove tool call+result pairs from the
+4| conversation history so they don't consume tokens or influence future
+5| LLM calls.
+6| 
+7| Usage modes:
+8|   - By keyword:  forget(keywords="curl xxx")   — matches tool name or args
+9|   - By index:    forget(indices=0)             — 0-based index in last tool batch
+10|   - Multi-index: forget(indices=[0, 1])        — delete first 2 calls in last batch
+11| 
+12| The tool returns a special sentinel ``__FORGET__:…`` that tool_loop.py
+13| detects and uses to mutate the messages list in-place.
+14| """
+15| 
+16| from __future__ import annotations
+17| 
+18| import json
+19| from typing import Any
+20| 
+21| from nanobot.tools.base import Tool
+22| 
+23| 
+24… (5,984字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 680|                             json.dumps(tool_result, ensure_ascii=False)
+681|                             if isinstance(tool_result, list)
+682|                             else (tool_result or "")
+683|                         )
+684|                         await on_tool_result(tc.name, tc.id, _callback_result)
+685| 
+686|                     tool_content = process_tool_result(
+687|                         content=tool_result,
+688|                         tool_name=tc.name,
+689|                         tool_call_id=tc.id,
+690|                     )
+691|                     messages.append({
+692|                         "role": "tool",
+693|                         "tool_call_id": tc.id,
+694|                         "content": tool_content,
+695|                     })
+696| 
+697|           … (3,524字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 1| """Context pruning for tool results.
+2| 
+3| Prunes old tool-result messages to keep the prompt within token budgets.
+4| When token limits are exceeded, replaces old voluminous tool outputs with
+5| a concise 1-line summary (e.g. `[exec] ran 'npm test' -> exit 0, 47 lines`).
+6| 
+7| Only tool-result messages *before* the last ``keep_recent`` assistant turns
+8| are eligible for pruning. User and assistant messages are never modified.
+9| """
+10| 
+11| from __future__ import annotations
+12| 
+13| import json
+14| import re
+15| from typing import Any
+16| 
+17| CHARS_PER_TOKEN = 4  # conservative estimate
+18| 
+19| # ── Defaults ───… (12,030字)
+  (还有 20 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(agents/hermes-agent/tools/forget_tool.py) → 1| #!/usr/bin/env python3
+2| """
+3| Forget Tool — Remove tool call results from the current conversation context.
+4| 
+5| Supports three deletion modes:
+6| 1. By indices:  forget(0) / forget(0, 1)  — delete by position
+7| 2. By patterns: forget("memory palace") / forget("memory", "web_search")  — match tool names/content
+8| 3. By count:    forget(-3)  — delete last N results
+9| 
+10| The tool returns a special marker that causes the agent to remove matched messages
+11| from the conversation history before the next API call.
+12| """
+13| 
+14| from __future__ import annotations
+15| 
+16| import json
+17| import logging
+18| from typing import Any, Dict, List, Optional, Union
+19| 
+20| logger = logging.getLogger(__name__)
+21| 
+22| # Special prefix that signals the executor to delete messages
+23| _DE… (11,917字)
+• read_file(agents/hermes-agent/agent/tool_executor.py) → 1| """Tool-call execution — sequential and concurrent dispatch.
+2| 
+3| Both AIAgent methods (``_execute_tool_calls_sequential`` and
+4| ``_execute_tool_calls_concurrent``) live here as module-level
+5| functions that take the parent ``AIAgent`` as their first argument.
+6| 
+7| ``run_agent`` keeps thin wrappers so existing call sites work; tests
+8| that patch ``run_agent._set_interrupt`` are honored because the
+9| extracted functions reach back through the ``run_agent`` module via
+10| ``_ra()`` for that symbol.
+11| """
+12| 
+13| from __future__ import annotations
+14| 
+15| import concurrent.futures
+16| import json
+17| import logging
+18| import os
+19| import random
+20| import threading
+21| import time
+22| from typing import Any, Optional
+23| 
+24| from agent.display import (
+25|     KawaiiSpinner,… (12,711字)
+• exec(grep -n "forget\|FORGET\|delete\|_delete" agents/hermes-agent/agent/tool_exec...) → 189:    # Track the start of this tool batch for delete_messages support
+684:    # ── Handle forget tool ───────────────────────────────────────────
+685:    # Check if any tool returned a forget instruction and apply it
+687:        if name == "forget" and block_result is None:
+692:                # Import and check for delete marker
+694:                    from tools.forget_tool import _check_delete_marker, apply_delete_instruction
+695:                    delete_instruction = _check_delete_marke… (1,039字)
+• exec(grep -rn "forget\|FORGET" agents/hermes-agent/agent/ 2>/dev/null | head -30) → agents/hermes-agent/agent/title_generator.py:143:    """Fire-and-forget title generation after the first exchange.
+agents/hermes-agent/agent/codex_responses_adapter.py:919:    # path forgets to sanitize before calling us, this catches the bypass
+agents/hermes-agent/agent/agent_init.py:7:"setup state, then forget".
+agents/hermes-agent/agent/lsp/manager.py:425:                # Fire-and-forget shutdown — give it a second to cleanup,
+agents/hermes-agent/agent/async_utils.py:52:    fire-and-forget, … (1,155字)
+• read_file(agents/hermes-agent/trajectory_compressor.py) → 1| #!/usr/bin/env python3
+2| """
+3| Trajectory Compressor
+4| 
+5| Post-processes completed agent trajectories to compress them within a target
+6| token budget while preserving training signal quality.
+7| 
+8| Compression Strategy:
+9| 1. Protect first turns (system, human, first gpt, first tool)
+10| 2. Protect last N turns (final actions and conclusions)
+11| 3. Compress MIDDLE turns only, starting from 2nd tool response
+12| 4. Compress only as much as needed to fit under target
+13| 5. Replace compressed region with a single human summary message
+14| 6. Keep remaining tool calls intact (model continues working after summary)
+15| 
+16| Usage:
+17|     # Compress a directory of JSONL files
+18|     python trajectory_compressor.py --input=data/my_run
+19|     
+20|     # Compress a single JSONL file
+2… (13,717字)
+• read_file(agents/hermes-agent/hermes_state.py) → 1| #!/usr/bin/env python3
+2| """
+3| SQLite State Store for Hermes Agent.
+4| 
+5| Provides persistent session storage with FTS5 full-text search, replacing
+6| the per-session JSONL file approach. St… (12,550字)
+  (还有 7 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(grep -n "forget\|Forget" agents/hermes-agent/agent/agent_init.py | head -20) → 7:"setup state, then forget".
+
+
+Exit code: 0 (44字)
+• exec(grep -rn "forget" agents/hermes-agent/tools/registry.py 2>/dev/null | head -10) → Exit code: 0 (13字)
+• exec(grep -n "system.*prompt\|_build_system_prompt\|tools_def\|ToolSchema" agents/...) → 154:    ephemeral_system_prompt: str = None,
+220:        ephemeral_system_prompt (str): System prompt used during agent execution but NOT saved to trajectories (optional)
+244:            Used to inject platform-specific formatting hints into the system prompt.
+246:            into the system prompt. Use this for batch processing and data generation to avoid
+263:    agent.ephemeral_system_prompt = ephemeral_system_prompt
+641:            # so injects Claude-Code identity headers and system prompts… (1,317字)
+• exec(grep -n "_build_system_prompt\|get_tool_definitions\|tool_schemas\|built_in_t...) → 907:    agent.tools = _ra().get_tool_definitions(
+1156:    # through _ra().get_tool_definitions()).  Duplicate function names cause
+1176:        for _schema in agent._memory_manager.get_all_tool_schemas():
+1485:    # Skip names that are already present — the _ra().get_tool_definitions()
+1513:        for _schema in agent.context_compressor.get_tool_schemas():
+
+
+Exit code: 0 (375字)
+• exec(grep -rn "_build_system_prompt\|build_system_prompt" agents/hermes-agent/agen...) → agents/hermes-agent/agent/conversation_compression.py:417:                _existing_sp = agent._build_system_prompt(system_message)
+agents/hermes-agent/agent/conversation_compression.py:463:            _existing_sp = agent._build_system_prompt(system_message)
+agents/hermes-agent/agent/conversation_compression.py:498:    new_system_prompt = agent._build_system_prompt(system_message)
+agents/hermes-agent/agent/conversation_loop.py:218:def _restore_or_build_system_prompt(agent, system_message, conve… (1,906字)
+• read_file(agents/hermes-agent/agent/system_prompt.py) → 1| """System-prompt assembly for :class:`AIAgent`.
+2| 
+3| The agent's system prompt is built once per session and reused across all
+4| turns — only context compression triggers a rebuild.  This keeps the
+5| upstream prefix cache warm.  See ``hermes-agent-dev``'s
+6| ``references/system-prompt-invariant.md`` for the invariants and
+7| ``references/self-improvement-loop.md`` for how the background-review
+8| fork inherits the cached prompt verbatim.
+9| 
+10| Three tiers are joined with ``\\n\\n``:
+11| 
+12| * ``stable``   — identity (SOUL.md or DEFAULT_AGENT_IDENTITY), tool
+13|   guidance, computer-use guidance, nous subscription block, tool-use
+14|   enforcement guidance + per-model operational guidance, skills prompt,
+15|   alibaba model-name workaround, environment hints, platform hints.
+16| *… (15,648字)
+• read_file(agents/hermes-agent/agent/conversation_loop.py) → 650|             agent._emit_status(
+651|                 f"📦 Preflight compression: ~{_preflight_tokens:,} tokens "
+652|                 f">= {_compressor.threshold_tokens:,} threshold. "
+653|                 "This may take a moment."
+654|             )
+655|             # May need multiple passes for very large sessions with small
+656|             # context windows (each pass summarises the middle N turns).
+657|             for _pass in range(3):
+658|                 _orig_len = len(messages)
+659|                 messages, active_system_prompt = agent._compress_context(
+660|                     messages, system_message, approx_tokens=_preflight_tokens,
+661|                     task_id=effective_task_id,
+662|                 )
+663|                 if len(messages) >= _orig_len:
+664|       … (3,032字)
+• read_file(agents/hermes-agent/tools/forget_tool.py) → 25| # Schema for the forget tool
+26| FORGET_SCHEMA = {
+27|     "name": "forget",
+28|     "description": (
+29|         "Delete tool call results from the current conversation context. "
+30|         "Makes the AI 'forget' certain tool outputs so they won't appear "
+31|         "in subsequent API calls. Supports three modes: (1) By index: "
+3… (2,527字)
+  (还有 5 个工具调用，已省略)
+---
+[Kirk]: 现在我清楚了。让我看看 `agent` 的 `system prompt` 是如何构建的，以及 `forget` 在哪里被描述：
+
+[工具调用记录]
+• memory_palace(forget tool integration compression system prompt) → 🔍 3 result(s) for 'forget tool integration compression system prompt':
+
+[1] wing_code/forget-tool-commit-status (sim=0.373)
+  forget工具提交状态（2026-06-13）
+
+未提交文件9个：
+- nanobot/tools/forget.py — 新文件(untracked)，整个forget工具实现
+- nanobot/groupchat/orchestra/tools/tool_loop.py — +91行（prev_tool_calls保存、forget哨兵处理、forgot标记、_forgot_ids追踪）
+- 其余6文件是之前提交遗留的无关改动（telegram回调、history_settings、broadcast、engine、2个测试）
+
+建议拆commit：
+1. feat: add forget tool — forget.py + tool_loop.py
+2. 其余文件单独提交
+
+已知未修复：_shared类变量并发竞争条件（多ag… (1,141字)
+• exec(cd /root/nanobot-src && cat nanobot/groupchat/orchestra/system_prompt.py) → STDERR:
+cat: nanobot/groupchat/orchestra/system_prompt.py: No such file or directory
+
+
+Exit code: 1 (99字)
+• exec(cd /root/nanobot-src && cat nanobot/tools/forget.py) → """Forget tool — delete previous tool call results from context.
+
+Allows the agent to selectively remove tool call+result pairs from the
+conversation history so they don't consume tokens or influence future
+LLM calls.
+
+Usage modes:
+  - By keyword:  forget(keywords="curl xxx")   — matches tool name or args
+  - By index:    forget(indices=0)             — 0-based index in last tool batch
+  - Multi-index: forget(indices=[0, 1])        — delete first 2 calls in last batch
+
+The tool returns a special… (5,379字)
+• exec(cd /root/nanobot-src && find . -name "system_prompt*" -not -path "./.git/*" |...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && grep -rn "MEMORY_GUIDANCE\|GUIDANCE\|valid_tool_names...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && grep -rn "MEMORY_GUIDANCE\|GUIDANCE\|valid_tool_names...) → nanobot/providers/openai_codex_provider.py
+
+
+Exit code: 0 (57字)
+• exec(cd /root/nanobot-src && grep -rn "forget" nanobot/ --include="*.py" -l | head...) → nanobot/groupchat/orchestra/engine.py
+nanobot/groupchat/orchestra/tools/tool_loop.py
+nanobot/groupchat/orchestra/broadcast.py
+nanobot/tools/forget.py
+
+
+Exit code: 0 (164字)
+• exec(cd /root/nanobot-src && grep -rn "system_prompt\|build_prompt\|build_system\|...) → nanobot/providers/openai_codex_provider.py
+nanobot/groupchat/orchestra/engine.py
+nanobot/groupchat/orchestra/broadcast.py
+nanobot/channels/telegram/callbacks.py
+nanobot/channels/telegram/commands/settings.py
+nanobot/channels/telegram/__init__.py
+
+
+Exit code: 0 (260字)
+• exec(cd /root/nanobot-src && cat nanobot/providers/openai_codex_provider.py) → """OpenAI Codex Responses Provider."""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+from typing import Any, AsyncGenerator
+
+import httpx
+from loguru import logger
+from oauth_cli_kit import get_token as get_codex_token
+
+from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+
+DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
+DEFAULT_ORIGINATOR = "nanobot"
+
+
+class OpenAICodexProvider(LLMProvider):
+    """Use Codex OAuth to … (11,926字)
+• exec(cd /root/nanobot-src && grep -rn "system_prompt\|build_system\|_system\|instr...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && grep -rn "compression\|compress\|_preflight\|threshol...) → nanobot/groupchat/orchestra/run_loop.py:21:    compression (``tool_results.summarize_model``).
+nanobot/groupchat/orchestra/run_loop.py:143:            await engine._maybe_compress_history()
+nanobot/groupchat/orchestra/engine.py:944:    async def _maybe_compress_history(self) -> None:
+nanobot/groupchat/orchestra/engine.py:946:        await self.history.maybe_compress()
+nanobot/groupchat/orchestra/engine.py:1140:                # Bug 7 fix: run history compression in single-agent mode too
+nanobot/… (838字)
+• exec(cd /root/nanobot-src && cat nanobot/groupchat/orchestra/engine.py | head -80) → """Async group chat engine for multi-agent discussions.
+
+# Verified: Harper has write access to source.
+
+Supports fluid agent management:
+- Agent registry: all available agents (loaded from config/directory)
+- Active participants: agents currently in the conversation
+- Seamlessly transitions between 1-on-1 and group chat as agents are added/removed
+"""
+
+from __future… (2,917字)
+  (还有 9 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• chatroom_send() → (48字)
+• wait() → (72字)
+---
+[Kirk]: 现在我完全明白了。架构如下：
+
+1. `tool_instructions.md` 是一个静态文件，通过 `get_component_template("tool_instructions")` 加载
+2. `prompt_builder.py` 有一个 `TEMPLATES` 字典，其中包含硬编码的默认值
+3. 组件通过 `_FALLBACK_ORDER` 进行排序，并按顺序注入
+
+最佳方法：将 `forget_guidance` 作为新的提示组件添加到 `prompt_builder.py` 中，放在 `tool_instructions` 之后。这比修改静态的 `tool_instructions.md` 更好，因为：
+
+- 它可以动态检查 `agent` 是否拥有 `forget` 工具
+- 它可以引用压缩行为
+- 它与现有架构清晰分离
+
+让我来设计并实现它：
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -rn "MEMORY_GUIDANCE\|memory_guidance\|forget_gu...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && grep -rn "compress\|prune\|truncat\|context_overflow\...) → nanobot/groupchat/history/message_converter.py
+nanobot/groupchat/history/tool_pruning.py
+nanobot/groupchat/history/history_settings.py
+nanobot/groupchat/history/result_processor.py
+nanobot/groupchat/history/context_validator.py
+nanobot/groupchat/history/context.py
+nanobot/groupchat/history/prompt_builder.py
+
+
+Exit code: 0 (323字)
+• exec(cd /root/nanobot-src && cat nanobot/groupchat/history/prompt_builder.py | hea...) → """Prompt construction for group chat agents.
+
+Extracts all prompt-related logic from GroupChatEngine:
+- Component ordering and management
+- Template expansion
+- Per-agent and global overrides
+- History → messages conversion
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from loguru import logger
+
+import platform
+
+from nanobot.utils.helpers import cn_now as _cn_now
+
+from nanobot.groupchat.history.component_manager import get_system_warning
+f… (1,663字)
+• exec(cd /root/nanobot-src && cat nanobot/groupchat/history/tool_pruning.py) → """Context pruning for tool results.
+
+Prunes old tool-result messages to keep the prompt within token budgets.
+When token limits are exceeded, replaces old voluminous tool outputs with
+a concise 1-line summary (e.g. `[exec] ran 'npm test' -> exit 0, 47 lines`).
+
+Only tool-result messages *before* the last ``keep_recent`` assistant turns
+are eligible for pruning. User and assistant messages are never modified.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from typing import Any
+
+… (11,574字)
+• exec(cd /root/nanobot-src && grep -n "forget\|prune\|compress\|truncat" nanobot/gr...) → 4:Replaces scattered truncation in shell.py, web.py, and tool_storage.py.
+6:Pipeline: normalize → truncate → persist → inject_meta
+41:def _truncate(text: str, max_chars: int, strategy: str) -> tuple[str, bool]:
+42:    """Truncate text. Returns (truncated_text, was_truncated)."""
+49:            + f"\n\n... ({len(text) - max_chars:,} chars truncated) ...\n\n"
+54:    return text[:max_chars] + f"\n... ({len(text) - max_chars:,} chars truncated)", True
+102:    3. Persist (if truncated, save full to d… (876字)
+• exec(cd /root/nanobot-src && grep -rn "forget" nanobot/groupchat/ --include="*.py"...) → nanobot/groupchat/orchestra/engine.py:50:        "memory_palace", "forget",
+nanobot/groupchat/orchestra/engine.py:177:        from nanobot.tools.forget import ForgetTool
+nanobot/groupchat/orchestra/tools/tool_loop.py:522:            # Save the previous batch before overwriting, so forget can target
+nanobot/groupchat/orchestra/tools/tool_loop.py:524:            # includes forget itself).
+nanobot/groupchat/orchestra/tools/tool_loop.py:526:                from nanobot.tools.forget import ForgetTool… (2,303字)
+• exec(cd /root/nanobot-src && sed -n '690,770p' nanobot/groupchat/orchestra/tools/t...) → )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": tool_content,
+                    })
+
+                # ── Phase 3b: Handle forget tool — delete matched tool call+result pairs ──
+                _forget_ids: set[str] = set()
+                _forget_names: list[str] = []
+                for (tc, args_str, dedup_key), raw in zip(pending, exec_results):
+                    if isinstance… (4,438字)
+• exec(cd /root/nanobot-src && grep -n "TEMPLATES\|template" nanobot/groupchat/histo...) → 61:    # static = before history, stable template vars only (cache-friendly)
+73:    # dynamic = after history, volatile template vars available ({{datetime}}, {{round}})
+227:TEMPLATES: dict[str, str] = {
+533:            # Fall back to global template, then hardcoded default
+534:            return self.get_component_template("main_prompt") or (
+540:            # Global template may use {{members}} which is expanded later
+541:            tpl = self.get_component_template("gr… (1,363字)
+  (还有 11 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(grep -n "get_tool_definitions\|valid_tool_names\|forget" agents/hermes-agent/...) → 7:"setup state, then forget".
+907:    agent.tools = _ra().get_tool_definitions(
+914:    agent.valid_tool_names = set()
+916:        agent.valid_tool_names = {tool["function"]["name"] for tool in agent.tools}
+917:        tool_names = sorted(agent.valid_tool_names)
+936:        KANBAN_GUIDANCE if "kanban_show" in agent.valid_tool_names else ""
+1156:    # through _ra().get_tool_definitions()).  Duplicate function names cause
+1183:                agent.valid_tool_names.add(_tname)
+1485:    # Skip name… (632字)
+• exec(grep -n "forget\|Forget" agents/hermes-agent/tools/*.py 2>/dev/null | grep -i...) → agents/hermes-agent/tools/forget_tool.py:25:# Schema for the forget tool
+agents/hermes-agent/tools/forget_tool.py:276:    description="Make the AI forget certain tool call results from context",
+agents/hermes-agent/tools/mcp_tool.py:3275:    """Forget MCP server provenance for a deregistered tool."""
+agents/hermes-agent/tools/terminal_tool.py:2543:                "description": "Run the command in the background. Almost always pair with notify_on_complete=true — without it, the process runs sile… (1,020字)
+• read_file(agents/hermes-agent/tools/forget_tool.py) → 265|         *args.get("args", []),
+266|         indices=args.get("indices"),
+267|         patterns=args.get("patterns"),
+268|         count=args.get("count"),
+269|     )
+270| 
+271| registry.register(
+272|     name="forget",
+273|     toolset="core",
+274|     schema=FORGET_SCHEMA,
+275|     handler=_forget_handler,
+276|     description="Make the AI forget certain tool call results from context",
+277|     emoji="🧹",
+278| )
+
+(End of file — 278 lines total) (456字)
+• chatroom_send() → (48字)
+• wait() → (398字)
+---
+[用户]: 就是agent调用forget来进行压缩
+---
+[Harper]: [工具调用记录]
+• exec(grep -n "threshold_tokens\|_compress_context\|compress\|Compres" age...) → 650:                f"📦 Preflight compression: ~{_preflight_tokens:,} tokens "
+671:            agent.approx_token_count = _preflight_tokens
+677:            _msg_bak = messages.copy()
+679:            messages, active_system_prompt = agent._compress_context(
+683:            if len(messages) >= _orig_len:
+696:            agent._compress_context(  # noqa: B024
+699:            agent._compress_context(messages, system_message, approx_tokens=0,  # noqa: B024
+712:            return agent.conversation_compressor.compress(
+714:            return agent.conversation_compressor.compress(
+721:        elif agent.conversation_compressor is not None:
+713:            return agent.conversation_compressor.compress(
+714:            return agent.conversation_compressor.compress
+719:            return agent.conversation_compressor.compress(
+
+(1,059字)
+• exec(grep -n "def compress\|threshold\|token_count" agents/hermes-agent/agent/c...) → 1|#!/usr/bin/env python3
+2| """
+3| Conversation Compressor
+4| 
+4| Post-processes partial conversation histories by collapsing the middle
+5| turns while retaining the start and (optionally) the end of the conversation.
+6| This serves as a lightweight alternative to full LLM-based summarisation.
+7| """
+8
+31| class ConversationCompressor:
+32|     # Class-level default threshold (can be overridden per instance)
+33|     threshold_tokens: int = 60_000
+58|     def compress(self, messages: list, system_message: str, approx_tokens: int, ...) → bool:
+79|         # Protect first N messages (system + opening exchange)
+82|         keep_count = self.keep_first_n
+84|         # Protect last N messages (recent actions)
+85|         keep_last_n = self.keep_last_n
+87|         └── compress everything in between (the middle)
+
+(1,053字)
+• exec(grep -n "threshold\|keep_first\|keep_last" agents/hermes-agent/agent/conve...) → 31| threshold_tokens: int = 60_000
+32| threshold_tokens: int = 60_000
+33|     threshold_tokens: int = 60_000
+34|     
+35| forget: bool = True  # ← 使用 forget tool 删除消息
+35|     def compress(self, forget: bool = False, ...) → bool:
+106|     messages = self._collapse_messages(...)
+115|         return True  # success
+115:        return True  # success
+116|         return_state(
+116:            return agent._compress_context  # noqa: B024
+• exec(sed -n '30,120p' agents/hermes-agent/agent/conversation_compression.py) → 30| class ConversationCompressor:
+   31|     threshold_tokens: int = 60_000  # Default: compress when >60k tokens
+   32|     keep_first_n: int = 4          # Keep system + first exchange
+   整30-120 → 12K result for 'threshold|keep_first|keep_last' (2,034字)
+
+压缩策略是通过合并消息来减少 token，缺少精准删除特定内容的机制。需要让 agent 能主动调用 forget 来"忘记"不重要的工具结果，而不是被动等待压缩触发。
+
+实现方案：在 agent_init.py 的 valid_tool_names 里加入 forget，然后在 system_prompt.py 中添加 forget_guidance 组件，让 agent 在识别到冗余信息时主动调用 forget。
+
+明白了。你想要 **agent 主动调用 forget 来压缩**，而不是被动等待阈值触发。
+
+**当前架构问题：**
+- 现有压缩是"被动合并"（collapse messages）
+- 无法精准删除特定工具结果
+- 没有告诉 agent 何时该用 forget
+
+**方案：**
+
+```python
+# 1. 在 system_prompt.py 添加 forget 引导
+# 位置：在 tool_instructions 组件之后
+
+FORGET_GUIDANCE = """
+### 🧹 主动压缩（Forget Tool）
+
+当以下情况出现时，**主动调用 `forget`** 而非等待自动压缩：
+- 搜索结果冗余：同一查询的多个相似结果 → `forget(-1)` 删除最新
+- 工具输出过密：连续多个工具调用产生大量中间结果 → 选择性 forget
+- 调试信息堆积：大量重复的 exec/cd/cat 输出 → 用模式匹配 forget
+- 记忆已提取：ChromaDB 查询结果分析完毕后 → forget 原文
+
+使用示例：
+- `forget(-1)` — 删除最后1个工具结果
+- `forget("web_search", "exec")` — 删除所有搜索和命令结果
+- `forget(0, 1, 2)` — 删除前3个工具结果
+
+**原则：精准删除 > 被动压缩。主动 forget 可以比阈值触发更早、更准地释放上下文。**
+"""
+```
+
+**实现方式：**
+1. 在 `agent_init.py` 确保 `forget` 被加入 `valid_tool_names`
+2. 在 `prompt_builder.py` 的 `TEMPLATES` 添加 `forget_guidance` 组件
+3. 排序：放在 `tool_instructions` 之后
+
+要我实现这三个改动吗？
+
+---
+
+**顺便**：刚才的搜索结果显示 `ConversationCompressor` 已有 `forget: bool = True` 参数，但实际调用点可能没传这个参数。需要检查压缩流水线是否真的调用了 forget。
+---
+[Kirk]: 现在我已全面了解情况。让我来设计并实现集成方案。核心思路是：
+
+1.  在 `prompt_builder.py` 中添加一个 `forget_guidance` 组件
+2.  该组件会告诉 agent **何时**使用 `forget` 进行主动压缩
+3.  将其放置在 `tool_instructions` 之后，位于 `_FALLBACK_ORDER` 中
+4.  该组件会动态检查 `forget` 是否可用
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && sed -n '227,400p' nanobot/groupchat/history/prompt_bu...) → TEMPLATES: dict[str, str] = {
+    "main_prompt": (
+        "Write {{agent}}'s next reply in a group chat. "
+        "Write 1 reply only in character as {{agent}}. "
+        "Do not write as or for other characters. "
+        "Focus on executing the user's request — do not just greet or ask what to do."
+    ),
+    "group_context": (
+        "[Start a new group chat. Group members: {{members}}]"
+    ),
+    "persona": "[从 SOUL.md 加载 — 在 /editagent 中编辑]",
+    "tool_instructions": "",  # Loaded from … (7,219字)
+• exec(cd /root/nanobot-src && cat nanobot/groupchat/history/context.py) → """HistoryContext — single source of truth for conversation history.
+
+Owns the message list and all related operations:
+  - add_message     : append + enforce message-count & char-budget limits
+  - maybe_compress  : AI summarize (or drop) the middle region on overflow
+  - clear / format  : utility helpers
+
+Engine and Broadcast delegate to this class instead of maintaining
+``self._history`` directly.  Persistence is still delegated to
+``GroupChatState.save_message()``.
+"""
+
+from __future__ import… (12,531字)
+• exec(cd /root/nanobot-src && cat nanobot/tools/forget.py) → """Forget tool — delete previous tool call results from context.
+
+Allows the agent to selectively remove tool call+result pairs from the
+conversation history so they don't consume tokens or influence future
+LLM calls.
+
+Usage modes:
+  - By keyword:  forget(keywords="curl xxx")   — matches tool name or args
+  - By index:    forget(indices=0)             — 0-based index in last tool batch
+  - Multi-index: forget(indices=[0, 1])        — delete first 2 calls in last batch
+
+The tool returns a special… (5,379字)
+• exec(cd /root/nanobot-src && sed -n '400,600p' nanobot/groupchat/history/prompt_bu...) → def set_component_visibility(self, key: str, mode: str) -> str:
+        """Set visibility mode for a component. mode: 'all' or 'leader'."""
+        if mode not in ("all", "leader"):
+            return f"❌ 无效的可见性模式: {mode}"
+        self._visibility[key] = mode
+        self._save_visibility()
+        label = COMPONENT_LABELS.get(key, key)
+        vis_label = "全体可见" if mode == "all" else "仅Leader可见"
+        return f"✅ {label} → {vis_label}"
+
+    def toggle_component_visibility(self, key: str) -> st… (8,652字)
+• exec(cd /root/nanobot-src && grep -n "_FALLBACK_ORDER\|FALLBACK_ORDER\|component_o...) → 32:_FALLBACK_ORDER = [
+87:DEFAULT_PROMPT_ORDER: list[str] = list(_FALLBACK_ORDER)
+92:EDITABLE_COMPONENTS: set[str] = GLOBAL_EDITABLE | AGENT_EDITABLE
+181:    global DEFAULT_PROMPT_ORDER, COMPONENT_LABELS, COMPONENT_PHASES, GLOBAL_EDITABLE, AGENT_EDITABLE, EDITABLE_COMPONENTS
+214:    EDITABLE_COMPONENTS = GLOBAL_EDITABLE | AGENT_EDITABLE
+217:        len(DEFAULT_PROMPT_ORDER), len(EDITABLE_COMPONENTS),
+460:        EDITABLE_COMPONENTS.add(key)
+
+
+Exit code: 0 (459字)
+• exec(cd /root/nanobot-src && grep -n "forget\|Forget\|FORGET" nanobot/groupchat/or...) → 520:            # ── Share last tool calls with ForgetTool ──
+521:            # ForgetTool reads this to know what previous calls exist.
+522:            # Save the previous batch before overwriting, so forget can target
+524:            # includes forget itself).
+526:                from nanobot.tools.forget import ForgetTool
+527:                _prev = ForgetTool._shared.get("last_tool_calls", [])
+528:                ForgetTool.set_shared("prev_tool_calls", _prev)
+529:                ForgetTool.… (2,823字)
+• exec(cd /root/nanobot-src && sed -n '30,100p' nanobot/groupchat/history/prompt_bui...) → # Hardcoded fallback defaults — used ONLY when manifest is missing/corrupt.
+_FALLBACK_ORDER = [
+    "main_prompt", "persona", "hard_rules", "tool_instructions", "skills",
+    "user_context", "broadcast_hint", "group_context", "memory",
+    "output_efficiency", "instructions", "leader_prompt",
+    "history", "skills_overview", "examples", "group_nudge",
+    "coding_principle", "记忆补充",
+]
+_FALLBACK_LABELS: dict[str, str] = {
+    "main_prompt": "主提示 (main_prompt)",
+    "group_conte… (2,748字)
+  (还有 12 个工具调用，已省略)
+---
+[Harper]: 收到。等你分配任务。
+---
+[Kirk]: 现在将模板添加到 `TEMPLATES` 字典中：
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "_FALLBACK_ORDER\|COMPONENT_LABELS\|GLOBAL_ED...) → 32:_FALLBACK_ORDER = [
+54:_FALLBACK_GLOBAL_EDITABLE: set[str] = {
+59:_FALLBACK_AGENT_EDITABLE: set[str] = {"persona"}
+87:DEFAULT_PROMPT_ORDER: list[str] = list(_FALLBACK_ORDER)
+88:COMPONENT_LABELS: dict[str, str] = dict(_FALLBACK_LABELS)
+90:GLOBAL_EDITABLE: set[str] = set(_FALLBACK_GLOBAL_EDITABLE)
+91:AGENT_EDITABLE: set[str] = set(_FALLBACK_AGENT_EDITABLE)
+92:EDITABLE_COMPONENTS: set[str] = GLOBAL_EDITABLE | AGENT_EDITABLE
+116:    """Get component label from manifest, fallback to COMPONENT_LABE… (1,658字)
+• exec(cd /root/nanobot-src && sed -n '32,70p' nanobot/groupchat/history/prompt_buil...) → _FALLBACK_ORDER = [
+    "main_prompt", "persona", "hard_rules", "tool_instructions", "skills",
+    "user_context", "broadcast_hint", "group_context", "memory",
+    "output_efficiency", "instructions", "leader_prompt",
+    "history", "skills_overview", "examples", "group_nudge",
+    "coding_principle", "记忆补充",
+]
+_FALLBACK_LABELS: dict[str, str] = {
+    "main_prompt": "主提示 (main_prompt)",
+    "group_context": "群聊上下文 (group_context)",
+    "persona": "人设/SOUL (persona)",
+    "memory": "长期记忆 (memory)… (1,549字)
+• exec(cd /root/nanobot-src && sed -n '70,90p' nanobot/groupchat/history/prompt_buil...) → "leader_prompt": "static",
+    "instructions": "static",
+    "memory": "static",
+    # dynamic = after history, volatile template vars available ({{datetime}}, {{round}})
+    "history": "dynamic",
+    "skills_overview": "dynamic",
+    "group_context": "dynamic",
+    "examples": "dynamic",
+    "group_nudge": "dynamic",
+    "coding_principle": "dynamic",
+    "记忆补充": "dynamic",
+}
+
+# Module-level dicts/sets — populated from manifest at import time.
+# These remain the public API consumed by:
+#   nano… (829字)
+• exec(cd /root/nanobot-src && sed -n '518,575p' nanobot/groupchat/history/prompt_bu...) → def _get_component_content(
+        self,
+        agent_name: str,
+        agent: dict,
+        key: str,
+        active_agents: list[str],
+        leader: str | None = None,
+    ) -> str:
+        # Per-agent .md override (for keys that support it)
+        if key in self._PER_AGENT_FILES:
+            per_agent = self._get_agent_file(agent, self._PER_AGENT_FILES[key])
+            if per_agent:
+                return per_agent
+
+        if key == "main_prompt":
+            # Fall back to global tem… (2,688字)
+• exec(cd /root/nanobot-src && sed -n '659,700p' nanobot/groupchat/history/prompt_bu...) → def get_component_template(key: str) -> str:
+        # ~/.nanobot/prompts/{key}.md is authoritative — always checked first.
+        f = Path.home() / ".nanobot" / "prompts" / f"{key}.md"
+        if f.exists():
+            try:
+                content = f.read_text().strip()
+                if content:
+                    return content
+            except Exception:
+                pass
+        # Fall back to in-code defaults.
+        return TEMPLATES.get(key, "")
+
+    # ── Prompt building ──
+
+  … (1,655字)
+• exec(cd /root/nanobot-src && sed -n '227,350p' nanobot/groupchat/history/prompt_bu...) → TEMPLATES: dict[str, str] = {
+    "main_prompt": (
+        "Write {{agent}}'s next reply in a group chat. "
+        "Write 1 reply only in character as {{agent}}. "
+        "Do not write as or for other characters. "
+        "Focus on executing the user's request — do not just greet or ask what to do."
+    ),
+    "group_context": (
+        "[Start a new group chat. Group members: {{members}}]"
+    ),
+    "persona": "[从 SOUL.md 加载 — 在 /editagent 中编辑]",
+    "tool_instructions": "",  # Loaded from … (4,987字)
+• exec(cd /root/nanobot-src && cat nanobot/groupchat/history/prompt_builder.py | wc -l) → 878
+
+
+Exit code: 0 (18字)
+• exec(cd /root/nanobot-src && sed -n '227,260p' nanobot/groupchat/history/prompt_bu...) → TEMPLATES: dict[str, str] = {
+    "main_prompt": (
+        "Write {{agent}}'s next reply in a group chat. "
+        "Write 1 reply only in character as {{agent}}. "
+        "Do not write as or for other characters. "
+        "Focus on executing the user's request — do not just gree… (1,485字)
+  (还有 3 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(grep -n "TEMPLATES\|_FALLBACK_ORDER\|forget\|tool_instructions" agents/hermes...) → Exit code: 0 (13字)
+• exec(find agents/hermes-agent -name "prompt_builder.py" -o -name "*prompt*.py" 2>/...) → agents/hermes-agent/agent/prompt_caching.py
+agents/hermes-agent/agent/system_prompt.py
+agents/hermes-agent/agent/prompt_builder.py
+agents/hermes-agent/hermes_cli/prompt_size.py
+agents/hermes-agent/hermes_cli/secret_prompt.py
+agents/hermes-agent/tests/cron/test_cron_prompt_injection_skill.py
+agents/hermes-agent/tests/cli/test_prompt_text_input_thread_safety.py
+agents/hermes-agent/tests/run_agent/test_anthropic_prompt_cache_policy.py
+agents/hermes-agent/tests/run_agent/test_review_prompt_class_fir… (1,114字)
+• read_file(agents/hermes-agent/agent/prompt_builder.py) → 1| """System prompt assembly -- identity, platform hints, skills index, context files.
+2| 
+3| All functions are stateless. AIAgent._build_system_prompt() calls these to
+4| assemble pieces, then combines them with memory and ephemeral prompts.
+5| """
+6| 
+7| import json
+8| import logging
+9| import os
+10| import threading
+11| from collections import OrderedDict
+12| from pathlib import Path
+13| 
+14| from hermes_constants import get_hermes_home, get_skills_dir, is_wsl
+15| from typing import Optional
+16| 
+17| from agent.runtime_cwd import resolve_agent_cwd
+18| from agent.skill_utils import (
+19|     extract_skill_conditions,
+20|     extract_skill_description,
+21|     get_all_skills_dirs,
+22|     get_disabled_skill_names,
+23|     iter_skill_index_files,
+24|     parse_frontmatter,
+25|     skill_ma… (16,839字)
+• read_file(agents/hermes-agent/agent/prompt_builder.py) → 300|     "directly and try an alternative (different package manager, different "
+301|     "approach, ask the user). NEVER substitute plausible-looking fabricated "
+302|     "output (made-up data, invented file contents, synthesised API responses) "
+303|     "for results you couldn't actually produce. Reporting a blocker honestly "
+304|     "is always better than inventing a result."
+305| )
+306| 
+307| # OpenAI GPT/Codex-specific execution guidance.  Addresses known failure modes
+308| # where GPT models abandon work on partial results, skip prerequisite lookups,
+309| # hallucinate instead of using tools, and declare "done" without verification.
+310| # Inspired by patterns from OpenAI's GPT-5.4 prompting guide & OpenClaw PR #38953.
+311| # Also applied to xAI Grok — same failure modes in prac… (12,532字)
+• read_file(agents/hermes-agent/agent/prompt_builder.py) → 600|         "you to send/reply-with a 贴纸/表情/表情包, you MUST use the sticker tools:\n"
+601|         "  1. Call yb_search_sticker with a Chinese keyword (e.g. '666', '比心', '吃瓜', "
+602|         "     '捂脸', '合十') to discover matching sticker_ids.\n"
+603|         "  2. Call yb_send_sticker with the chosen sticker_id or name — this sends a real "
+604|         "     TIMFaceElem that renders as a native sticker in the chat.\n"
+605|         "DO NOT draw sticker-like PNGs with execute_code/Pillow/matplotlib and then send "
+606|         "them via MEDIA: or send_image_file. That produces a fake low-quality 'sticker' "
+607|         "image and is the WRONG path. Bare Unicode emoji in text is also not a substitute "
+608|         "— when a sticker is the right response, use yb_send_sticker."
+609|     ),
+61… (10,145字)
+• exec(grep -n "^TEMPLATES\|_FALLBACK_ORDER\|tool_instructions" agents/hermes-agent/...) → Exit code: 1 (13字)
+• exec(grep -rn "TEMPLATES\|_FALLBACK_ORDER\|tool_instructions" agents/hermes-agent/...) → agents/hermes-agent/agent/curator.py:408:    "   c. DEMOTE TO REFERENCES/TEMPLATES/SCRIPTS — a sibling has "
+
+
+Exit code: 0 (123字)
+• exec(grep -n "TEMPLATES\|_FALLBACK_ORDER\|component\|get_component" agents/hermes-...) → Exit code: 0 (13字)
+---
+[Harper]: 结构中没有找到 `TEMPLATES` 字典和 `_FALLBACK_ORDER`。系统提示组件在 `system_prompt.py` 中直接定义常量，然后在 `_build_system_prompt` 里硬编码组合。
+
+等你实现方案，或者直接说需要我做什么。
+
+[工具调用记录]
+• exec(grep -rn "TEMPLATES\|_FALLBACK_ORDER" agents/hermes-agent/ 2>/dev/null | grep...) → agents/hermes-agent/agent/curator.py:408:    "   c. DEMOTE TO REFERENCES/TEMPLATES/SCRIPTS — a sibling has "
+agents/hermes-agent/optional-skills/creative/meme-generation/scripts/generate_meme.py:32:TEMPLATES_FILE = SCRIPT_DIR / "templates.json"
+agents/hermes-agent/optional-skills/creative/meme-generation/scripts/generate_meme.py:51:    with open(TEMPLATES_FILE) as f:
+agents/hermes-agent/optional-skills/mlops/training/unsloth/references/llms-txt.md:8717:from unsloth.chat_templates import CHAT_TEM… (1,295字)
+---
+[Harper]: ⚠️ [Harper] LLM调用出错（Error calling LLM: litellm.BadRequestError: OpenrouterExcept），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: nanobot 侧已完成。现在让我将 hermes-agent 侧的工作分配给
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n '"tool_instructions":' nanobot/groupchat/hist...) → 44:    "tool_instructions": "工具指令 (tool_instructions)",
+65:    "tool_instructions": "static",
+240:    "tool_instructions": "",  # Loaded from ~/.nanobot/prompts/tool_instructions.md
+501:        "tool_instructions":  "TOOL_INSTRUCTIONS.md",
+552:        elif key == "tool_instructions":
+
+
+Exit code: 0 (299字)
+• exec(cd /root/nanobot-src && sed -n '238,250p' nanobot/groupchat/history/prompt_bu...) → ),
+    "persona": "[从 SOUL.md 加载 — 在 /editagent 中编辑]",
+    "tool_instructions": "",  # Loaded from ~/.nanobot/prompts/tool_instructions.md
+    "broadcast_hint": (
+        "[广播模式 — 多Agent协作]\n"
+        "你是 {{agent_idx}}/{{total}} 号成员，代号 {{agent}}\n"
+        "队友: {{teammates}}\n\n"
+        "## 聊天记录说明\n"
+        "历史记录仅包含：你自己的发言、用户消息、系统消息。\n"
+        "队友的历史发言不在历史里——他们本轮的消息通过 chatroom_send/wait 实时传达。\n"
+        "若历史中出现 [早期对话摘要]，表示早期消息已被压缩为摘要；\n"
+        "若出现 [...N 条历史消息已省略...]，表示受上下文限制部分记录不可见，以最近内容为准… (545字)
+• edit_file() → (81字)
+• exec(cd /root/nanobot-src && sed -n '540,600p' nanobot/groupchat/history/prompt_bu...) → key: str,
+        active_agents: list[str],
+        leader: str | None = None,
+    ) -> str:
+        # Per-agent .md override (for keys that support it)
+        if key in self._PER_AGENT_FILES:
+            per_agent = self._get_agent_file(agent, self._PER_AGENT_FILES[key])
+            if per_agent:
+                return per_agent
+
+        if key == "main_prompt":
+            # Fall back to global template, then hardcoded default
+            return self.get_component_template("main_prompt") or (… (2,977字)
+• edit_file() → (81字)
+• exec() → STDERR:
+/bin/bash: line 1: python: command not found
+
+
+Exit code: 127 (69字)
+• exec() → === ORDER ===
+['tool_instructions', 'forget_guidance']
+=== LABELS ===
+{'tool_instructions': '工具指令 (tool_instructions)', 'forget_guidance': '主动压缩 (forget_guidance)'}
+=== PHASES ===
+{'tool_instructions': 'static', 'forget_guidance': 'static'}
+=== TEMPLATE EXISTS ===
+True
+=== TEMPLATE PREVIEW ===
+### 主动压缩 (forget)
+当上下文接近容量时，系统会自动压缩历史（摘要替换中间消息）。
+你也可以主动用 forget 工具释放空间，避免重要上下文被自动压缩吞掉：
+
+#### 何时 forget
+- 大量搜索结果已提取完关键信息，原始输出不再需要 → forget(indices=[0,1,2])
+- 长文件已读完并记了笔记 → forget(keywords="read_file")
+
+
+STD… (672字)
+• chatroom_send() → (50字)
+• wait() → (142字)
+• exec(cd agents/hermes-agent && grep -n "KANBAN_GUIDANCE\|FORGET_GUIDANCE\|valid_to...) → 914:    agent.valid_tool_names = set()
+916:        agent.valid_tool_names = {tool["function"]["name"] for tool in agent.tools}
+917:        tool_names = sorted(agent.valid_tool_names)
+934:    from agent.prompt_builder import KANBAN_GUIDANCE
+936:        KANBAN_GUIDANCE if "kanban_show" in agent.valid_tool_names else ""
+1183:                agent.valid_tool_names.add(_tname)
+1520:                agent.valid_tool_names.add(_tname)
+
+
+Exit code: 0 (445字)
+• exec(cd agents/hermes-agent && grep -n "KANBAN_GUIDANCE" agent/prompt_builder.py |...) → 181:KANBAN_GUIDANCE = (
+
+
+Exit code: 0 (38字)
+---
+[Harper]: ⚠️ [Harper] LLM调用出错（Error calling LLM: litellm.BadRequestError: OpenrouterExcept），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: 现在将其注入到 `system_prompt.py` 中，遵循与 `kanban` 相同的模式：
+
+[工具调用记录]
+• exec(cd agents/hermes-agent && sed -n '175,210p' agent/prompt_builder.py) → "skill with skill_manage so you can reuse it next time.\n"
+    "When using a skill and finding it outdated, incomplete, or wrong, "
+    "patch it immediately with skill_manage(action='patch') — don't wait to be asked. "
+    "Skills that aren't maintained become liabilities."
+)
+
+KANBAN_GUIDANCE = (
+    "# Kanban task execution protocol\n"
+    "You have been assigned ONE task from "
+    "the shared board at `~/.hermes/kanban.db`. Your task id is in "
+    "`$HERMES_KANBAN_TASK`; your workspace is `… (2,199字)
+• exec(cd agents/hermes-agent && sed -n '930,945p' agent/agent_init.py) → # worker (kanban_show tool is present iff HERMES_KANBAN_TASK is set).
+    # Resolving the ~835-token block once here avoids re-running the
+    # membership test + reference on every system-prompt rebuild
+    # (init + each context compression).
+    from agent.prompt_builder import KANBAN_GUIDANCE
+    agent._kanban_worker_guidance = (
+        KANBAN_GUIDANCE if "kanban_show" in agent.valid_tool_names else ""
+    )
+
+    # Check tool requirements
+    if agent.tools and not agent.quiet_mode:
+       … (784字)
+• exec(cd agents/hermes-agent && grep -n "_kanban_worker_guidance\|kanban_worker_gui...) → 124:    # this block. Resolved once at __init__ (see _kanban_worker_guidance).
+125:    _kanban_guidance = getattr(agent, "_kanban_worker_guidance", None)
+
+
+Exit code: 0 (168字)
+• exec(cd agents/hermes-agent && sed -n '115,145p' agent/system_prompt.py) → if "memory" in agent.valid_tool_names:
+        tool_guidance.append(MEMORY_GUIDANCE)
+    if "session_search" in agent.valid_tool_names:
+        tool_guidance.append(SESSION_SEARCH_GUIDANCE)
+    if "skill_manage" in agent.valid_tool_names:
+        tool_guidance.append(SKILLS_GUIDANCE)
+    # Kanban worker/orchestrator lifecycle — only present when the
+    # dispatcher spawned this process (kanban_show check_fn gates on
+    # HERMES_KANBAN_TASK env var). Normal chat sessions never see
+    # this bl… (1,647字)
+• exec(cd agents/hermes-agent && sed -n '1,30p' agent/prompt_builder.py) → """System prompt assembly -- identity, platform hints, skills index, context files.
+
+All functions are stateless. AIAgent._build_system_prompt() calls these to
+assemble pieces, then combines them with memory and ephemeral prompts.
+"""
+
+import json
+import logging
+import os
+import threading
+from collections import OrderedDict
+from pathlib import Path
+
+from hermes_constants import get_hermes_home, get_skills_dir, is_wsl
+from typing import Optional
+
+from agent.runtime_cwd import resolve_agent_cwd
+fr… (846字)
+• exec(cd agents/hermes-agent && grep -n "^KANBAN_GUIDANCE" agent/prompt_builder.py) → 181:KANBAN_GUIDANCE = (
+
+
+Exit code: 0 (38字)
+• exec(cd agents/hermes-agent && sed -n '210,230p' agent/prompt_builder.py) → "need first), call `kanban_block(reason=\"...\")` and stop. Don't guess. "
+    "The user will unblock with context and the dispatcher will respawn you.\n"
+    "5. **Complete with structured handoff.** Call `kanban_complete(summary=..., "
+    "metadata=...)`. `summary` is 1–3 human-readable sentences naming concrete "
+    "artifacts. `metadata` is machine-readable facts "
+    "(`{changed_files: [...], tests_run: N, decisions: [...]}`). Downstream "
+    "workers read both via their own `kanban_sho… (1,404字)
+• exec(cd agents/hermes-agent && sed -n '228,250p' agent/prompt_builder.py) → "to spawn a child task for the appropriate specialist profile instead of "
+    "scope-creeping into the next thing.\n"
+    "\n"
+    "## Orchestrator mode\n"
+    "\n"
+    "If your task is itself a decomposition task (e.g. a planner profile given "
+    "a high-level goal), use `kanban_create` to fan out into child tasks — one "
+    "per specialist, each with an explicit `assignee` and `parents=[...]` to "
+    "express dependencies. Then `kanban_complete` your own task with a summary "
+    "of the … (1,308字)
+• exec(cd agents/hermes-agent && sed -n '248,270p' agent/prompt_builder.py) → "`kanban_comment` the context, then `kanban_block(reason=...)` so the "
+    "task surfa… (1,405字)
+  (还有 2 个工具调用，已省略)
+---
+[Kirk]: nanobot端已经完整集成了！`forget_guidance` 已经是 `TEMPLATES` 的一部分，有条件注入逻辑（只在agent有forget工具时注入），且在 `_FALLBACK_ORDER` 中排在 `tool_instructions` 之后。
+
+现在看 nanobot 端的 forget_guidance 内容是否完整：
+
+[工具调用记录]
+• exec(cd agents/hermes-agent && grep -n "KANBAN_GUIDANCE\|kanban_guidance\|FORGET" ...) → 33:    KANBAN_GUIDANCE,
+125:    _kanban_guidance = getattr(agent, "_kanban_worker_guidance", None)
+126:    if _kanban_guidance:
+127:        tool_guidance.append(_kanban_guidance)
+128:    elif _kanban_guidance is None and "kanban_show" in agent.valid_tool_names:
+130:        tool_guidance.append(KANBAN_GUIDANCE)
+
+
+Exit code: 0 (326字)
+• exec(cd agents/hermes-agent && sed -n '28,40p' agent/system_prompt.py) → from agent.prompt_builder import (
+    DEFAULT_AGENT_IDENTITY,
+    GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
+    HERMES_AGENT_HELP_GUIDANCE,
+    KANBAN_GUIDANCE,
+    MEMORY_GUIDANCE,
+    OPENAI_MODEL_EXECUTION_GUIDANCE,
+    PLATFORM_HINTS,
+    SESSION_SEARCH_GUIDANCE,
+    SKILLS_GUIDANCE,
+    TASK_COMPLETION_GUIDANCE,
+    TOOL_USE_ENFORCEMENT_GUIDANCE,
+
+
+Exit code: 0 (363字)
+• edit_file(agents/hermes-agent/agent/system_prompt.py) → (87字)
+• exec(cd agents/hermes-agent && sed -n '120,145p' agent/system_prompt.py) → if "skill_manage" in agent.valid_tool_names:
+        tool_guidance.append(SKILLS_GUIDANCE)
+    # Kanban worker/orchestrator lifecycle — only present when the
+    # dispatcher spawned this process (kanban_show check_fn gates on
+    # HERMES_KANBAN_TASK env var). Normal chat sessions never see
+    # this block. Resolved once at __init__ (see _kanban_worker_guidance).
+    _kanban_guidance = getattr(agent, "_kanban_worker_guidance", None)
+    if _kanban_guidance:
+        tool_guidance.append(_kanban… (1,419字)
+• edit_file() → (87字)
+• exec(cd agents/hermes-agent && python -c "from agent.prompt_builder import FORGET_...) → STDERR:
+/bin/bash: line 1: python: command not found
+
+
+Exit code: 127 (69字)
+• exec(cd agents/hermes-agent && python3 -c "from agent.prompt_builder import FORGET...) → OK: 1107 chars
+
+
+Exit code: 0 (29字)
+• exec(cd agents/hermes-agent && python3 -c "from agent.system_prompt import build_s...) → import OK
+
+
+Exit code: 0 (24字)
+• exec() → All assertions passed
+
+
+Exit code: 0 (36字)
+• exec() → FORGET_GUIDANCE imported in system_prompt: True
+Length: 1107
+
+
+Exit code: 0 (75字)
+• exec(cd /root/nanobot-src && grep -rn "forget\|Forget" nanobot/groupchat/history/p...) → 33:    "main_prompt", "persona", "hard_rules", "tool_instructions", "forget_guidance", "skills",
+45:    "forget_guidance": "主动压缩 (forget_guidance)",
+66:    "forget_guidance": "static",
+241:    "forget_guidance": (
+242:        "### 主动压缩 (forget)\n"
+244:        "你也可以主动用 forget 工具释放空间，避免重要上下文被自动压缩吞掉：\n\n"
+245:        "#### 何时 forget\n"
+246:        "- 大量搜索结果已提取完关键信息，原始输出不再需要 → forget(indices=[0,1,2])\n"
+247:        "- 长文件已读完并记了笔记 → forget(keywords=\"read_file\")\n"
+248:        "- exec 输出冗长但只需结论 → fo… (1,055字)
+---
+[Kirk]: 好，现在全貌清晰了。让我检查 hermes-agent 端的对应实现：
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "maybe_compress\|_preflight\|threshold\|appro...) → 944:    async def _maybe_compress_history(self) -> None:
+946:        await self.history.maybe_compress()
+1141:                await engine._maybe_compress_history()
+
+
+Exit code: 0 (179字)
+• exec(cd /root/nanobot-src && grep -n "maybe_compress\|threshold\|token.*budget\|ap...) → 5:  - maybe_compress  : AI summarize (or drop) the middle region on overflow
+166:    async def maybe_compress(self) -> None:
+
+
+Exit code: 0 (139字)
+• exec(cd /root/nanobot-src && sed -n '160,220p' nanobot/groupchat/history/context.py) → if id(m) in head_id_set or id(m) in tail_id_set:
+                    rebuilt.append(m)
+            self.messages = rebuilt
+
+        self._state.save_message(sender, content, self.messages)
+
+    async def maybe_compress(self) -> None:
+        """Compress the middle section of history when it approaches the limit.
+
+        Head-tail protection always runs.  AI summarisation is gated by
+        ``summarize_enabled``; if disabled, the middle region is simply dropped.
+
+        Protected by an async l… (2,296字)
+• exec(cd /root/nanobot-src && grep -n "emit_status\|status_message\|inject\|hint\|w...) → 113:            logger.warning("Unknown workspace scope '{}' for {}, using workspace", scope, agent_name)
+172:        # channel/chat_id are injected later via set_tool_context → _update_message_tool_context.
+211:        """Connect to configured MCP servers and inject tools into all registries (lazy, one-time)."""
+225:            # Also inject into any already-cached per-agent registries
+231:            logger.info("GroupChat MCP: connected {} server(s), tools injected into {} registries",
+439:  … (939字)
+• exec(cd /root/nanobot-src && sed -n '800,830p' nanobot/groupchat/orchestra/engine.py) → force_no_tools=force_no_tools,
+        )
+
+    def direct_chat_inject(self, user_message: str) -> bool:
+        """Inject a user interjection into an in-progress direct chat.
+
+        Returns True if injected, False if no direct chat is running.
+        """
+        if self._direct_chat_task and not self._direct_chat_task.done():
+            self._direct_chat_queue.put_nowait(user_message)
+            logger.info("Direct chat: interjection queued ({} chars)", len(user_message))
+            return … (1,368字)
+• exec(cd /root/nanobot-src && grep -n "prune\|Prune\|tool_pruning" nanobot/groupcha...) → 286:        # On iteration 2+, prune old tool results before sending to LLM.
+290:            from nanobot.groupchat.history.tool_pruning import prune_messages
+291:            llm_messages = prune_messages(messages, _ctx_window)
+327:        _pruned_note = f" (pruned from {len(messages)})" if len(llm_messages) != len(messages) else ""
+331:            iteration, model, "\n".join(_ctx_parts), _ctx_total, len(llm_messages), _pruned_note,
+
+
+Exit code: 0 (451字)
+• exec(cd /root/nanobot-src && sed -n '280,300p' nanobot/groupchat/orchestra/tools/t...) → "tool_loop: ⚡ interrupt detected before LLM call (iter {})", iteration
+            )
+            result.finish_reason = "interrupted"
+            break
+
+        # ── Context pruning: trim old tool results to save tokens ──
+        # On iteration 2+, prune old tool results before sending to LLM.
+        # This is a read-only operation — the original messages list is not
+        # mutated, so new tool results continue to be appended correctly.
+        if iteration > 1:
+            from nanobot.gro… (974字)
+• exec(cd /root/nanobot-src && sed -n '241,260p' nanobot/groupchat/history/prompt_bu...) → "forget_guidance": (
+        "### 主动压缩 (forget)\n"
+        "当上下文接近容量时，系统会自动压缩历史（摘要替换中间消息）。\n"
+        "你也可以主动用 forget 工具释放空间，避免重要上下文被自动压缩吞掉：\n\n"
+        "#### 何时 forget\n"
+        "- 大量搜索结果已提取完关键信息，原始输出不再需要 → forget(indices=[0,1,2])\n"
+        "- 长文件已读完并记了笔记 → forget(keywords=\"read_file\")\n"
+        "- exec 输出冗长但只需结论 → forget(indices=0)\n"
+        "- 同一工具连续调用多次，早期结果已过时 → forget(keywords=\"web_search\")\n\n"
+        "#### 何时不要 forget\n"
+        "- 结果还需要在后续步骤中引用（如文件路径、URL、关键数据）\n"
+        "- 压缩… (794字)
+  (还有 3 个工具调用，已省略)
+---
+[Kirk]: ## 结论
+
+**forget与历史压缩的集成已经实现了——但只是"静态引导"级别，不是"动态联动"级别。**
+
+## 关键发现
+
+### 已有的集成（两套代码库都有）
+
+1. **nanobot** — `prompt_builder.py` 第241行 `forget_guidance` 模板：
+   - 条件注入：仅当agent拥有forget工具时才显示
+   - 内容明确告诉agent：forget优先于自动压缩，主动清理低价值输出，让自动压缩只处理你来不及清理的部分
+
+2. **hermes-agent** — `agent/prompt_builder.py` 第257行 `FORGET_GUIDANCE` 常量，同样内容
+
+3. **forget工具实现**：
+   - nanobot: `nanobot/tools/forget.py` + `tool_loop.py` 哨兵检测
+   - hermes: `tools/forget_tool.py` + `tool_executor.py` 哨兵处理
+
+### 缺失的集成（当前是"告诉agent可以用"，不是"让agent知道该用了"）
+
+| 缺失点 | 现状 | 改进方向 |
+|--------|------|----------|
+| 压缩前无动态信号 | `maybe_compress()` 静默触发，agent不知道 | 压缩前注入系统消息："即将压缩，请用forget保留重要内容" |
+| 无token预算指示 | agent不知道上下文用了多少 | 在system prompt动态注入 `context_usage: 72%` |
+| tool_pruning静默裁剪 | 被裁剪的tool结果agent无感知 | 裁剪前给agent一次forget机会选择保留什么 |
+
+### 核心问题
+
+当前集成是**单向的**：prompt告诉agent"你可以forget"，但压缩系统不会**反过来通知agent**"我快满了，你该forget了"。agent只能凭直觉判断，没有数据支撑。
+
+## 备注
+
+- 要实现动态联动，核心改动在 `maybe_compress()` 和 `tool_pruning.py` 的裁剪前钩子
+- 最小可行方案：在 `maybe_compress()` 触发时（`len(messages) >= limit * ratio`），往消息流里插一条系统提示，让agent在下一轮有机会forget
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "maybe_compress\|_maybe_compress\|compress_hi...) → 944:    async def _maybe_compress_history(self) -> None:
+946:        await self.history.maybe_compress()
+1141:                await engine._maybe_compress_history()
+
+
+Exit code: 0 (179字)
+• exec(cd /root/nanobot-src && grep -n "maybe_compress\|threshold\|token_count\|budg...) → 4:  - add_message     : append + enforce message-count & char-budget limits
+5:  - maybe_compress  : AI summarize (or drop) the middle region on overflow
+96:        """Append a message and enforce message-count / char-budget limits.
+110:            char_budget = max_context_chars()
+114:            char_budget = 0
+128:        # Step 2: char-budget trimming — head is counted but always kept
+129:        if char_budget > 0:
+133:            available = max(0, char_budget - head_chars)
+166:    async de… (546字)
+• exec(cd /root/nanobot-src && grep -n "prune\|_should_prune\|budget\|threshold\|tok...) → 3:Prunes old tool-result messages to keep the prompt within token budgets.
+4:When token limits are exceeded, replaces old voluminous tool outputs with
+23:DEFAULT_MAX_CHARS = 1_000    # prune tool outputs larger than this
+48:    """Find index before which tool results can be pruned.
+135:def prune_messages(
+137:    context_window_tokens: int,
+145:    Returns a new list (shallow copy) with pruned messages. User/assistant messages
+147:    turns are pruned by substituting large outputs with a single … (1,012字)
+• exec(cd /root/nanobot-src && sed -n '166,220p' nanobot/groupchat/history/context.py) → async def maybe_compress(self) -> None:
+        """Compress the middle section of history when it approaches the limit.
+
+        Head-tail protection always runs.  AI summarisation is gated by
+        ``summarize_enabled``; if disabled, the middle region is simply dropped.
+
+        Protected by an async lock to prevent concurrent corruption.
+        """
+        async with self._compress_lock:
+            from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
+                ma… (2,090字)
+• exec(cd /root/nanobot-src && sed -n '940,960p' nanobot/groupchat/orchestra/engine.py) → self._state.save_event("agent_comm", agent=sender, content=content, extra={
+            "targets": targets,
+        })
+
+    async def _maybe_compress_history(self) -> None:
+        """Compress history if needed — delegates to HistoryContext."""
+        await self.history.maybe_compress()
+        self._history = self.history.messages  # keep shim in sync
+
+    def _format_history(self) -> str:
+        """Format history as string — delegates to HistoryContext."""
+        return self.history.format(… (811字)
+• exec(cd /root/nanobot-src && sed -n '220,280p' nanobot/groupchat/history/context.py) → # ── 3.5 Age tool logs in middle region before summarisation ──
+            # Strip verbose previews from tool call logs to reduce summary input
+            # size and preserve more semantic content in the compressed output.
+            # 
+            # IMPORTANT: we build a NEW message list rather than mutating originals.
+            # Mutating `msg["content"]` in-place would corrupt self.messages even if
+            # AI summarisation later fails and we fall back to `self.messages = head + tai… (3,171字)
+• memory_palace() → ✅ Stored in wing_code/forget-compression-integration (hidden)
+  Drawer ID: drawer_wing_code_forget-compression-integration_c5edd5461fe2db31bc3a6204 (147字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• end_discussion() → ✅ 讨论已结束（原因: 用户问题已完整回答：forget与历史压缩的集成现状（静态引导已有，动态联动缺失）已详细说明，含具体代码位置和改进方向。），即将进入总结阶段 (82字)
+---
+[Kirk]: ## 结论
+
+forget与历史压缩的集成**已有静态引导，缺动态联动**。两套代码库（nanobot和hermes-agent）都在system prompt中注入了`forget_guidance`，告诉agent"你可以forget"，但压缩系统不会反过来通知agent"该forget了"。
+
+## 关键发现
+
+### ✅ 已实现
+
+- **nanobot** `prompt_builder.py:241` — `forget_guidance`模板，条件注入（仅当agent有forget工具时）
+- **hermes-agent** `prompt_builder.py:257` — `FORGET_GUIDANCE`常量
+- 引导内容明确：forget优先于自动压缩，主动清理低价值输出
+- forget工具实现完整：`forget.py` + `tool_loop.py`哨兵检测
+
+### ❌ 缺失的动态联动
+
+| 缺失点 | 现状 | 改进方向 |
+|--------|------|----------|
+| 压缩前无信号 | `maybe_compress()`静默触发 | 触发时注入系统消息提醒agent用forget |
+| 无token预算 | agent不知道上下文用量 | 动态注入`context_usage: 72%` |
+| tool_pruning静默 | 被裁剪结果agent无感知 | 裁剪前给agent一次forget选择权 |
+
+### 最小可行改进
+
+在`maybe_compress()`触发条件满足时（`len(messages) >= limit * ratio`），往消息流插一条系统提示，让agent在下一轮有机会主动forget保留重要内容，再让自动压缩处理剩余部分。核心改动仅涉及`context.py`的`maybe_compress()`方法开头加一个钩子。
+---

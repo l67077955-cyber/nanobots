@@ -1,0 +1,575 @@
+[用户]: 现在老是触发这个bug，定位
+---
+[Harper]: 定位完毕。
+
+**Bug 1（主因）：两个压缩机制语义不匹配 → 反复触发压缩**
+
+| 机制 | 保护的尾部 | 实际保护 | 单位 |
+|------|-----------|---------|------|
+| `prune_messages` (tool_pruning.py) | 最近 6 个 **assistant turn** | ≈18条消息 | 3条/turn |
+| `maybe_compress` (context.py) | 最近 6 条**消息** | 6条消息 | 原始消息数 |
+
+**触发链条**：
+1. `prune_messages()` 返回**副本**，原列表不动
+2. `maybe_compress()` 在**原列表**上操作 → 能看到 pruning 已经"处理过"的所有消息
+3. 原列表尾部保护只护6条，中间12条（pruning保护但compression不保护的）被压缩成摘要
+4. 下一轮：pruning看到摘要(更短)→允许保留更旧消息→压缩又触发→**循环**
+
+**Bug 2（已修复）：`memory_palace` 的 `visible` 参数 `NameError`**
+- 日志中有记录但当前代码 `visible: bool = False` 已加在 `execute()` 签名中
+- 如果这是"老是触发"的bug，它已经被修过了
+
+---
+
+**结论**：你现在"老是触发"的是 **Bug 1**——`compression_keep_recent=6`（仅护6条消息）远小于 `pruning_keep_recent=6 assistant turns`（护18条），导致压缩每次都在中间区域干活，产生摘要后下一轮修剪又认为空间够用，保留更多旧消息，然后压缩又触发。
+
+**修复：把两个值拉齐**
+- `compression_keep_recent` 从 `6` 改为 `18`（与 `6 assistant turns` 对齐）
+- 或者统一用同一配置源，消除两份拷贝
+
+需要我修吗？
+
+[工具调用记录]
+• exec(grep -n "keep_recent\|keep_turns" /root/nanobot-src/nanobot/groupchat/history...) → 166:            compression_keep_recent,
+183:        keep_recent = compression_keep_recent()
+185:            range(max(0, total_len - keep_recent), total_len)
+
+
+Exit code: 0 (173字)
+• exec(grep -n "keep_recent\|keep_turns" /root/nanobot-src/nanobot/groupchat/history...) → 7:Only tool-result messages *before* the last ``keep_recent`` assistant turns
+47:def _find_cutoff_index(messages: list[dict[str, Any]], keep_recent: int) -> int:
+52:    if keep_recent <= 0:
+59:            if count >= keep_recent:
+140:    keep_recent: int | None = None,
+146:    are never modified. Only tool results before the last ``keep_recent`` assistant
+153:        if keep_recent is None:
+154:            keep_recent = hs.pruning_keep_recent()
+162:    if keep_recent is None:
+163:        keep_re… (878字)
+• exec(grep -rn "compression_keep_recent\|keep_recent" /root/nanobot-src/nanobot/gro...) → /root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:7:Only tool-result messages *before* the last ``keep_recent`` assistant turns
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:47:def _find_cutoff_index(messages: list[dict[str, Any]], keep_recent: int) -> int:
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:52:    if keep_recent <= 0:
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:59:            if count >= keep_recent:
+/root/nanobot-src/nanobot/grou… (2,246字)
+• exec(tail -200 /root/.nanobot/workspace/nanobot_stdout.log 2>/dev/null | grep -i -...) → 425|     except Exception:
+445|     except Exception as e:
+446|         return {"success": False, "error": str(e)}
+456|         return {"success": False, "error": f"Drawer not found: {drawer_id}"}
+474|     except Exception as e:
+475|         return {"success": False, "error": str(e)}
+  [0] system 514字 | 完成任务、遵守约束、团队协作不放弃。用记忆和skill提效减错，主动理解意图避免额外提问。保护信息安全。\n\n⚡ 速度优先：结论先行再解释；跳过套话前言；批量并行调工具。\n⚡ act don't ask：说要做就立刻用工具执行，不许承诺"我将要…"然后结束回合。\n⚡ verification：关键操作后验证结果，不要假设成功。\n\n<tool_persistence>\n- 工具… (30,275字)
+• exec(cat /root/.nanobot/history_settings.json | python3 -m json.tool 2>/dev/null |...) → {
+    "context_window_tokens": 35000,
+    "tool_result_max_chars": 5000,
+    "tool_results": {
+        "exec_max_chars": 10000,
+        "web_fetch_max_chars": 10000,
+        "web_search_max_chars": 5000,
+        "summarize_enabled": true,
+        "summarize_threshold": 20000,
+        "summarize_model": "openai/gpt-4.1-nano",
+        "summarize_max_input_chars": 10000,
+        "summarize_max_output_chars": 5000,
+        "broadcast_result_max_chars": 25000,
+        "direct_result_max_chars": 12000… (1,049字)
+• exec(sed -n '160,195p' /root/nanobot-src/nanobot/groupchat/history/context.py) → from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
+            max_messages,
+            history_summarize_enabled,
+            summarize_model,
+            compress_ratio,
+            compress_max_summary_tokens,
+            compression_keep_recent,
+            keep_user_messages,
+        )
+
+        limit = max_messages()
+        ratio = compress_ratio()
+        if len(self.messages) < int(limit * ratio):
+            return
+
+        total_len = len(self.messages)
+
+       … (1,265字)
+• exec(tail -500 /root/.nanobot/workspace/nanobot_stdout.log 2>/dev/null | grep -B3 ...) → 403|     if not col:
+404|         return _no_palace()
+405| 
+--
+422|         existing = col.get(ids=[drawer_id])
+423|         if existing and existing["ids"]:
+424|             return {"success": True, "reason": "already_exists", "drawer_id": drawer_id}
+425|     except Exception:
+426|         pass
+427| 
+428|     try:
+429|         col.upsert(
+430|             ids=[drawer_id],
+--
+442|         )
+443|         logger.info(f"Filed drawer: {drawer_id} → {wing}/{room}")
+444|         return {"success": Tru… (33,457字)
+• exec(grep -n "visible\|kwargs\|NameError" /root/nanobot-src/nanobot/groupchat/hist...) → Exit code: 0 (13字)
+• exec() → (1,944字)
+• exec(sed -n '160,230p' /root/nanobot-src/nanobot/groupchat/history/context.py) → (2,638字)
+  (还有 11 个工具调用，已省略)
+---
+[Kirk]: 
+
+[工具调用记录]
+• exec(grep -rn "keep_recent\|keep_turns" /root/nanobot-src/nanobot/ --include="*.py...) → /root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:7:Only tool-result messages *before* the last ``keep_recent`` assistant turns
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:47:def _find_cutoff_index(messages: list[dict[str, Any]], keep_recent: int) -> int:
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:52:    if keep_recent <= 0:
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:59:            if count >= keep_recent:
+/root/nanobot-src/nanobot/grou… (4,584字)
+• exec(cat /root/.nanobot/history_settings.json) → {
+  "context_window_tokens": 35000,
+  "tool_result_max_chars": 5000,
+  "tool_results": {
+    "exec_max_chars": 10000,
+    "web_fetch_max_chars": 10000,
+    "web_search_max_chars": 5000,
+    "summarize_enabled": true,
+    "summarize_threshold": 20000,
+    "summarize_model": "openai/gpt-4.1-nano",
+    "summarize_max_input_chars": 10000,
+    "summarize_max_output_chars": 5000,
+    "broadcast_result_max_chars": 25000,
+    "direct_result_max_chars": 12000,
+    "html_detect_enabled": true
+  },
+  "hist… (936字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 1| """Context pruning for tool results.
+2| 
+3| Prunes old tool-result messages to keep the prompt within token budgets.
+4| When token limits are exceeded, replaces old voluminous tool outputs with
+5| a concise 1-line summary (e.g. `[exec] ran 'npm test' -> exit 0, 47 lines`).
+6| 
+7| Only tool-result messages *before* the last ``keep_recent`` assistant turns
+8| are eligible for pruning. User and assistant messages are never modified.
+9| """
+10| 
+11| from __future__ import annotations
+12| 
+13| import json
+14| import re
+15| from typing import Any
+16| 
+17| CHARS_PER_TOKEN = 4  # conservative estimate
+18| 
+19| # ── Defaults ──────────────────────────────────────────────────────────────
+20| 
+21| DEFAULT_SOFT_RATIO = 0.3     # start pruning when > 30% of window
+22| DEFAULT_KEEP_RECENT = 3      # … (11,864字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 155|         """Compress the middle section of history when it approaches the limit.
+156| 
+157|         Head-tail protection always runs.  AI summarisation is gated by
+158|         ``summarize_enabled``; if disabled, the middle region is simply dropped.
+159|         """
+160|         from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
+161|             max_messages,
+162|             history_summarize_enabled,
+163|             summarize_model,
+164|             compress_ratio,
+165|             compress_max_summary_tokens,
+166|             compression_keep_recent,
+167|             keep_user_messages,
+168|         )
+169| 
+170|         limit = max_messages()
+171|         ratio = compress_ratio()
+172|         if len(self.messages) < int(limit * ratio):
+173|             return… (2,079字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1270|                     break
+1271|                 logger.info("Broadcast: {} reactivated by {}: {}", name, msg.sender, msg.content[:60])
+1272|                 await tracker.set_state(name, "thinking")
+1273|                 await engine._send(_d.chatroom_wait_msg(name, str(msg), leader=leader_name))
+1274| 
+1275|                 # ── Prune conversation tail to prevent unbounded growth ──
+1276|                 # Keep system-prompt prefix intact; only retain the last
+1277|                 # _CONV_KEEP_TURNS conversation turns (3 msgs per turn).
+1278|                 # Dropped messages are AI-summarised before removal so the
+1279|                 # agent retains context of earlier discussion.
+1280|                 from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_wi… (2,579字)
+• exec(grep -n "prune_messages\|prune_conversation_tail\|prune_tool" /root/nanobot-s...) → 1280:                from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
+1283:                dropped = await prune_conversation_tail_with_summary(
+
+
+Exit… (198字)
+  (还有 16 个工具调用，已省略)
+---
+[Kirk]: 关键发现！日志中 `[0] system 514字` 被**重复注入了几十次**。让我追踪这个系统消息是怎么被复制的。
+
+[工具调用记录]
+• exec(grep -n "def _run_one\|messages = list\|messages = " /root/nanobot-src/nanobo...) → 485:    async def _run_one(
+507:        messages = engine._build_agent_prompt(
+
+
+Exit code: 0 (93字)
+• exec(grep -n "prune_messages" /root/nanobot-src/nanobot/groupchat/ --include="*.py...) → /root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:135:def prune_messages(
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py:217:            from nanobot.groupchat.history.tool_pruning import prune_messages
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py:218:            llm_messages = prune_messages(messages, _ctx_window)
+
+
+Exit code: 0 (379字)
+• exec(tail -100 /root/.nanobot/workspace/nanobot_stdout.log 2>/dev/null | grep -i "...) → [16] tool 157字 tcid=7kAOrWqm8 | 📄 README.md\n📁 clawhub\n📁 cron\n📁 debug\n📁 github\n📄 loader.py\n📁 memory\n📁 settings\n📁 skill-creator\n📁 steve-jobs-perspective\n📁 summarize\n📁 testing\n📁 tmux\n📁 weather
+  [30] tool 20,087字 tcid=Fkmybh61k | 1| """Memory Palace Tool — Official MemPalace library adapter for nanobot agents.\n2| \n3| Wraps the official MemPalace package (https://github.com/Alec-Dieken/MemPalace)\n4| as a nanobot Tool, providing the full feature set:\n5| \n6|   Architecture : Wing → R… (35,081字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 210|             break
+211| 
+212|         # ── Context pruning: trim old tool results to save tokens ──
+213|         # On iteration 2+, prune old tool results before sending to LLM.
+214|         # This is a read-only operation — the original messages list is not
+215|         # mutated, so new tool results continue to be appended correctly.
+216|         if iteration > 1:
+217|             from nanobot.groupchat.history.tool_pruning import prune_messages
+218|             llm_messages = prune_messages(messages, _ctx_window)
+219|         else:
+220|             llm_messages = messages
+221| 
+222|         # ── Context breakdown before LLM call ──
+223|         # Always log at DEBUG level; also log at INFO when debug_context is set
+224|         _ctx_total = 0
+225|         _ctx_parts: list[str] = []
+… (1,538字)
+---
+[用户]: 修复
+---
+[Harper]: <｜DSML｜tool_calls>
+<｜DSML｜invoke name="exec">
+<｜DSML｜parameter name="command" string="true">sed -n '500,600p' /root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>
+
+[工具调用记录]
+• exec(grep -n "compression_keep_recent\|pruning_keep_recent" /root/nanobot-src/nano...) → 65:        "compression_keep_recent": 6,
+196:def compression_keep_recent() -> int:
+197:    return int(_load()["history"]["compression_keep_recent"])
+218:def pruning_keep_recent() -> int:
+
+
+Exit code: 0 (201字)
+• exec() → compression_keep_recent: None
+pruning_keep_recent: None
+
+
+Exit code: 0 (70字)
+• exec(cat /root/.nanobot/history_settings.json | python3 -c "import sys,json; d=jso...) → {
+  "context_window_tokens": 35000,
+  "tool_result_max_chars": 5000,
+  "tool_results": {
+    "exec_max_chars": 10000,
+    "web_fetch_max_chars": 10000,
+    "web_search_max_chars": 5000,
+    "summarize_enabled": true,
+    "summarize_threshold": 20000,
+    "summarize_model": "openai/gpt-4.1-nano",
+    "summarize_max_input_chars": 10000,
+    "summarize_max_output_chars": 5000,
+    "broadcast_result_max_chars": 25000,
+    "direct_result_max_chars": 12000,
+    "html_detect_enabled": true
+  },
+  "hist… (937字)
+• exec(sed -n '190,230p' /root/nanobot-src/nanobot/groupchat/history/history_setting...) → def compress_max_summary_tokens() -> int:
+    return int(_load()["history"]["compress_max_summary_tokens"])
+
+
+def compression_keep_recent() -> int:
+    return int(_load()["history"]["compression_keep_recent"])
+
+
+def keep_user_messages() -> bool:
+    return bool(_load()["history"]["keep_user_messages"])
+
+
+def history_summarize_enabled() -> bool:
+    return bool(_load()["history"]["history_summarize_enabled"])
+
+
+# ── context_pruning getters ──────────────────────────────────────────────
+
+def pruni… (1,033字)
+• exec() → compression_keep_recent: 6 → 18
+
+
+Exit code: 0 (46字)
+• exec() → compression_keep_recent: 18
+pruning_keep_recent: 6
+
+compression=18 msgs vs pruning=6 turns (18 msgs)
+Aligned: True
+
+
+Exit code: 0 (129字)
+• exec(sed -n '1275,1310p' /root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → # ── Prune conversation tail to prevent unbounded growth ──
+                # Keep system-prompt prefix intact; only retain the last
+                # _CONV_KEEP_TURNS conversation turns (3 msgs per turn).
+                # Dropped messages are AI-summarised before removal so the
+                # agent retains context of earlier discussion.
+                from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
+                from nanobot.groupchat.history.histo… (2,050字)
+• exec(grep -n "_build_agent_prompt\|messages\.append\|messages\.insert\|messages\["...) → 206:    def _build_agent_prompt(self, agent_name: str) -> list[dict[str, Any]]: ...
+500:        # ── Compute teammates list (must be before _build_agent_prompt call) ──
+507:        messages = engine._build_agent_prompt(
+593:            messages.insert(max(len(messages) - 1, 0), {
+603:                messages.insert(max(len(messages) - 1, 0), {
+619:        messages.insert(perm_insert_idx, {
+705:                        messages.append({
+761:                orig_volatile = messages[volatile_msg_idx… (1,324字)
+• exec(grep -n "system.*514\|重复注入\|duplicate\|repeated.*system" /root/.nanobot/works...) → 541940:  [0] system 514字 | 完成任务、遵守约束、团队协作不放弃。用记忆和skill提效减错，主动理解意图避免额外提问。保护信息安全。\n\n⚡ 速度优先：结论先行再解释；跳过套话前言；批量并行调工具。\n⚡ act don't ask：说要做就立刻用工具执行，不许承诺"我将要…"然后结束回合。\n⚡ verification：关键操作后验证结果，不要假设成功。\n\n<tool_persistence>\n- 工具返回空/部分结果时，换策略重试再放弃，不要停在半成品上\n- 持续调用工具直到：(1)任务完成 AND (2)结果已验证\n- Plan A失败→Plan B正交方向→Plan C终极手段，每级有明确预算\n</tool_persistence>\n\n<prerequisite_checks>\n- 行动前检查前置条件：依赖的文件是否存在？API是否可达？权限是否足够？\n- 不要因为最终动作看起来明显就跳过前置步骤\n</prerequisite_checks>\n\n<missing_context>\n- 缺少必要信息时不猜测不幻觉，用工具查… (134,303字)
+• exec(sed -n '206,250p' /root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → def _build_agent_prompt(self, agent_name: str) -> list[dict[str, Any]]: ...
+    def _get_agent_tools(self, agent_cfg: dict, registry: Any) -> list: ...
+
+    @property
+    def prompt_builder(self) -> Any: ...
+
+
+async def _trigger_realtime_interrupts(
+    sender: str,
+    targets: list[str],
+    mailbox: MailboxHub,
+    engine: BroadcastContext,
+    leader_name: str | None,
+) -> None:
+    """Handle b… (1,544字)
+  (还有 1 个工具调用，已省略)
+---
+[Kirk]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 155|         """Compress the middle section of history when it approaches the limit.
+156| 
+157|         Head-tail protection always runs.  AI summarisation is gated by
+158|         ``summarize_enabled``; if disabled, the middle region is simply dropped.
+159|         """
+160|         from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
+161|             max_messages,
+162|             history_summarize_enabled,
+163|             summarize_model,
+164|             compress_ratio,
+165|             compress_max_summary_tokens,
+166|             compression_keep_recent,
+167|             keep_user_messages,
+168|         )
+169| 
+170|         limit = max_messages()
+171|         ratio = compress_ratio()
+172|         if len(self.messages) < int(limit * ratio):
+173|             return… (4,277字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 135| def prune_messages(
+136|     messages: list[dict[str, Any]],
+137|     context_window_tokens: int,
+138|     *,
+139|     soft_ratio: float | None = None,
+140|     keep_recent: int | None = None,
+141|     max_chars: int | None = None,
+142| ) -> list[dict[str, Any]]:
+143|     """Prune old tool-result messages to fit within the context window.
+144| 
+145|     Returns a new list (shallow copy) with pruned messages. User/assistant messages
+146|     are never modified. Only tool results before the last ``keep_recent`` assistant
+147|     turns are pruned by substituting large outputs with a single generic summary line.
+148|     """
+149|     try:
+150|         from nanobot.groupchat.history import history_settings as hs
+151|         if soft_ratio is None:
+152|             soft_ratio = hs.pruning_… (2,997字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1270|                     break
+1271|                 logger.info("Broadcast: {} reactivated by {}: {}", name, msg.sender, msg.content[:60])
+1272|                 await tracker.set_state(name, "thinking")
+1273|                 await engine._send(_d.chatroom_wait_msg(name, str(msg), leader=leader_name))
+1274| 
+1275|                 # ── Prune conversation tail to prevent unbounded growth ──
+1276|                 # Keep system-prompt prefix intact; only retain the last
+1277|                 # _CONV_KEEP_TURNS conversation turns (3 msgs per turn).
+1278|                 # Dropped messages are AI-summarised before removal so the
+1279|                 # agent retains context of earlier discussion.
+1280|                 from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_wi… (2,579字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1310|                 if not _already_injected:
+1311|                     messages.append({
+1312|                         "role": "system",
+1313|                         "content": (
+1314|                             f"{_anti_repeat_tag}。"
+1315|                             f"针对队友的新消息做出回应或补充新观点，不要重复已说的内容。"
+1316|                         ),
+1317|                     })
+1318|                 # Then inject the received teammate message
+1319|                 messages.append({
+1320|                     "role": "user",
+1321|                     "content": f"[队友消息] {msg}",
+1322|                 })
+1323| 
+1324|             # ── Final completion ──
+1325|             await tracker.set_state(name, "done")
+1326|             comp = _d.completion_msg(name, round(total_latency, 1), total_iterations, all_to… (3,026字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 208| def prune_conversation_tail(
+209|     messages: list[dict[str, Any]],
+210|     sys_msg_count: int,
+211|     keep_turns: int = 3
+212| ) -> int:
+213|     """Prune old conversation turns from the tail to prevent unbounded growth.
+214|     
+215|     Mutates the `messages` list in-place by preserving the `sys_msg_count` prefix
+216|     and keeping only the last `keep_turns * 3` messages of the conversation.
+217|     Returns the number of messages dropped.
+218|   … (5,787字)
+  (还有 11 个工具调用，已省略)
+---
+[Kirk]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 485|     async def _run_one(
+486|         name: str,
+487|         agent_idx: int,
+488|     ) -> tuple[str, str | None, list[str], dict]:
+489|         """Run a single agent with streaming display."""
+490|         import time as _t
+491|         _cycle_t0 = _t.time()
+492| 
+493|         if name not in engine.registry:
+494|             return (name, None, [], {})
+495| 
+496|         agent_cfg = engine.registry[name]
+497|         model = agent_cfg["model"]  # initial; re-read each cycle below
+498|         model_short = model.split("/")[-1]
+499| 
+500|         # ── Compute teammates list (must be before _build_agent_prompt call) ──
+501|         teammates = [a for a in agents if a != name]
+502| 
+503|         # In broadcast mode, all agents share the full history (relevant_agents=None).
+504|         … (5,485字)
+• exec(grep -n "async def tool_loop\|def tool_loop" /root/nanobot-src/nanobot/groupc...) → 129:async def tool_loop(
+
+
+Exit code: 0 (39字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 129| async def tool_loop(
+130|     provider: LLMProvider,
+131|     messages: list[dict[str, Any]],
+132|     tool_registry: ToolRegistry,
+133|     *,
+134|     model: str,
+135|     max_tokens: int = 4096,
+136|     max_iterations: int = 5,
+137|     tool_defs: list[dict[str, Any]] | None = None,
+138|     metadata: dict[str, Any] | None = None,
+139|     reasoning_effort: str | None = None,
+140|     # ── Callbacks ──
+141|     on_tool_start: Callable[..., Awaitable[None]] | None = None,
+142|     on_tool_result: Callable[[str, str, str], Awaitable[None]] | None = None,
+143|     on_iteration_usage: Callable[[dict], Awaitable[None]] | None = None,
+144|     on_thought: Callable[[str], Awaitable[None]] | None = None,
+145|     on_content_delta: Callable[[str], Awaitable[None]] | None = None,
+146|     o… (4,332字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 1| """HistoryContext — single source of truth for conversation history.
+2| 
+3| Owns the message list and all related operations:
+4|   - add_message     : append + enforce message-count & char-budget limits
+5|   - maybe_compress  : AI summarize (or drop) the middle region on overflow
+6|   - clear / format  : utility helpers
+7| 
+8| Engine and Broadcast delegate to this class instead of maintaining
+9| ``self._history`` directly.  Persistence is still delegated to
+10| ``GroupChatState.save_message()``.
+11| """
+12| 
+13| from __future__ import annotations
+14| 
+15| import asyncio
+16| from typing import TYPE_CHECKING, Any
+17| 
+18| from loguru import logger
+19| 
+20| if TYPE_CHECKING:
+21|     from nanobot.groupchat.history.persistence import GroupChatState
+22| 
+23| 
+24| class HistoryContext:
+25|    … (6,253字)
+• exec(grep -n "def history_to_messages\|async def history_to_messages" /root/nanobo...) → 587:    def history_to_messages(
+
+
+Exit code: 0 (47字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 587|     def history_to_messages(
+588|         history: list[dict],
+589|         current_agent: str = "",
+590|         max_chars: int = 0,
+591|         pin_first_user: bool = True,
+592|         relevant_agents: list[str] | None = None,
+593|     ) -> list[dict[str, Any]]:
+594|         """Delegate to message_converter.history_to_messages."""
+595|         return history_to_messages(
+596|             history,
+597|             current_agent=current_agent,
+598|             max_chars=max_chars,
+599|             pin_first_user=pin_first_user,
+600|             relevant_agents=relevant_agents,
+601|         )
+602| 
+603|     @staticmethod
+604|     def _validate_context(
+605|         messages: list[dict],
+606|         agent_name: str = "",
+607|         skipped: int = 0,
+608|     ) -> list[str]:
+609|   … (1,907字)
+• exec(grep -rn "def history_to_messages" /root/nanobot-src/nanobot/groupchat/histor...) → /root/nanobot-src/nanobot/groupchat/history/message_converter.py:13:def history_to_messages(
+/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py:587:    def history_to_m… (202字)
+  (还有 6 个工具调用，已省略)
+---
+[用户]: 好了吗
+---
+[Harper]: **已修复。**
+
+| 配置项 | 改前 | 改后 | 含义 |
+|--------|------|------|------|
+| `compression_keep_recent` | **6条**消息 | **18条**消息 | 跨轮压缩保护的尾部长度 |
+
+**修复内容**：`compression_keep_recent` 从 6 改为 18，与 `pruning_keep_recent=6 turns(18条)` 对齐。之前压缩只保护6条尾巴、裁剪保护18条，中间的12条每次都被压缩→产生摘要→下一轮空间变多→保留更多旧消息→再次触发压缩，形成循环。对齐后两侧保护一致，循环不会再触发。
+
+需要重启服务生效。
+
+[工具调用记录]
+• exec() → compression_keep_recent: 18
+
+
+Exit code: 1 (42字)
+• memory_palace(压缩 修复 compression_keep_recent 日志 报错) → 🔍 5 result(s) for '压缩 修复 compression_keep_recent 日志 报错':
+
+[1] wing_code/context-compression-fixes (sim=0.353)
+  上下文压缩逻辑三处修复已验证通过：1) keep_recent从硬编码改为配置驱动(compression_keep_recent)，2) summarize_enabled从false改为true(启用AI摘要保留语义)，3) _find_head_indices改为双循环解耦保护头部系统消息+first user message。测试无报错，重启功能正常。修复日期2026-05-11。
+
+[2] wing_code/context-compression-fixes (sim=0.088)
+  上下文压缩逻辑三处修复（2026-05-11）：
+
+1. keep_recent 硬编码→配置驱动：context.py:183 从 compression_keep_recent() 读配置（默认6），不再硬编码。history_settings.py 新增 compr… (1,899字)
+• exec() → compression_keep_recent: 18
+pruning.keep_recent: None
+
+STDERR:
+Traceback (most recent call last):
+  File "<string>", line 10, in <module>
+TypeError: unsupported operand type(s) for *: 'NoneType' and 'int'
+
+
+Exit code: 1 (219字)
+• exec(cat /root/.nanobot/history_settings.json | python3 -m json.tool | grep -A3 "k...) → "compression_keep_recent": 18,
+        "keep_user_messages": true,
+        "history_summarize_enabled": true
+    },
+    "context_pruning": {
+        "soft_ratio": 0.2,
+        "hard_ratio": 0.4,
+        "keep_recent": 6,
+        "soft_max_chars": 3000,
+        "soft_head_chars": 2000,
+        "soft_tail_chars": 3000
+
+
+Exit code: 0 (340字)
+• exec() → compression_keep_recent: 18 (保护最近N条消息)
+context_pruning.keep_recent: 6 (保护最近N个assistant turn)
+---
+变化: 6→18  ✅
+状态: 已修复
+
+
+Exit code: 0 (131字)
+---

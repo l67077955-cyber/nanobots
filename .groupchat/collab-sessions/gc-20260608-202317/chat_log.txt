@@ -1,0 +1,195 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 看看昨天和今天的代码版本
+---
+[系统]: ## 🧠 自动记忆检索（群聊开始时触发）
+当前用户输入: 看看昨天和今天的代码版本
+
+### 技术上下文 (wing_code) — 工具用法/方法/踩坑/技术结论
+## L2 — ON-DEMAND (5 drawers)
+  [tool-permissions-persistence] 工具权限设置持久化机制：Telegram /edit X tools 菜单切换后，写入本地JSON文件。单agent: ~/.nanobot/agents/<name>/config.json 的 tools 字段；全局默认: ~/.nanobot/nanobot_tools.json。重启后从文件读取，设置不丢失。
+  [context-compression-architecture] ## 上下文压缩架构 — 双层设计  ### 层级一：跨轮压缩 (HistoryContext.maybe_compress) - 位置: groupchat/history/context.py:146-250 - 触发: engine.py:1137, engine.py:951 - 作用对象: master 消息列表（破坏性操作） - 结构: Protected Head | Compressible Middle | Protected Tail - Head保护: _find_head_indices() 只保护 index_0 + first_user_msg - Tail保...
+  [nanobot-compression-thresholds] ## 压缩触发阈值（用户配置 ~/.nanobot/history_settings.json）  ### 工具输出摘要 (summarizer.py) - 触发条件：工具输出 > summarize_threshold 字符 - 用户配置：summarize_threshold = 20,000 字符 - 摘要输入上限：summarize_max_input_chars = 10,000 字符 (~4k tok) - 摘要输出上限：summarize_max_output_chars = 5,000 字符 - 模型：z-ai/glm-5.1  ### 历史上下文压缩 (context....
+  [nanobot-skills-inventory] nanobot 当前 skill 清单（2026-05-24确认）：共12个skill，位于 /root/nanobot-src/nanobot/skills/，全部完好。列表：clawhub, cron, debug, github, memory, settings, skill-creator, steve-jobs-perspective, summarize, testing, tmux, weather。另有 /root/.nanobot/skills/ 下 memory-palace 和 rag 两个旧 skill 未加载。workspace 下 skills/nuwa-s...
+  [send-photo-capability] 发图片能力确认（2026-05-24）：不存在独立的"发图片skill"。发图片功能通过 debug skill 的附属脚本 send_photo_cli.py 实现，位于 /root/nanobot-src/nanobot/skills/debug/scripts/send_photo_cli.py。5月3日创建（commit 11c678c），从未被删除。5月18日（commit 99eb8f6）将用法写入 debug/SKILL.md。使用方式：python3 send_photo_cli.py --chat-id $NANOBOT_CHAT_ID --image /path/to...
+
+---
+
+### 用户偏好 (wing_user) — 输出风格/交互习惯/格式偏好
+## L2 — ON-DEMAND (5 drawers)
+  [art-preferences] 用户艺术偏好：前卫×AI×材质感×极简。推荐5位核心艺术家：Refik Anadol（AI数据雕塑）、Mario Klingemann（GAN神经美学）、Sofia Crespo（AI生物纹理）、Memo Akten（生成艺术粒子物理）、Linda Dounia（AI推测性档案）。用户要求直接发图片不想自己搜索。
+  [preferences] 用户反馈：无法看到read_file的内容，只能看到直接发送到聊天的文本。以后发文件必须把内容直接输出在回复中，不能只给路径。
+  [file-transfer-limitation] 用户询问"发文件操作为什么不行"：当前agent环境没有文件传输/附件上传的原生能力，chatroom_send仅支持文本。替代方案：1)直接在回复中输出文件全文内容；2)上传到外部托管服务(pastebin/GitHub Gist)后给链接。
+  [memory-palace-search-issue] 用户反馈memory_palace搜索不到内容。诊断结果：搜索功能正常（60 drawers, 5 wings, ChromaDB 820KB）。常见原因：1)内容未store过 2)查询词与存储内容语义不匹配（ChromaDB是语义搜索非关键词匹配，部分结果sim为负数）3)recall指定room时可能返回空（已知bug）4)agent跳过store步骤。建议用户提供具体搜索关键词以便进一步诊断。
+  [system-capabilities-discussion] 用户自由讨论三个问题及结论（2026-05-23）：1)发文件操作不行：当前agent环境无文件传输/附件上传能力，chatroom_send仅支持文本，替代方案是直接在回复中输出文件全文或上传到外部托管服务；2)memory_palace搜索功能正常（60 drawers/5 wings/ChromaDB 820KB），搜不到的常见原因：内容未store过、语义不匹配、recall指定room的已知bug、agent跳过store步骤；3)用户说"发我"时agent会把搜索结果直接贴在聊天回复文本中，不会发送附件。
+
+---
+
+### 固定信息 (wing_agent) — 事实数据/发现/规则约定
+## L2 — ON-DEMAND (5 drawers)
+  [protocol-compliance] 用户反馈：agent工具调用时应严格遵守"先检索记忆再执行"协议，不能因为任务看起来是操作型就跳过记忆检索。2026-05-23用户明确指出此问题。正确流程：memory_palace search → 命中则直接用 → 未命中再走exec/read_file等。
+  [memory-search-sop] ## 记忆搜索标准操作流程（SOP）— 2026-05-24 用户制定  每个任务开始时，agent 必须按以下4个区块依次搜索记忆宫殿，全部完成后才开始执行任务：  ### 区块1：工具能力（Tool Capabilities） - 搜索词：`{任务关键词} skill tool 脚本 方法` - 目的：确认是否有现成 skill/脚本/工具可用，避免重复造轮子 - 例：用户要发图片 → 搜"图片发送 photo send" → 命中 send_photo_cli.py  ### 区块2：用户偏好（User Preferences） - 搜索词：`用户偏好 输出风格 交互习惯` - 目...
+  [protocol-compliance] ## Agent 协议遵守记录  2026-05-23：用户反馈 agent 跳过 memory_palace search 直接走 exec/read_file。 2026-05-24：用户制定记忆搜索SOP（4区块），存于 wing_agent/memory-search-sop。 解决方案：不再依赖 agent 自觉，改为结构化SOP强制执行。
+  [memory-store-protocol] ## 记忆存储协议（Store Protocol）— 2026-05-24 用户制定  ### 核心原则：存储即设计检索 记忆只能通过搜索获取。存入任何内容前，必须先回答：**"未来什么场景、用什么词能搜到这条？"** 如果答不上来，就不存。  ### 存储检查清单（每次 store 必须通过）  **1. 可搜索性验证** - 存入内容必须包含未来搜索时可能使用的关键词 - 必须同时覆盖中英文（ChromaDB embedding 对中英文都敏感） - 例：存"send_photo_cli.py"时，内容必须包含"发图片/图片发送/photo/send image/telegram图片...
+  [collaboration-lessons] 协作教训：end_discussion 前必须确保所有 agent 有过发言机会。如果 agent 刚创建还没进入 wait 状态，正确做法是等一轮让他们发言，而不是直接 disable 再 end。2026-05-26 发生过一次：用户说"看看是否能结束群聊"，Kirk 直接 disable 了 Harper 和 Lucas 然后强制 end_discussion，被用户指出错误。
+---
+[Retriever]: 记忆中有很多关于代码版本的历史信息。但我没有工具权限，需要请求有权限的队友帮忙查看昨天的 git 日志和 diff。
+
+让我先向 Kirk 汇报并请求帮助。
+
+[工具调用记录]
+• memory_palace(代码版本 git diff 昨天 今天 对比) → 🔍 10 result(s) for '代码版本 git diff 昨天 今天 对比':
+
+[1] wing_agent/discoveries-20260528 (sim=0.648)
+  ## 事实与数据
+- 代码对比基准版本：17-18号的稳定版（具体版本号未提供）
+- 近期主要变动内容包括：代码清理（删除调试脚本、临时文件）、新增完整pygame游戏代码、配置文件（.gitignore、.gitmodules）优化
+- 关键工具和文件：`memory_palace`相关工具（显示优化、内容检索）、`git log`和`git diff`命令用于版本差异比对
+- 代码差异范围：涉及多个目录和文件，差异内容主要为新增、删除和结构调整，未发现残留调用或明显断裂
+
+## 发现与洞察
+- 版本对比显示，主要变动为清理临时文件和调试脚本，功能性变更较少
+- 代码结构较为清晰，新增的pygame游戏代码完整合理
+- 变动中未发现残留调用链或import问题，说明代码整洁
+- 通过工具检索和diff比对，验证了代码变动的安全性和完整性
+- 版本差异比对工具（如`git diff`）已成…
+
+[… (4,565字)
+---
+[Harper]: ## 查询结果
+
+**6月7日~8日无新提交。** 最近一次提交：
+
+| 日期 | Commit | 说明 |
+|------|--------|------|
+| 2026-05-27 | `7e97d680` | feat(groupchat): auto memory recall + store + synthesis fixes |
+| 2026-05-26 | `3f04c590` | feat(groupchat): 工具可见性标注+跨agent工具调用压缩 |
+| 2026-05-26 | `ae2c1a26` | fix(groupchat): prevent content loss on leader end_discussion |
+
+距离今天（6月8日）最近活跃是**13天前**的代码版本。
+
+[工具调用记录]
+• memory_palace(git commit history 版本 代码变更) → 🔍 5 result(s) for 'git commit history 版本 代码变更':
+
+[1] wing_agent/discoveries-20260602 (sim=0.587)
+  ## 事实与数据
+- 当前代码版本：commit `39f1433`
+- 分支：`stable-20260527`
+- 最近稳定标签：`v-stable-20260523`
+- 版本比稳定标签多：8个commit
+- 最新提交时间：2026-05-27 21:33:48
+- 当前工作区状态：干净，无未提交修改
+
+## 发现与洞察
+- 当前版本为开发中状态，基于`stable-20260527`分支，包含最新8个commit，说明在稳定版本基础上有持续开发。
+- 版本管理采用git，版本信息可以通过`git log`和`git describe`准确获取，便于版本追踪和回溯。
+- 近期无新提交，说明项目在5月27日后进入相对稳定状态，适合进行版本发布或测试。
+
+## 规则与约定
+- 版本信息应通过git commit hash、分支名、标签和提交时间进行明确记录。
+- 版本比稳定标签多的co…… (2,309字)
+• exec(cd /root/nanobot-src && git log --oneline --since="2026-06-07" --until="2026-...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && git log --oneline -20) → 7e97d680 feat(groupchat): auto memory recall + store + synthesis fixes
+3f04c590 feat(groupchat): 工具可见性标注+跨agent工具调用压缩
+ae2c1a26 fix(groupchat): prevent content loss on leader end_discussion
+19e91046 fix(groupchat): eliminate agent deadlock from busy-replier misjudgment and infinite wait loops
+6b641659 fix(groupchat): 用户消息slot泄漏 — release时fallback到agent
+a36a8b66 Revert "fix(context): self sees full tool logs, other agents see aged (no previews)"
+552e2abf fix(context): self sees full tool logs, oth… (1,500字)
+• exec(cd /root/nanobot-src && git log --oneline -20 --format="%h %ad %s" --date=short) → 7e97d680 2026-05-27 feat(groupchat): auto memory recall + store + synthesis fixes
+3f04c590 2026-05-26 feat(groupchat): 工具可见性标注+跨agent工具调用压缩
+ae2c1a26 2026-05-26 fix(groupchat): prevent content loss on leader end_discussion
+19e91046 2026-05-26 fix(groupchat): eliminate agent deadlock from busy-replier misjudgment and infinite wait loops
+6b641659 2026-05-25 fix(groupchat): 用户消息slot泄漏 — release时fallback到agent
+a36a8b66 2026-05-25 Revert "fix(context): self sees full tool logs, other agents see aged (… (1,720字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• memory_palace(代码版本 git 仓库路径 nanobot-src) → 🔍 5 result(s) for '代码版本 git 仓库路径 nanobot-src':
+
+[1] wing_code/nanobot-src-branches (sim=0.767)
+  nanobot-src 代码仓库结构（2026-05-31）：
+- 路径: /root/nanobot-src
+- 当前运行分支: progressive-fixes (d728ec6)
+- 远程: git@github.com:l67077955-cyber/nanobots.git
+- 本地分支: progressive-fixes(当前), dev(44440fb), main(f9a3195), rollback-to-stable-20260517, stable-20260517-plus-fixes
+- 远程落后本地dev 8个commit未推送
+- 安装方式: pip install -e . (editable)
+- 配置目录: /root/.nanobot (独立git仓库, 分支rollback-config-20260517)
+- 包版本: nanobot-ai 0…
+
+… (2,312字)
+• exec(cd /root/nanobot-src && git log --oneline --since="2026-06-07 00:00:00" --unt...) → 8000a664 fix(groupchat): allow non-leader agents to trigger rank-based interrupts
+4840e51b refactor: consolidate recent changes — mailbox leader interrupt, display tool_result_brief action param, remove autorecall/auto_store
+
+
+Exit code: 0 (239字)
+• exec() → 8000a664 2026-06-08 13:56:19 +0800 fix(groupchat): allow non-leader agents to trigger rank-based interrupts
+4840e51b 2026-06-08 12:18:37 +0800 refactor: consolidate recent changes — mailbox leader interrupt, display tool_result_brief action param, remove autorecall/auto_store
+---
+stable-20260527
+---
+7e97d680 feat(groupchat): auto memory recall + store + synthesis fixes
+
+
+Exit code: 0 (386字)
+• exec() → === 所有分支 ===
+* stable-20260527
+  remotes/nanobots/dev
+  remotes/nanobots/feat/groupchat-optimization
+  remotes/nanobots/main
+  remotes/nanobots/progressive-fixes
+  remotes/nanobots/stable-20260527
+  remotes/nanobots/upstream-main
+  remotes/upstream/codex/cli-image-artifacts
+  remotes/upstream/codex/desktop-cleanup
+  remotes/upstream/codex/desktop-cleanup-review-fixes
+  remotes/upstream/codex/feishu-mention-slash-command
+  remotes/upstream/codex/filesystem-workspace-policy
+  remotes/upstream/code… (2,578字)
+• exec() → === 远程分支最新状态 ===
+=== nanobots/dev 最新 ===
+7b2326ed 2026-06-06 13:23:07 +0800 fix: pre-tool_loop prune messages to prevent unbounded growth and timeouts
+44440fbe 2026-05-30 11:33:25 +0800 backup: current state before rollback to stable-2026-05-17
+68e702df 2026-05-28 10:08:37 +0800 auto_recall: show generated keywords in injected system message
+46331ca2 2026-05-28 10:03:40 +0800 display: show memory_palace content preview in Telegram
+7e9a50a8 2026-05-28 09:39:32 +0800 feat: show auto memory store s… (1,565字)
+• exec() → === 今天(6/8)的commits详情 ===
+commit 8000a66468407d462c54045ae55821672163b797
+Author: nanobot-dev <dev@nanobot.local>
+Date:   Mon Jun 8 13:56:19 2026 +0800
+
+    fix(groupchat): allow non-leader agents to trigger rank-based interrupts
+    
+    - Remove 'not leader_name' guard in _trigger_realtime_interrupts() that
+      short-circuited interrupt flow for all non-leader agents
+    - Add explicit interrupt_busy_agents() call after chatroom_send delivery
+    - Add Fix A: defer user messages when all age… (1,523字)
+• memory_palace() → ✅ Stored in wing_code/version-snapshot-20260608 (hidden)
+  Drawer ID: drawer_wing_code_version-snapshot-20260608_55a47e9efff2caccd8191183 (137字)
+• end_discussion() → ✅ 讨论已结束（原因: 信息已完整：今天2个本地commit、昨天无commit、当前运行版本状态已呈现），即将进入总结阶段 (62字)
+---
+[Kirk]: ## 结论
+
+**当前运行版本**：`stable-20260527` 分支，commit `7e97d680`（5月27日），pip `nanobot-ai 0.1.4.post5`。今天有2个新 commit 但未合并到当前分支。
+
+## 关键发现
+
+### 今天（6月8日）— 2个本地 commit（未合并）
+
+| Commit | 时间 | 说明 |
+|--------|------|------|
+| `8000a664` | 13:56 | **fix(groupchat)**: 允许非 leader agent 触发 rank-based 中断。移除 `_trigger_realtime_interrupts()` 中阻止非 leader 的 guard，新增 chatroom_send 后主动中断、延迟用户消息、抢救未读消息。改了 `broadcast.py` + `chatroom_tools.py`（+40/-1） |
+| `4840e51b` | 12:18 | **refactor**: 整合近期改动 — mailbox leader 中断、display tool_result_brief 参数、删除 autorecall/auto_store。删了 `_auto_memory.py`（275行）和 `_auto_recall.py`（68行），净删362行 |
+
+### 昨天（6月7日）— 无 commit
+
+### 远程分支最新
+- **nanobots/dev**: `7b2326ed`（6月6日）— fix: pre-tool_loop prune messages
+- **nanobots/upstream-main**: `73353785`（6月6日）— docs teardown + fix MCP 连接关闭
+
+## 备注
+- 今天2个 commit 是本地 commit，未推送远程，也未合并到当前运行的 `stable-20260527`
+- 当前运行版本落后最新开发约12天
+---

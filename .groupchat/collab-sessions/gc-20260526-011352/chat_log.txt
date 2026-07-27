@@ -1,0 +1,346 @@
+[用户]: 看看23号稳定版和上一个稳定版代码的区别，可能就知道原因
+---
+[Kirk]: 关键发现。现在看看 `__SUMMARY__` 是在什么条件下被放入队列的：
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git tag -l --format='%(refname:short) %(creatordate:i...) → v2.0-history-docs 2026-04-09 15:13:37 +0200
+v0.1.6-stable 2026-05-13 22:20:06 +0800
+v0.1.6 2026-05-13 22:20:06 +0800
+v0.1.5-stable 2026-05-13 22:20:44 +0800
+v0.1.5 2026-05-13 22:21:30 +0800
+v0.1.4.post8-stable 2026-05-05 10:00:00 +0800
+v0.1.4.post7-stable 2026-04-29 15:25:13 +0200
+v0.1.4.post6-stable 2026-04-03 17:33:21 +0200
+v0.1.4.post5-safe 2026-03-30 19:34:22 +0200
+v0.1.4.post5 2026-03-16 15:11:38 +0000
+
+
+Exit code: 0 (425字)
+• exec(cd /root/nanobot-src && git log --oneline v-stable-20260523..v-stable-2026051...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && git tag -l | grep -i stable | sort) → stable-2026-05-16
+stable-2026-05-17
+stable-pre-config-change
+stable/pre-history-settings-defaults-update
+v-stable-20260511
+v-stable-20260517
+v-stable-20260518
+v-stable-20260523
+v0.1.4.post6-stable
+v0.1.4.post7-stable
+v0.1.4.post8-stable
+v0.1.5-stable
+v0.1.6-stable
+
+
+Exit code: 0 (279字)
+• exec(cd /root/nanobot-src && git tag -l | grep -i "2026052[0-9]\|2026051[0-9]" | sort) → v-stable-20260511
+v-stable-20260517
+v-stable-20260518
+v-stable-20260523
+
+
+Exit code: 0 (86字)
+• exec(cd /root/nanobot-src && git log --oneline v-stable-20260518..v-stable-2026052...) → 66091eb feat: docless/untracked skill discovery + compact mode + frontmatter normalization
+778c00c fix(broadcast): allow leader to produce synthesis after end_discussion
+bede0b0 fix: reduce false-positive blocks in safety guard
+fc4f504 refactor: allow loopback URLs in exec guard, only block non-loopback private IPs
+3b9a145 test: update localhost test to reflect loopback-allow policy
+4ac4fda fix: cap _request_log at 1000 entries to prevent memory leak
+6f6e835 fix: restore exec/web_fetch/web_searc… (1,045字)
+• exec(cd /root/nanobot-src && git diff --stat v-stable-20260518 v-stable-20260523) → nanobot/channels/telegram/callbacks.py             |   2 +-
+ nanobot/cli/commands.py                            |  13 +-
+ nanobot/groupchat/display/display.py               |   2 +-
+ nanobot/groupchat/history/history_settings.py      |  16 --
+ nanobot/groupchat/history/message_converter.py     |  28 +++
+ nanobot/groupchat/history/prompt_builder.py        |  13 +-
+ nanobot/groupchat/history/tool_pruning.py          |  20 --
+ nanobot/groupchat/orchestra/broadcast.py           | 105 +++++++---
+ nan… (1,764字)
+• exec(cd /root/nanobot-src && git show 778c00c --stat && echo "===DIFF===" && git s...) → commit 778c00cad5a7527c36447aead73e65d9fda8103e
+Author: nanobot-dev <dev@nanobot.local>
+Date:   Wed May 20 19:35:28 2026 +0800
+
+    fix(broadcast): allow leader to produce synthesis after end_discussion
+    
+    Root cause: end_discussion sets engine._running=False, but the cycle
+    loop's top-of-loop guard (line 749) checked engine._running and
+    broke immediately. When synthesis quality/length checks forced a
+    retry (continue), the leader hit this guard and exited without
+    ever produc… (2,861字)
+• exec(cd /root/nanobot-src && git show 8e58eb1 --stat && echo "===DIFF===" && git s...) → commit 8e58eb18c21123aeabfb97a63ed6784cdc801b34
+Author: nanobot-dev <dev@nanobot.local>
+Date:   Thu May 21 22:15:03 2026 +0800
+
+    fix: end_discussion guard + display iterations label
+    
+    - chatroom_tools.py: remove 60s autowait polling, reject immediately
+      when non-leader agents are not in waiting state
+    - broadcast.py: only set _leader_ended_discussion flag when tool
+      actually succeeded (engine._running == False)
+    - display.py: change 'X轮' to 'X次迭代' to distinguish from
+  … (4,366字)
+• exec(cd /root/nanobot-src && git show 61b466d --stat && echo "===DIFF===" && git s...) → commit 61b466d510ed48272de6d1429cb467cc35207c2a
+Author: nanobot-dev <dev@nanobot.local>
+Date:   Fri May 22 13:21:56 2026 +0800
+
+    refactor: remove dead code, extract synthesis retry helper, deduplicate import
+    
+    1. engine.py: remove dead _find_head_indices (unused, context.py has the real version)
+    2. broadcast.py: extract _inject_retry helper, migrate both synthesis retry blocks (too short + quality fail) to use it
+… (7,151字)
+  (还有 7 个工具调用，已省略)
+---
+[Kirk]: 现在看 `end_discussion` 工具本身的实现——它是否触发 `request_summary`：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 810|     async def direct_chat(self, user_message: str) -> str | None:
+811|         """Send message to single active agent — delegates to direct_chat module."""
+812|         from nanobot.groupchat.orchestra.engine import direct_chat as _direct_chat
+813|         return await _direct_chat(self, user_message)
+814| 
+815|     def inject(self, message: str) -> None:
+816|         """Inject a user message into the chat loop (1+ agents)."""
+817|         # Lazy start: if any agents and loop not running, start it now
+818|         if not self._running and len(self._active_agents) >= 1:
+819|             self._start_group_loop()
+820|         if self._running:
+821|             self._input_queue.put_nowait(message)
+822| 
+823|     def request_summary(self) -> None:
+824|         """Request a discussion summ… (1,903字)
+• exec(cd /root/nanobot-src && grep -n "request_summary\|__SUMMARY__" nanobot/groupc...) → 1471:                if msg == "__SUMMARY__":
+
+
+Exit code: 0 (60字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1460|     _join_listener_running = True
+1461| 
+1462|     try:
+1463|         # ── User interjection listener ──
+1464| 
+1465|         async def _user_listener() -> None:
+1466|             while _user_listener_running:
+1467|                 try:
+1468|                     msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+1469|                 except asyncio.TimeoutError:
+1470|                     continue
+1471|                 if msg == "__SUMMARY__":
+1472|                     continue
+1473| 
+1474|                 all_agent_names = list(mailbox.agent_names)
+1475|                 await pool.allocate_user(all_agent_names)
+1476| 
+1477|                 mailbox.create("用户")
+1478|                 mailbox.send("用户", ["All"], msg)
+1479|                 # Interrupt any agents current… (1,467字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1490| 
+1491|         user_task = asyncio.create_task(_user_listener())
+1492| 
+1493|         # ── Mid-round agent join listener ──
+1494|         # Drains engine._pending_join_queue so agents added via /add during
+1495|         # an active round are spawned immediately rather than waiting for next round.
+1496| 
+1497|         async def _join_listener() -> None:
+1498|             nonlocal total
+1499|             while _join_listener_running:
+1500|                 try:
+1501|                     new_name = await asyncio.wait_for(
+1502|                         engine._pending_join_queue.get(), timeout=1.0
+1503|                     )
+1504|                 except asyncio.TimeoutError:
+1505|                     continue
+1506|                 # Skip if already running (duplicate notification) or engi… (3,512字)
+• exec(cd /root/nanobot-src && grep -n "__SUMMARY__\|generate_summary\|request_summa...) → 1471:                if msg == "__SUMMARY__":
+
+
+Exit code: 0 (60字)
+• exec(cd /root/nanobot-src && grep -n "__SUMMARY__\|generate_summary\|request_summa...) → nanobot/groupchat/orchestra/broadcast.py:1471:                if msg == "__SUMMARY__":
+nanobot/groupchat/orchestra/engine.py:823:    def request_summary(self) -> None:
+nanobot/groupchat/orchestra/engine.py:826:            self._input_queue.put_nowait("__SUMMARY__")
+nanobot/groupchat/orchestra/engine.py:1000:    async def _generate_summary(self) -> None:
+nanobot/groupchat/orchestra/engine.py:1002:        from nanobot.groupchat.orchestra.run_loop import generate_summary
+nanobot/groupchat/orchestra… (1,046字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 100|                     f"👤 {engine._active_agents[0]}"
+101|                 )
+102| 
+103|         if not any(m["sender"] == "系统" for m in engine._history):
+104|             engine._add_message("系统", f"话题：{engine._topic}")
+105| 
+106|         rounds = 0
+107|         while engine._running:
+108|             rounds += 1
+109| 
+110|             # Wait for user input (block until user sends something)
+111|             user_input = None
+112… (1,926字)
+  (还有 4 个工具调用，已省略)
+---
+[Kirk]: 现在看 broadcast 结束后，`end_discussion` 工具本身是否在内部调用了 `request_summary`：之前看到的 chatroom_tools.py 里 end_discussion 的实现只是设 `_running=False`。让我确认：
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git log --oneline v-stable-20260518..v-stable-20260523) → f0a51db feat(rank): rank-based tool call isolation for multi-agent context
+c5cfb74 chore: update litellm_provider
+61b466d refactor: remove dead code, extract synthesis retry helper, deduplicate import
+46cf083 fix(tool_loop): detect and break degenerate repetition loops
+f5f44dd fix(broadcast): end group chat when leader hits consecutive LLM errors
+8e58eb1 fix: end_discussion guard + display iterations label
+c734792 fix: restore head_indices/head_msgs recalculation in char-budget trimming
+6f6e835 … (1,045字)
+• exec(cd /root/nanobot-src && git diff --stat v-stable-20260518..v-stable-20260523) → nanobot/channels/telegram/callbacks.py             |   2 +-
+ nanobot/cli/commands.py                            |  13 +-
+ nanobot/groupchat/display/display.py               |   2 +-
+ nanobot/groupchat/history/history_settings.py      |  16 --
+ nanobot/groupchat/history/message_converter.py     |  28 +++
+ nanobot/groupchat/history/prompt_builder.py        |  13 +-
+ nanobot/groupchat/history/tool_pruning.py          |  20 --
+ nanobot/groupchat/orchestra/broadcast.py           | 105 +++++++---
+ nan… (1,764字)
+• exec(cd /root/nanobot-src && git show 778c00c --stat) → commit 778c00cad5a7527c36447aead73e65d9fda8103e
+Author: nanobot-dev <dev@nanobot.local>
+Date:   Wed May 20 19:35:28 2026 +0800
+
+    fix(broadcast): allow leader to produce synthesis after end_discussion
+    
+    Root cause: end_discussion sets engine._running=False, but the cycle
+    loop's top-of-loop guard (line 749) checked engine._running and
+    broke immediately. When synthesis quality/length checks forced a
+    retry (continue), the leader hit this guard and exited without
+    ever produc… (953字)
+• exec(cd /root/nanobot-src && git diff v-stable-20260518..v-stable-20260523 -- nano...) → diff --git a/nanobot/groupchat/orchestra/broadcast.py b/nanobot/groupchat/orchestra/broadcast.py
+index 874b8c0..962d75b 100644
+--- a/nanobot/groupchat/orchestra/broadcast.py
++++ b/nanobot/groupchat/orchestra/broadcast.py
+@@ -415,6 +415,9 @@ async def broadcast_round(
+     Returns:
+         List of (agent_name, content) tuples in completion order.
+     """
++    # Clear stale rank cache from previous round
++    if hasattr(broadcast_round, "_agent_ranks_cache"):
++        del broadcast_round._agent_… (10,183字)
+• exec(cd /root/nanobot-src && grep -n "__SUMMARY__\|request_summary\|generate_summa...) → 823:    def request_summary(self) -> None:
+826:            self._input_queue.put_nowait("__SUMMARY__")
+1000:    async def _generate_summary(self) -> None:
+1002:        from nanobot.groupchat.orchestra.run_loop import generate_summary
+1003:        await generate_summary(self)
+
+
+Exit code: 0 (290字)
+• exec(cd /root/nanobot-src && grep -n "__SUMMARY__\|request_summary\|generate_summa...) → 1471:                if msg == "__SUMMARY__":
+
+
+Exit code: 0 (60字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 820|         if self._running:
+821|             self._input_queue.put_nowait(message)
+822| 
+823|     def request_summary(self) -> None:
+824|         """Request a discussion summary."""
+825|         if self._running:
+826|             self._input_queue.put_nowait("__SUMMARY__")
+827| 
+828|     def stop(self) -> None:
+829|         """Stop the group loop but keep active agents."""
+830|         self._stop_group_loop()
+831|         try:
+832|             asyncio.ensure_future(self._disconnect_mcp())
+833|         except RuntimeError:
+834|             pass  # no event loop — shutdown scenario
+835| 
+836|     # ── Internal ─────────────────────────────────────────────
+837| 
+838|     def _resolve_agent_name(self, name: str) -> str | None:
+839|         """Case-insensitive agent name resolution."""
+840| … (1,280字)
+• exec(cd /root/nanobot-src && grep -n "end_discussion" nanobot/groupchat/orchestra/...) → 1080:        return "end_discussion"
+1116:                    "请在所有 agent 进入等待状态后，再次调用 end_discussion。"
+
+
+Exit code: 0 (118字)
+  (还有 6 个工具调用，已省略)
+---
+[Kirk]: 根因找到了。`broadcast.py` synthesis 显示条件从 `if content and not _used_chatroom_send` 改为 `if content`。
+
+**旧版（v-stable-20260518）**：Leader 在 `end_discussion` 前调了 `chatroom_send` → `_used_chatroom_send=True` → synthesis 被静默丢弃 → 用户看不到总结。
+
+**新版（v-stable-20260523）**：移除该条件，synthesis 始终显示。注释：`chatroom_send targets teammates, NOT the user. The final synthesis is the user's only delivery channel and must never be silently dropped.`
+
+所以"有时候有总结有时候没有"取决于 Leader 结束前是否用了 chatroom_send。23号版修了。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git diff v-stable-20260518..v-stable-20260523 --stat) → nanobot/channels/telegram/callbacks.py             |   2 +-
+ nanobot/cli/commands.py                            |  13 +-
+ nanobot/groupchat/display/display.py               |   2 +-
+ nanobot/groupchat/history/history_settings.py      |  16 --
+ nanobot/groupchat/history/message_converter.py     |  28 +++
+ nanobot/groupchat/history/prompt_builder.py        |  13 +-
+ nanobot/groupchat/history/tool_pruning.py          |  20 --
+ nanobot/groupchat/orchestra/broadcast.py           | 105 +++++++---
+ nan… (1,764字)
+• exec(cd /root/nanobot-src && git diff v-stable-20260518..v-stable-20260523 -- nano...) → diff --git a/nanobot/groupchat/orchestra/broadcast.py b/nanobot/groupchat/orchestra/broadcast.py
+index 874b8c0..962d75b 100644
+--- a/nanobot/groupchat/orchestra/broadcast.py
++++ b/nanobot/groupchat/orchestra/broadcast.py
+@@ -415,6 +415,9 @@ async def broadcast_round(
+     Returns:
+         List of (agent_name, content) tuples in completion order.
+     """
++    # Clear stale rank cache from previous round
++    if hasattr(broadcast_round, "_agent_ranks_cache"):
++        del broadcast_round._agent_… (10,183字)
+• exec(cd /root/nanobot-src && git diff v-stable-20260518..v-stable-20260523 -- nano...) → diff --git a/nanobot/groupchat/orchestra/tools/chatroom_tools.py b/nanobot/groupchat/orchestra/tools/chatroom_tools.py
+index 2c9dab2..afb7b30 100644
+--- a/nanobot/groupchat/orchestra/tools/chatroom_tools.py
++++ b/nanobot/groupchat/orchestra/tools/chatroom_tools.py
+@@ -1102,7 +1102,7 @@ class EndDiscussionTool(Tool):
+         }
+ 
+     async def execute(self, reason: str = "", **kwargs: Any) -> str:
+-        # ── Autowait guard: if any non-leader agent is busy, wait for them ──
++        # ── Guard… (1,825字)
+• exec(cd /root/nanobot-src && git diff v-stable-20260518..v-stable-20260523 -- nano...) → diff --git a/nanobot/groupchat/orchestra/engine.py b/nanobot/groupchat/orchestra/engine.py
+index c4de29c..0d22979 100644
+--- a/nanobot/groupchat/orchestra/engine.py
++++ b/nanobot/groupchat/orchestra/engine.py
+@@ -904,16 +904,6 @@ class GroupChatEngine:
+     def _session_dir(self, value: Path | None) -> None:
+         self._state.session_dir = value
+ 
+-    @staticmethod
+-    def _find_head_indices(history: list[dict]) -> set[int]:
+-        """Identify head protection indices: index 0 + first user… (1,778字)
+• exec(cd /root/nanobot-src && git diff v-stable-20260518..v-stable-20260523 -- nano...) → diff --git a/nanobot/groupchat/orchestra/tools/tool_loop.py b/nanobot/groupchat/orchestra/tools/tool_loop.py
+index 7a76984..81eb913 100644
+--- a/nanobot/groupchat/orchestra/tools/tool_loop.py
++++ b/nanobot/groupchat/orchestra/tools/tool_loop.py
+@@ -61,6 +61,9 @@ class ToolLoopResult:
+     tools_available: bool = False
+     """Whether tool definitions were provided for this call."""
+ 
++    degenerate_repetition: bool = False
++    """``True`` if the loop was terminated due to degenerate repetition… (4,701字)
+• exec(cd /root/nanobot-src && git diff v-stable-20260518..v-stable-20260523 -- nano...) → diff --git a/nanobot/groupchat/history/message_converter.py b/nanobot/groupchat/history/message_converter.py
+index 32898f1..76d859c 100644
+--- a/nanobot/groupchat/history/message_converter.py
++++ b/nanobot/groupchat/history/message_converter.py
+@@ -19,6 +19,12 @@ _TOOL_LOG_RE = re.compile(
+     re.DOTALL,
+ )
+ 
++# Matches the entire [工具调用记录]... block at the end of a message
++_TOOL_LOG_BLOCK_RE = re.compile(
++    r"\n*\[工具调用记录\].*$",
++    re.DOTALL,
++)
++
+ 
+ def age_tool_log(content: str) -> str:
+ … (4,562字)
+• exec(cd /root/nanobot-src && git diff v-stable-20260518..v-stable-20260523 -- nano...) → diff --git a/nanobot/groupchat/history/history_settings.py b/nanobot/groupchat/history/history_settings.py
+index be8fdd3..00e32a9 100644
+--- a/nanobot/groupchat/history/history_settings.py
++++ b/nanobot/groupchat/history/history_settings.py
+@@ -171,10 +171,6 @@ def direct_result_max_chars() -> int:
+     return int(_load()["tool_results"]["direct_result_max_chars"])
+ 
+ 
+-def html_detect_enabled(… (2,472字)
+  (还有 4 个工具调用，已省略)
+---

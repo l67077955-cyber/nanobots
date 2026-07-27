@@ -1,0 +1,71 @@
+[用户]: 先看看有没有未提交的代码
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git status) → HEAD detached from v-stable-20260511
+nothing to commit, working tree clean
+
+
+Exit code: 0 (89字)
+• exec(cd /root/nanobot-src && git diff --stat) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && git stash list) → stash@{0}: WIP on dev: 312760b fix(groupchat): 用户消息即时中断 busy agent
+stash@{1}: WIP on main: 61a9ff5 fix: agent rank/model list corruption defense in mailbox, broadcast, agent_loader, litellm_provider
+stash@{2}: On feat/groupchat-optimization: WIP: streaming fix + leader standby mode (2026-04-03 15:52)
+
+
+Exit code: 0 (316字)
+• exec(cd /root/nanobot-src && git status --porcelain) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && git branch -a) → * (HEAD detached from v-stable-20260511)
+  dev
+  main
+
+
+Exit code: 0 (68字)
+• exec() → === Stash 0 ===
+ nanobot/groupchat/history/context.py     | 29 ++++++++++++++++++++++++-----
+ nanobot/groupchat/history/persistence.py |  8 ++++++++
+ 2 files changed, 32 insertions(+), 5 deletions(-)
+
+diff --git a/nanobot/groupchat/history/context.py b/nanobot/groupchat/history/context.py
+index 670fa55..fa4ea1b 100644
+--- a/nanobot/groupchat/history/context.py
++++ b/nanobot/groupchat/history/context.py
+@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
+ 
+ from loguru import logger
+ 
++from n… (8,563字)
+---
+[Harper]: ## Git Status Report
+
+**Working Tree**: Clean — zero uncommitted/unstaged/staged changes.
+**Branch**: Detached HEAD (`v-stable-20260511`)
+**Local branches**: `dev`, `main`
+
+但是有 **3 个 stash** 里有未落地的修改：
+
+| Stash | Branch Base | Files Changed | What It Does |
+|-------|-------------|---------------|--------------|
+| `stash@{0}` | WIP on dev | `context.py`, `persistence.py` (+32/-5) | asyncio lock、可配置化 `keep_recent`、压缩后持久化到 history.json、skip is_summary 条目 |
+| `stash@{1}` | WIP on main | `engine.py` (+7/-1) | `inject()` 时打断忙碌 agent |
+| `stash@{2}` | feat/groupchat-optimization | `agent_runner.py` (+15/-5) | Leader 待命模式（120s 超时自动退出） |
+
+**结论**：当前工作树干净，但有意义的改进都在 stash 里躺着。如果需要应用它们，告诉我哪个 stash 或者全部 pop/appply。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git diff --stat --cached) → Exit code: 0 (13字)
+---
+[Kirk]: 工作树干净，无未提交代码。3 个 stash 存着未落地改动，详见上方表格。需要应用哪个告诉我。
+
+[工具调用记录]
+• chatroom_send(在 /root/nanobot-src/nanobot 目录下执行：
+1. `git status` — 看未提交的文件
+2. `git diff --stat) → (49字)
+• wait() → (719字)
+• end_discussion() → ✅ 讨论已结束（原因: 用户问题已回答：工作树干净，3个stash已列出。等待用户指示下一步。），即将进入总结阶段 (57字)
+• memory_palace() → ✅ Stored in wing_code/nanobot-git-status
+  Drawer ID: drawer_wing_code_nanobot-git-status_ee6d2991a58de6cef5e39a1f
+  Chars: 292
+  Hall: hall_facts (146字)
+---

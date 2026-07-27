@@ -1,0 +1,225 @@
+[用户]: kirk单独修改吧，其他agent不打扰
+---
+[Lucas]: 已发给 Kirk。等他回复。
+
+[工具调用记录]
+• chatroom_send(用户请求：工具调用可见性标注只由你单独修改，不打扰其他 agent。
+
+方案建议（最小改动）：
+1. `build_tool_log` 加 `viewer_ro) → (48字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• memory_palace(tool call visibility display broadcast view agent visible-to compressed) → 🔍 5 result(s) for 'tool call visibility display broadcast view agent visible-to compressed':
+
+[1] wing_code/tool-call-visibility-design (sim=-0.356)
+  工具调用可见性设计：
+
+当前状态：
+- build_tool_log（engine.py L1535）有 per-tool-type 截断（_PREVIEW_LIMITS），但无 per-agent-role 可见性
+- 所有 agent 看到同一份 tool log，无法差异化
+- UI 展示（broadcast_view.py）只给用户看，agent 之间通过 history 传递
+
+最小改动方案：
+1. engine.py L1551 加 _VISIBILITY 字典定义每个工具的默认可见范围
+2. build_tool_log 加 viewer_role 参数，按角色过滤工具条目
+3. broadcast.py L1130 调用时传入 viewer 角色
+4. broadcast_… (2,373字)
+• memory_palace(Self/Final rename Output broadcast.py 已完成改动) → 🔍 5 result(s) for 'Self/Final rename Output broadcast.py 已完成改动':
+
+[1] wing_code/self-final-rename-to-output (sim=0.105)
+  Self/Final 和 进展 [N] 标签已统一改名为 Output [N]。
+
+改动位置：broadcast.py L1235, L1308, L1211(注释)。
+- L1235: `target_label = f"Output [{cycle}]"` （原：Leader显示"进展 [N]"，队友显示"Self/Final"，现统一）
+- L1308: `target_label = f"Output [{cycle}]"` （原：Leader synthesis 重试路径）
+- L1211: 注释更新
+
+改名理由：Self/Final 语义模糊（Self=自己？Final=最终？），进展暗示进度汇报但实际只是未指定目标的默认输出。Output 精确描述事实，Leader 和队友统一用同一个词。
+
+[2] wing_code/self-f… (2,198字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/broadcast_view.py) → Error: offset 670 is beyond end of file (162 lines)
+
+[Analyze the error above and try a different approach.] (108字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 280| 
+281| 
+282| def tool_call_line(agent_name: str, tool_name: str, short_arg: str = "") -> str:
+283|     """Format a tool call for direct mode.
+284| 
+285|     Returns: '▸ Nanobot · search(Trump news)'
+286|     """
+287|     label = TOOL_LABELS.get(tool_name, tool_name)
+288|     arg = _shorten_path(short_arg) if short_arg else ""
+289|     return f"▸ {agent_name} · {label}({arg})"
+290| 
+291| 
+292| def tool_result_line(preview: str, result_len: int) -> str:
+293|     """Format a tool result for inline display.
+294| 
+295|     Returns: '↳ Results for: Trump… (1,234字)'
+296|     """
+297|     ellipsis = "…" if result_len > 80 else ""
+298|     return f"↳ {preview}{ellipsis} ({result_len:,}字)"
+299| 
+300| 
+301| # ── Tool Activity Display (broadcast mode) ───────────────────
+302| 
+303| def tool_activi… (5,066字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/broadcast_view.py) → 1| import time as _t
+2| import json as _json
+3| from typing import Any
+4| from loguru import logger
+5| from nanobot.groupchat.display import display as _d
+6| from nanobot.groupchat.orchestra.broadcast import _trigger_realtime_interrupts
+7| 
+8| class BroadcastView:
+9|     """Handles Telegram UI rendering for broadcast events."""
+10| 
+11|     def __init__(self, engine: Any, tracker: Any, mailbox: Any, pool: Any, search_pool: Any, agents: list[str], leader_name: str | None):
+12|         self.engine = engine
+13|         self.tracker = tracker
+14|         self.mailbox = mailbox
+15|         self.pool = pool
+16|         self.search_pool = search_pool
+17|         self.agents = agents
+18|         self.leader_name = leader_name
+19|         
+20|         # Per-agent states
+21|         self.pending_too… (7,149字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 1535| def build_tool_log(tool_calls_detail: list[dict[str, Any]]) -> str:
+1536|     """Build a tool call summary for conversation history.
+1537| 
+1538|     Appended to the assistant's content so the model can see what tools
+1539|     it previously called on the next turn.  Preview lengths vary by tool
+1540|     type — search/fetch results get longer previews (the model needs to
+1541|     remember *what* it found), while exec/chatroom keep it shorter.
+1542| 
+1543|     Total output is capped at ~4000 chars to prevent context bloat.
+1544| 
+1545|     Returns empty string if no tool calls were made.
+1546|     """
+1547|     if not tool_calls_detail:
+1548|         return ""
+1549| 
+1550|     # Per-tool preview length limits
+1551|     _PREVIEW_LIMITS = {
+1552|         "web_search": 1500,
+1553|     … (4,381字)
+  (还有 7 个工具调用，已省略)
+---
+[Kirk]: 完美。写入记忆：
+
+[工具调用记录]
+• exec(grep -n "build_tool_log" /root/nanobot-src/nanobot/groupchat/orchestra/broadc...) → 19:from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
+1035:                    history_content = (content or "") + build_tool_log(result.tool_calls_detail)
+1118:                        history_content = content + build_tool_log(result.tool_calls_detail)
+1248:                        _tool_data = build_tool_log(result.tool_calls_detail)
+1272:                        _tool_data = build_tool_log(result.tool_calls_detail)
+
+
+Exit code: 0 (458字)
+• exec(grep -n "build_tool_log" /root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 1134:                history_content = (content or "") + build_tool_log(_tool_details)
+1535:def build_tool_log(tool_calls_detail: list[dict[str, Any]]) -> str:
+
+
+Exit code: 0 (174字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1110|                         )
+1111|                     logger.info(
+1112|                         "Broadcast: ⚡ {} interrupted by {} mid-turn (cycle {})",
+1113|                         name, _sender_name, cycle,
+1114|                     )
+1115| 
+1116|                     # Save any partial content already produced this cycle
+1117|                     if content:
+1118|                         history_content = content + build_tool_log(result.tool_calls_detail)
+1119|                         engine._add_message(name, history_content)
+1120|                         search_pool.on_output(name)
+1121|                         # Don't re-display partial content — it may be incomplete/mid-thought
+1122| 
+1123|                     # NOTE: Do NOT prune messages here.  Keeping the full
+1124|         … (1,881字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1240|                 # If leader called end_discussion this cycle, validate synthesis length & quality.
+1241|                 if is_leader and _leader_ended_discussion:
+1242|                     stripped = content.strip() if content else ""
+1243|                     if len(stripped) < _MIN_SYNTHESIS_LEN:
+1244|                         logger.warning(
+1245|                         "Broadcast: leader {} synthesis too short ({} chars < {}), forcing retry",
+1246|                         name, len(stripped), _MIN_SYNTHESIS_LEN,
+1247|                         )
+1248|                         _tool_data = build_tool_log(result.tool_calls_detail)
+1249|                         _retry_prompt = get_system_warning("leader_end_without_text", name=name)
+1250|                         if _tool_data:
+1251|  … (2,718字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 1125|                         **stats)
+1126|             logger.info(
+1127|                 "direct_chat [{}] cycle {} result: content={}",
+1128|                 agent_name, cycle, content,
+1129|             )
+1130|             _tool_details = stats.get("tool_calls_detail", [])
+1131|             if content or _tool_details:
+1132|                 engine._add_message("用户", current_user_msg)
+1133|                 # Store content with tool call log so model sees its history
+1134|                 history_content = (content or "") + build_tool_log(_tool_details)
+1135|                 engine._add_message(agent_name, history_content)
+1136|                 # Bug 7 fix: run history compression in single-agent mode too
+1137|                 await engine._maybe_compress_history()
+1138|                … (1,250字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/broadcast_view.py) → 1| import time as _t
+2| import json as _json
+3| from typing import Any
+4| from loguru import logger
+5| from nanobot.groupchat.display import display as _d
+6| from nanobot.groupchat.orchestra.broadcast import _trigger_realtime_interrupts
+7| 
+8| class BroadcastView:
+9|     """Handles Telegram UI rendering for broadcast events."""
+10| 
+11|     def __init__(self, engine: Any, tracker: Any, mailbox: Any, pool: Any, search_pool: Any, agents: list[str], leader_name: str | None):
+12|         self.engine = engine
+13|         s… (7,149字)
+  (还有 8 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• wait() → (19字)
+• wait() → (19字)
+• wait() → (16字)
+---
+[Harper]: 收到。改动完成，Peter的指令——"kirk单独修改，其他agent不打扰"——已落地。结束。
+---
+[Lucas]: 还没说完？后半段在哪——是要存 tool call visibility 的哪个结论？
+---
+[Kirk]: ## 结论
+
+工具调用可见性标注已实现。每条工具调用现在会显示 `→ visible` 标注，明确谁能看到。
+
+## 改动
+
+**display.py**：
+- 新增 `_tool_visibility(tool_name, args, caller, leader, all_agents)` — 按工具类型返回可见 agent 列表
+- `tool_activity_msg()` 增加 `all_agents` 参数，渲染 `→ visible` 后缀
+
+**broadcast_view.py**：
+- L79 调用时传入 `all_agents=self.agents`
+
+## 渲染效果
+
+```
+▸ Kirk · 🔍 "Trump news"  → all
+▸ Kirk · 📄 test.py  → Kirk, Leader
+▸ Kirk · 📤 Harper  → Harper
+▸ Kirk · 🔧 disable(Lucas)  → Leader
+👑▸ Nanobot · 🏁 done  → Leader
+```
+
+## 备注
+
+这是 **UI 层标注**，不影响实际 history 传递（所有 agent 仍看到同一份 tool log）。后续如需真正隔离可见性，需在 `build_tool_log` 层按 viewer role 过滤条目。
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/tool-call-visibility (hidden)
+  Drawer ID: drawer_wing_code_tool-call-visibility_d7cf4308a32b66133052865c (127字)
+• end_discussion() → ✅ 讨论已结束（原因: 工具调用可见性标注已完成。display.py 新增 _tool_visibility() + tool_activity_msg() 渲染 visible-to 标注，broadcast_view.py 传入 all_agents。语法验证通过，功能测试通过。），即将进入总结阶段 (153字)
+---

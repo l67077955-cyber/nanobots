@@ -1,0 +1,113 @@
+[用户]: 继续对比2提交的其他方面，
+---
+[Kirk]: v-stable-20260518 → v-stable-20260523 共 13 个 commit，**8 个变更类别**：
+
+| # | 类别 | 关键 commit | 影响 |
+|---|------|------------|------|
+| 1 | **Synthesis 交付链修复** | `778c00c` `8e58eb1` `61b466d` | 修复"总结时有时无"根因：end_discussion 后允许 Leader 继续输出 synthesis；移除 chatroom_send 静默丢弃条件；retry 时注入工具数据 |
+| 2 | **Rank-based 工具隔离** | `f0a51db` | pawn→king 体系，高 rank agent 看不到低 rank 的 `[工具调用记录]`，文本消息不受影响 |
+| 3 | **end_discussion guard** | `8e58eb1` | 移除 60s autowait 轮询，改为立即拒绝，Leader 必须等所有 agent waiting |
+| 4 | **Leader 崩溃自动结束** | `f5f44dd` | Leader 连续 3 次 LLM 错误 → `_running=False`，防止其他 agent 挂起 |
+| 5 | **退化重复检测** | `46cf083` | 同一句连续 ≥3 次 → break + 截断尾部，`ToolLoopResult` 新增 `degenerate_repetition` |
+| 6 | **安全策略调整** | `fc4f504` `bede0b0` | 允许 loopback URL（localhost 不是 SSRF），只阻止非 loopback 私有 IP |
+| 7 | **内存泄漏 + 死代码** | `4ac4fda` `6f6e835` `61b466d` | `_request_log` 上限 1000；删除 6 个未用 getter + `_find_head_indices` |
+| 8 | **Skill 系统增强** | `66091eb` | compact mode（1行描述）、docless skill 发现、untracked script 发现 |
+
+**变更量最大**：broadcast.py（+105）、tool_loop.py（+75）、skills/loader.py（+60）
+
+**整体方向**：修复 synthesis 可靠性 → 加固稳定性 → 引入 rank 隔离 → 清理技术债
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git diff v-stable-20260518..v-stable-20260523 -- nano...) → diff --git a/nanobot/channels/telegram/callbacks.py b/nanobot/channels/telegram/callbacks.py
+index 48b03ad..f1f8c99 100644
+--- a/nanobot/channels/telegram/callbacks.py
++++ b/nanobot/channels/telegram/callbacks.py
+@@ -2806,7 +2806,7 @@ class CallbacksMixin:
+                 soul_dir.mkdir(parents=True, exist_ok=True)
+                 (soul_dir / "SOUL.md").write_text(prompt)
+                 config_path = soul_dir.parent / "config.json"
+-                config_data = {"model": model}
++           … (730字)
+• exec(cd /root/nanobot-src && git diff v-stable-20260518..v-stable-20260523 -- nano...) → diff --git a/nanobot/cli/commands.py b/nanobot/cli/commands.py
+index 842fc04..0016308 100644
+--- a/nanobot/cli/commands.py
++++ b/nanobot/cli/commands.py
+@@ -283,7 +283,7 @@ def gateway(
+     """Start the nanobot gateway."""
+     from nanobot.bus.queue import MessageBus
+     from nanobot.channels.manager import ChannelManager
+-    from nanobot.config.paths import get_cron_dir
++    from nanobot.config.paths import get_cron_dir, get_logs_dir
+     from nanobot.cron.service import CronService
+     fr… (1,186字)
+• exec() → diff --git a/nanobot/groupchat/display/display.py b/nanobot/groupchat/display/display.py
+index 1fc9471..72085c3 100644
+--- a/nanobot/groupchat/display/display.py
++++ b/nanobot/groupchat/display/display.py
+@@ -140,7 +140,7 @@ def completion_msg(
+         ]
+         parts.append(", ".join(tool_parts))
+     if iterations > 1:
+-        parts.append(f"{iterations}轮")
++        parts.append(f"{iterations}次迭代")
+     detail = " · ".join(parts)
+     icon = "👑✓" if leader == agent_name else "✓"
+     return… (5,225字)
+• exec(cd /root/nanobot-src && git diff v-stable-20260518..v-stable-20260523 -- nano...) → diff --git a/nanobot/skills/clawhub/SKILL.md b/nanobot/skills/clawhub/SKILL.md
+index 7409bf4..b8ad82b 100644
+--- a/nanobot/skills/clawhub/SKILL.md
++++ b/nanobot/skills/clawhub/SKILL.md
+@@ -1,6 +1,7 @@
+ ---
+ name: clawhub
+ description: Search and install agent skills from ClawHub, the public skill registry.
++always: false
+ homepage: https://clawhub.ai
+ metadata: {"nanobot":{"emoji":"🦞"}}
+ ---
+diff --git a/nanobot/skills/github/SKILL.md b/nanobot/skills/github/SKILL.md
+index 57d8127..dbe28b2 10064… (10,458字)
+• exec(cd /root/nanobot-src && git diff v-stable-20260518..v-stable-20260523 -- test...) → diff --git a/tests/test_broadcast_synthesis_fix.py b/tests/test_broadcast_synthesis_fix.py
+new file mode 100644
+index 0000000..d50bcfd
+--- /dev/null
++++ b/tests/test_broadcast_synthesis_fix.py
+@@ -0,0 +1,189 @@
++#!/usr/bin/env python3
++"""
++Test: broadcast.py synthesis display + retry prompt fix.
++
++Covers three bugs introduced in 5/13-5/14:
++1. _used_chatroom_send blocks synthesis display
++2. retry prompt lacks tool data → LLM can't produce content
++3. retry exhaustion silently releases empty c… (20,666字)
+• exec(cd /root/nanobot-src && git diff v-stable-20260518..v-stable-20260523 -- nano...) → diff --git a/nanobot/groupchat/history/message_converter.py b/nanobot/groupchat/history/message_converter.py
+index 32898f1..76d859c 100644
+--- a/nanobot/groupchat/history/message_converter.py
++++ b/nanobot/groupchat/history/message_converter.py
+@@ -19,6 +19,12 @@ _TOOL_LOG_RE = re.compile(
+     re.DOTALL,
+ )
+ 
++# Matches the entire [工具调用记录]... block at the end of a message
++_TOOL_LOG_BLOCK_RE = re.compile(
++    r"\n*\[工具调用记录\].*$",
++    re.DOTALL,
++)
++
+ 
+ def age_tool_log(content: str) -> str:
+ … (2,361字)
+• exec(cd /root/nanobot-src && git diff v-stable-20260518..v-stable-20260523 -- nano...) → diff --git a/nanobot/groupchat/orchestra/broadcast.py b/nanobot/groupchat/orchestra/broadcast.py
+index 874b8c0..962d75b 100644
+--- a/nanobot/groupchat/orchestra/broadcast.py
++++ b/nanobot/groupchat/orchestra/broadcast.py
+@@ -415,6 +415,9 @@ async def broadcast_round(
+     Returns:
+         List of (agent_name, content) tuples in completion order.
+     """
++    # Clear stale rank cache from previous round
++    if hasattr(broadcast_round, "_agent_ranks_cache"):
++        d… (10,183字)
+  (还有 7 个工具调用，已省略)
+---

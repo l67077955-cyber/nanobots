@@ -1,0 +1,470 @@
+[用户]: 检查现在的上下文压缩逻辑
+---
+[Kirk]: 现在我来检查一下 `history_settings.py`，以获取 `max_context_chars` 的配置：
+
+[工具调用记录]
+• memory_palace(context compression truncation history) → 🔍 5 result(s) for 'context compression truncation history':
+
+[1] wing_code/memory-architecture (sim=-0.529)
+  架构决策：memory.md 不能丢弃，应与 mempalace 分层共存。memory.md 保留 ≤300 chars 的运行时硬常量（服务器地址、管理员前缀、禁令等），其余知识全部存 mempalace。HISTORY.md 可废弃（空文件无价值）。mempalace 已有 30 docs / 11 wings，运行正常。
+
+[2] wing_kirk/diary (sim=-0.719)
+  MemPalace 功能测试日记：正在执行全面功能测试，验证 store/recall/search/kg/diary 等操作。
+
+[3] wing_code/mempalace-debug-20260511 (sim=-0.772)
+  ## MemPalace 0 drawers 根因 (2026-05-11)
+
+**现象**: memory_palace tool 调… (1,492字)
+• list_dir(/root/nanobot-src/nanobot/groupchat) → __init__.py
+config.py
+display/
+display/broadcast_view.py
+display/display.py
+display/streaming.py
+history/
+history/__init__.py
+history/agent_loader.py
+history/component_manager.py
+history/context.py
+history/context_validator.py
+history/history_settings.py
+history/message_converter.py
+history/persiste… (862字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 1| """HistoryContext — single source of truth for conversation history.
+2| 
+3| Owns the message list and all related operations:
+4|   - add_message     : append + enforce message-count & char-budget limits
+5|   - maybe_compress  : AI summarize (or drop) the middle region on overflow
+6|   - clear / format  : utility helpers
+7| 
+8| Engine and Broadcast delegate to this class instead of maintaining
+9| ``self._history`` directly.  Persistence is still delegated to
+10| ``GroupChatState.save_message()``.
+11| """
+12| 
+13| from __future__ import annotations
+14| 
+15| import asyncio
+16| from typing import TYPE_CHECKING, Any
+17| 
+18| from loguru import logger
+19| 
+20| if TYPE_CHECKING:
+21|     from nanobot.groupchat.history.persistence import GroupChatState
+22| 
+23| 
+24| class HistoryContext:
+25|    … (9,879字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 1| """Prompt construction for group chat agents.
+2| 
+3| Extracts all prompt-related logic from GroupChatEngine:
+4| - Component ordering and management
+5| - Template expansion
+6| - Per-agent and global overrides
+7| - History → messages conversion
+8| """
+9| 
+10| from __future__ import annotations
+11| 
+12| import json
+13| from pathlib import Path
+14| from typing import Any
+15| 
+16| from loguru import logger
+17| 
+18| import platform
+19| 
+20| from nanobot.utils.helpers import cn_now as _cn_now
+21| 
+22| from nanobot.groupchat.history.component_manager import get_system_warning
+23| from nanobot.groupchat.history.message_converter import history_to_messages
+24| from nanobot.groupchat.history.context_validator import validate_context
+25| 
+26| 
+27| # ── Constants ────────────────────────────────────… (12,371字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/component_manager.py) → 1| """System warning templates for idle/timeout enforcement."""
+2| 
+3| 
+4| # ── System Warning Templates ──────────────────────────────────
+5| 
+6| SYSTEM_WARNINGS: dict[str, str] = {
+7|     "idle": (
+8|         "[⚠️ 你（{name}）还没有采取任何行动！]\n"
+9|         "你必须立即使用工具（web_search, web_fetch, exec 等）来回答用户的最新问题。\n"
+10|         "不要直接从之前的对话中回答 — 用户需要新的搜索结果。\n"
+11|         "禁止调用 wait() — 先执行工作再交流。"
+12|     ),
+13|     "no_text_after_tools": (
+14|         "[⚠️ 你（{name}）完成了工具调用，但没有输出任何文字！]\n"
+15|         "请用自然语言总结工具执行结果，写出你的结论，让 Leader 和队友能看到你的输出。\n"
+16|         "禁止再调用工具，直接输出文字。"
+17|     ),
+18|     "leader_no_text_after_tools": (
+19|         "[⚠️ 你（{name}）完成了管理操作，但没有输出任何文字！]\n"
+20|         "请立即整合所有队友的发现，给出完整、结构化的最终答案。\n"
+21|         "这是你作为 Leader 的核心职责，禁止再调用工具，直接输出文字。"
+22|     ),
+23|     "leader_end_witho… (1,417字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/history_settings.py) → 1| """Centralized history, summarization, and context-pruning settings.
+2| 
+3| Loads ``~/.nanobot/history_settings.json`` once and exposes typed getters
+4| so that shell.py, summarizer.py, tool_loop.py, context_pruning.py,
+5| engine.py, broadcast.py, tool_chat.py, and the Telegram UI can all
+6| read the same configuration without hardcoding defaults.
+7| 
+8| Settings are organized into four sections:
+9| 
+10| - **T… (9,022字)
+  (还有 15 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -rn -l "compress\|summariz\|context.*window\|sli...) → nanobot/groupchat/history/message_converter.py
+nanobot/groupchat/history/tool_pruning.py
+nanobot/groupchat/history/history_settings.py
+nanobot/groupchat/history/result_processor.py
+nanobot/groupchat/history/persistence.py
+nanobot/groupchat/history/context_validator.py
+nanobot/groupchat/history/context.py
+nanobot/groupchat/history/raft/persistence.py
+nanobot/groupchat/orchestra/run_loop.py
+nanobot/groupchat/orchestra/engine.py
+nanobot/groupchat/orchestra/tools/tool_loop.py
+nanobot/groupchat/orche… (543字)
+• exec(cd /root/nanobot-src && grep -rn -l "compress\|summariz\|context.*cut\|early....) → Exit code: 0 (13字)
+• exec(ls /root/nanobot-src/nanobot/groupchat/history/) → __init__.py
+__pycache__
+agent_loader.py
+component_manager.py
+context.py
+context_validator.py
+history_settings.py
+message_converter.py
+persistence.py
+prompt_builder.py
+prompt_builder.py.bak3
+prompt_builder.py.bak4
+raft
+response_cleanup.py
+result_processor.py
+tool_pruning.py
+tool_storage.py
+
+
+Exit code: 0 (304字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 1| """HistoryContext — single source of truth for conversation history.
+2| 
+3| Owns the message list and all related operations:
+4|   - add_message     : append + enforce message-count & char-budget limits
+5|   - maybe_compress  : AI summarize (or drop) the middle region on overflow
+6|   - clear / format  : utility helpers
+7| 
+8| Engine and Broadcast delegate to this class instead of maintaining
+9| ``self._history`` directly.  Persistence is still delegated to
+10| ``GroupChatState.save_message()``.
+11| """
+12| 
+13| from __future__ import annotations
+14| 
+15| import asyncio
+16| from typing import TYPE_CHECKING, Any
+17| 
+18| from loguru import logger
+19| 
+20| if TYPE_CHECKING:
+21|     from nanobot.groupchat.history.persistence import GroupChatState
+22| 
+23| 
+24| class HistoryContext:
+25|    … (9,879字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context_validator.py) → 1| """Context validation for LLM message lists.
+2| 
+3| Validates message ordering, tool call visibility, compression integrity.
+4| Independent of prompt construction — pure diagnostic logic."""
+5| 
+6| from __future__ import annotations
+7| 
+8| from loguru import logger
+9| 
+10| 
+11| def validate_context(
+12|     messages: list[dict],
+13|     agent_name: str = "",
+14|     skipped: int = 0,
+15| ) -> list[str]:
+16|     """Validate a message list and return any warnings found."""
+17|     warnings: list[str] = []
+18|     tag = f"[ctx/{agent_name or '?'}]"
+19| 
+20|     def _warn(msg: str):
+21|         warnings.append(msg)
+22|         logger.warning("{}", msg)
+23| 
+24|     if not messages:
+25|         _warn(f"{tag} 上下文为空")
+26|         return warnings
+27| 
+28|     # ── 1. 顺序检查 ──
+29|     prev_role =… (2,443字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/history_settings.py) → 1| """Centralized history, summarization, and context-pruning settings.
+2| 
+3| Loads ``~/.nanobot/history_settings.json`` once and exposes typed getters
+4| so that shell.py, summarizer.py, tool_loop.py, context_pruning.py,
+5| engine.py, broadcast.py, tool_chat.py, and the Telegram UI can all
+6| read the same configuration without hardcoding defaults.
+7| 
+8| Settings are organized into four sections:
+9| 
+10| - **Top-level**: global limits (context window, tool result hard cap)
+11| - **tool_results**: per-tool truncation + AI summarization
+12| - **history**: conversation history window
+13| - **context_pruning**: iterative context pruning thresholds
+14| """
+15| 
+16| from __future__ import annotations
+17| 
+18| import json
+19| from pathlib import Path
+20| from typing import Any
+21| 
+22| from lo… (9,022字)
+• exec(cd /root/nanobot-src && grep -rn "maybe_compress\|context_pruning\|prune_hist...) → nanobot/groupchat/history/history_settings.py:4:so that shell.py, summarizer.py, tool_loop.py, context_pruning.py,
+nanobot/groupchat/history/history_settings.py:13:- **context_pruning**: iterative context pruning thresholds
+nanobot/groupchat/history/history_settin… (1,780字)
+  (还有 4 个工具调用，已省略)
+---
+[Harper]: 好，整条链路都理清了。来看全景图——
+
+## 上下文压缩架构（双层设计）
+
+### 🔷 层级一：跨轮压缩 — `HistoryContext.maybe_compress()`
+
+**位置**: `groupchat/history/context.py:146-250`
+**触发器**: `engine.py:1137`（下一轮开始前）、`engine.py:951`（其他时机）
+**作用对象**: master 消息列表本身（破坏性操作）
+
+```
+┌─ Protected Head ─┬─ Compressible Middle ─┬─ Protected Tail ─┐
+│ system prompt    │                       │                   │
+│ initial setup    │   这里被压缩或丢弃     │ 最后6条消息       │
+│ leader指令       │                       │                   │
+└──────────────────┴───────────────────────┴───────────────────┘
+```
+
+**两种策略**（按优先级）：
+1. **AI 摘要**（若 `summarize_enabled=true`）— 用指定模型生成 ≤500字中文摘要，插入为一条虚拟的系统消息标记 `[早期对话摘要（压缩了 N 条中间消息）]`
+2. **Fallback：直接丢掉中间区域**
+
+**阈值**: 仅当消息数 ≥ `max_messages × compress_ratio(=0.7)` 时才触发。例如 max=30，则在≥21条时激活。
+
+---
+
+### 🔶 层级二：轮内修剪 — `tool_pruning.prune_messages()`
+
+**位置**: `groupchat/history/tool_pruning.py:135-205`
+**触发器**: `tool_loop.py:216-218` — tool loop 的第2次及以上迭代
+**作用对象**: LLM入参副本（浅拷贝），不改动原始消息列表
+
+```
+对每条 tool result：
+  长度 > max_chars(≈3000) ?
+    ↓ yes
+  位于倒数 keep_recent(≈3)个 assistant turn之外?
+    ↓ yes
+  替换成一行摘要："[exec] ran npm test → exit 0, 47 lines"
+```
+
+这样后续迭代不会带着巨大的 stdout/stderr payload。
+
+---
+
+### 🔵 整体流程图
+
+```
+一轮对话结束
+    ↓
+engine._maybe_compress_history()
+    → HistoryContext.maybe_compress()
+        → IF msg_count > threshold (=21)
+            → AI摘要 OR Drop middle
+    
+下一轮的每一次 tool iteration (iteration ≥ 2)
+    ↓
+prune_messages(master_copy, ctx_window)
+    → IF total_chars > soft_ratio×char_window (=30%)
+        → 大体积旧 tool result → 一行摘要
+        
+LLM inference ← pruned copy
+```
+
+---
+
+### ⚙️ 当前配置值
+
+| Key | Value |
+|---|---|
+| `max_messages` | 30 |
+| `compress_ratio` | 0.7（触发门槛 ≈21条） |
+| `summarize_enabled` | **false** （所以只会drop，不做AI摘要） |
+| `soft_ratio` | 0.2 |
+| `hard_ratio` | 0.4 |
+| `keep_recent` (cross-round) | **6**（hardcoded in context.py:171） |
+| `keep_recent` (in-turn) | **3**（configurable via history_settings） |
+| context_window_tokens | 50,000 |
+
+---
+
+### ⚠️ 值得关注的点
+
+1. **两个 keep_recent不一致**: cross-round的是硬编码6(`context.py:171`)，in-turn的是配置驱动默认为3(`tool_pruning.py`)
+2. **summarize_enabled=false意味着middle区直接被扔掉**,不会有语义保留。如果要启用得配一个合适的 summarize_model
+3. **Head保护的判定函数**_find_head_indices我没看到实现细节——它在哪定义的？这决定了初始setup会不会意外被裁掉
+
+要不要我把这几个潜在问题的修复一起做了？比如统一 keep_recent、开启 summarize、审查 _find_head_indices？
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "_maybe_compress_history\|\.add_message\|prun...) → 273:        # self.history.add_message() or self.history.messages directly.
+920:        self.history.add_message(sender, content)
+951:    async def _maybe_compress_history(self) -> None:
+1137:                await engine._maybe_compress_history()
+
+
+Exit code: 0 (261字)
+• exec(cd /root/nanobot-src && grep -n "prune_" nanobot/groupchat/orchestra/tools/to...) → 217:            from nanobot.groupchat.history.tool_pruning import prune_messages
+218:            llm_messages = prune_messages(messages, _ctx_window)
+
+
+Exit code: 0 (165字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 240|                     "HistoryContext: AI compress failed: {}, falling back to drop", e
+241|                 )
+242| 
+243|         # ── 4b. Fallback: drop middle region ──
+244|         self.messages = head + tail
+245|         logger.info(
+246|             "HistoryContext: dropped {} middle messages (head: {}, tail: {})",
+247|             len(to_compress),
+248|             len(head),
+249|             len(tail),
+250|         )
+
+(End of file — 250 lines total) (463字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 290|                     reasoning_effort=reasoning_effort,
+291|                 )
+292|                 
+293|             if interrupt_event is not None:
+294|                 # Race the LLM call against the cooperative interrupt
+295|                 async def _wait_interrupt():
+296|                     await interrupt_event.wait()
+297|                     
+298|                 intr_task = asyncio.create_task(_wait_interrupt())
+299|                 llm_task = asyncio.create_task(_coro)
+300|                 
+301|                 try:
+302|                     done, pending = await asyncio.wait(
+303|                         [intr_task, llm_task],
+304|                         return_when=asyncio.FIRST_COMPLETED,
+305|                         timeout=call_timeout
+306|                     )
+307|  … (3,728字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 130|                 if available - c < 0:
+131|                     break
+132|                 tail.insert(0, m)
+133|                 available -= c
+134| 
+135|             # Rebuild: head first (preserving order), then tail
+136|             seen: set[int] = set()
+137|             rebuilt: list[dict] = []
+138|             for m in head_msgs + tail:
+139|                 if id(m) not in seen:
+140|                     rebuilt.append(m)
+141|                     seen.add(id(m))
+142|             self.messages = rebuilt
+143| 
+144|         self._state.save_message(sender, content, self.messages)
+145| 
+146|     async def maybe_compress(self) -> None:
+147|         """Compress the middle section of history when it approaches the limit.
+148| 
+149|         Head-tail protection always runs.  AI summarisa… (4,844字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 210|             break
+211| 
+212|         # ── Context pruning: trim old tool results to save tokens ──
+213|         # On iteration 2+, prune old tool results before sending to LLM.
+214|         # This is a read-only operation — the original messages list is not
+215|         # mutated, so new tool results continue to be appended correctly.
+216|         if iteration > 1:
+217|             from nanobot.groupchat.history.tool_pruning import prune_messages
+218|             llm_messages = prune_messages(messages, _ctx_window)
+219|         else:
+220|             llm_messages = messages
+221| 
+222|         # ── Context breakdown before LLM call ──
+223|         # Always log at DEBUG level; also log at INFO when debug_context is set
+224|         _ctx_total = 0
+225|         _ctx_parts: list[str] = []
+… (3,690字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 1| """Context pruning for tool results.
+2| 
+3| Prunes old tool-result messages to keep the prompt within token budgets.
+4| When token limits are exceeded, replaces old voluminous… (8,839字)
+  (还有 1 个工具调用，已省略)
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---

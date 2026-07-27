@@ -1,0 +1,36 @@
+[用户]: 我问你们之前是否已经是稳定版
+---
+[Kirk]: **结论：回退前不是稳定版。**
+
+| 时间 | 提交 | 说明 |
+|---|---|---|
+| 10:44 | `bb23ae3` | ✅ 稳定版 checkpoint |
+| 11:45 | `312760b` | ⚠️ cherry-pick 了「用户消息即时中断 busy agent」 |
+| 现在 | `bb23ae3` | 回退到稳定版 |
+
+回退前 HEAD 在 `312760b`，比稳定版多一个未验证的 cherry-pick。回退操作合理。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git reflog -10) → bb23ae3 HEAD@{0}: reset: moving to bb23ae3
+312760b HEAD@{1}: reset: moving to HEAD
+312760b HEAD@{2}: cherry-pick: fix(groupchat): 用户消息即时中断 busy agent
+bb23ae3 HEAD@{3}: checkout: moving from dev to dev
+bb23ae3 HEAD@{4}: checkout: moving from main to dev
+bb23ae3 HEAD@{5}: reset: moving to v-stable-20260511
+bb23ae3 HEAD@{6}: checkout: moving from main to main
+bb23ae3 HEAD@{7}: reset: moving to v-stable-20260511
+43adf6d HEAD@{8}: cherry-pick: fix: agent rank/model list corruption defense in mailbox,… (677字)
+• exec(cd /root/nanobot-src && git log --oneline --format="%h %ai %s" -5) → bb23ae3 2026-05-11 10:44:35 +0800 stable checkpoint before context compression fix
+9ea0e76 2026-05-09 12:54:59 +0800 fix(groupchat): 打断系统两处权限漏洞
+29957ff 2026-05-09 11:37:37 +0800 feat(groupchat): 打断通知显示等级标签 + 修复 sender 显示为 teammate 的 bug
+30d7454 2026-05-08 12:27:46 +0800 refactor: unify tool result truncation via result_processor.py
+11c678c 2026-05-07 16:22:50 +0800 stable: v0.1.4.post8-stable — early May 2026
+
+
+Exit code: 0 (427字)
+• exec(cd /root/nanobot-src && git log --oneline --format="%h %ai %s" 312760b -1) → 312760b 2026-05-11 11:45:45 +0800 fix(groupchat): 用户消息即时中断 busy agent
+
+
+Exit code: 0 (84字)
+• end_discussion() → ✅ 讨论已结束（原因: 问题已回答：回退前不是稳定版，多了一个cherry-pick提交312760b），即将进入总结阶段 (61字)
+---

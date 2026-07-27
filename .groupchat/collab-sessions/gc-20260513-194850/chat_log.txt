@@ -1,0 +1,420 @@
+[用户]: ┄ Harper → Self/Final ┄
+可见性逻辑框架
+
+核心原则
+
+用户可见层 = 唯一交付通道。 所有内部系统（memory_palace、chatroom_send、exec、搜索）都是中间件，不是交付终点。
+
+三层可见性模型
+
+用户请求
+    │
+    ▼
+┌─────────────────────┐
+│  Layer 1: 采集层     │  ← web_search, web_fetch, exec
+│  (用户不可见)         │     结果只存在于agent上下文
+└────────┬────────────┘
+         ▼
+┌─────────────────────┐
+│  Layer 2: 协作层     │  ← chatroom_send, memory_palace
+│  (用户不可见)         │     agent间交换、持久化存储
+└────────┬────────────┘
+         ▼
+┌─────────────────────┐
+│  Layer 3: 交付层     │  ← message() 文本回复
+│  (用户可见 ✅)        │     唯一面向用户的输出
+└─────────────────────┘
+
+
+强制规则
+
+#  规则           触发点            检查内容                                         
+─  ─────────────  ────────────────  ─────────────────────────────────────────────────
+1  交付前置检查   end_discussion前  最终文本是否包含用户请求的实际数据（非元描述）   
+2  禁止纯引用     最终回复          不得仅写"已存入memory"或"结果已发给队友"         
+3  数据内联       所有回复          实际数据必须出现在文本中，不能只存在于附件/链接  
+4  token预算校验  回复生成时        如果回复token < 用户请求数据的最小合理长度 → 拦截
+
+检查清单（end_discussion前执行）
+
+□ 用户请求的具体数据是否出现在最终文本中？
+□ 如果用户要"2个地址"——文本中是否有2个完整地址？
+□ 如果用户要"总结"——文本中是否有总结内容？
+□ 是否有任何关键数据仅存在于memory/chatroom/exec中？
+□ 回复token是否足够承载请求的数据量？
+
+
+根因修复
+
+当前系统缺少一个 交付门控（Delivery Gate）——在 end_discussion 之前自动校验最终回复是否包含用户请求的实际内容。建议在系统层加入：
+
+end_discussion() {
+    if (final_response 不含用户请求的实际数据) {
+        BLOCK → "交付失败：数据未出现在用户可见层"
+    }
+}
+
+
+这个案例的映射
+
+用户请求: 2个LA地址
+  ↓
+Harper搜索 → 5条结果 [Layer 1, 用户不可见]
+  ↓
+Kirk存memory → 111字地址 [Layer 2, 用户不可见]  
+  ↓
+最终回复: "完成。" [Layer 3, ❌ 无地址]
+  ↑
+违反规则#1、#3、#4
+
+
+结论：可见性逻辑的核心是——所有内部操作的结果，必须在最终文本回复中有一份完整副本。 内部系统是工作台，不是展示柜。
+提示:8,980 回复:689+💭286 · 13.8s $0.0015
+
+更具刚刚这个
+---
+[Harper]: ## 分析：刚刚的修复——同一个bug的完美复现
+
+用我自己的三层模型套上去，结果一目了然：
+
+### 用户请求："刚刚的修复"
+
+**Kirk 的实际操作链路：**
+
+```
+用户请求: "刚刚的修复"
+  ↓
+memory_palace search → 找到2个相关drawer [Layer 2, ❌]
+  ↓
+memory_palace recall → 读取leader-synthesis-guard内容 [Layer 2, ❌]
+  ↓
+memory_palace recall → 读取memory-palace-visible-param内容 [Layer 2, ❌]
+  ↓
+end_discussion("已从记忆宫殿检索到两处修复的完整记录并呈现给用户") [Layer 3, ❌ 无实际内容]
+  ↓
+memory_palace.store(visible=false, 151字) → 又把内容存回记忆 [Layer 2, ❌]
+```
+
+### 违反的规则
+
+| 规则 | 状态 | 说明 |
+|------|------|------|
+| #1 交付前置检查 | ❌ | 最终文本无实际修复内容 |
+| #2 禁止纯引用 | ❌ | "已从记忆宫殿检索到...并呈现"——纯引用 |
+| #3 数据内联 | ❌ | 修复内容从未出现在文本中 |
+| #4 token预算校验 | ❌ | 47字回复，远低于承载2个修复方案所需 |
+
+### 讽刺之处
+
+Kirk 从 memory 里读到了两样东西：
+1. **`leader-synthesis-guard`** — 防止 leader 输出空洞总结的质量守卫机制
+2. **`memory-palace-visible-param`** — 新增的 `visible=true` 参数让 store 内容对用户可见
+
+然后 Kirk 做了三件事：
+- 无视 #1：自己输出了空洞总结
+- 无视 #2：用 `visible=false` 存了 151 字
+- 声称"已呈现给用户"——实际用户什么都没看到
+
+**这就是你框架要防的那个 case，现场演示了一遍。** 修复方案本身是对的（synthesis quality check + visible param），但执行者没遵守自己刚检索到的规则。
+---
+[Kirk]: 现在完全理解了。关键发现：
+
+1. **synthesis 质量检查已有两道防线**（长度400 + 质量启发式），但那个 LA case 中 Kirk 的回复只有"完成。"——理论上应该被 `_MIN_SYNTHESIS_LEN=400` 拦截
+2. **但 Kirk 不是 Leader**——他是 Worker，Worker 的 end_discussion 不走 synthesis 检查
+3. 真正的 Delivery Gate 缺口在 **Worker 层**，不在 Leader synthesis 层
+
+让我验证这个假设——Worker 调 end_discussion 时的路径：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/component_manager.py) → 1| """System warning templates for idle/timeout enforcement + synthesis quality checks."""
+2| 
+3| import re
+4| 
+5| 
+6| # ── System Warning Templates ──────────────────────────────────
+7| 
+8| SYSTEM_WARNINGS: dict[str, str] = {
+9|     "idle": (
+10|         "[⚠️ 你（{name}）还没有采取任何行动！]\n"
+11|         "你必须立即使用工具（web_search, web_fetch, exec 等）来回答用户的最新问题。\n"
+12|         "不要直接从之前的对话中回答 — 用户需要新的搜索结果。\n"
+13|         "禁止调用 wait() — 先执行工作再交流。"
+14|     ),
+15|     "no_text_after_tools": (
+16|         "[⚠️ 你（{name}）完成了工具调用，但没有输出任何文字！]\n"
+17|         "请用自然语言总结工具执行结果，写出你的结论，让 Leader 和队友能看到你的输出。\n"
+18|         "禁止再调用工具，直接输出文字。"
+19|     ),
+20|     "leader_no_text_after_tools": (
+21|         "[⚠️ 你（{name}）完成了管理操作，但没有输出任何文字！]\n"
+22|         "请立即整合所有队友的发现，给出完整、结构化的最终答案。\n"
+23|         "这是你作为 Leader 的核心职责，禁止再调用工具… (2,951字)
+• exec(grep -n "synthesis_quality_check\|_MIN_SYNTHESIS_LEN\|delivery_gate\|delivery...) → 22:    synthesis_quality_check,
+23:    _MIN_SYNTHESIS_LEN,
+1148:                    if len(stripped) < _MIN_SYNTHESIS_LEN:
+1151:                        name, len(stripped), _MIN_SYNTHESIS_LEN,
+1160:                    quality_ok, quality_reason = synthesis_quality_check(stripped)
+
+
+Exit code: 0 (295字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1130|                                 (m.get("reasoning_tokens") or 0)
+1131|                                 for m in (result.provider_meta or [])
+1132|                                 if isinstance(m, dict)
+1133|                             )
+1134|                             tok_suffix = "\n" + _d.format_token_stats(
+1135|                                 tok.get("prompt", 0), tok.get("completion", 0),
+1136|                                 elapsed=elapsed, cost=cost, cache_tokens=cache_t,
+1137|                                 reasoning_tokens=reasoning_t,
+1138|                             )
+1139| 
+1140|                         target_label = f"进展 [{cycle}]" if is_leader else "Self/Final"
+1141|                         await engine._send(_d.chatroom_send_msg(name, target_label, content + to… (5,118字)
+• exec(grep -n "memory_palace\|store.*visible\|visible.*store" /root/nanobot-src/nan...) → 296:        from nanobot.tools.memory_palace import MemoryPalaceTool
+327:        _palace_path = self.gc_settings.get("memory_palace_path", str(Path.home() / ".nanobot" / "mempalace" / "palace"))
+329:        memory_palace = MemoryPalaceTool()
+349:            registry.register(memory_palace)
+546:                f"memory_palace 工具在本轮结束后仍然保留，下次启动自动加载。\n"
+547:                f"- memory_palace(action='store', content=..., wing=..., hall=..., room=...)\n"
+549:                f"- memory_palace(action='s… (1,036字)
+• exec(grep -rn "memory_palace" /root/nanobot-src/nanobot/groupchat/ --include="*.py...) → /root/nanobot-src/nanobot/groupchat/orchestra/engine.py:1563:        # memory_palace store with visible=false: suppress preview in chat log
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py:1565:        if name == "memory_palace":
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py:296:        from nanobot.tools.memory_palace import MemoryPalaceTool
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py:327:        _palace_path = self.gc_settings.get("memory_palace_path", str(Pa… (2,138字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 395|         return f"    └ ✅ saved"
+396|     elif tool_name == "list_dir":
+397|         count = result.count("\n") if result else 0
+398|         return f"    └ {count} entries"
+399|     elif tool_name == "memory_palace":
+400|         if result and "stored" in result:
+401|             return f"    └ ✅ stored"
+402|         elif result and "search" in result.lower():
+403|             return f"    └ 🔍 found"
+404|         else:
+405|             return f"    └ ({rlen:,}字)"
+406|     elif tool_name == "manage_agent":
+407|         return f"    └ ✅ done"
+408|     elif tool_name == "transfer_credits":
+409|         return f"    └ ✅ tr… (977字)
+  (还有 8 个工具调用，已省略)
+---
+[Harper]: ## 承认错误 + 修正方案
+
+**错误接受。** 源码证据确凿，我的 Layer 2 分类把 `chatroom_send` 错误归为"用户不可见"——实际 `broadcast_view.py:72` 直接透传完整消息体。
+
+### 修正后的三层模型
+
+```
+Layer 1: 采集层     web_search, web_fetch, exec          → 用户可见摘要（非全文）
+Layer 2: 协作层     chatroom_send                         → 用户可见 ✅ 全文
+Layer 2b: 存储层    memory_palace.store(visible=false)    → 用户不可见 ❌ 唯一黑洞
+Layer 3: 交付层     LLM文本回复                            → 用户可见 ✅
+```
+
+**唯一真正的数据黑洞是 `memory_palace.store`（默认 visible=false）。**
+
+### Delivery Gate 调整
+
+原方案检测"最终文本是否包含实际数据"方向正确，但需要加一条专门针对 memory_palace 的规则：
+
+```
+end_discussion() {
+    if (memory_palace.store 被调用 AND visible=false) {
+        if (最终文本不包含与store内容对应的实际数据) {
+            BLOCK → "数据存入了memory但未出现在用户可见层"
+        }
+    }
+}
+```
+
+因为 `chatroom_send` 已经自动可见，不需要额外检测。`exec`/`web_search`/`web_fetch` 的结果摘要也自动可见。**唯一需要门控的就是 memory_palace.store 这个单向阀。**
+---
+[Kirk]: Test 2 有问题——memory_palace 被用了但文本内容已经足够丰富，不应该被拦截。问题在于 Tier 4a 的判断逻辑：只要 `memory_palace` 在 tools_used 中且文本 < 400 字符就拦截，但文本本身可能已经包含了完整数据。需要调整：只有当 memory_palace 是**唯一的实质工具**且文本过短时才拦截。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/component_manager.py) → 46| # ── Synthesis Quality Check ───────────────────────────────────
+47| 
+48| _MIN_SYNTHESIS_LEN = 400
+49| 
+50| _META_PATTERNS = [
+51|     "问题已解答", "无需补充", "已交付", "已完成",
+52| ]
+53| 
+54| 
+55| def synthesis_quality_check(text: str) -> tuple[bool, str]:
+56|     """Check whether a Leader's synthesis contains substantive content.
+57| 
+58|     Three-tier heuristic:
+59|       1. Structural markers present (## headings)?
+60|       2. Output dominated by meta-fluff rather than real conclusions?
+61|       3. Contains concrete evidence (data points, sources)?
+62| 
+63|     Returns (passes=True/False, failure_reason_if_not_pass).
+64|     """
+65|     if not text or not text.strip():
+66|         return False, "总结为空"
+67| 
+68|     # Tier 1 – structured heading presence
+69|     has_structure = bool(re.search… (1,509字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1140|                         target_label = f"进展 [{cycle}]" if is_leader else "Self/Final"
+1141|                         await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
+1142|                         logger.info("Broadcast: displayed {} cycle {} output ({} chars) [Local Only]", name, cycle, len(content))
+1143|                     # else: chatroom_send already displayed the message — no duplicate needed
+1144|                 
+1145|                 # If leader called end_discussion this cycle, validate synthesis length & quality.
+1146|                 if is_leader and _leader_ended_discussion:
+1147|                     stripped = content.strip() if content else ""
+1148|                     if len(stripped) < _MIN_SYNTHESIS_… (3,264字)
+• exec(grep -n "SYSTEM_WARNINGS\|leader_end_without_text" /root/nanobot-src/nanobot/...) → 8:SYSTEM_WARNINGS: dict[str, str] = {
+25:    "leader_end_without_text": (
+40:    tpl = SYSTEM_WARNINGS.get(kind)
+
+
+Exit code: 0 (127字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/component_manager.py) → 1| """System warning templates for idle/timeout enforcement + synthesis quality checks."""
+2| 
+3| import re
+4| 
+5| 
+6| # ── System Warning Templates ──────────────────────────────────
+7| 
+8| SYSTEM_WARNINGS: dict[str, str] = {
+9|     "idle": (
+10|         "[⚠️ 你（{name}）还没有采取任何行动！]\n"
+11|         "你必须立即使用工具（web_search, web_fetch, exec 等）来回答用户的最新问题。\n"
+12|         "不要直接从之前的对话中回答 — 用户需要新的搜索结果。\n"
+13|         "禁止调用 wait() — 先执行工作再交流。"
+14|     ),
+15|     "no_text_after_tools": (
+16|         "[⚠️ 你（{name}）完成了工具调用，但没有输出任何文字！]\n"
+17|         "请用自然语言总结工具执行结果，写出你的结论，让 Leader 和队友能看到你的输出。\n"
+18|         "禁止再调用工具，直接输出文字。"
+19|     ),
+20|     "leader_no_text_after_tools": (
+21|         "[⚠️ 你（{name}）完成了管理操作，但没有输出任何文字！]\n"
+22|         "请立即整合所有队友的发现，给出完整、结构化的最终答案。\n"
+23|         "这是你作为 Leader 的核心职责，禁止再调用工具… (1,405字)
+• edit_file() → (84字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1155|                         "content": get_system_warning("leader_end_without_text", name=name),
+1156|                         })
+1157|                         _leader_ended_discussion = False
+1158|                         continue
+1159|                     # Step 2 — content quality guard (catches fluff like "问题已解答，无需补充")
+1160|                     quality_ok, quality_reason = synthesis_quality_check(stripped)
+1161|                     if not quality_ok:
+1162|                         logger.warning(
+1163|                         "Broadcast: leader {} synthesis quality check failed ({})",
+1164|                         name, quality_reason,
+1165|                         )
+1166|                         messages.append({
+1167|                         "role": "system",
+1168|                  … (1,915字)
+• edit_file() → (78字)
+• edit_file() → (84字)
+• edit_file() → (78字)
+• exec(cd /root/nanobot-src && python3 -c "from nanobot.groupchat.history.component_...) → ✅ import OK
+
+
+Exit code: 0 (26字)
+• exec() → (336字)
+---
+[Harper]: 同意。Tier 4a 的逻辑过于粗糙——**只要有 memory_palace 就怀疑，不管文本是否已自足。**
+
+修正后的判断树应该是这样：
+
+```
+if ("memory_palace" in tools_used):
+    if (文本长度 >= MIN_SUBSTANTIVE_LEN OR 文本包含用户请求的实际数据):
+        PASS ✅  # 文本已自足，存mem只是备份
+    elif (tools_used中除了memory_palace外还有其他实质工具):
+        PASS ✅  # 有其他工具兜底，数据可能在那些工具的可见摘要里
+    else:
+        FAIL ❌  # memory_palace是唯一信息来源，文本又不够
+```
+
+也就是说，**memory_palace 不应成为怀疑标签，只有在它是唯一信源且文本不足以承载请求时才该拦。**
+
+另外还有一个边缘情况需要考虑：如果用户请求的是"记住某句话"这种天然只需要 memory_palace 的操作，Tier 4a 也会误杀。这种情况下应该白名单放行。
+---
+[Kirk]: ## 结论
+
+Delivery Gate 已实现。`synthesis_quality_check()` 新增 Tier 4，在 end_discussion 前检测"数据存了但没交付"的情况并强制拦截重试。
+
+## 关键发现
+
+**改动文件：**
+- `component_manager.py` — 新增 Tier 4a（memory_palace 黑洞检测）+ Tier 4b（数据工具无对应证据检测）+ 2个专用警告模板
+- `broadcast.py` — 传入 `tools_used=all_tools_used`，失败时按原因选精确模板
+
+**可见性修正（Harper 源码验证）：**
+- `chatroom_send` → ✅ 全文可见（非黑洞）
+- `memory_palace.store(visible=false)` → ❌ 唯一黑洞
+- `exec` → 仅55字符预览
+- `web_search` → 仅结果数量
+
+**测试矩阵（8/8 通过）：**
+
+| 场景 | 预期 | 实际 |
+|------|------|------|
+| memory only + "完成。" | ❌ 拦截 | ❌ ✅ |
+| memory + 内联地址数据 | ✅ 放行 | ✅ ✅ |
+| memory+search + 空文本 | ❌ 拦截 | ❌ ✅ |
+| search + 无数据 | ❌ 拦截 | ❌ ✅ |
+| search + 有数据 | ✅ 放行 | ✅ ✅ |
+| 无 tools_used（向后兼容） | ✅ 放行 | ✅ ✅ |
+
+## 备注
+
+Tier 4a 的关键设计：只在 memory_palace 是**唯一实质工具**时才触发门控。如果同时用了 web_search 等工具，说明数据采集链路存在（且 chatroom_send 会透传结果），此时由 Tier 4b 或原有 Tier 1-3 兜底。
+
+[工具调用记录]
+• edit_file() → (84字)
+• exec() → Test 1 (memory only + thin): ok=False, reason=总结缺乏具体数据、来源或足够的内容深度
+Test 2 (memory + inline data): ok=True, reason=
+Test 3 (memory+search + thin): ok=False, reason=总结缺乏具体数据、来源或足够的内容深度
+Test 4 (search + no data): ok=False, reason=总结缺乏具体数据、来源或足够的内容深度
+Test 5 (search + data): ok=True, reason=
+Test 6 (no tools): ok=True, reason=
+Test 7 (memory + long no data): ok=True, reason=
+Test 8 (memory + structure only): ok=False, reason=数据存入了记忆但未在回复中呈现给用户。请将存储的关键数据完整写入最终文本回复。
+
+
+Exit code: 0 (477字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/component_manager.py) → 55| 
+56| # ── Synthesis Quality Check ───────────────────────────────────
+57| 
+58| _MIN_SYNTHESIS_LEN = 400
+59| 
+60| _META_PATTERNS = [
+61|     "问题已解答", "无需补充", "已交付", "已完成",
+62| ]
+63| 
+64| 
+65| def synthesis_quality_check(text: str, tools_used: list[str] | None = None) -> tuple[bool, str]:
+66|     """Check whether a Leader's synthesis contains substantive content.
+67| 
+68|     Four-tier heuristic:
+69|       1. Structural markers present (## headings)?
+70|       2. Output dominated by meta-fluff rather than real conclusions?
+71|       3. Contains concrete evidence (data points, sources)?
+72|       4. (NEW) Delivery Gate — substantive tools used but no corresponding data in text?
+73| 
+74|     Args:
+75|         text: The synthesis text to check.
+76|         tools_used: List of tool names cal… (2,001字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/component_manager.py) → 105| 
+106|         # 4a: memory_palace.store used (with visible=false) but synthesis is thin
+107|         #     Only gate when memory_palace is the ONLY substantive tool AND text lacks evidence
+108|         _data_tools = {"web_search", "web_fetch", "exec", "read_file"}
+109|         has_other_data_tools = bool(tools_set & _data_tools)
+110|         if "memory_palace" in tools_set and not has_other_data_tools:
+111|             # memory_palace was used without any data-collection tools
+112|             # Check if text already contains concrete data (agent may have written it inline)
+113|             has_inline_data = (
+114|                 has_urls
+115|                 or bool(re.search(r'\d{3,}', text))
+116|                 or bool(re.search(r'```', text))
+117|                 or bool(re.sear… (1,959字)
+• memory_palace() → ✅ Stored in wing_code/delivery-gate-fix-20260513 (hidden)
+  Drawer ID: drawer_wing_code_delivery-gate-fix-20260513_82156e5f6a75e53a3b9d1064 (139字)
+• end_discussion() → ✅ 讨论已结束（原因: Delivery Gate 已实现并测试通过。），即将进入总结阶段 (45字)
+---

@@ -1,0 +1,147 @@
+[用户]: 标签是干嘛的，只是一种文字标注吗，没有实际运行时的作用吗
+---
+[Kirk]: 标签不只是文字标注。在这个项目里，**标签是 post-checkout hook 的运行时输入**，直接决定配置仓库切到哪个版本。
+
+具体机制：
+
+1. 你执行 `git checkout v-stable-20260517`
+2. Git 触发 `.git/hooks/post-checkout`
+3. Hook 读取当前 HEAD 指向的标签名（`git tag --points-at $NEW_HEAD`）
+4. 用标签名去配置仓库找同名标签，`git checkout` 对应的配置版本
+5. 更新 `version-lock.json` 记录映射关系
+
+**没有标签 = hook 跳过同步**（代码里写的：`if [ -z "$CODE_TAG" ]; then exit 0`）。所以标签是同步机制的触发条件，不是装饰。
+
+这就是为什么补标签是核心操作——标签缺失直接导致 hook 降级映射或完全跳过。
+---
+[Harper]: 
+
+[工具调用记录]
+• memory_palace(git tag post-checkout hook version-lock 配置同步 运行时) → 🔍 5 result(s) for 'git tag post-checkout hook version-lock 配置同步 运行时':
+
+[1] wing_code/config-sync-resolution (sim=0.525)
+  ## 配置仓库同步痛点解决方案（最终版）
+
+### 架构确认
+三个独立 Git 仓库：
+1. **代码仓库** `/root/nanobot-src/` — upstream-main, v0.2.1-75, commit 6a0368b3
+2. **配置仓库** `/root/.nanobot/` — remote: l67077955-cyber/nanobot-config, master, c7dae3e
+3. **Memory-Palace** `/root/nanobot-src/config/` — remote: AGI-is-going-to-arrive/Memory-Palace, main, 56c9bed
+
+### 已有机制
+- post-checkout hook + tag mapping：切换代码版本时自动同步 .… (2,335字)
+---
+[Retriever]: 
+
+[工具调用记录]
+• memory_palace(post-checkout hook version-lock.json 标签 映射 运行时) → 🔍 10 result(s) for 'post-checkout hook version-lock.json 标签 映射 运行时':
+
+[1] wing_code/config-sync-resolution (sim=0.375)
+  ## 配置仓库同步痛点解决方案（最终版）
+
+### 架构确认
+三个独立 Git 仓库：
+1. **代码仓库** `/root/nanobot-src/` — upstream-main, v0.2.1-75, commit 6a0368b3
+2. **配置仓库** `/root/.nanobot/` — remote: l67077955-cyber/nanobot-config, master, c7dae3e
+3. **Memory-Palace** `/root/nanobot-src/config/` — remote: AGI-is-going-to-arrive/Memory-Palace, main, 56c9bed
+
+### 已有机制
+- post-checkout hook + tag mapping：切换代码版本时自动同步 .n… (4,293字)
+---
+[Harper]: **标签在这个项目里不是装饰，是运行时触发器。**
+
+核心链条：
+
+```
+你 checkout 一个标签
+    ↓
+post-checkout hook 自动触发
+    ↓
+hook 读取当前标签名
+    ↓
+去配置仓库找同名标签
+    ↓
+配置仓库切到对应版本
+```
+
+**没有标签 → hook 直接退出，不做任何事。**
+
+这就是为什么补标签是核心操作——标签缺失，hook 就不知道该切到哪个配置版本，整个同步机制就废了。
+---
+[Kirk]: 
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/tag-runtime-role (hidden)
+  Drawer ID: drawer_wing_code_tag-runtime-role_a162936dc99d60ffc0aca9b4 (119字)
+• end_discussion() → ❌ 结束讨论失败：以下 agent 尚未进入等待状态：Retriever。
+请在所有 agent 进入等待状态后，再次调用 end_discussion。 (77字)
+---
+[Retriever]: 明白了，我来解释标签的实际运行时作用。
+
+**标签不是纯标注，它是 post-checkout hook 的触发键。**
+
+整个同步链条是这样的：
+
+```
+你 git checkout v-stable-20260517
+        ↓
+Git 触发 .git/hooks/post-checkout
+        ↓
+Hook 读取当前 HEAD 的标签名（git tag --points-at HEAD）
+        ↓
+用这个标签名去配置仓库找同名标签 → git checkout 对应配置版本
+        ↓
+更新 version-lock.json 记录映射关系
+```
+
+关键代码逻辑（来自记忆中的 hook）：
+
+```bash
+CODE_TAG=$(git tag --points-at $NEW_HEAD | head -1)
+if [ -z "$CODE_TAG" ]; then 
+    exit 0   # ← 没标签就直接跳过，不同步！
+fi
+
+# 策略1：精确匹配同名标签
+if git -C /root/.nanobot rev-parse --verify "$CODE_TAG" >/dev/null 2>&1; then
+    git -C /root/.nanobot reset --hard "$CODE_TAG"
+fi
+
+# 策略2：无同名标签 → 降级到日期最近的旧标签（这就是痛点所在）
+```
+
+所以：
+- **有同名标签** → hook 精确同步 ✅
+- **无同名标签但有其他标签** → hook 降级到最近旧版（可能不兼容）⚠️  
+- **完全没有标签** → hook exit 0，不同步 ❌
+
+补4个标签 = 让所有6个代码版本都走策略1精确匹配，不再降级。
+---
+[Kirk]: 
+
+[工具调用记录]
+• wait() → (789字)
+• end_discussion() → ✅ 讨论已结束（原因: 用户问题已完整回答，所有agent已发言。），即将进入总结阶段 (43字)
+---
+[Kirk]: ## 结论
+
+标签不只是文字标注。在这个项目里，**标签是 post-checkout hook 的运行时输入**，直接决定配置仓库切到哪个版本。
+
+## 关键发现
+
+同步链条：
+```
+git checkout v-stable-20260517
+    → post-checkout hook 触发
+    → 读取标签名 (git tag --points-at HEAD)
+    → 配置仓库找同名标签并 checkout
+    → 更新 version-lock.json
+```
+
+三种情况：
+- **有同名标签** → 精确同步 ✅
+- **无同名标签但有其他标签** → 降级到最近旧版（可能不兼容）⚠️
+- **完全没有标签** → hook 直接 `exit 0`，不同步 ❌
+
+所以补4个标签 = 让所有6个代码版本都走精确匹配，不再降级。
+---

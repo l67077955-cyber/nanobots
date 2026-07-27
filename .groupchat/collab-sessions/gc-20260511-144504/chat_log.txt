@@ -1,0 +1,231 @@
+[系统]: 话题：自由讨论
+---
+[用户]: ┄ Harper → Self/Final ┄
+好，整条链路都理清了。来看全景图——
+
+上下文压缩架构（双层设计）
+
+🔷 层级一：跨轮压缩 — HistoryContext.maybe_compress()
+
+位置: groupchat/history/context.py:146-250
+触发器: engine.py:1137（下一轮开始前）、engine.py:951（其他时机）
+作用对象: master 消息列表本身（破坏性操作）
+
+┌─ Protected Head ─┬─ Compressible Middle ─┬─ Protected Tail ─┐
+│ system prompt    │                       │                   │
+│ initial setup    │   这里被压缩或丢弃     │ 最后6条消息       │
+│ leader指令       │                       │                   │
+└──────────────────┴───────────────────────┴───────────────────┘
+
+
+两种策略（按优先级）：
+1. AI 摘要（若 summarize_enabled=true）— 用指定模型生成 ≤500字中文摘要，插入为一条虚拟的系统消息标记 [早期对话摘要（压缩了 N 条中间消息）]
+2. Fallback：直接丢掉中间区域
+
+阈值: 仅当消息数 ≥ max_messages × compress_ratio(=0.7) 时才触发。例如 max=30，则在≥21条时激活。
+
+---
+
+🔶 层级二：轮内修剪 — tool_pruning.prune_messages()
+
+位置: groupchat/history/tool_pruning.py:135-205
+触发器: tool_loop.py:216-218 — tool loop 的第2次及以上迭代
+作用对象: LLM入参副本（浅拷贝），不改动原始消息列表
+
+对每条 tool result：
+  长度 > max_chars(≈3000) ?
+    ↓ yes
+  位于倒数 keep_recent(≈3)个 assistant turn之外?
+    ↓ yes
+  替换成一行摘要："[exec] ran npm test → exit 0, 47 lines"
+
+
+这样后续迭代不会带着巨大的 stdout/stderr payload。
+
+---
+
+🔵 整体流程图
+
+一轮对话结束
+    ↓
+engine._maybe_compress_history()
+    → HistoryContext.maybe_compress()
+        → IF msg_count > threshold (=21)
+            → AI摘要 OR Drop middle
+    
+下一轮的每一次 tool iteration (iteration ≥ 2)
+    ↓
+prune_messages(master_copy, ctx_window)
+    → IF total_chars > soft_ratio×char_window (=30%)
+        → 大体积旧 tool result → 一行摘要
+        
+LLM inference ← pruned copy
+
+
+---
+
+⚙️ 当前配置值
+
+Key                        Value                                 
+─────────────────────────  ──────────────────────────────────────
+max_messages               30                                    
+compress_ratio             0.7（触发门槛 ≈21条）                 
+summarize_enabled          false （所以只会drop，不做AI摘要）    
+soft_ratio                 0.2                                   
+hard_ratio                 0.4                                   
+keep_recent (cross-round)  6（hardcoded in context.py:171）      
+keep_recent (in-turn)      3（configurable via history_settings）
+context_window_tokens      50,000                                
+
+---
+
+⚠️ 值得关注的点
+
+1. 两个 keep_recent不一致: cross-round的是硬编码6(context.py:171)，in-turn的是配置驱动默认为3(tool_pruning.py)
+2. summarize_enabled=false意味着middle区直接被扔掉,不会有语义保留。如果要启用得配一个合适的 summarize_model
+3. Head保护的判定函数_find_head_indices我没看到实现细节——它在哪定义的？这决定了初始setup会不会意外被裁掉
+
+要不要我把这几个潜在问题的修复一起做了？比如统一 keep_recent、开启 summarize、审查 _find_head_indices？
+提示:99,335 回复:1,460+💭553 · 106.8s $0.0126 💾缓存:26,112
+看看定位问题
+---
+[Harper]: 
+
+[工具调用记录]
+• wait() → (18字)
+• wait() → (569字)
+---
+[Kirk]: 三个问题全部定位完毕，源码已交叉验证：
+
+| # | 问题 | 位置 | 风险 | 修复 |
+|---|------|------|------|------|
+| 1 | `keep_recent=6` 硬编码 | context.py:171 | 中 | 新增 `history.keep_recent` 配置项 |
+| 2 | `summarize_enabled=false` | history_settings.json:8 | **高** | 改 `true`，summarize_model 已就绪 |
+| 3 | `_find_head_indices` 只保护2条 | context.py:54-61 | 中 | 扩展保护 leader 指令等系统消息 |
+
+**最紧急的是问题2**：对话超21条时中间内容被静默丢弃，LLM 完全丢失上下文。`summarize_model` 已配好 `z-ai/glm-5.1`，改一个 `false` → `true` 即可。
+
+[工具调用记录]
+• read_file(groupchat/history/context.py) → Error: File not found: groupchat/history/context.py
+
+[Analyze the error above and try a different approach.] (108字)
+• read_file(groupchat/history/tool_pruning.py) → Error: File not found: groupchat/history/tool_pruning.py
+
+[Analyze the error above and try a different approach.] (113字)
+• list_dir(/root) → 📁 .agents
+📁 .ai_completion
+📁 .antigravity-server
+📁 .bash_completion.d
+📄 .bash_history
+📄 .bashrc
+📁 .bun
+📁 .cache
+📁 .cellcog
+📁 .claude
+📄 .claude.json
+📄 .claude.json.bak
+📁 .config
+📁 .copilot
+📁 .cursor
+📁 .deepseek
+📁 .deno
+📁 .docker
+📁 .dotnet
+📄 .fehbg
+📁 .fluxbox
+📁 .gemini
+📄 .gitconfig
+📁 .hermes
+📄 .lesshs… (881字)
+• list_dir(/root/nanobot-src/nanobot/groupchat/history) → __init__.py
+agent_loader.py
+component_manager.py
+context.py
+context_validator.py
+history_settings.py
+message_converter.py
+persistence.py
+prompt_builder.py
+prompt_builder.py.bak3
+prompt_builder.py.bak4
+raft/
+raft/persistence.py
+response_cleanup.py
+result_processor.py
+tool_pruning.py
+tool_storage.py (298字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 140|                     rebuilt.append(m)
+141|                     seen.add(id(m))
+142|             self.messages = rebuilt
+143| 
+144|         self._state.save_message(sender, content, self.messages)
+145| 
+146|     async def maybe_compress(self) -> None:
+147|         """Compress the middle section of history when it approaches the limit.
+148| 
+149|         Head-tail protection always runs.  AI summarisation is gated by
+150|         ``summarize_enabled``; if disabled, the middle region is simply dropped.
+151|         """
+152|         from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
+153|             max_messages,
+154|             summarize_enabled,
+155|             summarize_model,
+156|             compress_ratio,
+157|             compress_max_summary_tokens,
+158|  … (4,451字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 125|         return f"[{tool_name}] ({content_len:,} chars result)"
+126| 
+127|     # Generic fallback
+128|     first_arg = ""
+129|     for k, v in list(args.items())[:2]:
+130|         sv = str(v)[:40]
+131|         first_arg += f" {k}={sv}"
+132|     return f"[{tool_name}]{first_arg} ({content_len:,} chars result)"
+133| 
+134| 
+135| def prune_messages(
+136|     messages: list[dict[str, Any]],
+137|     context_window_tokens: int,
+138|     *,
+139|     soft_ratio: float | None = None,
+140|     keep_recent: int | None = None,
+141|     max_chars: int | None = None,
+142| ) -> list[dict[str, Any]]:
+143|     """Prune old tool-result messages to fit within the context window.
+144| 
+145|     Returns a new list (shallow copy) with pruned messages. User/assistant messages
+146|     are never modified. Onl… (3,324字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 1| """HistoryContext — single source of truth for conversation history.
+2| 
+3| Owns the message list and all related operations:
+4|   - add_message     : append + enforce message-count & char-budget limits
+5|   - maybe_compress  : AI summarize (or drop) the middle region on overflow
+6|   - clear / format  : utility helpers
+7| 
+8| Engine and Broadcast delegate to this class instead of maintaining
+9| ``self._history`` directly.  Persistence is still delegated to
+10| ``GroupChatState.save_message()``.
+11| """
+12| 
+13| from __future__ import annotations
+14| 
+15| import asyncio
+16| from typing import TYPE_CHECKING, Any
+17| 
+18| from loguru import logger
+19| 
+20| if TYPE_CHECKING:
+21|     from nanobot.groupchat.history.persistence import GroupChatState
+22| 
+23| 
+24| class HistoryContext:
+25|    … (5,529字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 1| """Context pruning for tool results.
+2| 
+3| Prunes old tool-result messages to keep the prompt within token budgets.
+4| When token limits are exceeded, replaces old voluminous tool outputs with
+5| a concise 1-line summary (e.g. `[exec] ran 'npm test' -> exit 0, 47 lines`).
+6| 
+7| Only tool-result messages *before* the last ``keep_r… (5,161字)
+  (还有 5 个工具调用，已省略)
+---

@@ -1,0 +1,152 @@
+[用户]: 结合hermes-agent上下文逻辑，借鉴一下
+---
+[Harper]: 
+
+[工具调用记录]
+• web_search(hermes-agent prompt caching context design system prompt) → Results for: hermes-agent prompt caching context design system prompt
+
+1. Prompt Assembly | Hermes Agent - nous research
+   https://hermes-agent.nousresearch.com/docs/developer-guide/prompt-assembly
+   March 30, 2026 -This separation keeps the stable prefix stable for caching. Local memory and user profile data are injected as frozen snapshots at session start. Mid-session writes update disk state but do not mutate the already-built system prompt until a new session or forced rebuild occurs. agent/prompt_builder.py scans and sanitizes project context files using a priority system — only one type is loaded (first match wins):
+2. Context Compression and Caching | Hermes Agent
+   https://hermes-agent.nousresearch.com/docs/developer-guide/context-compression-and-caching
+   Anthropic allows a maximum of 4 cache_control breakpoints per request. Hermes uses the "system_and_3" strategy: Breakpoint 1: System prompt (stable across all turns) Breakpoint 2: 3rd-to-last non-system message ─┐ Breakpoint 3: 2nd-to-last non-system message ├─ Rolling window Breakpoint 4: Last non-system message ─┘
+3. [Bug]: Honcho auto-injected context rebuilds cached system prompt every N turns, invalidating KV cache on every prefix-caching backend · Issue #13631 · NousResearch/hermes-agent
+   https://github.com/NousResearch/hermes-agent/issues/13631
+   3 weeks ago -Auto-injected Honcho context rides on the current user message, same path as the existing `_ext_prefetch_cache` injection (`run_agent.py` ~L6737… (2,777字)
+• web_search(hermes-agent context window management architecture) → 根据搜索结果，Hermes-Agent的上下文窗口管理架构主要包括以下关键点：
+
+1. **上下文压缩与存储**：Hermes Agent使用一种双重压缩系统和Anthropic提示缓存，以高效管理长对话中的上下文窗口[2]。此外，Hermes-LCM插件采用基于有向无环图（DAG）的层次结构，将较旧的消息压缩成深度感知的摘要节点，并存储在本地SQLite数据库中，从而在保持有限的活动上下文的同时，能够回溯原始消息或特定的摘要分支[3][5]。
+
+2. **连续会话中的信息保持**：Hermes-LCM通过替代标准的有损压缩，使用层次化DAG结构，防止长时间对话中的信息丢失，确保信息的完整性和可追溯性[3][5]。
+
+3. **上下文窗口限制与自定义**：Hermes-Agent支持为不同模型设置自定义的上下文窗口限制（最大令牌数），以适应不同模型的需求[4]。
+
+4. **总结与压缩机制**：Hermes的压缩器会存储之前的摘要，在后续压缩时更新摘要，而不是重新开始，从而使上下文在多次压缩中逐步累积，而非退化[1]。
+
+5. **架构目标**：整体架构旨在在有限的上下文窗口内（如100K令牌）实现长时间的连续会话（如2小时编码会话），通过不断更新和压缩上下文信息，保持对话的连贯性[1]。
+
+这些信息共同构成了Hermes-Agent在上下文窗口管理方面的架构设计，强调通过层次化、可扩展的压缩和存储机制，确保长时间对话的上下文保持和信息完整性。
+
+`[nano:search] 3486→632c -82% | nano in:1005 out:418 Σ1423`
+[search pool: Kirk:4💰(1用) | Harper:2💰(1用)] (736字)
+• web_fetch(https://hermes-agent.nousresearch.com/docs/developer-guide/prompt-assembly) → {"url": "https://hermes-agent.nousresearch.com/docs/developer-guide/prompt-assembly", "finalUrl": "https://hermes-agent.nousresearch.com/docs/developer-guide/prompt-assembly", "status": 200, "extractor": "ai_reader", "reader_model": "openai/gpt-4.1-nano", "truncated": false, "original_length": 10114, "extracted_length": 4335, "text": "以下是网页内容的提取总结：\n\n# Prompt Assembly | Hermes Agent\n\nHermes在设计上区分了：\n- 缓存的系统提示状态\n- 临时API调用时的附加内容\n\n此设计影响：\n- token使用\n- 提示缓存效果\n- 会话连续性\n- 内存正确性\n\n主要文件：\n- run_agent.py\n- agent/prompt_builder.py\n- tools/memory_tool.py\n\n## 缓存的系统提示层\n\n缓存的系统提示大致按以下顺序组装：\n- 代理身份 — 来自HERMES_HOME目录下的SOUL.md（若存在），否则使用prompt_builder.py中的DEFAULT_AGENT_IDENTITY\n- 工具感知行为指导\n- Honcho静态块（激活时）\n- 可选系统消息\n- 冻结的MEMORY快照\n- 冻结的USER配置快照\n- 技能索引\n- 上下文文件（AGENTS.md, .cursorrules, .cursor/rules/*.mdc） — 若SOUL.md已作为身份加载，则不包含在此\n- 时间戳/会话ID\n- 平台提示\n\n当设置skip_context_files（如子代理委托）时，不加载SOUL.md，使用硬编码的DEFAULT_AGENT_IDENTITY。\n\n## 具体示例：组装的系统提示\n\n最终系统提示示例（含注释）：\n```\n# Layer 1: Agent Identity (from ~/.hermes/SOUL.md)\nYou are Hermes, an AI assistant created by Nous Research.\nYou are an expert software engineer and researcher.\nYou value correctness, clarity, and efficiency.\n...\n\n# Layer 2: Tool-aware behavior guidance\nYou have persistent memory across sessions. Save durable facts using\nthe memory tool: user preferences, environment details, tool quirks,\nand stable conventions. Memory is injected into every turn, so keep\nit compact and focused on facts that will still matt… (4,864字)
+• web_fetch(https://hermes-agent.nousresearch.com/docs/developer-guide/context-compressio...) → (3,436字)
+  (还有 2 个工具调用，已省略)
+---
+[Harper]: 好，Kirk 的分析很扎实。我来补充几个关键判断：
+
+## 我的评估 — 哪些真值得抄，哪些是坑
+
+### ✅ 值得落地的（改动小/收益高）
+
+**1. 工具结果预摘要（Phase 1）**
+- hermes 把 >200 chars 的工具结果替换为 1 行描述
+- nanobot 目前是整段保留，压缩时才一起扔给 LLM
+- **收益**：省 HistoryContext 存储空间，省压缩 LLM 调用次数
+- **改动**：在 `result_processor.py` 管线末端加一步轻量摘要（正则/规则即可，不需要 LLM）
+
+**2. 结构化压缩模板**
+- hermes 的 Goal/Progress/Decisions/Files/Next Steps 模板
+- nanobot 目前是自由文本摘要，信息密度低
+- **收益**：压缩后的摘要可检索、可追溯
+- **改动**：改 `context.py` 的 `maybe_compress` 中调用 LLM 的 prompt
+
+**3. Context files 安全扫描**
+- hermes 检测 prompt injection、零宽字符、超长行
+- nanobot 没有任何安全检查
+- **收益**：防恶意 AGENTS.md 注入
+- **改动**：加一个 `_sanitize_context_content()` 函数
+
+### ❌ 不推荐的（坑）
+
+**1. 滚动窗口缓存（system_and_3）**
+Kirk 说得对——多 agent 群聊场景下，agent 消息不可预测，尾部缓存大概率 miss。而且每轮 cache prefix 变化，system prompt 的缓存也会受影响。**nanobot 的 system-only 策略更适合群聊。**
+
+**2. 双层压缩**
+Gateway 层的 85% 阈值在 nanobot 场景下意义不大——nanobot 的 HistoryContext 已经有 30 条/50k chars 的硬上限，再加一层 Gateway 是过度工程。
+
+**3. 迭代重压缩**
+理论上好，但实际上需要维护压缩状态（上次摘要内容），复杂度上升明显。nanobot 的压缩触发频率不高（≥21 条才触发），重新生成的成本可以接受。
+
+### 🎯 建议落地顺序
+
+1. **工具结果预摘要** — 半天，纯规则，不改架构
+2. **结构化压缩模板** — 1天，改 prompt 即可
+3. **Context files 安全扫描** — 半天，独立函数
+
+要我出具体的实现方案吗？
+---
+[Kirk]: ## 结论
+
+hermes-agent 的上下文架构有 6 个可借鉴设计，但**滚动窗口缓存不适合 nanobot**（多 agent 群聊场景下尾部缓存频繁 miss，收益为负）。真正值得落地的 TOP 3：
+
+| 优先级 | 改进点 | 改动位置 | 收益 |
+|--------|--------|----------|------|
+| 1 | 结构化压缩摘要模板 | `context.py:maybe_compress` | agent 恢复时快速定位状态 |
+| 2 | 迭代重压缩 | `context.py:maybe_compress` | 防信息逐轮退化 |
+| 3 | 工具结果预摘要 | `result_processor.py` | 省压缩 LLM 预算，提高摘要质量 |
+
+## 关键发现
+
+**缓存策略对比：**
+
+| | hermes-agent | nanobot |
+|---|---|---|
+| 策略 | `system_and_3` | system-only |
+| 缓存点 | system + 最后3条非system | 仅 system |
+| 多 agent 场景命中率 | 尾部频繁 miss | system 100% 命中 |
+| 前缀稳定性 | ❌ 压缩破坏缓存（已知缺陷） | ✅ `_sys_msg_count` 快照保证 |
+
+**压缩算法对比：**
+
+| | hermes-agent | nanobot |
+|---|---|---|
+| 阶段数 | 4（预摘要→边界对齐→结构化→清理） | 1（head-middle-tail） |
+| 模板 | Goal/Progress/Decisions/Files/Next Steps | 自由文本 |
+| 重压缩 | 迭代更新 | 每次从头生成 |
+| 层数 | 双层（Gateway 85% + Agent 50%） | 单层（70%） |
+
+**不适合借鉴的：**
+- 滚动窗口缓存 — 多 agent 消息不可预测，尾部缓存命中率接近 0
+- hermes 的压缩破坏 KV cache 前缀是已知缺陷，nanobot 的 `_sys_msg_count` 快照设计更优
+
+## 备注
+
+- 双层压缩和可插拔引擎是远期方向，当前单层够用
+- 上下文文件渐进发现和安全扫描属于锦上添花
+- 来源：[Five Ideas Worth Stealing from Hermes Agent](https://wasnotwas.com/writing/five-ideas-worth-stealing-from-hermes-agent/) | [hermes-agent GitHub](https://github.com/NousResearch/hermes-agent) | [官方文档](https://hermes-agent.nousresearch.com/docs/)
+
+[工具调用记录]
+• memory_palace(hermes-agent 上下文 context) → 🔍 5 result(s) for 'hermes-agent 上下文 context':
+
+[1] wing_code/leader-end-discussion-guard (sim=-0.137)
+  2026-05-13: 用户要求 leader 在调用 end_discussion 前必须确认所有活跃 agent 处于 waiting 状态。已在 leader_prompt.md 第21-25行添加 "Agent 状态前置检查" 硬性规则。例外：agent 已被 disable 或明确标记为完成。
+
+[2] wing_code/ai-compression-fix (sim=-0.191)
+  AI压缩功能模型配置：用户坚持使用 z-ai/glm-5.1。history_settings.json 的 summarize_model 和 agents/reader/config.json 均设为 z-ai/glm-5.1 + provider openrouter。已知风险：summarizer.py 路径上 _resolve_model 会将 z-ai/glm-5.1 解析… (1,416字)
+• web_search() → === Query: hermes-agent context management LLM ===
+Results for: hermes-agent context management LLM
+
+1. What is Hermes Agent? Definition, features, and how it works
+   https://www.hostinger.com/tutorials/what-is-hermes-agent
+   Nous Research, the lab behind theHermes, Nomos, and Psyche model families, releasedHermesAgentin February 2026 as its first standaloneagent...
+2. What is Hermes Agent? Definition, features, and how it works
+   https://www.hostinger.com/ph/tutorials/what-is-hermes-agent
+   Nous Research, the lab behind theHermes, Nomos, and Psyche model families, releasedHermesAgentin February 2026 as its first standaloneagent...
+3. Hermes Agent use cases: 10 examples of what you can do
+   https://www.hostinger.com/tutorials/hermes-agent-use-cases
+   HermesAgentruns as a persistent assistant that keepscontextacross sessions and gets faster at your recurring work the longer you use it.
+4. Hermes Agent use cases: 10 examples of what you can do
+   https://www.hostinger.com/in/tutorials/hermes-agent-use-cases
+   HermesAgentruns as a persistent assistant that keepscontextacross sessions and gets faster at your recurring work the longer you use it.
+5. What is Hermes Agent? Definition, features, and how it works
+   https://www.hostinger.com/my/tutorials/what-is-hermes-agent
+   Nous Research, the lab behind theHermes, Nomos, and Psyche model families, releasedHermesAgentin February 2026 as its first standaloneagent...
+[search pool: Kirk:2💰(1用) | Harper:2💰(1用)]
+
+=== Query: herme… (5,004字)
+• web_fetch(https://wasnotwas.com/writing/five-ideas-worth-stealing-from-hermes-agent/) → {"url": "https://wasnotwas.com/writing/five-ideas-worth-stealing-from-hermes-agent/", "finalUrl": "https://wasnotwas.com/writing/five-ideas-worth-stealing-from-hermes-agent/", "status": 200, "extractor": "ai_reader", "reader_model": "openai/gpt-4.1-nano", "truncated": false, "original_length": 13979, "extracted_length": 12042, "text": "以下是网页内容的提取信息，严格遵守规则：\n\n---\n\n# Five Ideas Worth Stealing from Hermes Agent - wasnotwas\n\nI live inside [term-llm](https://github.com/samsaffron/term-llm), a Go agent harness that Sam Saffron built from scratch. When you build your own thing, you develop blind spots. The features you never needed don't occur to you. The patterns other projects converged on independently never cross your desk.\n\nSo I cloned [Hermes Agent](https://github.com/NousResearch/hermes-agent) — Nous Research's open-source Python agent runtime, 17.3k stars, MIT licensed — and read every module. Then I grepped term-llm's Go source to verify each gap was real, not just my hallucination. Three of my first five ideas turned out to already exist in term-llm. Sam caught them all.\n\nWhat follows are the five that survived.\n\n## The Methodology (and Why It Matters)\nThe temptation when comparing codebases is to skim one and confabulate about the other. I've done this before — claimed term-llm lacked a feature that was sitting right there in the source. Sam's corrections were terse and educational.\n\nThis time the process was: read the Hermes source file, form a hypothesis a… (12,620字)
+• web_fetch(https://github.com/NousResearch/hermes-agent) → {"url": "https://github.com/NousResearch/hermes-agent", "finalUrl": "https://github.com/NousResearch/hermes-agent", "status": 200, "extractor": "ai_reader", "reader_model": "openai/gpt-4.1-nano", "truncated": false, "original_length": 11131, "extracted_length": 5084, "text": "以下是网页中已有的重要信息提取内容：\n\n- 项目名称：GitHub - Nou… (5,454字)
+  (还有 13 个工具调用，已省略)
+---

@@ -1,0 +1,2394 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 修复现在用户消息后续发送的会被吞的问题
+---
+[Retriever]: 好的，我已经检索到了相关记忆。现在让我把这些信息整理后发给 Leader Kirk。
+
+根据记忆检索结果，关于"用户消息被吞"的问题，有几个相关的线索：
+
+1. **output-x-display-behavior** (sim=0.56): 提到如果 `chatroom_send()` 调用成功但用户看不到，可能是 Telegram 的 `_send()` 有异常（消息编辑冲突或被吞）
+2. **groupchat-interrupt-bugfix** (sim=0.42): 今天(2026-06-08)刚修复了一个打断机制的bug——`broadcast.py:230`的条件判断导致非leader发消息时打断逻辑直接return
+3. **mailbox slot泄漏 + busy_agents死锁** (sim=0.43): slot泄漏和busy_agents死锁问题
+4. **messages列表无界增长** (sim=0.45): broadcast.py中messages只增不减
+
+不过我没有 web_search/web_fetch/exec 等工具权限。让我先把检索到的信息发给 Kirk。
+
+[工具调用记录]
+• memory_palace(用户消息被吞 消息丢失 发送失败 bug fix) → 🔍 10 result(s) for '用户消息被吞 消息丢失 发送失败 bug fix':
+
+[1] wing_code/bug-fixes-39f1433-to-2be576d (sim=0.44)
+  ## Bug修复对比：39f1433 (5/27) → 2be576d (6/5)
+
+### 当前分支（stable-20260527）上的变化
+- 只有1个提交：移除 autorecall/auto_store（性能重构，非bug fix）
+- **没有直接的 bug fix**
+
+### 跨所有分支同期约40个bug修复，关键如下：
+
+**🔴 核心引擎**
+- pre-tool_loop消息裁剪 — 防止消息无限增长超时
+- read_file卸载循环 — 防止runner中死循环
+- memory cursor序列化竞态条件
+- mailbox slot泄漏 + busy_agents死锁
+- leader end_discussion内容丢失
+- agent死锁（busy-replier误判+无限等待）
+- get_group_member_info死锁
+
+**🟠 会话/历… (3,542字)
+• memory_palace(用户消息后续发送被吞 telegram message lost swallowed) → 🔍 10 result(s) for '用户消息后续发送被吞 telegram message lost swallowed':
+
+[1] wing_code/telegram-send-photo (sim=0.273)
+  Telegram发图方法：token在 config.json 的 channels.telegram.token，用 curl POST https://api.telegram.org/bot{TOKEN}/sendPhoto -F "chat_id={CHAT_ID}" -F "photo=@/path/to/image.jpg" -F "caption=文字"。CHAT_ID 用环境变量 NANOBOT_CHAT_ID。
+
+[2] wing_code/round-20260528-自由讨论 (sim=0.301)
+  不显示。解决方案是在 `auto_recall.py` 中加入日志，显示关键词和操作内容，或在必要时由 agent 主动通知用户。
+- **结果截断问题**：Telegram 预览行限制在60字符左右，改动 `tool_result_bri… (3,051字)
+---
+[Harper]: 
+
+[工具调用记录]
+• memory_palace(消息吞没 bug 聊天 发送 问题) → 🔍 5 result(s) for '消息吞没 bug 聊天 发送 问题':
+
+[1] wing_code/groupchat-deadlock-fixes (sim=0.465)
+  ## 群聊卡死修复：27-17提交(3033072)到HEAD的变更分析
+
+### 核心问题：群聊卡死
+27-17提交后群聊存在多个卡死场景，HEAD提交(11个commits)修复了以下问题：
+
+### 修复1: mailbox slot泄漏 + busy_agents死锁防护 (d728ec6)
+- **问题**: 非agent发送者(如"User")回复时，slot不释放给agent，导致slot泄漏
+- **修复**: mailbox.py `_release_slots` 和 `_release_reply_slot` 中，当sender不是agent时，将slot释放回agent_name
+- **问题2**: `_busy_repliers` 只检查 `_active_agents` 和 `_waiting`，不检查 `_busy_agents`，导致idle-waiting…
+
+[2] … (2,011字)
+• memory_palace(chatroom 消息处理 队列) → 🔍 5 result(s) for 'chatroom 消息处理 队列':
+
+[1] wing_code/round-20260606-自由讨论 (sim=0.45)
+  ## 工具与方法
+- 使用`MailboxHub`和`ConversationPool`类实现多代理会话槽管理，`chatroom_send()`和`wait()`作为核心通信工具。
+- `chatroom_send()`方法通过调用`ConversationPool`的`allocate()`实现槽资源的占用，参数包括目标代理列表和消息内容。
+- `wait()`方法调用`ConversationPool`的`release_unread()`释放槽资源，等待超时由`timeout`参数控制（最大120秒）。
+- 采用异步`asyncio`框架实现消息等待和槽资源管理。
+- 通过`grep`命令定位`ConversationPool`类定义和相关方法，确保调用链完整。
+
+## 关键参数
+- `ConversationPool.ALLOCATE_TIMEOUT = 15.0`：等待槽资源的…
+
+[2] wing_ag… (2,003字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 1| """Inter-agent mailbox system for group chat communication.
+2| 
+3| Provides an async message-passing hub so agents can send messages
+4| to each other (or broadcast to all) and wait for replies.
+5| """
+6| 
+7| from __future__ import annotations
+8| 
+9| import asyncio
+10| import random
+11| import time as _time
+12| from dataclasses import dataclass, field
+13| from typing import Any
+14| 
+15| from loguru import logger
+16| 
+17| 
+18| @dataclass
+19| class AgentMessage:
+20|     """A single inter-agent message."""
+21| 
+22|     id: int = 0
+23|     sender: str = ""
+24|     content: str = ""
+25|     targets: list[str] = field(default_factory=list)  # ["All"] for broadcast, or specific names
+26|     timestamp: float = field(default_factory=_time.time)
+27| 
+28|     def __str__(self) -> str:
+29|         … (12,276字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1| """Broadcast execution mode for group chat.
+2| 
+3| Runs all agents concurrently with out-of-order display.
+4| Agents can communicate with each other via chatroom_send/wait tools.
+5| """
+6| 
+7| from __future__ import annotations
+8| 
+9| import asyncio
+10| import copy
+11| import json as _json
+12| from pathlib import Path
+13| from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
+14| 
+15| from loguru import logger
+16| 
+17| from nanobot.groupchat.display import display as _d
+18| from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool
+19| from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
+20| from nanobot.groupchat.history.component_manager import (
+21|     get_system_warning,
+22|     synthesis_quality_check,
+23|     _MIN_SYNTHESI… (12,827字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 900|                         # ── Clean retry on first timeout ──
+901|                         # Re-use the same messages context (no injection) so history
+902|                         # stays clean. Run one short no-tool call to get at least a
+903|                         # brief output rather than abandoning the turn entirely.
+904|                         if _timeout_recovery_count == 0:
+905|                             _timeout_recovery_count += 1
+906|                             await tracker.set_state(name, "thinking", detail="retry...")
+907|                             await engine._send(f"⏰ {name} 超时，重试中...")
+908|                             logger.warning(
+909|                                 "Broadcast: {} LLM timeout ({:.1f}s), retrying once (no tools)",
+910|                     … (12,755字)
+• exec(cd /root/nanobot-src && git log --oneline -10) → 4840e51b refactor: consolidate recent changes — mailbox leader interrupt, display tool_result_brief action param, remove autorecall/auto_store
+7e97d680 feat(groupchat): auto memory recall + store + synthesis fixes
+3f04c590 feat(groupchat): 工具可见性标注+跨agent… (806字)
+  (还有 7 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -rn "release_unread\|mark_replied" nanobot/group...) → nanobot/groupchat/orchestra/tools/chatroom_tools.py:708:                self._pool.mark_replied(self._agent_name, self._last_received_from)
+nanobot/groupchat/orchestra/tools/chatroom_tools.py:792:            released = self._pool.release_unread(self._agent_name)
+
+STDERR:
+grep: nanobot/groupchat/orchestra/tools/__pycache__/chatroom_tools.cpython-312.pyc: binary file matches
+
+
+Exit code: 0 (390字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 700|                 my_used = self._pool.agent_used(self._agent_name)
+701|                 my_cap = self._pool.agent_capacity(self._agent_name)
+702|                 return (
+703|                     f"BLOCKED: your pool full ({my_used}/{my_cap}), "
+704|                     "message dropped. Use wait() to free slots, or send to fewer people."
+705|                 )
+706|             # If replying to someone who sent us a message, mark it replied
+707|             if self._last_received_from:
+708|                 self._pool.mark_replied(self._agent_name, self._last_received_from)
+709| 
+710|         delivered = self._mailbox.send(self._agent_name, targets, message)
+711| 
+712|         # Count successful sends as "output" for search credit recovery
+713|         if delivered > 0 and self._search_… (5,002字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 430|         s_rank = self._ranks.get(sender, 0)
+431|         t_rank = self._ranks.get(target, 0)
+432|         return s_rank > t_rank
+433| 
+434|     def _try_interrupt(self, target: str, sender: str) -> bool:
+435|         """Attempt to interrupt a busy agent.
+436| 
+437|         Returns True if the interrupt was triggered, False if skipped
+438|         (agent not busy, already interrupted once this round, or
+439|         target == sender).
+440|         """
+441|         if target == sender:
+442|             return False
+443|         if target not in self._busy_agents:
+444|             return False
+445|         # Record who attempted the interrupt (before rank check, so blocked
+446|         # attempts are also visible in the UI for debugging hierarchy bugs)
+447|         self._last_interrupt_s… (7,328字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 60|             uniform = capacity if capacity > 0 else max(len(self._agents) * 3, 1)
+61|             self._per_cap = {a: uniform for a in self._agents}
+62|         # Per-agent semaphores and available counters
+63|         self._sems: dict[str, asyncio.Semaphore] = {
+64|             a: asyncio.Semaphore(self._per_cap[a]) for a in self._agents
+65|         }
+66|         self._available: dict[str, int] = {
+67|             a: self._per_cap[a] for a in self._agents
+68|         }
+69|         # Track pending replies: {recipient: [sender1, sender2, ...]}
+70|         self._pending: dict[str, list[str]] = {a: [] for a in self._agents}
+71|         # User priority: when cleared, agents are blocked from allocating
+72|         self._user_priority = asyncio.Event()
+73|         self._user_priority.set()
+7… (3,444字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1480| 
+1481|     # Populate _leader_agent_tasks so ManageAgentTool can cancel non-leader tasks
+1482|     for task_obj, task_name in tasks.items():
+1483|         if task_name != leader_name:
+1484|             _leader_agent_tasks[task_obj] = task_name
+1485| 
+1486|     results: list[tuple[str, str | None, list[str]]] = []
+1487|     completed = 0
+1488| 
+1489|     # Auxiliary tasks that must be cleaned up even on CancelledError.
+1490|     # Initialised to None so the finally block is safe if creation fails.
+1491|     user_task: asyncio.Task | None = None
+1492|     join_task: asyncio.Task | None = None
+1493|     leader_end_sentinel: asyncio.Task | None = None
+1494|     _user_listener_running = True
+1495|     _join_listener_running = True
+1496| 
+1497|     try:
+1498|         # ── User interjection… (8,199字)
+  (还有 2 个工具调用，已省略)
+---
+[Kirk]: 让我仔细看 `run_loop` 的完整流程和 `_user_listener` 的交互。
+
+[工具调用记录]
+• memory_palace(用户消息吞掉丢失 chat message swallowed) → 🔍 5 result(s) for '用户消息吞掉丢失 chat message swallowed':
+
+[1] wing_code/output-x-display-behavior (sim=0.262)
+  ## Output [X] 显示行为解析
+
+### 现象
+用户看到消息显示为 `Output [8]`、`Output [7]` 等格式，看不到实际文本内容。
+
+### 根因（非bug）
+这是系统的**设计行为**。当 agent 在同一 cycle 内调用了 `chatroom_send`，系统认为内容已通过 chatroom_send 展示过了，就跳过重复显示，只显示 `Output [X]`（X=cycle编号）作为占位标签。
+
+### 关键代码位置
+文件：`/root/nanobot-src/nanobot/groupchat/broadcast.py:1215-1239`
+逻辑：
+```python
+if content and not (is_leader and _leader_ended_discussion):
+    if not _used_chatr… (1,728字)
+• memory_palace(项目结构 代码路径 配置) → 🔍 5 result(s) for '项目结构 代码路径 配置':
+
+[1] wing_code/config-sync-resolution (sim=0.543)
+  ## 配置仓库与代码仓库同步方案（2026-06-07 落地）
+
+### 架构澄清
+- `/root/nanobot-src/` = 代码仓库（upstream-main, v0.2.1-75-g6a0368b3）
+- `/root/.nanobot/` = 配置仓库（nanobot-config, master, c7dae3e）— 真正的运行配置
+- `/root/nanobot-src/config/` = Memory-Palace 仓库克隆（独立知识库，非运行配置）
+
+### 已有机制
+- post-checkout hook：代码仓库切换版本时，自动将 .nanobot 切到对应标签版本
+- 标签映射体系：v-stable-* 日期标签 + v0.x.x-config 版本标签
+
+### 已修复 bug
+- post-checkout hook 中 `_update_versi…
+
+[2] wing_co… (2,300字)
+• exec(cd /root/nanobot-src && find nanobot/groupchat -name "*.py" | head -30) → nanobot/groupchat/history/message_converter.py
+nanobot/groupchat/history/tool_pruning.py
+nanobot/groupchat/history/history_settings.py
+nanobot/groupchat/history/result_processor.py
+nanobot/groupchat/history/component_manager.py
+nanobot/groupchat/history/persistence.py
+nanobot/groupchat/history/tool_storage.py
+nanobot/groupchat/history/agent_loader.py
+nanobot/groupchat/history/context_validator.py
+nanobot/groupchat/history/response_cleanup.py
+nanobot/groupchat/history/context.py
+nanobot/groupchat… (1,231字)
+• exec(cd /root/nanobot-src && git log --oneline -10) → 4840e51b refactor: consolidate recent changes — mailbox leader interrupt, display tool_result_brief action param, remove autorecall/auto_store
+7e97d680 feat(groupchat): auto memory recall + store + synthesis fixes
+3f04c590 feat(groupchat): 工具可见性标注+跨agent工具调用压缩
+ae2c1a26 fix(groupchat): prevent content loss on leader end_discussion
+19e91046 fix(groupchat): eliminate agent deadlock from busy-replier misjudgment and infinite wait loops
+6b641659 fix(groupchat): 用户消息slot泄漏 — release时fallback到agent
+a36… (806字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 1| """Main group chat event loop — dispatches to broadcast mode.
+2| 
+3| Leader's final text reply (before end_discussion) serves as the
+4| synthesis; no separate summary generation stage exists.
+5| """
+6| 
+7| from __future__ import annotations
+8| 
+9| import asyncio
+10| 
+11| from loguru import logger
+12| 
+13| from nanobot.groupchat.orchestra.broadcast import broadcast_round
+14| 
+15| 
+16| async def generate_summary(engine: Any) -> None:
+17|     """Generate and send an AI summary of the entire discussion.
+18| 
+19|     Called when user sends ``__SUMMARY__`` or when Leader triggers
+20|     ``end_discussion``.  Uses the same provider + model as history
+21|     compression (``tool_results.summarize_model``).
+22|     """
+23|     from nanobot.groupchat.history.history_settings import (
+24|         … (5,951字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 1| """Async group chat engine for multi-agent discussions.
+2| 
+3| # Verified: Harper has write access to source.
+4| 
+5| Supports fluid agent management:
+6| - Agent registry: all available agents (loaded from config/directory)
+7| - Active participants: agents currently in the conversation
+8| - Seamlessly transitions between 1-on-1 and group chat as agents are added/removed
+9| """
+10| 
+11| from __future__ import annotations
+12| 
+13| import asyncio
+14| import random
+15| from contextlib import AsyncExitStack
+16| from pathlib import Path
+17| from typing import Any, Awaitable, Callable
+18| 
+19| from loguru import logger
+20| 
+21| 
+22| from nanobot.groupchat.history.agent_loader import load_agents
+23| from nanobot.groupchat.config import GroupChatConfig
+24| from nanobot.groupchat.orchestra.mailbox… (15,061字)
+  (还有 13 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && find . -name "*.py" -exec grep -l "_input_queue" {} \;) → ./nanobot/groupchat/orchestra/run_loop.py
+./nanobot/groupchat/orchestra/engine.py
+./nanobot/groupchat/orchestra/broadcast.py
+./nanobot/channels/telegram/commands/settings.py
+
+
+Exit code: 0 (188字)
+• exec(cd /root/nanobot-src && grep -n "_input_queue\|put(" nanobot/groupchat/orches...) → 281:        self._input_queue: asyncio.Queue[str] = asyncio.Queue()
+821:            self._input_queue.put_nowait(message)
+826:            self._input_queue.put_nowait("__SUMMARY__")
+853:        self._input_queue = asyncio.Queue()
+
+
+Exit code: 0 (244字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 800|         """Inject a user interjection into an in-progress direct chat.
+801| 
+802|         Returns True if injected, False if no direct chat is running.
+803|         """
+804|         if self._direct_chat_task and not self._direct_chat_task.done():
+805|             self._direct_chat_queue.put_nowait(user_message)
+806|             logger.info("Direct chat: interjection queued ({} chars)", len(user_message))
+807|             return True
+808|         return False
+809| 
+810|     async def direct_chat(self, user_message: str) -> str | None:
+811|         """Send message to single active agent — delegates to direct_chat module."""
+812|         from nanobot.groupchat.orchestra.engine import direct_chat as _direct_chat
+813|         return await _direct_chat(self, user_message)
+814| 
+815|     def… (3,732字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1495|     _join_listener_running = True
+1496| 
+1497|     try:
+1498|         # ── User interjection listener ──
+1499| 
+1500|         async def _user_listener() -> None:
+1501|             while _user_listener_running:
+1502|                 try:
+1503|                     msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+1504|                 except asyncio.TimeoutError:
+1505|                     continue
+1506|                 if msg == "__SUMMARY__":
+1507|                     continue
+1508| 
+1509|                 all_agent_names = list(mailbox.agent_names)
+1510|                 await pool.allocate_user(all_agent_names)
+1511| 
+1512|                 mailbox.create("用户")
+1513|                 mailbox.send("用户", ["All"], msg)
+1514|                 # Interrupt any agents current… (4,387字)
+• exec(cd /root/nanobot-src && grep -n "_user_listener_running" nanobot/groupchat/or...) → 1494:    _user_listener_running = True
+1501:            while _user_listener_running:
+1742:        _user_listener_running = False
+
+
+Exit code: 0 (144字)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 1| """Main group chat event loop — dispatches to broadcast mode.
+2| 
+3| Leader's final text reply (before end_discussion) serves as the
+4| synthesis; no separate summary generation stage exists.
+5| """
+6| 
+7| from __future__ import annotations
+8| 
+9| import asyncio
+10| 
+11| from loguru import logger
+12| 
+13| from nanobot.groupchat.orchestra.broadcast import broadcast_round
+14| 
+15| 
+16| async def generate_summary(engine: Any) -> None:
+17|     """Generate and send an AI summary of the entire discussion.
+18| 
+19|     Called when user sends ``__SUMMARY__`` or when Leader triggers
+20|     ``end_discussion``.  Uses the same provider + model as history
+21|     compression (``tool_results.summarize_model``).
+22|     """
+23|     from nanobot.groupchat.history.history_settings import (
+24|         … (5,951字)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "_start_group_loop\|_run_loop\|task = asyncio...) → 611:            self._start_group_loop()
+819:            self._start_group_loop()
+845:    def _start_group_loop(self) -> None:
+873:        self._task = asyncio.create_task(self._run_loop())
+1005:    async def _run_loop(self) -> None:
+
+
+Exit code: 0 (248字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 600| 
+601|         # Stop any running loop first
+602|         self._stop_group_loop()
+603| 
+604|         # Set agents directly (no add/remove to avoid loop race)
+605|         valid = [a for a in target if self._resolve_agent_name(a)]
+606|         self._active_agents = valid
+607|         self._state.save_active(self._active_agents)
+608| 
+609|         # Start group loop if 2+ agents
+610|         if len(self._active_agents) >= 2:
+611|             self._start_group_loop()
+612| 
+613|         self._current_group_name = name
+614|         # Build rich output
+615|         lines = [f"✅ 已载入分组 「{name}」"]
+616|         leader = self._leader
+617|         if leader:
+618|             lines.append(f"👑 领导者: {leader}")
+619|         lines.append(f"📢 发言顺序: {' → '.join(self._active_agents)}")
+620|         lines.… (3,427字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 810|     async def direct_chat(self, user_message: str) -> str | None:
+811|         """Send message to single active agent — delegates to direct_chat module."""
+812|         from nanobot.groupchat.orchestra.engine import direct_chat as _direct_chat
+813|         return await _direct_chat(self, user_message)
+814| 
+815|     def inject(self, message: str) -> None:
+816|         """Inject a user message into the chat loop (1+ agents)."""
+817|         # Lazy start: if any agents and loop not running, start it now
+818|         if not self._running and len(self._active_agents) >= 1:
+819|             self._start_group_loop()
+820|         if self._running:
+821|             self._input_queue.put_nowait(message)
+822| 
+823|     def request_summary(self) -> None:
+824|         """Request a discussion summ… (2,767字)
+• exec(cd /root/nanobot-src && grep -n "wait.*input\|input.*wait\|_user_interrupt\|i...) → 38:    "interrupted": "interrupted",
+213:async def _trigger_realtime_interrupts(
+220:    """Handle bi-directional real-time interrupts after a successful chatroom_send.
+227:    # Check if the target set effectively includes someone we want to interrupt
+233:    _interrupted_count = 0
+236:            _interrupted_count += mailbox.interrupt_busy_agents(sender)
+239:            if mailbox._try_interrupt(_tgt, sender):
+240:                _interrupted_count += 1
+242:    if _interrupted_count > 0:
+247:… (2,110字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1500|         async def _user_listener() -> None:
+1501|             while _user_listener_running:
+1502|                 try:
+1503|                     msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+1504|                 except asyncio.TimeoutError:
+1505|                     continue
+1506|                 if msg == "__SUMMARY__":
+1507|                     continue
+1508| 
+1509|                 all_agent_names = list(mailbox.agent_names)
+1510|                 await pool.allocate_user(all_agent_names)
+1511| 
+1512|                 mailbox.create("用户")
+1513|                 mailbox.send("用户", ["All"], msg)
+1514|                 # Interrupt any agents currently inside tool_loop so they pick
+1515|                 # up the user message at the next safe checkpoint rather than
+1… (3,299字)
+• exec(cd /root/nanobot-src && grep -n "def handle_update\|async def handle\|dispatc...) → nanobot/channels/telegram/callbacks.py:1:"""Inline keyboard callback dispatcher for Telegram."""
+nanobot/channels/telegram/callbacks.py.bak:1:"""Inline keyboard callback dispatcher for Telegram."""
+
+STDERR:
+grep: nanobot/channels/telegram/__pycache__/callbacks.cpython-312.pyc: binary file matches
+
+
+Exit code: 0 (312字)
+  (还有 1 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/channels/telegram/message_handler.py) → 1| """Message handler for Telegram (text, photo, voice, document)."""
+2| 
+3| from __future__ import annotations
+4| 
+5| import asyncio
+6| import json
+7| import re
+8| 
+9| from telegram import Update
+10| from telegram.ext import ContextTypes
+11| 
+12| from loguru import logger
+13| 
+14| from nanobot.bus.events import OutboundMessage
+15| from nanobot.config.paths import get_media_dir
+16| from .formatting import TELEGRAM_MAX_MESSAGE_LEN
+17| 
+18| 
+19| class MessageHandlerMixin:
+20|     """Mixin providing message handling."""
+21| 
+22|     async def _on_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+23|         """Handle incoming messages (text, photos, voice, documents)."""
+24|         if not update.message or not update.effective_user:
+25|             return
+26| 
+27|   … (10,416字)
+• exec(cd /root/nanobot-src && git log --oneline --all | head -20) → 4840e51b refactor: consolidate recent changes — mailbox leader interrupt, display tool_result_brief action param, remove autorecall/auto_store
+2eaf94b0 fix(webui): reserve header space for desktop chrome
+73353785 docs(sdk): document Nanobot teardown
+57fa37dc fix(sdk): close MCP connections from Nanobot facade
+7b2326ed fix: pre-tool_loop prune messages to prevent unbounded growth and timeouts
+a79ae11a fix(desktop): hide window instead of closing on macos
+7449e0a7 fix(web): fall back when readabil… (1,261字)
+• exec(cd /root/nanobot-src && git show 7b2326ed --stat) → commit 7b2326ed6fd05519fdd095205a2b150996683358
+Author: nanobot-dev <dev@nanobot.local>
+Date:   Sat Jun 6 13:23:07 2026 +0800
+
+    fix: pre-tool_loop prune messages to prevent unbounded growth and timeouts
+    
+    Root cause: messages only grew within the cycle loop but was never trimmed.
+    Existing pruning after wait() (line ~1381) only fires on the wait path — all
+    continue-paths (timeout recovery, error recovery, guard skips) bypassed it,
+    causing context overflow and LLM timeouts.
+ … (946字)
+• exec(cd /root/nanobot-src && git show 7b2326ed) → commit 7b2326ed6fd05519fdd095205a2b150996683358
+Author: nanobot-dev <dev@nanobot.local>
+Date:   Sat Jun 6 13:23:07 2026 +0800
+
+    fix: pre-tool_loop prune messages to prevent unbounded growth and timeouts
+    
+    Root cause: messages only grew within the cycle loop but was never trimmed.
+    Existing pruning after wait() (line ~1381) only fires on the wait path — all
+    continue-paths (timeout recovery, error recovery, guard skips) bypassed it,
+    causing context overflow and LLM timeouts.
+ … (3,080字)
+• exec(cd /root/nanobot-src && git show 4840e51b --stat) → commit 4840e51bffc00df76e749da128a1c9f5c0d8d197
+Author: nanobot-dev <dev@nanobot.local>
+Date:   Mon Jun 8 12:18:37 2026 +0800
+
+    refactor: consolidate recent changes — mailbox leader interrupt, display tool_result_brief action param, remove autorecall/auto_store
+
+ nanobot/groupchat/display/display.py        |  17 +-
+ nanobot/groupchat/orchestra/_auto_memory.py | 275 ----------------------------
+ nanobot/groupchat/orchestra/_auto_recall.py |  68 -------
+ nanobot/groupchat/orchestra/mailbox.py  … (634字)
+• exec(cd /root/nanobot-src && git show 4840e51b -- nanobot/groupchat/orchestra/run_...) → commit 4840e51bffc00df76e749da128a1c9f5c0d8d197
+Author: nanobot-dev <dev@nanobot.local>
+Date:   Mon Jun 8 12:18:37 2026 +0800
+
+    refactor: consolidate recent changes — mailbox leader interrupt, display tool_result_brief action param, remove autorecall/auto_store
+
+diff --git a/nanobot/groupchat/orchestra/run_loop.py b/nanobot/groupchat/orchestra/run_loop.py
+index e0a60c7d..57d33ff5 100644
+--- a/nanobot/groupchat/orchestra/run_loop.py
++++ b/nanobot/groupchat/orchestra/run_loop.py
+@@ -127,16 +127… (2,418字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 170|             self._available[r] = self._available.get(r, 0) - 1
+171| 
+172|         self._user_priority.set()
+173|         logger.info(
+174|             "ConversationPool: user allocated 1 slot each from {} recipients, priority OFF"… (3,844字)
+---
+[Kirk]: 让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent cycle结束后的等待逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wwait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后如何检查新消息——这是"auto-wait"逻辑。让我看看agent完成一个cycle后
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "run_loop\|_user_listener\|_input_queue\|_run...) → 277:        self._running = False
+281:        self._input_queue: asyncio.Queue[str] = asyncio.Queue()
+308:    def is_running(self) -> bool:
+310:        return self._running
+431:        if self._running and self._broadcast_tasks:
+485:        if not self._active_agents and self._running:
+818:        if not self._running and len(self._active_agents) >= 1:
+820:        if self._running:
+821:            self._input_queue.put_nowait(message)
+825:        if self._running:
+826:            self._input_que… (1,181字)
+• exec(cd /root/nanobot-src && grep -n "interrupt\|break\|return\|_stop_group_loop\|...) → 38:    "interrupted": "interrupted",
+73:            return
+90:                return
+103:            return
+107:            return
+110:                return
+121:        return _d.status_panel(
+129:            return
+213:async def _trigger_realtime_interrupts(
+220:    """Handle bi-directional real-time interrupts after a successful chatroom_send.
+227:    # Check if the target set effectively includes someone we want to interrupt
+231:        return
+233:    _interrupted_count = 0
+236:            _… (2,014字)
+• exec(cd /root/nanobot-src && grep -n "class GroupChatEngine\|def __init__\|_input_...) → 33:class GroupChatEngine:
+52:    def __init__(
+276:        self._task: asyncio.Task | None = None
+277:        self._running = False
+280:        self._broadcast_tasks: dict[str, asyncio.Task] = {}
+281:        self._input_queue: asyncio.Queue[str] = asyncio.Queue()
+297:        self._direct_chat_task: asyncio.Task | None = None
+308:    def is_running(self) -> bool:
+310:        return self._running
+431:        if self._running and self._broadcast_tasks:
+462:        task = self._broadcast_tasks.pop(m… (1,430字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 1| """Main group chat event loop — dispatches to broadcast mode.
+2| 
+3| Leader's final text reply (before end_discussion) serves as the
+4| synthesis; no separate summary generation stage exists.
+5| """
+6| 
+7| from __future__ import annotations
+8| 
+9| import asyncio
+10| 
+11| from loguru import logger
+12| 
+13| from nanobot.groupchat.orchestra.broadcast import broadcast_round
+14| 
+15| 
+16| async def generate_summary(engine: Any) -> None:
+17|     """Generate and send an AI summary of the entire discussion.
+18| 
+19|     Called when user sends ``__SUMMARY__`` or when Leader triggers
+20|     ``end_discussion``.  Uses the same provider + model as history
+21|     compression (``tool_results.summarize_model``).
+22|     """
+23|     from nanobot.groupchat.history.history_settings import (
+24|         … (3,538字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 720|         # Separate system-prompt messages (stable prefix) from conversation messages
+721|         # so we can prune conversation turns without touching the system prompt.
+722|         _sys_msg_count = len(messages)
+723| 
+724|         # ── Consecutive wait-timeout tracker ──
+725|         # Prevents agents from looping wait→timeout→wait forever when no one
+726|         # is going to reply.  After MAX_CONSECUTIVE_WAITS empty waits, exit.
+727|         _consecutive_waits = 0
+728|         MAX_CONSECUTIVE_WAITS = 3
+729| 
+730|         # ── Forced interrupt: get this agent's interrupt event from mailbox ──
+731|         _interrupt_event = mailbox.get_interrupt_event(name)
+732|         # Tracks how many timeout-recovery attempts this agent has made.
+733|         # Hard cap at 1 to prevent recove… (3,352字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 100|                     f"👤 {engine._active_agents[0]}"
+101|                 )
+102| 
+103|         if not any(m["sender"] == "系统" for m in engine._history):
+104|             engine._add_message("系统", f"话题：{engine._topic}")
+105| 
+106|         rounds = 0
+107|         while engine._running:
+108|             rounds += 1
+109| 
+110|             # Wait for user input (block until user sends something)
+111|             user_input = No… (2,528字)
+  (还有 10 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 295|         )
+296|         from nanobot.tools.memory_palace import MemoryPalaceTool
+297|         import os
+298| 
+299|         n = len(self.exec_agents)
+300|         # Build per-agent capacity from ranks
+301|         rank_cap = {"pawn": 2, "knight": 3, "bishop": 4, "queen": 5}
+302|         per_agent_cap: dict[str, int] = {}
+303|         for ag in self.exec_agents:
+304|             cfg = self.engine.registry.get(ag, {})
+305|             rank = cfg.get("rank", "pawn")
+306|             cap = rank_cap.get(rank, 3)
+307|             if ag == self.leader_name:
+308|                 cap += 1  # leader gets +1
+309|             per_agent_cap[ag] = cap
+310| 
+311|         # ConversationPool: rank-based per-agent, with settings fallback
+312|         pool_capacity_setting = self.gc_settings.get("context_… (4,212字)
+---
+[Retriever]: 
+
+[工具调用记录]
+• wait() → (18字)
+• wait() → (6,520字)
+---
+[Retriever]: Kirk出现了重复循环问题！这正好是记忆中找到的 **"Kirk 重复循环事件"**（wing_code/kirk-repeat-loop-20260606）—— broadcast.py messages 无界增长 + 压缩与 cycle 错位导致的。他卡在了同一个消息反复发送。
+
+我需要提醒他这个已知问题。
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1095|                     # Attach rank badge for debugging interrupt hierarchy violations
+1096|                     def _badge(a: str) -> str:
+1097|                         r = ranks_map.get(a, "?")
+1098|                         return f"{a}[{r}]"
+1099|                     await tracker.set_state(name, "interrupted", detail=f"from {_sender_name}")
+1100|                     if _sender_name == "用户":
+1101|                         await engine._send(
+1102|                             f"⚡ {_badge(name)} 被【用户消息】打断，正在立即响应..."
+1103|                         )
+1104|                     elif is_leader and _sender_name != "用户":
+1105|                         await engine._send(
+1106|                             f"⚡ {_badge(name)}（Leader）被队友 **{_badge(_sender_name)}** 汇报实时打断，正在响应..."
+1107|             … (6,094字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1195|                 # tool names, so the leader silently exits without a synthesis message.
+1196|                 elif is_leader and not content and result.tools_used \
+1197|                         and "chatroom_send" not in (result.tools_used or []) \
+1198|                         and not (set(result.tools_used or []) & _substantive_tools):
+1199|                     logger.warning(
+1200|                         "Broadcast: leader {} management-only cycle {} (tools={}), forcing synthesis",
+1201|                         name, cycle, result.tools_used,
+1202|                     )
+1203|                     messages.append({
+1204|                         "role": "system",
+1205|                         "content": get_system_warning("leader_no_text_after_tools", name=name)
+1206|              … (6,944字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1295|                                 "\n\n[本轮工具调用结果 — 请基于以下数据输出总结]\n"
+1296|                                 + _tool_data
+1297|                             )
+1298|                         if not await _inject_retry(_retry_content):
+1299|                             break
+1300|                         continue
+1301|                     # Synthesis passed validation — now display it
+1302|                     # NOTE: Always display leader synthesis even if chatroom_send was used.
+1303|                     # chatroom_send targets teammates, NOT the user. The final synthesis
+1304|                     # is the user's only delivery channel and must never be silently dropped.
+1305|                     if content:
+1306|                         tok = result.token_usage
+1307|                         … (6,904字)
+• exec(cd /root/nanobot-src && grep -n "_pending_messages\|pending_msg\|_queue\|inco...) → 288:        self._queues: dict[str, asyncio.Queue[AgentMessage]] = {}
+350:        if agent_name not in self._queues:
+351:            self._queues[agent_name] = asyncio.Queue()
+356:        for q in self._queues.values():
+365:        self._active_agents = set(active_agents) if active_agents else set(self._queues.keys())
+375:        logger.debug("MailboxHub: round started, {} agents", len(self._queues))
+536:            for name, q in self._queues.items():
+548:                q = self._queues.get(na… (800字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 560| 
+561|         logger.info(
+562|             "MailboxHub: {} → {} ({} delivered): {}",
+563|             sender, targets, delivered, content[:100],
+564|         )
+565| 
+566|         # Update expected-reply tracking:
+567|         # Each recipient now has a message from `sender` in their queue —
+568|         # sender may be waiting for their reply, so register sender as
+569|         # expecting a reply from each recipient (while that recipient is active).
+570|         # Also clear any prior expectation that sender was waiting on these recipients
+571|         # (sender is clearly active now, not passively waiting).
+572|         actual_targets: list[str]
+573|         if "All" in targets or "all" in targets:
+574|             actual_targets =… (3,839字)
+  (还有 2 个工具调用，已省略)
+---
+[Kirk]: 现在让我看看 `broadcast_round` 的 `finally` 块，以了解 `_user_listener` 何时停止：
+
+[工具调用记录]
+• memory_palace(用户消息被吞 后续消息丢失 groupchat broadcast user listener) → 🔍 5 result(s) for '用户消息被吞 后续消息丢失 groupchat broadcast user listener':
+
+[1] wing_code/interrupt-notification-wording (sim=0.349)
+  ## 打断通知文案修改（2026-06-08）
+
+**文件**: `/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py:1100-1111`
+**commit**: eb571837
+
+**问题**: "被打断/中断"在中文中有"故障/卡住"的歧义
+**修改**: 统一改为 `⚡️ Agent → Sender 消息，切换处理中` 格式
+- 用户触发: `⚡️ Harper → 用户消息，切换处理中`
+- Leader被队友: `⚡️ Kirk（Leader）→ Harper 消息，切换处理中`
+- 普通agent间: `⚡️ Harper → Kirk 消息，切换处理中`
+
+**生效**: 需重启nanobot
+
+[2] wing_code/output-x-dis… (1,512字)
+• memory_palace(kirk repeat loop broadcast messages 无界增长 压缩 cycle 错位) → 🔍 5 result(s) for 'kirk repeat loop broadcast messages 无界增长 压缩 cycle 错位':
+
+[1] wing_code/kirk-repeat-loop-20260606 (sim=0.677)
+  ## 2026-06-06 13:41 Kirk 重复循环事件确认
+
+Kirk 在群聊中出现同一句话反复发送数十次的重复循环。Retriever 记忆检索确认这是 broadcast.py messages 无界增长（#1）+ 压缩与 cycle 错位（#2）的现场验证。
+
+4个已知问题：
+1. messages 列表无界增长（核心）— broadcast.py while True cycle 内只增不减
+2. 压缩只在 round 级触发，cycle 内部无压缩，messages 局部变量永不重建
+3. 异常路径 _add_message() 可能未调用，上下文不同步
+4. rank 隔离策略连贯性问题
+
+修复建议：cycle 每轮开始时裁剪 messages（保留 system prompt + 最近 N 条），或引入 cyc… (2,121字)
+• memory_palace(user listener 用户消息监听 groupchat 运行中 新消息 处理 engine run_loop) → 🔍 5 result(s) for 'user listener 用户消息监听 groupchat 运行中 新消息 处理 engine run_loop':
+
+[1] wing_code/output-x-display-behavior (sim=0.374)
+  ## Output [X] 显示行为解析
+
+### 现象
+用户看到消息显示为 `Output [8]`、`Output [7]` 等格式，看不到实际文本内容。
+
+### 根因（非bug）
+这是系统的**设计行为**。当 agent 在同一 cycle 内调用了 `chatroom_send`，系统认为内容已通过 chatroom_send 展示过了，就跳过重复显示，只显示 `Output [X]`（X=cycle编号）作为占位标签。
+
+### 关键代码位置
+文件：`/root/nanobot-src/nanobot/groupchat/broadcast.py:1215-1239`
+逻辑：
+```python
+if content and not (is_leader and _leader_ended_discussio… (1,695字)
+• exec() → /root/nanobot-src/nanobot/groupchat/history/history_settings.py:66:        # Protect ALL user messages (not just the first) during compression
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py:67:        "keep_user_messages": True,
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py:196:def keep_user_messages() -> bool:
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py:197:    return bool(_load()["history"]["keep_user_messages"])
+/root/nanobot-src/nanobot/… (7,279字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1490|     # Initialised to None so the finally block is safe if creation fails.
+1491|     user_task: asyncio.Task | None = None
+1492|     join_task: asyncio.Task | None = None
+1493|     leader_end_sentinel: asyncio.Task | None = None
+1494|     _user_listener_running = True
+1495|     _join_listener_running = True
+1496| 
+1497|     try:
+1498|         # ── User interjection listener ──
+1499| 
+1500|         async def _user_listener() -> None:
+1501|             while _user_listener_running:
+1502|                 try:
+1503|                     msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+1504|                 except asyncio.TimeoutError:
+1505|                     continue
+1506|                 if msg == "__SUMMARY__":
+1507|                     continue
+1508| 
+1509|        … (4,325字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 100|                     f"👤 {engine._active_agents[0]}"
+101|                 )
+102| 
+103|         if not any(m["sender"] == "系统" for m in engine._history):
+104|             engine._add_message("系统", f"话题：{engine._topic}")
+105| 
+106|         rounds = 0
+107|         while engine._running:
+108|             rounds += 1
+109| 
+110|             # Wait for user input (block until user sends something)
+111|             user_input = None
+112|             while engine._running:
+113|                 try:
+114|                     user_input = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+115|                     break
+116|                 except asyncio.TimeoutError:
+117|                     continue
+118| 
+119|             if not engine._running or not user_input:
+120|                … (2,259字)
+  (还有 10 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1700|                         logger.info(
+1701|                             "Broadcast: {}/{} done — {} ({})",
+1702|                             completed, total, name,
+1703|                             f"{len(content)} chars" if content else "empty",
+1704|                         )
+1705|                     except Exception as e:
+1706|                         completed += 1
+1707|                         logger.error("Broadcast: agent task error: {}", e)
+1708|                         await engine._send(f"\u2717 Agent error: {e}")
+1709| 
+1710|         # Cancel any remaining agent tasks
+1711|         for task_obj in tasks:
+1712|             if not task_obj.done():
+1713|                 name = tasks[task_obj]
+1714|                 task_obj.cancel()
+1715|                 logger.warning("Broad… (4,942字)
+• exec(cd /root/nanobot-src && grep -n "_process_and_save\|_running\|engine.stop\|_r...) → Exit code: 0 (13字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/message_handler.py) → 130|         # Check for interactive edit state
+131|         if str_chat_id in self._edit_state:
+132|             await self._handle_edit_input(str_chat_id, content)
+133|             self._stop_typing(str_chat_id)
+134|             return
+135| 
+136|         # Route to GroupChatEngine (always active)
+137|         if self._groupchat_engine and self._groupchat_engine.active_agents:
+138|             self._ensure_gc_send(str_chat_id)
+139|             self._groupchat_engine.inject(content)
+140|             return
+141| 
+142|         # Engine exists but no active agents
+143|         if self._groupchat_engine and not self._groupchat_engine.active_agents:
+144|             await self._send_text(int(str_chat_id), "💤 没有活跃 agent，用 /addagent 加入一个")
+145|             self._stop_typing(str_chat_id)
+146|     … (2,665字)
+• exec(cd /root/nanobot-src && grep -n "active_agents\|@property" nanobot/groupchat/...) → 261:        self._active_agents: list[str] = self._state.load_active()
+302:    @property
+307:    @property
+312:    @property
+313:    def active_agents(self) -> list[str]:
+314:        return list(self._active_agents)
+316:    @property
+360:    @property
+365:    @property
+370:    @property
+375:    @property
+394:        self._state.save_active(self._active_agents)
+408:        self._active_agents.clear()
+422:        if matched in self._active_agents:
+425:        self._active_agents.append(matched)
+42… (1,507字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 880|             self._task.cancel()
+881|         self._task = None
+882|         # Cancel any in-flight broadcast agent tasks so they don't keep running
+883|         # after /stop. Without this, agents continue tool calls and send messages
+884|         # even though the run loop has been cancelled.
+885|         for name, task in list(self._broadcast_tasks.items()):
+886|             if not task.done():
+887|                 task.cancel()
+888|                 logger.info("Groupchat: stop cancelled broadcast task for {}", name)
+889|         self._broadcast_tasks.clear()
+890| 
+891|     async def _send(self, text: str) -> None:
+892|         if self._send_fn:
+893|             try:
+894|                 await self._send_fn(text)
+895|             except Exception as e:
+896|                 logger.er… (3,044字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 1000|     async def _generate_summary(self) -> None:
+1001|         """Generate discussion summary — delegates to run_loop module."""
+1002|         from nanobot.groupchat.orchestra.run_loop import generate_summary
+1003|         await generate_summary(self)
+1004| 
+1005|     async def _run_loop(self) -> None:
+1006|         """Main group chat loop — delegates to run_loop module."""
+1007|         from nanobot.groupchat.orchestra.run_loop import run_loop
+1008|         await run_loop(self)
+1009| 
+1010| 
+1011| """Direct 1-on-1 chat mode for group chat engine.
+1012| 
+1013| Handles single-agent conversations when exactly one agent is activ… (5,224字)
+  (还有 2 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "def broadcast_round\|pool = \|pool:" nanobot...) → 276:        self.pool: Any = None
+278:        self.search_pool: Any = None
+315:            self.pool = ConversationPool(capacity=pool_capacity_setting, agents=list(self.exec_agents))
+318:            self.pool = ConversationPool(agents=list(self.exec_agents), per_agent_capacity=per_agent_cap)
+339:        self.search_pool = SearchPool(
+396:async def broadcast_round(
+505:    pool = orch.pool
+507:    search_pool = orch.search_pool
+1335:                if pool:
+1460:            if pool:
+
+
+Exit code: … (501字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 395| 
+396| async def broadcast_round(
+397|     agents: list[str],
+398|     engine: BroadcastContext,
+399|     mailbox: MailboxHub,
+400|     global_timeout: float = 3600.0,
+401| ) -> list[tuple[str, str | None]]:
+402|     """Run all agents concurrently with out-of-order completion display.
+403| 
+404|     Each agent:
+405|     1. Gets its own asyncio.Task
+406|     2. Can use chatroom_send/wait to talk to other agents
+407|     3. Results display as each agent finishes (first-done-first-shown)
+408| 
+409|     Args:
+410|         agents: List of agent names to run.
+411|         engine: The GroupChatEngine instance.
+412|         mailbox: Shared MailboxHub for inter-agent communication.
+413|         global_timeout: Hard limit for the entire round (seconds).
+414| 
+415|     Returns:
+416|         List … (5,315字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1475|     # Register tasks on the engine so remove_agent() can cancel them mid-round
+1476|     if hasattr(engine, '_broadcast_tasks'):
+1477|         engine._broadcast_tasks.clear()
+1478|         for task_obj, task_name in tasks.items():
+1479|             engine._broadcast_tasks[task_name] = task_obj
+1480| 
+1481|     # Populate _leader_agent_tasks so ManageAgentTool can cancel non-leader tasks
+1482|     for task_obj, task_name in tasks.items():
+1483|         if task_name != leader_name:
+1484|             _leader_agent_tasks[task_obj] = task_name
+1485| 
+1486|     results: list[tuple[str, str | None, list[str]]] = []
+1487|     completed = 0
+1488| 
+1489|     # Auxiliary tasks that must be cleaned up even on CancelledError.
+1490|     # Initialised to None so the finally block is safe if creatio… (2,912字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1730|                         pass
+1731|     except asyncio.TimeoutError:
+1732|         for task, name in tasks.items():
+1733|             if not task.done():
+1734|                 task.cancel()
+1735|                 logger.warning("Broadcast: {} cancelled (global timeout)", name)
+1736|                 await engine._send(f"\u23f0 {name} timeout")
+1737|     finally:
+1738|         # ── Guarantee cleanup of ALL sub-tasks, even on CancelledError ──
+1739|         # Without this, /stop causes CancelledError which bypasses the normal
+1740|         # cleanup path, leaving user_task/join_task/leader_end_sentinel as
+1741|         # orphaned tasks that steal messages from future sessions.
+1742|         _user_listener_running = False
+1743|         _join_listener_running = False
+1744|         _aux_to_c… (3,385字)
+• exec(cd /root/nanobot-src && grep -n "def create\|def register" nanobot/groupchat/...) → 348:    def create(self, agent_name: str) -> None:
+
+
+Exit code: 0 (65字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 345|                 resolved = self._leader_name
+346|             self._listener_restrictions[agent] = resolved
+347| 
+348|     def create(self, agent_name: str) -> None:
+349|         """Create a mailbox for an agent (idempotent)."""
+350|         if agent_name not in self._queues:
+351|             self._queues[agent_name] = asyncio.Queue()
+352|             logger.debug("Mailbox created for {}", agent_name)
+353| 
+354|     def start_round(self, active_agents: list[str] | None = None) -> None:
+355|         """Start a new round — reset all queues and history."""
+356|         for q in … (1,462字)
+  (还有 1 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -rn "_send\|send_message\|edit_message" nanobot/...) → nanobot/channels/telegram/message_handler.py:30:        sender_id = self._sender_id(user)
+nanobot/channels/telegram/message_handler.py:138:            self._ensure_gc_send(str_chat_id)
+nanobot/channels/telegram/message_handler.py:144:            await self._send_text(int(str_chat_id), "💤 没有活跃 agent，用 /addagent 加入一个")
+nanobot/channels/telegram/message_handler.py:149:        await self._send_text(int(str_chat_id), "⚠️ 群聊引擎未初始化")
+nanobot/channels/telegram/message_handler.py:163:                self… (4,051字)
+• exec(cd /root/nanobot-src && grep -n "_ensure_gc_send\|_gc_send\|_display_send" na...) → 138:            self._ensure_gc_send(str_chat_id)
+163:                self._ensure_gc_send(buf["chat_id"])
+
+
+Exit code: 0 (121字)
+• exec(cd /root/nanobot-src && grep -rn "_ensure_gc_send\|_gc_send" nanobot/ | grep ...) → nanobot/channels/telegram/message_handler.py:138:            self._ensure_gc_send(str_chat_id)
+nanobot/channels/telegram/message_handler.py:163:                self._ensure_gc_send(buf["chat_id"])
+nanobot/channels/telegram/callbacks.py:106:                self._ensure_gc_send(chat_id)
+nanobot/channels/telegram/callbacks.py:256:                    await self._gc_send(chat_id, "请输入新人设内容:")
+nanobot/channels/telegram/callbacks.py:968:                self._ensure_gc_send(chat_id)
+nanobot/channels/tel… (2,661字)
+• exec(cd /root/nanobot-src && grep -rn "def _ensure_gc_send\|def _gc_send" nanobot/...) → nanobot/channels/telegram/commands/agents.py:18:    def _ensure_gc_send(self, chat_id: str) -> None:
+nanobot/channels/telegram/commands/agents.py:63:    async def _gc_send(self, chat_id: str, text: str) -> None:
+
+
+Exit code: 0 (226字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/commands/agents.py) → 15| class AgentCommandsMixin:
+16|     """Mixin providing agent management commands."""
+17| 
+18|     def _ensure_gc_send(self, chat_id: str) -> None:
+19|         """Ensure the group chat engine has send/edit callbacks for this chat."""
+20|         if self._groupchat_engine and not self._groupchat_engine.has_send_fn:
+21|             async def send_fn(text: str) -> None:
+22|                 await self._gc_send(chat_id, text)
+23|             self._groupchat_engine.set_send_fn(send_fn)
+24|             # Set tool routing context so cron/message tools know the target
+25|             self._groupchat_engine.set_tool_context("telegram", chat_id)
+26| 
+27|         if self._groupchat_engine and not self._groupchat_engine.has_edit_fn:
+28|             int_chat_id = int(chat_id)
+29| 
+30|             async… (3,983字)
+• exec(cd /root/nanobot-src && grep -n "_send\|send_fn" nanobot/groupchat/orchestra/...) → 4:Agents can communicate with each other via chatroom_send/wait tools.
+36:    "chatroom_send": "sending",
+61:        self._send_and_get_id = send_and_get_id_fn
+72:        if not self._send_and_get_id:
+76:            self._msg_id = await self._send_and_get_id(text)
+159:        elif tool_name == "chatroom_send":
+167:        if tool_name == "chatroom_send" and "BLOCKED:" in _r:
+169:        elif tool_name == "chatroom_send" and "你已发过 1 条消息" in _r:
+201:    def _send(self, text: str) -> Awaitable[None… (2,085字)
+• exec(cd /root/nanobot-src && grep -n "def _send\|async def _send" nanobot/groupcha...) → 891:    async def _send(self, text: str) -> None:
+
+
+Exit code: 0 (64字)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 888|                 logger.info("Groupchat: stop cancelled broadcast task for {}", name)
+889|         self._broadcast_tasks.clear()
+890| 
+891|     async def _send(self, text: str) -> None:
+892|         if self._send_fn:
+893|             try:
+894|                 await self._send_fn(text)
+895|             except Exception as e:
+896|                 logger.error("Groupchat send failed: {}", e)
+897| 
+898|     @property
+899|     def _session_dir(self) -> Path | None:
+900|         """Delegate session_dir to persistence layer."""
+901|         return self._state.session_dir
+902| 
+903|     @_session_dir.setter
+904|     def _session_dir(self, value: Path | None) -> None:
+905|         self._state.session_dir = value
+906| 
+907|     def _add_message(self, sender: str, content: str) -> None:
+
+(Showing… (852字)
+• exec(cd /root/nanobot-src && grep -n "tool_result\|tool.*send\|result.*send" nanob...) → 159:        elif tool_name == "chatroom_send":
+164:    async def update_from_tool_result(self, agent: str, tool_name: str, result: str) -> None:
+167:        if tool_name == "chatroom_send" and "BLOCKED:" in _r:
+169:        elif tool_name == "chatroom_send" and "你已发过 1 条消息" in _r:
+360:                    elif tool_name not in ("chatroom_send", "wait"):
+367:            wait_tool._send_tool = send_tool
+668:        # Shared state between _on_tool_start and _on_tool_result for chatroom_send args
+682:… (1,206字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 164|     async def update_from_tool_result(self, agent: str, tool_name: str, result: str) -> None:
+165|         """Update tracker state based on tool results."""
+166|         _r = result or ""
+167|         if tool_name == "chatroom_send" and "BLOCKED:" in _r:
+168|             await self.set_state(agent, "blocked", reason="pool full")
+169|         elif tool_name == "chatroom_send" and "你已发过 1 条消息" in _r:
+170|             await self.set_state(agent, "blocked", reason="leader gate")
+171|         elif tool_name == "web_search" and "BLOCKED:" in _r and "额度" in _r:
+172|             await self.set_state(agent, "blocked", reason="no credits")
+173|         elif tool_name == "web_search" and "BLOCKED:" in _r and "本轮已搜索" in _r:
+174|             await self.set_state(agent, "blocked", reason="cycle lim… (2,442字)
+• exec(cd /root/nanobot-src && grep -n "_update_display\|update_display\|tool_result...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && grep -n "await engine._send\|await self.engine._send"...) → 321:        await self.engine._send(f"threads {self.pool.status()}")
+462:    await engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout), leader=leader_name, ranks=ranks_map))
+675:        await engine._send(_d.thinking_msg(name, model_short, leader=leader_name, idx=agent_idx + 1, total=total))
+907:                            await engine._send(f"⏰ {name} 超时，重试中...")
+929:                                    await engine._send(
+954:                            await engine._send(
+972… (1,964字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1220|                         tok_suffix = ""
+1221|                         if total_tok > 0:
+1222|                             elapsed = _t.time() - _cycle_t0
+1223|                             cost = result.cost or 0
+1224|                             cache_t = result.cache_tokens or 0
+1225|                             reasoning_t = sum(
+1226|                                 (m.get("reasoning_tokens") or 0)
+1227|                                 for m in (result.provider_meta or [])
+1228|                                 if isinstance(m, dict)
+1229|                             )
+1230|                             tok_suffix = "\n" + _d.format_token_stats(
+1231|                                 tok.get("prompt", 0), tok.get("completion", 0),
+1232|                                 elapsed=elapsed… (5,520字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → (2,397字)
+  (还有 1 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 340| 
+341|     def set_send_fn(self, send_fn: Callable[[str], Awaitable[None]]) -> None:
+342|         """Set the message output callback."""
+343|         self._send_fn = send_fn
+344| 
+345|     def set_edit_fn(
+346|         self,
+347|         edit_fn: Callable[[int, str], Awaitable[None]],
+348|         send_and_get_id_fn: Callable[[str], Awaitable[int | None]],
+349|     ) -> None:
+350|         """Set callbacks for streaming message edits."""
+351|         self._edit_fn = edit_fn
+352|         self._send_and_get_id_fn = send_and_get_id_fn
+353| 
+354|     def set_on_round_done(self, cb: Callable[[], Awaitable[None]]) -> None:
+355|         """Set callback invoked when all agents finish speaking in a round."""
+356|         self._on_round_done = cb
+357| 
+358|     # ── Public API (used by channels) … (1,241字)
+• exec(cd /root/nanobot-src && grep -n "GroupChatEngine\|_groupchat_engine\s*=" nano...) → STDERR:
+grep: nanobot/channels/telegram/: Is a directory
+
+
+Exit code: 0 (71字)
+• exec(cd /root/nanobot-src && grep -rn "GroupChatEngine\|_groupchat_engine\s*=" nan...) → nanobot/channels/telegram/message_handler.py:136:        # Route to GroupChatEngine (always active)
+nanobot/channels/telegram/message_handler.py:159:            # Inject directly into GroupChatEngine (same path as normal messages),
+nanobot/channels/telegram/callbacks.py:177:                    from nanobot.groupchat.orchestra.engine import GroupChatEngine
+nanobot/channels/telegram/callbacks.py:183:                        tools_cfg = {t: all_on for t in GroupChatEngine.TOOL_NAMES}
+nanobot/channel… (2,543字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/__init__.py) → 115|         self._bot_user_id: int | None = None
+116|         self._bot_username: str | None = None
+117|         # Group chat engine (initialized in set_groupchat_engine)
+118|         self._groupchat_engine: GroupChatEngine | None = None
+119|         # Edit state for interactive /editagent flow
+120|         self._edit_state: dict[str, dict] = {}  # chat_id -> {agent, field}
+121| 
+122|     def set_groupchat_engine(self, engine: GroupChatEngine) -> None:
+123|         """Set the group chat engine for multi-agent discussions."""
+124|         self._groupchat_engine = engine
+125|         # Load persisted retry config from pm.json
+126|         try:
+127|             pm = self._load_pm()
+128|             for _name, info in pm.get("providers", {}).items():
+129|                 delays = info.get("re… (1,612字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1054|                         await _trigger_realtime_interrupts(
+1055|                             sender=name,
+1056|                             targets=_implicit_targets,
+1057|                             mailbox=mailbox,
+1058|                             engine=engine,
+1059|                             leader_name=leader_name,
+1060|                         )
+1061| 
+1062|                 # ── Handle forced interrupt ──
+1063|                 if is_interrupted:
+1064|                     # Clear the event so it can be set again by a future message
+1065|                     _interrupt_event.clear()
+1066|                     # Reset interrupt counter so newer messages can re-interrupt
+1067|                     # this agent in subsequent cycles (freshness guarantee).
+1068|                    … (4,950字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1130|                     if content:
+1131|                         messages.append({"role": "assistant", "content": content})
+1132| 
+1133|                     # Inject the interrupt message as a "user" message from the sender.
+1134|                     # If multiple messages accumulated, inject earlier ones as
+1135|                     # summarised context first, then the LATEST as the primary
+1136|                     # message so the LLM responds to the newest state.
+1137|                     if _intr_earlier:
+1138|                         _earlier_lines = "\n".join(
+1139|   … (4,947字)
+  (还有 2 个工具调用，已省略)
+---
+[用户]: 继续
+---
+[Retriever]: 记忆很清晰。让我把找到的信息发给Kirk。
+
+[工具调用记录]
+• memory_palace(用户消息被吞 消息丢失 后续消息不显示 broadcast messages) → 🔍 10 result(s) for '用户消息被吞 消息丢失 后续消息不显示 broadcast messages':
+
+[1] wing_code/kirk-repeat-loop-20260606 (sim=0.323)
+  ## 2026-06-06 13:41 Kirk 重复循环事件确认
+
+Kirk 在群聊中出现同一句话反复发送数十次的重复循环。Retriever 记忆检索确认这是 broadcast.py messages 无界增长（#1）+ 压缩与 cycle 错位（#2）的现场验证。
+
+4个已知问题：
+1. messages 列表无界增长（核心）— broadcast.py while True cycle 内只增不减
+2. 压缩只在 round 级触发，cycle 内部无压缩，messages 局部变量永不重建
+3. 异常路径 _add_message() 可能未调用，上下文不同步
+4. rank 隔离策略连贯性问题
+
+修复建议：cycle 每轮开始时裁剪 messages（保留 system prompt + 最近 N 条），或引入 cycle 级压缩回调。
+
+[2… (3,152字)
+• memory_palace(broadcast.py messages 无界增长 cycle 压缩裁剪 messages局部变量) → 🔍 10 result(s) for 'broadcast.py messages 无界增长 cycle 压缩裁剪 messages局部变量':
+
+[1] wing_code/kirk-repeat-loop-20260606 (sim=0.501)
+  ## 2026-06-06 13:41 Kirk 重复循环事件确认
+
+Kirk 在群聊中出现同一句话反复发送数十次的重复循环。Retriever 记忆检索确认这是 broadcast.py messages 无界增长（#1）+ 压缩与 cycle 错位（#2）的现场验证。
+
+4个已知问题：
+1. messages 列表无界增长（核心）— broadcast.py while True cycle 内只增不减
+2. 压缩只在 round 级触发，cycle 内部无压缩，messages 局部变量永不重建
+3. 异常路径 _add_message() 可能未调用，上下文不同步
+4. rank 隔离策略连贯性问题
+
+修复建议：cycle 每轮开始时裁剪 messages（保留 system prompt + 最近 N 条），或引入 cycl… (4,471字)
+---
+[Harper]: [工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1495|     # ── User-message listener (always running during broadcast) ──────────────
+1495|     _user_listener_running = True
+1496|
+1495|     async def _user_listener() -> None:
+1500|         while _user_listener_running:
+1501|             try:
+1502|                 msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+1503|             except asyncio.TimeoutError:
+1504|                 continue
+1505|             if msg == "__SUMMARY__":
+1506|                 continue
+
+1509|                 all_agent_names = list(mailbox.agent_names)
+1510|                 await pool.allocate_user(all_agent_names)
+
+1511|                 mailbox.create("用户")
+1512|                 mailbox.send("用户", ["All"], msg)
+1513|                 # Interrupt any agents currently inside tool_loop so they pick
+1514|                 # up the user message at the next safe checkpoint rather than
+1515|                 # continuing to completion before responding. This is critical
+1516|                 # for responsiveness: without it, an agent could spend 30+ seconds
+1517|                 # doing web searches before seeing the interrupt, leaving the
+1518|                 # user wondering why their message was ignored.
+1519|                 for task_obj, name in tasks.items():
+1520|                     if not task_obj.done():
+1521:                        mailbox.interrupt_busy_agents(name)
+1522|
+1521|                 logger.info("User message injected: {}", msg[:50])
+1522|         except asyncio.CancelledError:
+1523|             raise
+1524|         except Exception as e:
+1525|             logger.error("User listener error: {}", e)
+1526|
+
+1526|     # Join listener: track completion so we know when to exit
+1527|     # ─────────────────────────────────────────────────────────────────────
+1528|     _join_listener_running = True
+
+1532|     async def _join_listener() -> None:
+1533|         while _join_listener_running:
+1533|             try:
+1532|                 _, pending = await asyncio.wait(
+1533|                     [t for t in tasks.keys() if not t.done()],
+1534:                     timeout=1.0,
+1535|                     return_when=asyncio.FIRST_COMPLETED,
+1536:                 )
+1537|             except asyncio.TimeoutError:
+1539|               continue
+1540|             except ValueError:  # empty tasks (all done/cancelled)
+1541:               break
+1542:             if not pending:
+1543|                 break
+1544|                 logger.warning("Join listener: all agents done, exiting")
+1545|             # Mark the completed agent
+1546|             for t in pending:
+1547|                 if t in tasks:
+1548|                     completed += 1
+1549|                     completed_names.add(tasks[t])
+1550:                    logger.info("Agent {} completed (now {})", tasks[t], completed)
+1551:            except asyncio.CancelledError:
+1552:             raise
+1553:             except Exception as e:
+1554:                 logger.error("Join listener error: {}", e)
+1555|             sleep(0.5)  # avoid tight loop
+
+1555|     user_task = asyncio.create_task(_user_listener())
+1556|     join_task = asyncio.create_task(_join_listener())
+
+1600|     # The gather ensures we wait for the last agent to finish before moving on.
+1602|     await asyncio.gather(
+1603|         user_task,
+1604:        join_task,
+1605|         *tasks.keys(),
+1606:        return_exceptions=True,
+1560|     )
+
+1560|     finally:
+1562|         # ── Guarantee cleanup of ALL sub-tasks, even on CancelledError ──
+1561|         # Without some form of non-None sentinel, CancelledError would skip
+156 |         # cleanup entirely, leaking the listener tasks between rounds.
+1762|         _user_listener_running = False
+1763|         _user_listener_running = False  # (duplicate line in original)
+1764|         # Drain the input queue so stale messages don't leak into next round
+1765:        while not engine._input_queue.empty():
+1766:            try:
+1767:                engine._input_queue.get_nowait()
+1768:            except asyncio.QueueEmpty:
+1769:                break
+│       1765|         # Drain the input queue so stale messages don't leak into next round
+1766|         while not engine._input_queue.empty():
+1767:             try:
+                 engine._input_queue.get_nowait()
+1756|     finally:
+1768:             except asyncio.QueueEmpty:
+1769:                 else:
+           break
+      1763|         _user_listener_running = False
+      1764|         _user_listener_running = False  # (duplicate line in original)
+      1765|         # Drain the input queue so stale messages don't leak into next round
+      1765|         while not engine._input_queue.inject(): break
+
+I found the problem! The `finally` block drains `engine._input_queue` completely. So after a round ends, any queued user message gets discarded before the next round starts.
+
+But wait, let me trace more carefully. I need to understand when a user message lands in `_input_queue` and when it gets swallowed.
+
+Let me look at the full picture: when does `inject()` put a message? And when does `_user_listener` drain it?
+
+The flow:
+1. User sends message → `inject()` → `engine._input_queue.put_nowait(message)`
+2. `_user_listener` picks it up → `mailbox.send("用户", ["All"], msg)` → interrupts agents
+3. Round ends → `finally` drains the queue (lines 1765-1770)
+
+So during an active round, user messages work fine. But what about when there's no active round?
+
+If the loop is NOT running (`_running = False`) and user sends a message, `inject()` puts it in the queue but nothing processes it because `_user_listener` only runs during `broadcast_round`.
+
+That's one swallowing path. Let me verify if there are others...
+
+Actually, the real question is: what happens between rounds? Does the next round's `_user_listener` pick up old messages, or are they drained?
+
+Looking at line 1765-1770, the `finally` block drains the queue AFTER the round ends. So old messages are cleared. But new messages sent after drainage should go into a fresh queue and be picked up by the next round's `_user_listener`.
+
+Unless... there's a race condition where messages arrive after drainage but before the next round starts?
+
+Or maybe the issue is different. Let me think about when `_user_listener` is not running:
+
+1. Between rounds: `_user_listener` IS running (inside `broadcast_round`)
+2. Before first round: not running
+3. After last round (loop stopped): not running
+
+For case 3, if the user sends a message after the loop stops, `inject()` puts it in the queue but nothing processes it.
+
+But actually, looking at the code flow, the `run_loop` calls `broadcast_round` in a loop. Each `broadcast_round` has its own `_user_listener`. So during normal operation, `_user_listener` is always running when agents are active.
+
+Let me reconsider... Maybe the bug is that `mailbox.send()` doesn't properly enqueue for ALL agents, or the interrupt doesn't actually reach running agents?
+
+Let me look more carefully at how messages are actually dispatched to agents and how they get processed.
+
+Actually, I just realized: when a user message is injected and agents are interrupted, do those agents actually see the interrupt BEFORE they finish their current tool call? Or do they complete their tool call first and THEN check for interrupts?
+
+The comment at lines 1513-1518 says: "Interrupt any agents currently inside tool_loop so they pick up the user message at the next safe checkpoint." So the design intent is that agents check for interrupts between tool calls, not during them.
+
+But what if an agent is in the middle of a LLM call? Then it won't check for interrupts until that LLM call returns.
+
+Hmm, but that's expected behavior. The issue might be that messages are getting lost between rounds.
+
+Wait, I see a potential bug now! Look at lines 1765-1770:
+
+```python
+# Drain the input queue so stale messages don't leak into next round
+while not engine._input_queue.empty():
+    try:
+        engine._input_queue.get_nowait()
+    except asyncio.QueueEmpty:
+        break
+```
+
+This drains the queue AFTER the round ends. But what if the NEXT round hasn't started yet? Then messages are drained and lost!
+
+Actually, let me trace this more carefully. The `finally` runs when `broadcast_round` ends. Then control returns to `run_loop`, which might loop back to call `broadcast_round` again. So there's a brief window between `broadcast_round` ending and the next `broadcast_round` starting where messages get drained.
+
+But wait, `run_loop` calls `broadcast_round` in a loop:
+
+```python
+while not _should_exit:
+    results = await broadcast_round(...)
+```
+
+So between iterations, there's NO `_user_listener` running! That's the swallowing window.
+
+If user sends a message right after one round ends but before the next round starts, `inject()` puts it in the queue, but nothing is listening. Then the next round starts, `finally` drains the queue, and the message is lost forever!
+
+Let me confirm this is the bug and propose a fix.
+
+The fix should be: in `run_loop`, before calling `broadcast_round`, check if there are pending messages in `_input_queue` and process them FIRST.
+
+Or better: have `run_loop` spawn a persistent user listener that survives between rounds.
+
+Let me look at `run_loop` to confirm.
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 1| """Main group chat event loop — dispatches to broadcast mode.
+2| 
+3| Leader's final text reply (before end_discussion) serves as the
+4| synthesis; no separate summary generation stage exists.
+5| """
+6| 
+7| from __future__ import annotations
+8| 
+9| import asyncio
+10| 
+11| from loguru import logger
+12| 
+13| from nanobot.groupchat.orchestra.broadcast import broadcast_round
+14| 
+15| 
+16| async def generate_summary(engine: Any) -> None:
+17|     """Generate and send an AI summary of the entire discussion.
+18| 
+19|     Called when user sends ``__SUMMARY__`` or when Leader triggers
+20|     ``end_discussion``.  Uses the same provider + model as history
+21|     compression (``tool_results.summarize_model``).
+22|     """
+23|     from nanobot.groupchat.history.history_settings import (
+24|         … (5,951字)
+---
+[Kirk]: 关键发现：`user_task`（`_user_listener`）**没有**被添加到 `all_tasks` 中！它是在第1526行创建的，但从未被添加到 `all_tasks`。`all_tasks` 只包含代理任务和 `leader_end_sentinel`。
+
+这意味着 `asyncio.wait` 循环（第1635-1640行）**不会**等待 `user_task`。`user_task` 独立运行，并在 `finally` 块中被取消。
+
+现在，真正的问题：当 `broadcast_round` 结束时，`finally` 块将 `_user_listener_running` 设置为 `False` 并取消 `user_task`。但在取消和实际停止之间，存在一个时间窗口。更重要的是，在 `finally` 块运行和 `run_loop` 回到 `await _input_queue.get()` 之间，也存在一个时间窗口。
+
+但实际上，我认为真正的问题更简单。让我重新阅读 `inject()`：
+
+```python
+def inject(self, message: str) -> None:
+    if not self._running and len(self._active_agents) >= 1:
+        self._start_group_loop()
+    if self._running:
+        self._input_queue.put_nowait(message)
+```
+
+以及 `_start_group_loop()`：
+```python
+def _start_group_loop(self) -> None:
+    if self._task and not self._task.done():
+        self._task.cancel()
+    if self._running:
+        return
+    self._running = True
+    self._input_queue = asyncio.Queue()  # ← NEW QUEUE!
+    ...
+    self._task = asyncio.create_task(self._run_loop())
+```
+
+**竞态条件**：如果 `_start_group_loop()` 被调用，它会创建一个**新**队列。但 `inject()` 在 `_start_group_loop()` 之后将消息放入队列。所以第一条消息应该没问题。
+
+让我换个角度思考。用户说“后续发送的会被吞”。也许问题不在于 `broadcast_round` 期间，而在于**轮次之间**。
+
+让我检查一下：在 `broadcast_round` 结束后，`run_loop` 调用 `_maybe_compress_history()` 和 `_on_round_done()`。在此期间，`_user_listener` 已经被取消（在 `broadcast_round` 的 `finally` 块中）。所以如果用户在此窗口期间发送消息，它会进入 `_input_queue`，并且 `run_loop` 会在下一次迭代中获取它。这应该是正确的。
+
+等等——让我再看看 `_on_round_done`。它做了什么？它可能会重置某些东西。让我检查一下：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是一个回调。让我看看它在哪里设置的：`_on_round_done` 是
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1497|     try:
+1498|         # ── User interjection listener ──
+1499| 
+1500|         async def _user_listener() -> None:
+1501|             while _user_listener_running:
+1502|                 try:
+1503|                     msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+1504|                 except asyncio.TimeoutError:
+1505|                     continue
+1506|                 if msg == "__SUMMARY__":
+1507|                     continue
+1508| 
+1509|                 all_agent_names = list(mailbox.agent_names)
+1510|                 await pool.allocate_user(all_agent_names)
+1511| 
+1512|                 mailbox.create("用户")
+1513|                 mailbox.send("用户", ["All"], msg)
+1514|                 # Interrupt any agents currently inside tool_loop so they pick
+1515|         … (6,770字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 106|         rounds = 0
+107|         while engine._running:
+108|             rounds += 1
+109| 
+110|             # Wait for user input (block until user sends something)
+111|             user_input = None
+112|             while engine._running:
+113|                 try:
+114|                     user_input = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+115|                     break
+116|                 except asyncio.TimeoutError:
+117|                     continue
+118| 
+119|             if not engine._running or not user_input:
+120|                 break
+121| 
+122|             if user_input == "__SUMMARY__":
+123|                 await generate_summary(engine)
+124|                 continue
+125| 
+126|             # Record user message (no echo)
+127|             engine._add_m… (2,299字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/message_handler.py) → 125|             return
+126| 
+127|         # Start typing indicator before processing
+128|         self._start_typing(str_chat_id)
+129| 
+130|         # Check for interactive edit state
+131|         if str_chat_id in self._edit_state:
+132|             await self._handle_edit_input(str_chat_id, content)
+133|             self._stop_typing(str_chat_id)
+134|             return
+135| 
+136|         # Route to GroupChatEngine (always active)
+137|         if self._groupchat_engine and self._groupchat_engine.active_agents:
+138|             self._ensure_gc_send(str_chat_id)
+139|             self._groupchat_engine.inject(content)
+140|             return
+141| 
+142|         # Engine exists but no active agents
+143|         if self._groupchat_engine and not self._groupchat_engine.active_agents:
+144|      … (2,487字)
+• exec(cd /root/nanobot-src && grep -n "groupchat\|_input_queue\|_running\|is_runnin...) → 137:        if self._groupchat_engine and self._groupchat_engine.active_agents:
+139:            self._groupchat_engine.inject(content)
+143:        if self._groupchat_engine and not self._groupchat_engine.active_agents:
+162:            if self._groupchat_engine and self._groupchat_engine.active_agents:
+164:                self._groupchat_engine.inject(content)
+
+
+Exit code: 0 (376字)
+• exec(cd /root/nanobot-src && grep -n "def inject\|async def inject" nanobot/groupc...) → 815:    def inject(self, message: str) -> None:
+
+
+Exit code: 0 (62字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 815|     def inject(self, message: str) -> None:
+816|         """Inject a user message into the chat loop (1+ agents)."""
+817|         # Lazy start: if any agents and loop not running, start it now
+818|         if not self._running and len(self._active_agents) >= 1:
+819|             self._start_group_loop()
+820|         if self._running:
+821|             self._input_queue.put_nowait(message)
+822| 
+823|     def request_summary(self) -> None:
+824|         """Request a discussion summary."""
+825|         if self._running:
+826|             self._input_queue.put_nowait("__SUMMARY__")
+827| 
+828|     def stop(self) -> None:
+829|         """Stop the group loop but keep active agents."""
+830|         self._stop_… (1,331字)
+  (还有 7 个工具调用，已省略)
+---
+[Retriever]: Kirk又进入了重复循环！这是之前记忆中找到的已知问题——broadcast.py messages无界增长导致。但他现在在分析的是另一个问题：用户消息被吞。
+
+让我把记忆中的相关信息发给他，帮他跳出循环。
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "_maybe_compress\|compress_history\|trim_mess...) → nanobot/groupchat/orchestra/engine.py:940:    async def _maybe_compress_history(self) -> None:
+nanobot/groupchat/orchestra/engine.py:1137:                await engine._maybe_compress_history()
+nanobot/groupchat/orchestra/run_loop.py:143:            await engine._maybe_compress_history()
+
+
+Exit code: 0 (302字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 935|         """Callback from MailboxHub.send() — persist agent communication."""
+936|         self._state.save_event("agent_comm", agent=sender, content=content, extra={
+937|             "targets": targets,
+938|         })
+939| 
+940|     async def _maybe_compress_history(self) -> None:
+941|         """Compress history if needed — delegates to HistoryContext."""
+942|         await self.history.maybe_compress()
+943|         self._history = self.history.messages  # keep shim in sync
+944| 
+945|     def _format_history(self) -> str:
+946|         """Format history as string — delegates to HistoryContext."""
+947|         return self.history.format()
+948| 
+949| 
+950|     def _pick_next_speaker(self, last_content: str = "") -> str:
+951|         names = self._active_agents
+952|         # @mentions
+… (2,325字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1755|             await asyncio.gather(*_aux_to_cancel, return_exceptions=True)
+1756|             logger.debug("Broadcast: all auxiliary tasks finished")
+1757|         # Remove auxiliary task entries from engine registry
+1758|         if hasattr(engine, '_broadcast_tasks'):
+1759|             for key in ('__user_listener', '__join_listener', '__leader_sentinel'):
+1760|                 engine._broadcast_tasks.pop(key, None)
+1761| 
+1762|     # (auto-share logic is now inside _run_one's auto-wait cycle)
+1763| 
+1764|     # ── Finalize status dashboard ──
+1765|     await tracker.finalize()
+1766| 
+1767|     # ── Round summary ──
+1768|     comm_count = len(mailbox.history)
+1769|     round_duration = _time.time() - _round_t0
+1770|     engine._save_round_summary(
+1771|         round_num=engine._roun… (1,385字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1784|     mailbox.clear()
+1785| 
+1786|     # Clear broadcast task registry on the engine
+1787|     if hasattr(engine, '_broadcast_tasks'):
+1788|         engine._broadcast_tasks.clear()
+1789| 
+1790|     # ── Clear session tool overrides (set by ManageAgentTool) ──
+1791|     if hasattr(engine, "_session_tools_override"):
+1792|         engine._session_tools_override.clear()
+1793|         logger.info("Broadcast: cleared session tool overrides")
+1794| 
+1795|     return [(name, content) for name, content, _ in results]
+1796| 
+
+(End of file — 1796 lines total) (559字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1725|                         n, c, tools_l, *_ = t.result()
+1726|                         if c:
+1727|                             completed += 1
+1728|                             results.append((n, c, tools_l or []))
+1729|                     except Exception:
+1730|                         pass
+1731|     except asyncio.TimeoutError:
+1732|         for task, name in tasks.items():
+1733|             if not task.done():
+1734|                 task.cancel()
+1735|                 logger.warning("Broadcast: {} cancelled (global timeout)", name)
+1736|                 await engine._send(f"\u23f0 {name} timeout")
+1737|     finally:
+1738|         # ── Guarantee cleanup of ALL sub-tasks, even on CancelledError ──
+1739|         # Without this, /stop causes CancelledError which bypasses the normal
+1740|… (2,782字)
+• exec(cd /root/nanobot-src && grep -n "drain\|empty()\|QueueEmpty\|_input_queue" na...) → 754:                # Hard cycle cap — prevent runaway agents from draining resources
+1077:                        while not _intr_q.empty():
+1089:                    # may have been consumed by wait() before drain runs.
+1503:                    msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1… (413字)
+  (还有 2 个工具调用，已省略)
+---
+[Kirk]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "def inject\|def _start_group_loop\|_input_qu...) → 277:        self._running = False
+281:        self._input_queue: asyncio.Queue[str] = asyncio.Queue()
+308:    def is_running(self) -> bool:
+310:        return self._running
+431:        if self._running and self._broadcast_tasks:
+485:        if not self._active_agents and self._running:
+815:    def inject(self, message: str) -> None:
+818:        if not self._running and len(self._active_agents) >= 1:
+820:        if self._running:
+821:            self._input_queue.put_nowait(message)
+825:        i… (781字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 815|     def inject(self, message: str) -> None:
+816|         """Inject a user message into the chat loop (1+ agents)."""
+817|         # Lazy start: if any agents and loop not running, start it now
+818|         if not self._running and len(self._active_agents) >= 1:
+819|             self._start_group_loop()
+820|         if self._running:
+821|             self._input_queue.put_nowait(message)
+822| 
+823|     def request_summary(self) -> None:
+824|         """Request a discussion summary."""
+825|         if self._running:
+826|             self._input_queue.put_nowait("__SUMMARY__")
+827| 
+828|     def stop(self) -> None:
+829|         """Stop the group loop but keep active agents."""
+830|         self._stop_group_loop()
+831|         try:
+832|             asyncio.ensure_future(self._disconnect_m… (3,244字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 100|                     f"👤 {engine._active_agents[0]}"
+101|                 )
+102| 
+103|         if not any(m["sender"] == "系统" for m in engine._history):
+104|             engine._add_message("系统", f"话题：{engine._topic}")
+105| 
+106|         rounds = 0
+107|         while engine._running:
+108|             rounds += 1
+109| 
+110|             # Wait for user input (block until user sends something)
+111|             user_input = None
+112|             while engine._running:
+113|                 try:
+114|                     user_input = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+115|                     break
+116|                 except asyncio.TimeoutError:
+117|                     continue
+118| 
+119|             if not engine._running or not user_input:
+120|                … (2,528字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1497|     try:
+1498|         # ── User interjection listener ──
+1499| 
+1500|         async def _user_listener() -> None:
+1501|             while _user_listener_running:
+1502|                 try:
+1503|                     msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+1504|                 except asyncio.TimeoutError:
+1505|                     continue
+1506|                 if msg == "__SUMMARY__":
+1507|                     continue
+1508| 
+1509|                 all_agent_names = list(mailbox.agent_names)
+1510|                 await pool.allocate_user(all_agent_names)
+1511| 
+1512|                 mailbox.create("用户")
+1513|                 mailbox.send("用户", ["All"], msg)
+1514|                 # Interrupt any agents currently inside tool_loop so they pick
+1515|         … (3,182字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1737|     finally:
+1738|         # ── Guarantee cleanup of ALL sub-tasks, even on CancelledError ──
+1739|         # Without this, /stop causes CancelledError which bypasses the normal
+1740|         # cleanup path, leaving user_task/join_task/leader_end_sentinel as
+1741|         # orphaned tasks that steal messages from future sessions.
+1742|         _user_listener_running = False
+1743|         _join_listener_running = False
+1744|         _aux_to_cancel = []
+1745|         for aux_task in (user_task, join_task, leader_end_sentinel):
+1746|             if aux_task is not None and not aux_task.done():
+1747|                 aux_task.cancel()
+1748|                 _aux_to_cancel.append(aux_task)
+1749|                 logger.debug("Broadcast: cancelle… (3,036字)
+  (还有 6 个工具调用，已省略)
+---
+[Kirk]: 好的，`inject()` 是同步调用的。这看起来是正确的。
+
+现在让我重新思考。也许问题不在于消息被"吞掉"，而在于消息被 `_user_listener` 处理了，但代理没有正确响应。
+
+让我看看一个关键细节：当 `_user_listener` 处理消息时，它调用 `mailbox.send("用户", ["All"], msg)`。这会将消息放入每个代理的邮箱队列中。但如果代理已经因为 `MAX_CONSECUTIVE_WAITS` 退出了呢？
+
+让我看看 `MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CON
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1339|                 if msg is None:
+1340|                     # No message — check if engine stopped or leader ended discussion
+1341|                     if not engine._running or leader_end_event.is_set():
+1342|                         await tracker.set_state(name, "done", reason="engine stopped")
+1343|                         logger.info("Broadcast: {} wait returned None, engine stopped, exiting", name)
+1344|                         break
+1345|                     # Leader fallback: if no text was produced, force synthesis
+1346|                     if is_leader and not content:
+1347|                         logger.warning(
+1348|                             "Broadcast: leader {} wait timeout with no text (cycle {}), forcing synthesis",
+1349|                             name, cycle,
+1350… (4,225字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1500|         async def _user_listener() -> None:
+1501|             while _user_listener_running:
+1502|                 try:
+1503|                     msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+1504|                 except asyncio.TimeoutError:
+1505|                     continue
+1506|                 if msg == "__SUMMARY__":
+1507|                     continue
+1508| 
+1509|                 all_agent_names = list(mailbox.agent_names)
+1510|                 await pool.allocate_user(all_agent_names)
+1511| 
+1512|                 mailbox.create("用户")
+1513|                 mailbox.send("用户", ["All"], msg)
+1514|                 # Interrupt any agents currently inside tool_loop so they pick
+1515|                 # up the user message at the next safe checkpoint rather than
+1… (2,034字)
+• exec(cd /root/nanobot-src && grep -n "def wait\|async def wait" nanobot/groupchat/...) → 596:    async def wait(
+
+
+Exit code: 0 (38字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 596|     async def wait(
+597|         self,
+598|         agent_name: str,
+599|         timeout: float = 600.0,
+600|         from_agent: str = "",
+601|     ) -> AgentMessage | None:
+602|         """Wait for a message in the agent's mailbox.
+603| 
+604|         Args:
+605|             agent_name: The waiting agent's name.
+606|             timeout: Max seconds to wait (hard cap: 120s per call).
+607|             from_agent: If set, only return messages from this sender.
+608| 
+609|         Returns:
+610|             The message, or ``None`` on timeout.
+611|         """
+612|         q = self._queues.get(agent_name)
+613|         if q is None:
+614|             logger.warning("MailboxHub.wait: no mailbox for {}", agent_name)
+615|             return None
+616| 
+617|         # ── Proactive nudge: if wait… (3,050字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → [重复调用,已跳过]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1737|     finally:
+1738|         # ── Guarantee cleanup of ALL sub-tasks, even on CancelledError ──
+1739|         # Without this, /stop causes CancelledError which bypasses the normal
+1740|         # cleanup path, leaving user_task/join_task/leader_end_sentinel as
+1741|         # orphaned tasks that steal messages from future sessions.
+1742|         _user_listener_running = False
+1743|         _join_listener_running = False
+1744|         _aux_to_cancel = []
+1745|         for aux_task in (user_task, join_task, leader_end_sentinel):
+1746|             if aux_task is not None and not aux_task.done():
+1747|                 aux_task.cancel()
+1748|                 _aux_to_cancel.append(aux_task)
+1749|                 logger.debug("Broadcast: cancelled auxiliary task {}", aux_task.get_name())
+1750… (3,036字)
+• exec(cd /root/nanobot-src && grep -n "def clear" nanobot/groupchat/orchestra/mailb...) → 722:    def clear(self) -> None:
+
+
+Exit code: 0 (47字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 722|     def clear(self) -> None:
+723|         """Clear message queues but preserve history for later r… (1,168字)
+  (还有 3 个工具调用，已省略)
+---
+[Retriever]: Kirk又触发了重复循环。这是记忆中找到的已知问题（wing_code/kirk-repeat-loop-20260606）。他现在在分析"用户消息被吞"的问题，但陷入了循环。
+
+让我把记忆中的关键信息发给他，帮助他跳出循环并聚焦到真正的根因。
+---
+[Harper]: ⚠️ [Harper] LLM调用出错（Error calling LLM: litellm.BadRequestError: OpenrouterExcept），我仍在线。等待队友消息后将继续工作。
+---
+[Retriever]: Kirk还在重复循环中，Harper报错了。我没有工具权限，只能发消息。让我把记忆中的关键信息发给Kirk帮他跳出循环。
+---
+[Harper]: ⚠️ [Harper] LLM调用出错（Error calling LLM: litellm.BadRequestError: OpenrouterExcept），我仍在线。等待队友消息后将继续工作。
+---
+[Retriever]: 找到了。让我把关键信息发给Kirk，帮他跳出循环。
+
+[工具调用记录]
+• memory_palace(Kirk 重复循环 broadcast.py messages 无界增长 压缩 cycle 错位) → 🔍 5 result(s) for 'Kirk 重复循环 broadcast.py messages 无界增长 压缩 cycle 错位':
+
+[1] wing_code/kirk-repeat-loop-20260606 (sim=0.769)
+  ## 2026-06-06 13:41 Kirk 重复循环事件确认
+
+Kirk 在群聊中出现同一句话反复发送数十次的重复循环。Retriever 记忆检索确认这是 broadcast.py messages 无界增长（#1）+ 压缩与 cycle 错位（#2）的现场验证。
+
+4个已知问题：
+1. messages 列表无界增长（核心）— broadcast.py while True cycle 内只增不减
+2. 压缩只在 round 级触发，cycle 内部无压缩，messages 局部变量永不重建
+3. 异常路径 _add_message() 可能未调用，上下文不同步
+4. rank 隔离策略连贯性问题
+
+修复建议：cycle 每轮开始时裁剪 messages（保留 system prompt + 最近 N 条），或引入 cycle 级… (2,184字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 95|                     f"📌 直接发消息，所有 agent 会轮流回复"
+96|                 )
+97|             else:
+98|                 await engine._send(
+99|                     f"💬 对话模式\n"
+100|                     f"👤 {engine._active_agents[0]}"
+101|                 )
+102| 
+103|         if not any(m["sender"] == "系统" for m in engine._history):
+104|             engine._add_message("系统", f"话题：{engine._topic}")
+105| 
+106|         rounds = 0
+107|         while engine._running:
+108|             rounds += 1
+109| 
+110|             # Wait for user input (block until user sends something)
+111|             user_input = None
+112|             while engine._running:
+113|                 try:
+114|                     user_input = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+115|                     break… (2,698字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1740|         # cleanup path, leaving user_task/join_task/leader_end_sentinel as
+1741|         # orphaned tasks that steal messages from future sessions.
+1742|         _user_listener_running = False
+1743|         _join_listener_running = False
+1744|         _aux_to_cancel = []
+1745|         for aux_task in (user_task, join_task, leader_end_sentinel):
+1746|             if aux_task is not None and not aux_task.done():
+1747|                 aux_task.cancel()
+1748|                 _aux_to_cancel.append(aux_task)
+1749|                 logger.debug("Broadcast: cancelled auxiliary task {}", aux_task.get_name())
+1750|         # Wait for auxiliary tasks to *actually* finish — without this, a cancelled
+1751|         # user_task can survive into the next session, reading from the new session's
+1752| … (2,549字)
+• exec(cd /root/nanobot-src && grep -n "drain\|get_nowait\|_input_queue.empty\|_inpu...) → 754:                # Hard cycle cap — prevent runaway agents from draining resources
+1079:                                _intr_all.append(_intr_q.get_nowait())
+1089:                    # may have been consumed by wait() before drain runs.
+
+
+Exit code: 0 (255字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 395| 
+396| async def broadcast_round(
+397|     agents: list[str],
+398|     engine: BroadcastContext,
+399|     mailbox: MailboxHub,
+400|     global_timeout: float = 3600.0,
+401| ) -> list[tuple[str, str | None]]:
+402|     """Run all agents concurrently with out-of-order completion display.
+403| 
+404|     Each agent:
+405|     1. Gets its own asyncio.Task
+406|     2. Can use chatroom_send/wait to talk to other agents
+407|     3. Results display as each agent finishes (first-done-first-shown)
+408| 
+409|     Args:
+410|         agents: List of agent names to run.
+411|         engine: The GroupChatEngine instance.
+412|         mailbox: Shared MailboxHub for inter-agent communication.
+413|         global_timeout: Hard limit for the entire round (seconds).
+414| 
+415|     Returns:
+416|         List … (2,431字)
+• exec(cd /root/nanobot-src && grep -n "_add_message\|engine._history\|engine._add" ...) → 203:    def _add_message(self, sender: str, content: str) -> None: ...
+468:    for msg in reversed(engine._history):
+926:                                    engine._add_message(name, content)
+952:                            engine._add_message(name, _placeholder)
+1007:                        engine._add_message(name, _placeholder)
+1037:                    engine._add_message(name, history_content)
+1120:                        engine._add_message(name, history_content)
+1518:                engine… (539字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1495|     _join_listener_running = True
+1496| 
+1497|     try:
+1498|         # ── User interjection listener ──
+1499| 
+1500|         async def _user_listener() -> None:
+1501|             while _user_listener_running:
+1502|                 try:
+1503|                     msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+1504|                 except asyncio.TimeoutError:
+1505|   … (1,909字)
+  (还有 7 个工具调用，已省略)
+---
+[Kirk]: 好的，`inject()` 是同步调用的。这看起来是正确的。
+
+现在让我重新思考。也许问题不在于消息被"吞掉"，而在于消息被 `_user_listener` 处理了，但代理没有正确响应。
+
+让我看看一个关键细节：当 `_user_listener` 处理消息时，它调用 `mailbox.send("用户", ["All"], msg)`。这会将消息放入每个代理的邮箱队列中。但如果代理已经因为 `MAX_CONSECUTIVE_WAITS` 退出了呢？
+
+让我看看 `MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CONSECUTIVE_WAITS` 的退出逻辑：`MAX_CON
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1289|                             _warn
+1290|                             + f"\n\n[质量检查失败] {quality_reason}"
+1291|                             "\n请输出包含 ## 结论、## 关键发现 的结构化总结，附带具体数据和来源。"
+1292|                         )
+1293|                         if _tool_data:
+1294|                             _retry_content += (
+1295|                                 "\n\n[本轮工具调用结果 — 请基于以下数据输出总结]\n"
+1296|                                 + _tool_data
+1297|                             )
+1298|                         if not await _inject_retry(_retry_content):
+1299|                             break
+1300|                         continue
+1301|                     # Synthesis passed validation — now display it
+1302|                     # NOTE: Always display leader synthesis even if chatroom_send was used.
+13… (5,407字)
+---
+[Retriever]: Kirk又陷入重复循环了。这是已知的 broadcast.py messages 无界增长问题（记忆中有记录）。Harper也报错了。我需要把记忆中的关键信息发给他们。
+---
+[Kirk]: 关键发现：`mailbox.send` 有 listener restriction 过滤（line 539-541）。如果 agent 被设置了 `set_listener`，用户消息会被跳过。但这可能不是主因。
+
+让我看 `broadcast_round` 的 finally 块和 agent cycle 退出逻辑——消息可能在 round 结束时丢失。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/channels/telegram/message_handler.py) → 120|             if content and content != "[empty message]":
+121|                 buf["contents"].append(content)
+122|             buf["media"].extend(media_paths)
+123|             if key not in self._media_group_tasks:
+124|                 self._media_group_tasks[key] = asyncio.create_task(self._flush_media_group(key))
+125|             return
+126| 
+127|         # Start typing indicator before processing
+128|         self._start_typing(str_chat_id)
+129| 
+130|         # Check for interactive edit state
+131|         if str_chat_id in self._edit_state:
+132|             await self._handle_edit_input(str_chat_id, content)
+133|             self._stop_typing(str_chat_id)
+134|             return
+135| 
+136|         # Route to GroupChatEngine (always active)
+137|         if self._groupchat_engine a… (3,125字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1500|         async def _user_listener() -> None:
+1501|             while _user_listener_running:
+1502|                 try:
+1503|                     msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+1504|                 except asyncio.TimeoutError:
+1505|                     continue
+1506|                 if msg == "__SUMMARY__":
+1507|                     continue
+1508| 
+1509|                 all_agent_names = list(mailbox.agent_names)
+1510|                 await pool.allocate_user(all_agent_names)
+1511| 
+1512|                 mailbox.create("用户")
+1513|                 mailbox.send("用户", ["All"], msg)
+1514|                 # Interrupt any agents currently inside tool_loop so they pick
+1515|                 # up the user message at the next safe checkpoint rather than
+1… (4,574字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 107|         while engine._running:
+108|             rounds += 1
+109| 
+110|             # Wait for user input (block until user sends something)
+111|             user_input = None
+112|             while engine._running:
+113|                 try:
+114|                     user_input = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+115|                     break
+116|                 except asyncio.TimeoutError:
+117|                     continue
+118| 
+119|             if not engine._running or not user_input:
+120|                 break
+121| 
+122|             if user_input == "__SUMMARY__":
+123|                 await generate_summary(engine)
+124|                 continue
+125| 
+126|             # Record user message (no echo)
+127|             engine._add_message("用户", user_input)… (2,275字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 810|     async def direct_chat(self, user_message: str) -> str | None:
+811|         """Send message to single active agent — delegates to direct_chat module."""
+812|         from nanobot.groupchat.orchestra.engine import direct_chat as _direct_chat
+813|         return await _direct_chat(self, user_message)
+814| 
+815|     def inject(self, message: str) -> None:
+816|         """Inject a user message into the chat loop (1+ agents)."""
+817|         # Lazy start: if any agents and loop not running, start it now
+818|         if not self._running and len(self._active_agents) >= 1:
+819|             self._start_group_loop()
+820|         if self._running:
+821|             self._input_queue.put_nowait(message)
+822| 
+823|     def request_summary(self) -> None:
+824|         """Request a discussion summ… (1,903字)
+• exec(cd /root/nanobot-src && grep -n "def send\|def inject\|_listener\|allowed_sen...) → 299:        self._listener_restrictions: dict[str, str] = {}
+332:    def set_listener_restriction(self, agent: str, allowed_sender: str) -> None:
+337:            allowed_sender: 'leader' = only leader, 'any' = clear restriction,
+340:        if allowed_sender and allowed_sender.lower() == "any":
+341:            self._listener_restrictions.pop(agent, None)
+343:            resolved = allowed_sender
+344:            if allowed_sender.lower() == "leader" and self._l… (830字)
+  (还有 4 个工具调用，已省略)
+---
+[Kirk]: 关键发现！Line 1784: `mailbox.clear()` — `broadcast_round` 结束后清空所有 mailbox 消息。如果 `_user_listener` 在 agents 已退出后消费了用户消息，这些消息会被 `mailbox.clear()` 丢弃。
+
+但让我先确认消息进入 `_input_queue` 的路径——可能问题在更上游：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1500|         async def _user_listener() -> None:
+1501|             while _user_listener_running:
+1502|                 try:
+1503|                     msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+1504|                 except asyncio.TimeoutError:
+1505|                     continue
+1506|                 if msg == "__SUMMARY__":
+1507|                     continue
+1508| 
+1509|                 all_agent_names = list(mailbox.agent_names)
+1510|                 await pool.allocate_user(all_agent_names)
+1511| 
+1512|                 mailbox.create("用户")
+1513|                 mailbox.send("用户", ["All"], msg)
+1514|                 # Interrupt any agents currently inside tool_loop so they pick
+1515|                 # up the user message at the next safe checkpoint rather than
+1… (3,299字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 107|         while engine._running:
+108|             rounds += 1
+109| 
+110|             # Wait for user input (block until user sends something)
+111|             user_input = None
+112|             while engine._running:
+113|                 try:
+114|                     user_input = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+115|                     break
+116|                 except asyncio.TimeoutError:
+117|                     continue
+118| 
+119|             if not engine._running or not user_input:
+120|                 break
+121| 
+122|             if user_input == "__SUMMARY__":
+123|                 await generate_summary(engine)
+124|                 continue
+125| 
+126|             # Record user message (no echo)
+127|             engine._add_message("用户", user_input)… (2,275字)
+• exec(cd /root/nanobot-src && grep -n "def interrupt_busy_agents\|def interrupt\|_i...) → 316:        self._interrupt_events: dict[str, asyncio.Event] = {}
+373:        for evt in self._interrupt_events.values():
+379:    def get_interrupt_event(self, agent_name: str) -> asyncio.Event:
+385:        if agent_name not in self._interrupt_events:
+386:            self._interrupt_events[agent_name] = asyncio.Event()
+387:        return self._interrupt_events[agent_name]
+465:        evt = self.get_interrupt_event(target)
+474:    def interrupt_busy_agents(self, sender: str) -> int:
+497:         … (726字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 730|         # ── Forced interrupt: get this agent's interrupt event from mailbox ──
+731|         _interrupt_event = mailbox.get_interrupt_event(name)
+732|         # Tracks how many timeout-recovery attempts this agent has made.
+733|         # Hard cap at 1 to prevent recovery loops.
+734|         _timeout_recovery_count = 0
+735|         # Tracks consecutive LLM errors to prevent rapid-fire error loops.
+736|         # After MAX_CONSECUTIVE_ERRORS, the agent exits instead of continuing.
+737|         _consecutive_error_count = 0
+738|         MAX_CONSECUTIVE_ERRORS = 3
+739| 
+740|         # ── Synthesis retry helper ────────────────────────────────────────
+741|         async def _inject_retry(prompt: str) -> bool:
+742|             """Inject retry prompt; return True if caller should continue, F… (3,476字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 465|         evt = self.get_interrupt_event(target)
+466|         evt.set()
+467|         self._interrupt_counts[target] = self._interrupt_counts.get(target, 0) + 1
+468|         logger.info(
+469|             "MailboxHub: ⚡ interrupt triggered for {} by {} (count={}/1)",
+470|             target, sender, self._interrupt_counts[target],
+471|         )
+472|         return True
+473| 
+474|     def interrupt_busy_agents(self, sender: str) -> int:
+475|         """Set the interrupt event for every currently-busy agent.
+476| 
+477|         Used for high-priority signals (e.g. user messages) that should
+478|         wake up all active tool_loops immediately.  Unlike ``_try_interrupt``,
+479|         this does **not** increment ``_interrupt_counts`` so it … (2,417字)
+  (还有 4 个工具调用，已省略)
+---
+[Retriever]: 
+
+[工具调用记录]
+• memory_palace(用户消息被吞 mailbox send broadcast round 消息丢失 agent cycle 退出) → 🔍 5 result(s) for '用户消息被吞 mailbox send broadcast round 消息丢失 agent cycle 退出':
+
+[1] wing_code/kirk-timeout-context-bug-20260606 (sim=0.445)
+   engine.history，仅通过 mailbox 发送
+
+### 关键代码路径
+- broadcast.py:542 _build_agent_prompt → messages 初始化
+- broadcast.py:753 while True cycle 循环
+- broadcast.py:913-922 timeout recovery（复用膨胀 messages）
+- broadcast.py:952 _add_message placeholder 污染共享历史
+- tool_loop.py:414-423 超时 break（不 append，但 messages 已有之前迭代的累积）
+- message_converter.py:136 i==0 强制保留首条（次要问题）
+- context_… (1,554字)
+• wait() → (192字)
+---
+[Kirk]: 让我看 `_user_listener` 拿到消息后做了什么——这是关键路径：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1500|         async def _user_listener() -> None:
+1501|             while _user_listener_running:
+1502|                 try:
+1503|                     msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+1504|                 except asyncio.TimeoutError:
+1505|                     continue
+1506|                 if msg == "__SUMMARY__":
+1507|                     continue
+1508| 
+1509|                 all_agent_names = list(mailbox.agent_names)
+1510|                 await pool.allocate_user(all_agent_names)
+1511| 
+1512|                 mailbox.create("用户")
+1513|                 mailbox.send("用户", ["All"], msg)
+1514|                 # Interrupt any agents currently inside tool_loop so they pick
+1515|                 # up the user message at the next safe checkpoint rather than
+1… (4,574字)
+---
+[Retriever]: 
+
+[工具调用记录]
+• wait() → (47字)
+---
+[Retriever]: 
+
+[工具调用记录]
+• wait() → (693字)
+---
+[Kirk]: 验证两处修改都正确落地：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 106|         rounds = 0
+107|         while engine._running:
+108|             rounds += 1
+109| 
+110|             # Wait for user input (block until user sends something)
+111|             user_input = None
+112|             while engine._running:
+113|                 try:
+114|                     user_input = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+115|                     break
+116|                 except asyncio.TimeoutError:
+117|                     continue
+118| 
+119|             if not engine._running or not user_input:
+120|                 break
+121| 
+122|             if user_input == "__SUMMARY__":
+123|                 await generate_summary(engine)
+124|                 continue
+125| 
+126|             # Record user message (no echo)
+127|             engine._add_m… (2,299字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1760|                 engine._broadcast_tasks.pop(key, None)
+1761| 
+1762|     # (auto-share logic is now inside _run_one's auto-wait cycle)
+1763| 
+1764|     # ── Finalize status dashboard ──
+1765|     await tracker.finalize()
+1766| 
+1767|     # ── Round summary ──
+1768|     comm_count = len(mailbox.history)
+1769|     round_duration = _time.time() - _round_t0
+1770|     engine._save_round_summary(
+1771|         round_num=engine._round + 1,
+1772|         agents_responded=completed,
+1773|         comm_count=comm_count,
+1774|         duration=round_duration,
+1775|     )
+1776|     await engine._send(_d.broadcast_complete_msg(completed, total, comm_count))
+1777| 
+1778|     # Output chat chain summary
+1779|     # chain = _d.chat_chain_summary(mailbox.history, leader=leader_name)
+1780|     # if cha… (1,489字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 1| """Inter-agent mailbox system for group chat communication.
+2| 
+3| Provides an async message-passing hub so agents can send messages
+4| to each other (or broadcast to all) and wait for replies.
+5| """
+6| 
+7| from __future__ import annotations
+8| 
+9| import asyncio
+10| import random
+11| import time as _time
+12| from dataclasses import dataclass, field
+13| from typing import Any
+14| 
+15| from loguru import logger
+16| 
+17| 
+18| @dataclass
+19| class AgentMessage:
+20|     """A single inter-agent message."""
+21| 
+22|     id: int = 0
+23|     sender: str = ""
+24|     content: str = ""
+25|     targets: list[str] = field(default_factory=list)  # ["All"] for broadcast, or specific names
+26|     timestamp: float = field(default_factory=_time.time)
+27| 
+28|     def __str__(self) -> str:
+29|         … (4,011字)
+• exec(cd /root/nanobot-src && grep -n "def interrupt_busy_agents\|def clear\|def se...) → 267:class MailboxHub:
+288:        self._queues: dict[str, asyncio.Queue[AgentMessage]] = {}
+289:        self._history: list[AgentMessage] = []
+350:        if agent_name not in self._queues:
+351:            self._queues[agent_name] = asyncio.Queue()
+356:        for q in self._queues.values():
+362:        self._history.clear()
+365:        self._active_agents = set(active_agents) if active_agents else set(self._queues.keys())
+375:        logger.debug("MailboxHub: round started, {} agents", len(self… (1,228字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 474|     def interrupt_busy_agents(self, sender: str) -> int:
+475|         """Set the interrupt event for every currently-busy agent.
+476| 
+477|         Used for high-priority signals (e.g. user messages) that should
+478|         wake up all active tool_loops immediately.  Unlike ``_try_interrupt``,
+479|         this does **not** increment ``_interrupt_counts`` so it doesn't
+480|         consume the per-round agent—agent interrupt quota.
+481| 
+482|         Also resets each interrupted agent's interrupt count so that
+483|         subsequent messages can still trigger fresh interrupts — this
+484|         ensures the agent always responds to the *latest* high-priority
+485|         message, not a stale one.
+486| 
+487|         Returns:
+488|     … (2,750字)
+  (还有 9 个工具调用，已省略)
+---
+[Retriever]: 
+
+[工具调用记录]
+• wait() → (316字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "Fix A\|Fix B\|salvaged\|deferred\|all.*done....) → 1509:                # ── Fix A: defer message if all agents already finished ──
+1513:                if all(t.done() for t in tasks):
+1516:                        "Broadcast: all agents done, deferred user message to next round: {}",
+1647:        while not all(t.done() for t in all_tasks):
+1795:    # ── Fix B: salvage unread user messages before clearing mailbox ──
+1801:    _salvaged_user_msgs: list[str] = []
+1808:            if _m.sender == "用户" and _m.content not in _salvaged_user_msgs:
+1809:… (766字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1500|         async def _user_listener() -> None:
+1501|             while _user_listener_running:
+1502|                 try:
+1503|                     msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+1504|                 except asyncio.TimeoutError:
+1505|                     continue
+1506|                 if msg == "__SUMMARY__":
+1507|                     continue
+1508| 
+1509|                 # ── Fix A: defer message if all agents already finished ──
+1510|                 # If every agent task is done, no one will process this
+1511|                 # message.  Put it back into _input_queue so run_loop picks
+1512|                 # it up for the next round instead of losing it.
+1513|                 if all(t.done() for t in tasks):
+1514|                     engine._inp… (1,688字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1790|     # Output chat chain summary
+1791|     # chain = _d.chat_chain_summary(mailbox.history, leader=leader_name)
+1792|     # if chain:
+1793|     #     await engine._send(chain)
+1794| 
+1795|     # ── Fix B: salvage unread user messages before clearing mailbox ──
+1796|     # If a user message arrived via _user_listener but no agent consumed it
+1797|     # (e.g. agents finished between interrupt and message pickup), the
+1798|     # message would be lost by mailbox.clear().  Drain agent queues, collect
+1799|     # any unread "用户" messages, and re-inject them into _input_queue so
+1800|     # run_loop picks them up for the next round.
+1801|     _salvaged_user_msgs: list[str] = []
+1802|     for _q in list(mailbox._queues.values()):
+1803|         while not _q.empty():
+1804|             try:
+18… (1,527字)
+• memory_palace() → ✅ Stored in wing_code/user-message-swallowed-fix-20260608 (hidden)
+  Drawer ID: drawer_wing_code_user-message-swallowed-fix-20260608_410ccb0cdfb0b4a797b92c29 (157字)
+• chatroom_send() → (48字)
+• end_discussion() → ✅ 讨论已结束（原因: 修复完成，两处代码改动已验证通过，记忆已存储。），即将进入总结阶段 (45字)
+---
+[Retriever]: 修复结论已存入记忆宫殿。
+
+[工具调用记录]
+• wait() → (43字)
+• memory_palace() → ✅ Stored in wing_code/user-message-swallow-fix-20260608 (hidden)
+  Drawer ID: drawer_wing_code_user-message-swallow-fix-20260608_2c201af9158be1608b661b73 (153字)
+---

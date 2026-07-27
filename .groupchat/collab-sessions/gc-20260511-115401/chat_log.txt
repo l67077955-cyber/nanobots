@@ -1,0 +1,21 @@
+[用户]: 就刚刚代码变化了什么地方
+---
+[Kirk]: 被回滚的提交 `7544989` 只改了 **`nanobot/groupchat/orchestra/engine.py`** 一个文件，在 `inject()` 方法里新增 3 行：
+
+```python
+self._input_queue.put_nowait(message)
+# ↓ 新增 ↓
+count = self._mailbox.interrupt_busy_agents("用户")
+if count > 0:
+    logger.info("Interrupted {} busy agent(s) due to user injection", count)
+```
+
+**效果**：用户发消息时立即打断正在跑工具的 agent，不再等 broadcast round 结束。
+
+工作区里这个改动还在（未提交），要清掉还是保留你定。
+
+[工具调用记录]
+• chatroom_send() → (49字)
+• wait() → (538字)
+• end_discussion() → ✅ 讨论已结束（原因: 已回答用户问题：被回滚提交的代码变更内容。），即将进入总结阶段 (43字)
+---

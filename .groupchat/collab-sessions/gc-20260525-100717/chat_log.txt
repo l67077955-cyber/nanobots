@@ -1,0 +1,274 @@
+[系统]: 话题：自由讨论
+---
+[用户]: [2026/5/25 9:50] nano助手: 👑 Kirk → 进展 [2] ━━
+现在逻辑完全清晰了。这是一个设计层面的 bug，不是简单的 User 特殊情况。
+
+让我重新梳理整个 pool 模型：
+
+allocate(sender, recipients):
+• 消耗 sender 的 slot（sem[sender].acquire(), _available[sender] -= 1）
+• 记录 pending[recipient].append(sender)
+
+release_unread(agent):
+• 遍历 pending[agent] 中的每个 sender
+• 释放 sender 的 slot（sem[sender].release(), _available[sender] += 1）
+
+mark_replied(agent, to_sender):
+• 从 pending[agent] 移除 to_sender
+• 释放 to_sender 的 slot
+
+allocate_user(recipients):
+• 消耗 recipient 的 slot（sem[r].acquire(), _available[r] -= 1）
+• 记录 pending[r].append("User")
+
+Bug: allocate_user 消耗的是 recipient（agent） 的 slot，但 release_unread(agent) 释放的是 sender（"User"） 的 slot。两条路径不对称！
+
+对于 agent-to-agent：A 发给 B → 消耗 A 的 slot → B 不读 → 释放回 A 的 slot。一致。
+
+对于 user-to-agent：User 发给 B → 消耗 B 的 slot → B 不读 → 尝试释放回 User 的 slot → User 不在 pool 中，释放失败！
+提示:77,387 回复:827+💭828 · 34.7s $0.0307 💾缓存:71,616
+[2026/5/25 9:56] nano助手: ┄ Harper → Self/Final ┄
+找到bug了。第192行：
+
+self._available[target] = self._available.get(sender, 0) + 1
+
+
+左边用了正确的 target，右边 .get() 还在用原始 sender。当 sender="User" 时，_available 里根本没有 "User" 这个 key，永远返回 0，导致每次释放都把 agent 池子重置为 1 而不是恢复原值。
+提示:128,418 回复:1,047+💭600 · 40.8s $0.0558 💾缓存:100,761
+
+
+user发信息是否会导致池子只增不减
+---
+[Kirk]: 现在逻辑完全清楚了。Harper 之前说的"第192行变量名写错"是错的——实际代码里没有 `target` 变量，两边都是 `sender`。**真正的 bug 更根本：整个释放逻辑被 `if sem:` 守卫，而 "User" 根本没有 semaphore，所以释放块被整体跳过。**
+
+## 结论
+
+**不是"只增不减"，是"只减不增"。** 用户每发一条消息，永久消耗每个 agent 1 个 slot，且永远无法恢复。
+
+## 关键发现
+
+- `allocate_user` (L170): `_available[r] -= 1` — 消耗 **recipient（agent）** 的 slot
+- `release_unread` (L188-191): 遍历 `_pending[agent]` 中的 sender，先查 `self._sems.get(sender)`，当 sender="User" 时返回 None → **整个 `if sem:` 块被跳过** → `_available` 从未被修改
+- `mark_replied` (L208-211): 同理，`_sems.get("User")` 返回 None → 跳过
+- `start_round` (L347-368): 只清队列和历史，**不重置 `_available`**
+- Pool 在 `broadcast.py` L315/318 创建，**每 session 一次，不随 round 重建**
+
+**根因**：`allocate_user` 消耗的是 agent 的 slot，但释放路径（`release_unread`/`mark_replied`）试图释放回 sender 的 slot。两条路径不对称，且 "User" 不在 `_sems` 中导致释放被静默跳过。
+
+**效果**：用户发 N 条消息后，每个 agent 的可用 slot 永久减少 N，直到归零后 agent 无法再分配 slot（被阻塞）。
+
+## 备注
+
+Harper 之前定位的"第192行变量名 bug"不准确——实际代码 L190 是 `self._available[sender] = self._available.get(sender, 0) + 1`，变量名一致。真正的问题是这行代码**根本不会被执行到**，因为外层 `if sem:` 已经把 "User" 过滤掉了。修复方向应该是：当 sender="User" 时，把 slot 释放回 recipient（agent_name）而非 sender。
+
+[工具调用记录]
+• memory_palace(pool allocate_user release_unread bug slot semaphore) → 🔍 5 result(s) for 'pool allocate_user release_unread bug slot semaphore':
+
+[1] wing_project/git-commits-after-511 (sim=-0.31)
+  2026-05-11: v-stable-20260511 (bb23ae3) 之后有1个游离提交 312760b "fix(groupchat): 用户消息即时中断 busy agent"，用户确认该提交有bug。该提交未合入main/dev，不影响稳定版。
+
+[2] wing_code/groupchat-command-params (sim=-0.363)
+  /groupchat 命令5个参数分析（2026-05-24）：
+1. tool_initial (默认2) — 每agent初始工具额度，有用
+2. tool_earn_per_output (默认0.25) — 每次输出获得工具额度，有用
+3. allocate_timeout (默认15) — 消息分配超时秒数，有用
+4. context_pool_capacit… (1,326字)
+• memory_palace(nano助手 pool 池子 消息队列 agent) → 🔍 5 result(s) for 'nano助手 pool 池子 消息队列 agent':
+
+[1] wing_memory/memory-palace-persistence (sim=0.102)
+  Memory Palace 持久化机制：底层使用 ChromaDB (chroma.sqlite3) + 本地二进制文件，存储路径 /root/.nanobot/workspace/memory_palace/。所有 store 操作写入磁盘，进程重启后自动加载，无需额外配置。
+
+[2] wing_code/nanobot-skills-inventory (sim=0.023)
+  nanobot 当前 skill 清单（2026-05-24确认）：共12个skill，位于 /root/nanobot-src/nanobot/skills/，全部完好。列表：clawhub, cron, debug, github, memory, settings, skill-creator, steve-jobs-perspective, summarize, testing, tmux, … (1,689字)
+• exec(find /root/nanobot-src -type f -name "*.py" | xargs grep -l "allocate_user\|r...) → /root/nanobot-src/tests/test_telegram_channel.py
+/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py
+/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_chat.py
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py
+/root/nanobot-src… (619字)
+• exec(grep -n "allocate_user\|release_unread\|mark_replied\|_available\|class.*Pool...) → 33:class ConversationPool:
+66:        self._available: dict[str, int] = {
+98:        avail = self._available.get(sender, 0)
+115:                self._available[sender] -= 1
+121:                        self._available[sender] += 1
+130:                self._available[sender] += 1
+145:            sender, recipients, n, self._available.get(sender, 0),
+149:    async def allocate_user(self, recipients: list[str]) -> None:
+169:                    pass  # overflow: still decrement _available
+170:       … (1,121字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 149|     async def allocate_user(self, recipients: list[str]) -> None:
+150|         """Force-allocate 1 slot from each recipient's pool for a user message.
+151| 
+152|         User messages consume from every recipient's pool so that agents
+153|         can't bypass limits by only receiving user messages.
+154|         _user_priority blocks agents during delivery.
+155|         """
+156|         self._user_priority.clear()
+157|         n = len(recipients)
+158|         logger.info("ConversationPool: user force-allocate {} slots (per-agent)", n)
+159| 
+160|         for r in recipients:
+161|             if r in self._pending:
+162|                 self._pending[r].append("User")
+163|             # Deduct 1 slot from each recipient's pool
+164|             sem = self._sems.get(r)
+165|             if … (3,420字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 33| class ConversationPool:
+34|     """Per-agent conversation pool with independent semaphores.
+35| 
+36|     Each agent has its own slot budget. Sending a message costs slots from
+37|     the *sender's* pool (one per recipient). This prevents any single agent
+38|     from monopolizing the conversation.
+39| 
+40|     - chatroom_send(to="All") with 3 recipients → costs 3 slots from sender
+41|     - chatroom_send(to="Harper") → costs 1 slot from sender
+42|     - When recipient calls wait() without replying → releases 1 slot back to sender
+43|     - When sender's pool is empty → chatroom_send blocks until slots freed
+44|     - User messages force-allocate from every recipient's pool (never blocked)
+45|     """
+46| 
+47|     ALLOCATE_TIMEOUT = 15.0  # max seconds to wait for sl… (3,145字)
+  (还有 6 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• memory_palace(pool allocate release_unread _available bug User slot) → 🔍 5 result(s) for 'pool allocate release_unread _available bug User slot':
+
+[1] wing_project/git-commits-after-511 (sim=-0.294)
+  2026-05-11: v-stable-20260511 (bb23ae3) 之后有1个游离提交 312760b "fix(groupchat): 用户消息即时中断 busy agent"，用户确认该提交有bug。该提交未合入main/dev，不影响稳定版。
+
+[2] wing_code/groupchat-command-params (sim=-0.399)
+  /groupchat 命令5个参数分析（2026-05-24）：
+1. tool_initial (默认2) — 每agent初始工具额度，有用
+2. tool_earn_per_output (默认0.25) — 每次输出获得工具额度，有用
+3. allocate_timeout (默认15) — 消息分配超时秒数，有用
+4. context_pool_capac… (1,412字)
+• exec(find /home -name "*.py" -path "*nanobot*" 2>/dev/null | head -20; find /works...) → Exit code: 0 (13字)
+• exec() → /root/nanobot-src/tests/test_groupchat.py
+/root/hermes-agent/agent/credential_pool.py
+/tmp/nanobot_check.py
+/tmp/profile_nano.py
+/root/nanobot-src/fix_single_agent.py
+/root/nanobot-src/test_interrupt_sender.py
+/root/nanobot-src/test_mp3.py
+/root/nanobot-src/tools/migrate_to_manifest.py
+/root/nanobot-src/test_mp2.py
+/root/nanobot-src/test_mp.py
+/root/nanobot-src/tests/test_groupchat.py
+/root/nanobot-src/tests/test_base_channel.py
+/root/nanobot-src/tests/test_custom_provider.py
+/root/nanobot-src/t… (8,577字)
+• exec(grep -rn "release_unread\|allocate_user\|_available\|pending\[" /root/nanobot...) → /root/nanobot-src/nanobot/groupchat/history/prompt_builder.py
+/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_chat.py
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py
+/root/nanobot-src/nanobot/channels/telegram/callbacks.py
+/root/nan… (570字)
+• exec(grep -n "release_unread\|allocate_user\|_available\|class.*Pool\|def allocate...) → 33:class ConversationPool:
+66:        self._available: dict[str, int] = {
+75:    async def allocate(self, sender: str, recipients: list[str]) -> bool:
+98:        avail = self._available.get(sender, 0)
+115:                self._available[sender] -= 1
+121:                        self._available[sender] += 1
+130:                self._available[sender] += 1
+145:            sender, recipients, n, self._available.get(sender, 0),
+149:    async def allocate_user(self, recipients: list[str]) -> None:
+169… (1,125字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 55|         self._agents = agents or []
+56|         # Per-agent capacity: explicit dict wins, else uniform from capacity
+57|         if per_agent_capacity:
+58|             self._per_cap = dict(per_agent_capacity)
+59|         else:
+60|             uniform = capacity if capacity > 0 else max(len(self._agents) * 3, 1)
+61|             self._per_cap = {a: uniform for a in self._agents}
+62|         # Per-agent semaphores and available counters
+63|         self._sems: dict[str, asyncio.Semaphore] = {
+64|             a: asyncio.Semaphore(self._per_cap[a]) for a in self._agents
+65|         }
+66|         self._available: dict[str, int] = {
+67|             a: self._per_cap[a] for a in self._agents
+68|         }
+69|         # Track pending replies: {recipient: [sender1, sender2, ...]}
+70|         self… (7,652字)
+• chatroom_send() → (48字)
+• wait() → (1,115字)
+---
+[Harper]: 
+
+[工具调用记录]
+• chatroom_send() → (48字)
+• wait() → (49字)
+---
+[Kirk]: ## 结论
+
+**不是"只增不减"，是"只减不增"。** 用户每发一条消息，永久消耗每个 agent 1 个 slot，且永远无法恢复。已修复。
+
+## 关键发现
+
+- **根因**：`allocate_user` 消耗的是 **agent（recipient）** 的 slot，但 `release_unread`/`mark_replied` 试图释放回 **sender（"User"）** 的 slot。两条路径不对称。
+- **"User" 不在 `_sems` 中**，导致 `if sem:` 守卫把整个释放块跳过，slot 永久泄漏。
+- `start_round` 不重置 `_available`，Pool 每 session 创建一次不随 round 重建 → 泄漏跨 round 累积。
+- L167 的 `timeout=0.01` + L170 无条件减 `_available` 是**有意设计**（user_priority 强制投递），不是 bug。
+
+## 修复内容（mailbox.py）
+
+1. **`release_unread` L192-195**：sender 不在 `_sems` 时，`_available[agent_name] += 1`（还给 agent）
+2. **`mark_replied` L216-218**：to_sender 不在 `_sems` 时，同理还给 agent
+
+路径现在对称：allocate_user 扣 agent 的 slot → 释放时找不到 sender 的 sem → 还给 agent。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 155|         """
+156|         self._user_priority.clear()
+157|         n = len(recipients)
+158|         logger.info("ConversationPool: user force-allocate {} slots (per-agent)", n)
+159| 
+160|         for r in recipients:
+161|             if r in self._pending:
+162|                 self._pending[r].append("User")
+163|             # Deduct 1 slot from each recipient's pool
+164|             sem = self._sems.get(r)
+165|             if sem:
+166|                 try:
+167|                     await asyncio.wait_for(sem.acquire(), timeout=0.01)
+168|                 except (asyncio.TimeoutError, Exception):
+169|                     pass  # overflow: still decrement _available
+170|             self._available[r] = self._available.get(r, 0) - 1
+171| 
+172|         self._user_priority.set()
+173|       … (2,778字)
+• chatroom_send() → (50字)
+• memory_palace() → ✅ Stored in wing_code/conversation-pool-bug (hidden)
+  Drawer ID: drawer_wing_code_conversation-pool-bug_d00ca355873f15c9a845df3c (129字)
+• end_discussion() → ❌ 结束讨论失败：以下 agent 尚未进入等待状态：Harper。
+请在所有 agent 进入等待状态后，再次调用 end_discussion。 (74字)
+• wait() → (549字)
+• chatroom_send(改吧。两处都加 else fallback 到 agent_name。改完我验证。) → (50字)
+• wait() → (284字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 178|     def release_unread(self, agent_name: str) -> int:
+179|         """Release slots back to each pending sender's pool.
+180| 
+181|         Called when agent calls wait() without replying.
+182|         Returns number of slots released.
+183|         """
+184|         pending = self._pending.get(agent_name, [])
+185|         released = 0
+186|         for sender in pending:
+187|             sem = self._sems.get(sender)
+188|             if sem:
+189|                 sem.release()
+190|                 self._available[sender] = self._available.get(sender, 0) + 1
+191|                 released += 1
+192|             else:
+193|                 # Non-agent sender (e.g. "User"): release slot back to agent
+194|                 self._available[agent_name] = self._available.get(agent_name, 0) + 1
+195|  … (2,307字)
+• end_discussion() → ✅ 讨论已结束（原因: Bug 分析完成，修复已验证。），即将进入总结阶段 (37字)
+---

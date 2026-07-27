@@ -1,0 +1,445 @@
+[用户]: 看看现在上下文组织形式
+---
+[Harper]: ## 当前上下文组织形式 — 4 层流水线
+
+```
+用户输入
+  │
+  ▼
+Stage 1 ─ 工具输出截断
+  │  exec: 10k chars | web_fetch: 8k | web_search: 5k
+  │  HTML 检测 → 标记不可用
+  ▼
+Stage 2 ─ 工具结果 AI 摘要
+  │  >8k chars → gpt-4.1-nano 摘要 → ≤4k chars
+  ▼
+Stage 3 ─ 对话历史窗口 (HistoryContext)
+  │  max 50 条 / 100k chars
+  │  头部保护: system prompt + 所有用户消息永不删除
+  │  尾部保护: 保留最近 6 条
+  │  中间区域: 达到 80% 阈值 → AI 摘要或直接丢弃
+  ▼
+Stage 4 ─ 迭代上下文裁剪 (tool_loop 第2轮+)
+  │  软裁剪 30% | 硬裁剪 50%
+  │  保留最近 3 条
+  ▼
+LLM 调用
+  │  cache_control 只打在 system messages 上
+  │  前缀 = system prompt 块，永不增长
+  ▼
+输出
+```
+
+**关键参数**（`~/.nanobot/history_settings.json`）：
+
+| 参数 | 值 | 作用 |
+|------|-----|------|
+| `max_messages` | 50 | 历史消息上限 |
+| `max_context_chars` | 100k | 历史字符上限 |
+| `compress_ratio` | 0.8 | 达到 40 条触发压缩 |
+| `compression_keep_recent` | 6 | 压缩时保留最近 N 条 |
+| `keep_user_messages` | true | 保护所有用户消息不被删 |
+| `context_window_tokens` | 200k | LLM 上下文窗口 |
+
+**三层保护机制**确保关键信息不丢失：
+1. **头部保护** — index 0 (system prompt) + 所有用户消息
+2. **尾部保护** — 最近 6 条消息
+3. **中间压缩** — AI 摘要替代原始对话，而非直接丢弃
+
+**前缀稳定**（Kirk 已分析）：`_sys_msg_count` 快照固定前缀边界，cache_control 只打在 system 消息上，对话历史增长但前缀不变 → 缓存命中。
+
+[工具调用记录]
+• exec(grep -rn "compress\|context.*organ\|message.*struct\|history.*format" /root/n...) → /root/nanobot-src/nanobot/groupchat/history/history_settings.py
+/root/nanobot-src/nanobot/groupchat/history/context_validator.py
+/root/nanobot-src/nanobot/groupchat/history/context.py
+/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py
+
+
+Exit code: 0 (312字)
+• exec(grep -rn "class.*Context\|class.*History\|class.*Message" /root/nanobot-src/n...) → /root/nanobot-src/nanobot/groupchat/history/context.py:24:class HistoryContext:
+/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py:19:class AgentMessage:
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py:1129:class ClearContextTool(Tool):
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py:1306:class QuoteMessageTool(Tool):
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py:1352:class ListMessagesTool(Tool):
+/root/nanobot-src/nanobot… (586字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 1| """HistoryContext — single source of truth for conversation history.
+2| 
+3| Owns the message list and all related operations:
+4|   - add_message     : append + enforce message-count & char-budget limits
+5|   - maybe_compress  : AI summarize (or drop) the middle region on overflow
+6|   - clear / format  : utility helpers
+7| 
+8| Engine and Broadcast delegate to this class instead of maintaining
+9| ``self._history`` directly.  Persistence is still delegated to
+10| ``GroupChatState.save_message()``.
+11| """
+12| 
+13| from __future__ import annotations
+14| 
+15| import asyncio
+16| from typing import TYPE_CHECKING, Any
+17| 
+18| from loguru import logger
+19| 
+20| if TYPE_CHECKING:
+21|     from nanobot.groupchat.history.persistence import GroupChatState
+22| 
+23| 
+24| class HistoryContext:
+25|    … (10,387字)
+• exec(grep -rn "maybe_compress\|compress_context\|_compress" /root/nanobot-src/nano...) → /root/nanobot-src/nanobot/groupchat/history/context.py:5:  - maybe_compress  : AI summarize (or drop) the middle region on overflow
+/root/nanobot-src/nanobot/groupchat/history/context.py:154:    async def maybe_compress(self) -> None:
+/root/nanobot-src/nanobot/groupchat/history/context.py:199:        to_compress = [
+/root/nanobot-src/nanobot/groupchat/history/context.py:203:        if not to_compress:
+/root/nanobot-src/nanobot/groupchat/history/context.py:209:                f"[{m['sender']}]: {… (1,437字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/history_settings.py) → 1| """Centralized history, summarization, and context-pruning settings.
+2| 
+3| Loads ``~/.nanobot/history_settings.json`` once and exposes typed getters
+4| so that shell.py, summarizer.py, tool_loop.py, context_pruning.py,
+5| engine.py, broadcast.py, tool_chat.py, and the Telegram UI can all
+6| read the same configuration without hardcoding defaults.
+7| 
+8| Settings are organized into four sections:
+9| 
+10| - **Top-level**: global limits (context window, tool result hard cap)
+11| - **tool_results**: per-tool truncation + AI summarization
+12| - **history**: conversation history window
+13| - **context_pruning**: iterative context pruning thresholds
+14| """
+15| 
+16| from __future__ import annotations
+17| 
+18| import json
+19| from pathlib import Path
+20| from typing import Any
+21| 
+22| from lo… (9,777字)
+---
+[Kirk]: ## 当前上下文组织形式 — 完整架构
+
+整个上下文从存储到发送给 LLM，经过 **4 层处理**：
+
+### 第 1 层：HistoryContext（原始存储）
+
+`context.py` — 以 `[{sender, content}, ...]` 格式存储所有群聊消息。触发压缩时（消息数 ≥ `max_messages × compress_ratio`，即 30×0.7=21 条）：
+
+```
+┌──────────────────────────────┐
+│  Head（受保护）              │ ← 连续 system 消息 + 所有 user 消息
+├──────────────────────────────┤
+│  Middle（可压缩）            │ ← AI 摘要 或 直接丢弃
+├──────────────────────────────┤
+│  Tail（受保护）              │ ← 最近 6 条（compression_keep_recent=6）
+└──────────────────────────────┘
+```
+
+### 第 2 层：Prompt Builder（组装 LLM 消息）
+
+`prompt_builder.py:629-712` — 按 `prompt_order.json` 顺序拼接：
+
+```
+┌──────────────────────────────┐
+│  persona / memory / tools    │ ← system messages（stable_tpl_vars）
+│  hard_rules / examples ...   │   变量替换用 stable 值
+├──────────────────────────────┤
+│  history（对话历史）         │ ← message_converter 转换
+├──────────────────────────────┤
+│  [datetime] + [round]        │ ← volatile_tpl_vars，放最后
+└──────────────────────────────┘
+```
+
+关键：history 之前的 system 组件用 `stable_tpl_vars`（agent 名、成员列表等不变值），history 之后的 volatile 变量（时间、轮次）单独追加，**不破坏前缀稳定性**。
+
+### 第 3 层：Broadcast（运行时快照）
+
+`broadcast.py:685` — agent 启动时拍快照：
+
+```python
+_sys_msg_count = len(messages)  # 此后前缀永不修改
+```
+
+此后所有裁剪操作（tool_pruning、中断处理）只动 `messages[_sys_msg_count:]`。
+
+### 第 4 层：cache_control 注入
+
+`litellm_provider.py:198-235` — 发送前只给 system messages 打 `cache_control: ephemeral`：
+
+```
+配额：4 个 breakpoint → tools 占 1 → system 占 3
+只标记最后 3 条 system 消息
+user/assistant 消息永远不加
+```
+
+---
+
+### 为什么前缀不逐步增加
+
+| 机制 | 作用 |
+|---|---|
+| `_sys_msg_count` 快照 | 前缀边界固定，永不修改 |
+| stable vs volatile 变量分离 | 前缀内容不变 |
+| cache_control 只打 system | 服务端缓存点不随对话移动 |
+| 裁剪只动尾部 | `prune_conversation_tail` 只裁 `messages[sys_msg_count:]` |
+| 对话窗口固定 | 保留最近 6 轮（`_CONV_KEEP_TURNS=6`），超出丢弃 |
+
+**结果**：system prompt 块永远 ~几千 token，Anthropic 每次请求都命中缓存，跳过前缀的 KV 重复计算。对话历史在下面自然增长但被定期裁剪到固定窗口。
+
+[工具调用记录]
+• memory_palace(上下文组织形式 context structure 压缩 compression) → 🔍 5 result(s) for '上下文组织形式 context structure 压缩 compression':
+
+[1] wing_code/context-compression-fixes (sim=0.1)
+  上下文压缩逻辑三处修复已验证通过：1) keep_recent从硬编码改为配置驱动(compression_keep_recent)，2) summarize_enabled从false改为true(启用AI摘要保留语义)，3) _find_head_indices改为双循环解耦保护头部系统消息+first user message。测试无报错，重启功能正常。修复日期2026-05-11。
+
+[2] wing_code/context-compression-fixes (sim=-0.088)
+  上下文压缩逻辑三处修复（2026-05-11）：
+
+1. keep_recent 硬编码→配置驱动：context.py:183 从 compression_keep_recent() 读配置（默认6），不再硬编码。history_settings.py 新增 c… (1,871字)
+• exec(grep -rn "context\|上下文" /root/nanobot-src/nanobot/groupchat/history/ --includ...) → /root/nanobot-src/nanobot/groupchat/history/message_converter.py
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py
+/root/nanobot-src/nanobot/groupchat/history/result_processor.py
+/root/nanobot-src/nanobot/groupchat/history/component_manager.py
+/root/nanobot-src/nanobot/groupchat/history/context_validator.py
+/root/nanobot-src/nanobot/groupchat/history/context.py
+/root/nanobot-src/nanobot/groupchat/history/__init__.py
+/root/… (570字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 1| """HistoryContext — single source of truth for conversation history.
+2| 
+3| Owns the message list and all related operations:
+4|   - add_message     : append + enforce message-count & char-budget limits
+5|   - maybe_compress  : AI summarize (or drop) the middle region on overflow
+6|   - clear / format  : utility helpers
+7| 
+8| Engine and Broadcast delegate to this class instead of maintaining
+9| ``self._history`` directly.  Persistence is still delegated to
+10| ``GroupChatState.save_message()``.
+11| """
+12| 
+13| from __future__ import annotations
+14| 
+15| import asyncio
+16| from typing import TYPE_CHECKING, Any
+17| 
+18| from loguru import logger
+19| 
+20| if TYPE_CHECKING:
+21|     from nanobot.groupchat.history.persistence import GroupChatState
+22| 
+23| 
+24| class HistoryContext:
+25|    … (10,387字)
+• exec(grep -n "def \|class " /root/nanobot-src/nanobot/groupchat/history/context.py) → 8:Engine and Broadcast delegate to this class instead of maintaining
+24:class HistoryContext:
+37:    def __init__(
+54:    def _find_head_indices(history: list[dict], keep_all_users: bool = False) -> set[int]:
+70:    def __len__(self) -> int:
+73:    def __bool__(self) -> bool:
+76:    def __iter__(self):
+79:    def __getitem__(self, idx):
+82:    def clear(self) -> None:
+86:    def format(self) -> str:
+92:    def add_message(self, sender: str, content: str) -> None:
+154:    async def maybe_compress… (530字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 1| """Prompt construction for group chat agents.
+2| 
+3| Extracts all prompt-related logic from GroupChatEngine:
+4| - Component ordering and management
+5| - Template expansion
+6| - Per-agent and global overrides
+7| - History → messages conversion
+8| """
+9| 
+10| from __future__ import annotations
+11| 
+12| import json
+13| from pathlib import Path
+14| from typing import Any
+15| 
+16| from loguru import logger
+17| 
+18| import platform
+19| 
+20| from nanobot.utils.helpers import cn_now as _cn_now
+21| 
+22| from nanobot.groupchat.history.component_manager import get_system_warning
+23| from nanobot.groupchat.history.message_converter import history_to_messages
+24| from nanobot.groupchat.history.context_validator import validate_context
+25| 
+26| 
+27| # ── Constants ────────────────────────────────────… (3,089字)
+• exec(grep -n "def \|_CONV_KEEP\|keep_turns\|sys_msg_count\|prefix" /root/nanobot-s...) → 26:def _estimate_message_chars(msg: dict[str, Any]) -> int:
+43:def _estimate_total_chars(messages: list[dict[str, Any]]) -> int:
+47:def _find_cutoff_index(messages: list[dict[str, Any]], keep_recent: int) -> int:
+64:def _build_tool_map(messages: list[dict[str, Any]]) -> dict[str, tuple[str, str]]:
+80:def _summarize_tool_result(tool_name: str, tool_args: str, tool_content: str) -> str:
+135:def prune_messages(
+208:def prune_conversation_tail(
+210:    sys_msg_count:… (822字)
+  (还有 6 个工具调用，已省略)
+---
+[Harper]: （无新信息补充，Kirk 的架构分析完整覆盖了全部 4 层。）
+---
+[Kirk]: ## 纠正 Harper 的数字
+
+Harper 的流水线结构是对的，但**4 个关键参数全错**：
+
+| 参数 | Harper 说的 | 实际值 |
+|------|------------|--------|
+| `max_messages` | 50 | **30** |
+| `max_context_chars` | 100k | **50,000** |
+| `compress_ratio` | 0.8 | **0.7** |
+| `context_window_tokens` | 200k | **35,000** |
+
+压缩触发条件实际是 `30 × 0.7 = 21 条`，不是 40 条。
+
+---
+
+### 补充：工具结果处理管线（Harper 的 Stage 1-2）
+
+`result_processor.py` — 单入口管线：
+
+```
+normalize → truncate → persist → inject_meta
+```
+
+| 工具 | 截断上限 | 策略 |
+|------|---------|------|
+| exec | 10,000 chars | head_tail（首尾各保留一半） |
+| web_fetch | 10,000 chars | head_only |
+| web_search | 5,000 chars | head_only |
+
+AI 摘要（`summarize_enabled: true`）是独立开关，阈值 20,000 chars，用 `gpt-4.1-nano` 摘要到 ≤5,000 chars。但注意：**摘要阈值 20k > 截断上限 10k**，所以实际上工具结果先被截断到 10k，永远不会触发摘要——这个阈值设置可能是个 bug。
+
+---
+
+### 完整上下文流水线（修正版）
+
+```
+工具输出
+  │  result_processor: normalize → truncate(5k-10k) → persist
+  ▼
+HistoryContext（原始存储）
+  │  max 30 条 / 50k chars
+  │  压缩触发: ≥21 条 → head(保护) + middle(AI摘要/丢弃) + tail(最近6条)
+  ▼
+Prompt Builder（组装）
+  │  system 组件(stable vars) → history → volatile vars(时间/轮次)
+  ▼
+Broadcast（快照 _sys_msg_count）
+  │  tool_pruning: 软裁剪40% / 硬裁剪40%，保留最近3条assistant
+  ▼
+cache_control 注入 → LLM
+```
+
+[工具调用记录]
+• exec(cat ~/.nanobot/history_settings.json | python3 -m json.tool) → {
+    "context_window_tokens": 35000,
+    "tool_result_max_chars": 5000,
+    "tool_results": {
+        "exec_max_chars": 10000,
+        "web_fetch_max_chars": 10000,
+        "web_search_max_chars": 5000,
+        "summarize_enabled": true,
+        "summarize_threshold": 20000,
+        "summarize_model": "openai/gpt-4.1-nano",
+        "summarize_max_input_chars": 10000,
+        "summarize_max_output_chars": 5000,
+        "broadcast_result_max_chars": 25000,
+        "direct_result_max_chars": 12000… (1,049字)
+• exec(grep -n "def \|class " /root/nanobot-src/nanobot/groupchat/history/result_pro...) → 26:def _get_max_chars(tool_name: str) -> int:
+41:def _truncate(text: str, max_chars: int, strategy: str) -> tuple[str, bool]:
+57:def _normalize(content: Any) -> tuple[Any, bool]:
+75:def _persist_to_disk(content: str, tool_name: str, tool_call_id: str) -> Path | None:
+91:def process_tool_result(
+143:def maybe_persist_tool_result(
+
+
+Exit code: 0 (345字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/result_processor.py) → 1| """Unified tool result post-processing pipeline.
+2| 
+3| Single chokepoint for ALL tool results after execution.
+4| Replaces scattered truncation in shell.py, web.py, and tool_storage.py.
+5| 
+6| Pipeline: normalize → truncate → persist → inject_meta
+7| """
+8| 
+9| from __future__ import annotations
+10| import json
+11| from pathlib import Path
+12| from typing import Any
+13| from loguru import logger
+14| 
+15| STORAGE_DIR = Path("/tmp/nanobot/tool_storage")
+16| 
+17| # tool_name → (config_getter_name, strategy)
+18| _TOOL_CONFIGS: dict[str, tuple[str, str]] = {
+19|     "exec":       ("exec_max_chars", "head_tail"),
+20|     "web_fetch":  ("web_fetch_max_chars", "head_only"),
+21|     "web_search": ("web_search_max_chars", "head_only"),
+22| }
+23| _FALLBACK_CONFIG = ("tool_result_max_chars", "head… (2,255字)
+---
+[Harper]: Kirk 全对。实际 `~/.nanobot/history_settings.json` 确认：
+
+- `max_messages`: **30** ← 我错说 50
+- `max_context_chars`: **50,000** ← 我错说 100k
+- `compress_ratio`: **0.7** ← 我错说 0.8
+- `context_window_tokens`: **35,000** ← 我错说 200k
+
+另外 Kirk 指出的摘要阈值 bug 也确认存在：`summarize_threshold=20,000` 但 `exec_max_chars=10,000`，截断后最大 10k，**永远达不到 20k 的摘要触发线**。摘要基本上是个死代码。
+
+[工具调用记录]
+• exec(cat ~/.nanobot/history_settings.json 2>/dev/null || echo "文件不存在") → {
+  "context_window_tokens": 35000,
+  "tool_result_max_chars": 5000,
+  "tool_results": {
+    "exec_max_chars": 10000,
+    "web_fetch_max_chars": 10000,
+    "web_search_max_chars": 5000,
+    "summarize_enabled": true,
+    "summarize_threshold": 20000,
+    "summarize_model": "openai/gpt-4.1-nano",
+    "summarize_max_input_chars": 10000,
+    "summarize_max_output_chars": 5000,
+    "broadcast_result_max_chars": 25000,
+    "direct_result_max_chars": 12000,
+    "html_detect_enabled": true
+  },
+  "hist… (936字)
+---
+[Kirk]: ## 结论
+
+上下文组织是 **4 层流水线**，每层各司其职，最终通过前缀稳定机制让 Anthropic prompt cache 持续命中。
+
+## 关键发现
+
+**4 层流水线：**
+
+| 层 | 位置 | 作用 |
+|---|---|---|
+| ① 工具结果截断 | `result_processor.py` | exec 10k / web_fetch 10k / web_search 5k |
+| ② HistoryContext | `context.py` | 存储 30 条/50k chars，≥21 条触发压缩（head 保护 + middle 摘要 + tail 保留 6 条） |
+| ③ Prompt Builder | `prompt_builder.py` | stable 变量放前缀，volatile 变量（时间/轮次）放末尾 |
+| ④ Broadcast 快照 | `broadcast.py:685` | `_sys_msg_count` 固定前缀边界，裁剪只动尾部 |
+
+**前缀稳定机制（为什么前缀不增长）：**
+- `_sys_msg_count` 快照 → 前缀边界永不修改
+- `cache_control` 只打 system 消息（4 breakpoints：tools 占 1，system 占 3）
+- `tool_pruning` 只裁 `messages[sys_msg_count:]`，保留最近 6 轮
+- stable vs volatile 变量分离确保前缀内容不变
+
+**实际配置（`~/.nanobot/history_settings.json`）：**
+- `max_messages`: 30，`max_context_chars`: 50,000，`compress_ratio`: 0.7
+- `context_window_tokens`: 35,000
+- `context_pruning`: soft_ratio=0.4, hard_ratio=0.4, keep_recent=3
+
+## 备注
+
+工具结果 AI 摘要阈值（20,000 chars）大于截断上限（10,000 chars），摘要可能永不触发——疑似配置 bug。
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/context-organization (hidden)
+  Drawer ID: drawer_wing_code_context-organization_82d61d1e2a15cb35c4c78538 (127字)
+• end_discussion() → ✅ 讨论已结束（原因: 上下文组织形式已完整分析：4层流水线（工具截断→HistoryContext→Prompt Builder→Broadcast）+ 前缀稳定机制，Harper无新信息补充），即将进入总结阶段 (107字)
+---

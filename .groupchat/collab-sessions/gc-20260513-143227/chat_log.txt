@@ -1,0 +1,209 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 帮我看看leader结束讨论后的一个总结提示词在哪里，具体内容是什么
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(grep -rl "end_discussion\|结束讨论\|总结提示" ~/nanobot-src/ 2>/dev/null | head -30) → /root/nanobot-src/.git/config-versions.git/prompts/output_efficiency.md
+/root/nanobot-src/.git/config-versions.git/prompts/broadcast_hint.md
+/root/nanobot-src/.git/config-versions.git/prompts/leader_prompt.md
+/root/nanobot-src/.git/config-versions.git/memory_palace.bak.1776946110/chroma.sqlite3
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/prompts/output_efficiency.md
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/prompts/broadcast_hint.md
+/root/nanobot-src/.git/config-v… (1,889字)
+• memory_palace(leader 结束讨论 总结提示词) → 🔍 5 result(s) for 'leader 结束讨论 总结提示词':
+
+[1] wing_kirk/diary (sim=0.009)
+  复杂任务测试（链式依赖任务）：2026年5月AI Agent生态全景分析。Kirk独立完成全部搜索(4次)和数据抓取(5次)，Harper超时未响应。任务包含：多源搜索→交叉验证→综合分析→记忆存储。验证了Leader独立承担复杂任务的能力，以及Harper超时时的降级处理。
+
+[2] wing_user/gaming-knife-run (sim=-0.065)
+  跑刀游戏玩法：源于《使命召唤》近战击杀挑战，后在《逃离塔科夫》《暗区突围》等搜刮撤离类游戏中成为核心战术。核心机制：只带小刀+背包/保险箱进图，快速搜刮高价值物资后安全撤离。死了一分不亏，活着血赚。代表游戏：逃离塔科夫、暗区突围、三角洲行动、超凡先锋。关键策略：地图熟悉度、路线规划、保险箱利用、SCAV角色利用。社区术语：跑刀仔、白给、空手套白狼。
+
+[3] wing_user/xbox-cloud-gaming-ios (sim=-0.099)
+  用户已确认Better … (863字)
+• read_file(/root/nanobot-src/.git/config-versions.git/prompts/leader_prompt.md) → 1| [leader]
+2| 你是GROUP LEADER，最高决策者和回复整合者。
+3| 
+4| 职责链：分析意图→制定计划→分发任务→管理团队→验证闭环→输出用户
+5| 
+6| ### 任务分发格式（强制四要素）
+7| 给队友分配任务时必须包含：
+8| 1. **目标**：要达成什么（具体、可验证）
+9| 2. **输入**：已知信息/起点
+10| 3. **输出格式**：期望的结果形式（列表/JSON/摘要等）
+11| 4. **约束**：限制条件（搜索次数、时间、工具限制等）
+12| 
+13| ### 验证闭环
+14| - 队友返回结果后评估：是否满足任务目标？缺什么补什么
+15| - 如质量不达预期，明确指正后重新分配
+16| - 如有agent持续低质量，可移除该agent
+17| 
+18| ### 终止条件（满足任一即end_discussion）
+19| 1. 任务完成 2. 信息充足无新价值 3. 循环>2轮 4. 讨论3-5轮 5. 用户暗示结束
+20| 
+21| ### 交付验证（end_discussion 前强制检查）
+22| 调用 end_discussion 前，必须自检最终文本回复：
+23| - 是否包含用户请求的**实际内容**（数据/列表/代码/摘要等）？
+24| - 是否只有元描述（"已提取"/"已完成"/"以上就是全部"）而无实质内容？
+25| - 如果实际内容只存在于 chatroom_send/memory 而不在文本回复中 → 禁止 end_discussion
+26| 不通过验证则继续工作，直到文本回复包含完整结果。
+27| 
+28| 果断结束不拖延。综合团队产出得出结论后发用户。
+
+(End of file — 28 lines total) (758字)
+• exec(grep -rn "end_discussion\|总结\|summary\|结束" /root/nanobot-src/nanobot/groupcha...) → 200:    def _save_round_summary(self, round_num: int, agents_responded: int, comm_count: int = 0, duration: float = 0.0) -> None: ...
+498:        # can read a concise summary of what was done without the full tool protocol overhead.
+538:                f"- end_discussion(reason): 结束讨论，进入最终总结\n"
+542:                f"memory_palace 工具在本轮结束后仍然保留，下次启动自动加载。\n"
+560:                f"6. 信息充分后，先完成以下两步，再调用 end_discussion()：\n"
+564:                f"7. 完成记忆存入后，调用 end_discussion() 结束任务\n\n"
+566:           … (2,418字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1390|                 # Also send the new agent a kickstart message with context
+1391|                 mailbox.send(
+1392|                     "系统", [new_name],
+1393|                     f"你刚刚加入了正在进行的群聊讨论。"
+1394|                     f"用户问题: {user_question}\n"
+1395|                     f"当前成员: {', '.join(mailbox._active_agents)}。"
+1396|                     f"{'Leader 是 ' + leader_name + '，等待 Leader 给你分配任务。' if leader_name and leader_name != new_name else '请开始工作。'}",
+1397|                 )
+1398|                 logger.info("Broadcast: dynamically spawned {} (idx={})", new_name, idx)
+1399| 
+1400|         join_task = asyncio.create_task(_join_listener())
+1401| 
+1402|         # Register auxiliary tasks on the engine so _stop_group_loop can cancel
+1403|         # them even when CancelledError s… (5,447字)
+• exec(grep -rn "总结\|summary\|synthesis\|最终\|最终总结" /root/nanobot-src/nanobot/groupch...) → 200:    def _save_round_summary(self, round_num: int, agents_responded: int, comm_count: int = 0, duration: float = 0.0) -> None: ...
+498:        # can read a concise summary of what was done without the full tool protocol overhead.
+538:                f"- end_discussion(reason): 结束讨论，进入最终总结\n"
+561:                f"   a. 在最终文字回复中整合所有发现，给出完整答案\n"
+568:                f"- 你的最终文字回复就是给用户的答案，要完整、结构化\n"
+698:                            "content": "[已达到最大轮次限制，请立即输出最终总结，禁止再调用工具。]",
+735:                # … (2,063字)
+  (还有 8 个工具调用，已省略)
+---
+[Kirk]: 现在让我看看 `end_discussion` 后谁调用 `request_summary`：
+
+[工具调用记录]
+• memory_palace(leader end discussion summary prompt) → 🔍 5 result(s) for 'leader end discussion summary prompt':
+
+[1] wing_code/summarize-enabled-bug (sim=-0.394)
+  ## summarize_enabled=false 后仍触发的三个 Bug (2026-05-11)
+
+### Bug 1（主因）：Telegram UI hs_stage2 按钮无回调处理器
+- settings.py:557 定义了 callback_data="hs_stage2" 按钮
+- 全代码库无对应 handler，点击无效
+- 用户以为关了但设置未变
+
+### Bug 2：generate_summary() 不检查 summarize_enabled
+- run_loop.py:19-49 的 generate_summary() 完全不检查 summarize_enabled
+- 只要有 history + active agent 就调 LLM
+
+### Bug 3：maybe_compress() 关闭 AI 后仍机械丢弃中间消息
+- cont… (2,267字)
+• exec(grep -r "end_discussion\|总结\|summary" /root/nanobot-src/nanobot/ --include="*...) → /root/nanobot-src/nanobot/providers/cache_probe.py
+/root/nanobot-src/nanobot/providers/litellm_provider.py
+/root/nanobot-src/nanobot/providers/httpx_provider.py
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py
+/root/nanobot-src/nanobot/groupchat/history/component_manager.py
+/root/nanobot-src/nanobot/groupchat/history/persistence.py
+/root/nanobot-src/nanobot/groupchat/history/context.py
+/root/nanobot-src/nanobot/groupchat/… (1,174字)
+• exec(grep -n "end_discussion\|final.*summar\|总结提示\|summary.*prompt\|FINAL_SUMMARY\...) → Exit code: 0 (13字)
+• exec(grep -n "end_discussion\|final.*summar\|总结\|summary.*prompt\|FINAL_SUMMARY" /...) → 26:        await engine._send("⚠️ 没有活跃 agent，无法生成总结")
+35:                {"role": "system", "content": "你是一个讨论总结专家。"},
+39:                    "请输出简洁总结：1)核心观点 2)分歧点 3)初步结论"
+45:        summary = response.content or "无法生成总结"
+46:        await engine._send(f"📋 讨论总结:\n\n{summary}")
+49:        await engine._send(f"⚠️ 总结生成失败: {e}")
+
+
+Exit code: 0 (340字)
+• exec(grep -n "end_discussion\|final.*summar\|总结\|summary.*prompt\|FINAL_SUMMARY" /...) → 1072:        return "end_discussion"
+1077:            "结束当前讨论，立即进入总结阶段。"
+1079:            "调用后所有 agent 会被停止，你将进入最终总结。"
+1103:        return f"✅ 讨论已结束{reason_str}，即将进入总结阶段"
+1304:            "用途：在总结或记忆store时引用消息，避免复制粘贴浪费token。"
+
+
+Exit code: 0 (239字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 1| """Main group chat event loop and summary generation.
+2| 
+3| Contains the core run loop that processes user input and dispatches
+4| to broadcast mode, plus the summary generator.
+5| """
+6| 
+7| from __future__ import annotations
+8| 
+9| import asyncio
+10| from typing import Any
+11| 
+12| from loguru import logger
+13| 
+14| from nanobot.groupchat.display import display as _d
+15| # ── 关键修复：import 移到文件顶部，避免循环内重复 import ──
+16| from nanobot.groupchat.orchestra.broadcast import broadcast_round
+17| 
+18| 
+19| async def generate_summary(engine: Any) -> None:
+20|     """Generate a discussion summary using the first active agent's model."""
+21|     if not engine._history:
+22|         return
+23| 
+24|     # ── 关键修复：防止 _active_agents 为空时 IndexError ──
+25|     if not engine._active_agents:
+26|         awa… (2,135字)
+• exec(grep -n "end_discussion\|总结\|summary\|final" /root/nanobot-src/nanobot/groupc...) → 237:        finally:
+823:    def request_summary(self) -> None:
+824:        """Request a discussion summary."""
+934:    def _save_round_summary(
+942:        self._state.save_round_summary(round_num, agents_responded, comm_count, duration)
+999:    async def _generate_summary(self) -> None:
+1000:        """Generate discussion summary — delegates to run_loop module."""
+1001:        from nanobot.groupchat.orchestra.run_loop import generate_summary
+1002:        await generate_summary(self)
+1148:     … (656字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 820|         if self._running:
+821|             self._input_queue.put_nowait(message)
+822| 
+823|     def request_summary(self) -> None:
+824|         """Request a discussion summary."""
+825|         if self._running:
+826|             self._input_queue.put_nowait("__SUMMARY__")
+827| 
+828|     def stop(self) -> None:
+829|         """Stop the group loop but keep active agents."""
+830|         self._stop_group_loop()
+831|         try:
+832|             asyncio.ensure_f… (1,280字)
+  (还有 10 个工具调用，已省略)
+---
+[Kirk]: 结论已给出。简单说：**没有单独的总结提示词文件**，是 `broadcast.py` 动态拼入 Leader 上下文的工作流指令 + `leader_prompt.md` 的交付验证规则 + `EndDiscussionTool` 的执行逻辑三者协同完成的。
+
+[工具调用记录]
+• exec(grep -n "synthesis\|end_discussion\|存记忆\|强制顺序" /root/nanobot-src/nanobot/grou...) → 538:                f"- end_discussion(reason): 结束讨论，进入最终总结\n"
+560:                f"6. 信息充分后，先完成以下两步，再调用 end_discussion()：\n"
+564:                f"7. 完成记忆存入后，调用 end_discussion() 结束任务\n\n"
+566:                f"- 发现队友空转或无法完成任务时：果断 end_discussion\n"
+569:                f"- ⚠️ 如果你打算自己做搜索/验证，必须先完成工具调用，再调用 end_discussion。\n"
+570:                f"  end_discussion 一旦触发无法撤销，之后再说'我来搜索'只是文字，不会执行。\n"
+573:                f"- ⚠️ 禁止在未存记忆的情况下调用 end_discussion。存记忆 → end_discussion 是强制顺序。\n"
+648:        # Onl… (1,693字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 555|                 f"2. 分析问题，决定如何分工\n"
+556|                 f"3. 用 chatroom_send 给队友分配具体任务（写清楚要做什么）\n"
+557|                 f"   ⚠️ 只分配队友有工具能力完成的任务！无 web_search 的队友不要让他搜索\n"
+558|                 f"4. 用 wait() 等待队友回复结果\n"
+559|                 f"5. 根据结果：追加任务 / 纠正方向 / 自己补充搜索\n"
+560|                 f"6. 信息充分后，先完成以下两步，再调用 end_discussion()：\n"
+561|                 f"   a. 在最终文字回复中整合所有发现，给出完整答案\n"
+562|                 f"   b. 用 memory_palace(action='store') 将关键结论、发现写入记忆宫殿\n"
+563|                 f"      示例: memory_palace(action='store', content='用户偏好：...', wing='用户', hall='偏好', room='main')\n"
+564|                 f"7. 完成记忆存入后，调用 end_discussion() 结束任务\n\n"
+565|                 f"## 关键规则\n"
+566|                 f"- 发现队友空转或无法完成任务时：果断 end_discussion\n"
+567|                 f"- 可以一次给多个队友同时发任务（并行工作… (1,304字)
+• memory_palace() → ✅ Stored in wing_code/groupchat-synthesis-prompt (hidden)
+  Drawer ID: drawer_wing_code_groupchat-synthesis-prompt_79574e7d29a82684dc58236f (139字)
+• end_discussion() → ✅ 讨论已结束（原因: 调查完成，已定位总结提示词的三处来源并验证），即将进入总结阶段 (43字)
+---

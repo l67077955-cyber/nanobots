@@ -1,0 +1,164 @@
+[用户]: 看看能不能恢复到引入轮询机制之前的几次提交
+---
+[Kirk]: `main` 分支完全不包含轮询机制的提交。现在确认 `rollback-to-stable-20260517`（当前分支）的状态：它指向 `3033072`，也就是 `main` 的 `f9a3195` 之前一个提交，同样不含轮询机制。
+
+也就是说，**当前分支 `rollback-to-stable-20260517` 已经是轮询机制引入之前的状态**。`dev` 分支才是包含轮询机制的。
+
+让我验证一下：
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git log --format="%h %ai %s" 7e97d68~10..7e97d68) → 7e97d68 2026-05-27 19:58:45 +0800 feat(groupchat): auto memory recall + store + synthesis fixes
+3f04c59 2026-05-26 17:18:32 +0800 feat(groupchat): 工具可见性标注+跨agent工具调用压缩
+ae2c1a2 2026-05-26 11:49:27 +0800 fix(groupchat): prevent content loss on leader end_discussion
+19e9104 2026-05-26 09:58:24 +0800 fix(groupchat): eliminate agent deadlock from busy-replier misjudgment and infinite wait loops
+6b64165 2026-05-25 10:42:50 +0800 fix(groupchat): 用户消息slot泄漏 — release时fallback到agent
+a36a8b6 2026-05-25 10… (1,001字)
+• exec(cd /root/nanobot-src && git log --format="%h %ai %s" 7e97d68~3..7e97d68~1) → 3f04c59 2026-05-26 17:18:32 +0800 feat(groupchat): 工具可见性标注+跨agent工具调用压缩
+ae2c1a2 2026-05-26 11:49:27 +0800 fix(groupchat): prevent content loss on leader end_discussion
+
+
+Exit code: 0 (182字)
+• exec(cd /root/nanobot-src && git show --stat 7e97d68~1) → commit 3f04c590e2a60295f0c07139e6b01d429ed33f65
+Author: nanobot-dev <dev@nanobot.local>
+Date:   Tue May 26 17:18:32 2026 +0800
+
+    feat(groupchat): 工具可见性标注+跨agent工具调用压缩
+    
+    - 新建 visibility.py: 单一真相源 (compute_agent_ranks, can_see_tool_call, tool_call_label)
+    - display.py: 标注从 → all 改为列出具体人名
+    - message_converter.py: 跨agent工具调用应用age_tool_log压缩，只留函数名+摘要+字数
+    - broadcast.py: 用can_see_tool_call替代内联比较，删除废弃的compute_visible_agents
+
+ nanobot/groupchat/display/broadcast_view.py    |  5 ++-
+ n… (846字)
+• exec(cd /root/nanobot-src && git log --format="%h %ai %s" 7e97d68~5..7e97d68~1) → 3f04c59 2026-05-26 17:18:32 +0800 feat(groupchat): 工具可见性标注+跨agent工具调用压缩
+ae2c1a2 2026-05-26 11:49:27 +0800 fix(groupchat): prevent content loss on leader end_discussion
+19e9104 2026-05-26 09:58:24 +0800 fix(groupchat): eliminate agent deadlock from busy-replier misjudgment and infinite wait loops
+6b64165 2026-05-25 10:42:50 +0800 fix(groupchat): 用户消息slot泄漏 — release时fallback到agent
+
+
+Exit code: 0 (397字)
+• exec(cd /root/nanobot-src && git diff --stat 3f04c59..7e97d68) → nanobot/groupchat/history/component_manager.py |   2 +-
+ nanobot/groupchat/orchestra/_auto_memory.py    | 275 +++++++++++++++++++++++++
+ nanobot/groupchat/orchestra/_auto_recall.py    |  68 ++++++
+ nanobot/groupchat/orchestra/broadcast.py       |  25 +++
+ nanobot/groupchat/orchestra/run_loop.py        |  27 +++
+ nanobot/groupchat/orchestra/tools/tool_loop.py |  11 +
+ 6 files changed, 407 insertions(+), 1 deletion(-)
+
+
+Exit code: 0 (435字)
+• exec(cd /root/nanobot-src && git branch -a --contains 3f04c59 | head -5) → dev
+  remotes/nanobots/dev
+  remotes/nanobots/main
+
+
+Exit code: 0 (67字)
+• exec(cd /root/nanobot-src && git log --oneline -1 HEAD && echo "---" && git log --...) → 3033072 release: merge dev for v-stable-20260517
+---
+3f04c59 feat(groupchat): 工具可见性标注+跨agent工具调用压缩
+---
+9c7e253a7bf15dc730301bb8c782a75544977234
+
+
+Exit code: 0 (158字)
+• exec(cd /root/nanobot-src && git log --format="%h %ai %s" HEAD~10..HEAD) → 3033072 2026-05-17 10:44:38 +0800 release: merge dev for v-stable-20260517
+9c7e253 2026-05-17 10:44:30 +0800 feat: rank badges in broadcast banner & polish pool status display
+63b294a 2026-05-17 10:32:18 +0800 feat: add ▰▱ bars to per-agent pool status display
+56b52aa 2026-05-17 10:31:24 +0800 cleanup: remove dead thread_bar function (no callers remain)
+0dcf9ef 2026-05-17 10:30:52 +0800 fix: per-agent pool visualization replaces total-only thread_bar
+6407d3b 2026-05-17 10:25:21 +0800 fix: rank-b… (3,294字)
+• exec(cd /root/nanobot-src && git log --oneline --graph 3f04c59..HEAD 2>/dev/null |...) → * 3033072 release: merge dev for v-stable-20260517
+
+
+Exit code: 0 (65字)
+• exec(cd /root/nanobot-src && git log --oneline --all --graph 3f04c59~1..7e97d68 2>...) → * 44440fb backup: current state before rollback to stable-2026-05-17
+* 68e702d auto_recall: show generated keywords in injected system message
+* 46331ca display: show memory_palace content preview in Telegram
+* 7e9a50a feat: show auto memory store summary in Telegram context
+* 54a5ca1 refactor: remove dead _mp_hidden code from engine.py (visible param was deleted)
+* b4c439d refactor: remove unused 'visible' param … (1,612字)
+  (还有 13 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git show --stat 7e97d68) → commit 7e97d6800a3c4146416759dbc55d6b82cde9352a
+Author: nanobot-dev <dev@nanobot.local>
+Date:   Wed May 27 19:58:45 2026 +0800
+
+    feat(groupchat): auto memory recall + store + synthesis fixes
+    
+    - Add _auto_recall.py: semantic recall from 3 wings (code/user/agent) before broadcast
+    - Add _auto_memory.py: 3-poll LLM extraction after discussion ends
+    - Integrate both into run_loop.py (pre-broadcast recall, post-broadcast store)
+    - Fix end_discussion clean exit in tool_loop.py (bre… (1,103字)
+• exec(cd /root/nanobot-src && git show --stat d286926) → commit d286926f6b641a538f4345c43c4e84a4039c3cbc
+Author: Tony <tony@zuzuche.com>
+Date:   Fri Mar 13 13:52:36 2026 +0800
+
+    feat(memory): implement async background consolidation
+    
+    Implement asynchronous memory consolidation that runs in the background when
+    sessions are idle, instead of blocking user interactions after each message.
+    
+    Changes:
+    - MemoryConsolidator: Add background task management with idle detection
+      * Track session activity timestamps
+      * Backgroun… (1,555字)
+• exec(cd /root/nanobot-src && ls -la nanobot/groupchat/_auto_recall.py nanobot/grou...) → ls: cannot access 'nanobot/groupchat/_auto_recall.py': No such file or directory
+ls: cannot access 'nanobot/groupchat/_auto_memory.py': No such file or directory
+ls: cannot access 'nanobot/memory/consolidator.py': No such file or directory
+
+
+Exit code: 2 (254字)
+• exec(cd /root/nanobot-src && ls nanobot/groupchat/orchestra/_auto_recall.py nanobo...) → ls: cannot access 'nanobot/groupchat/orchestra/_auto_recall.py': No such file or directory
+ls: cannot access 'nanobot/groupchat/orchestra/_auto_memory.py': No such file or directory
+
+
+Exit code: 2 (196字)
+• exec(cd /root/nanobot-src && git diff 7e97d68^..7e97d68 -- nanobot/groupchat/orche...) → diff --git a/nanobot/groupchat/orchestra/run_loop.py b/nanobot/groupchat/orchestra/run_loop.py
+index 57d33ff..e0a60c7 100644
+--- a/nanobot/groupchat/orchestra/run_loop.py
++++ b/nanobot/groupchat/orchestra/run_loop.py
+@@ -127,6 +127,16 @@ async def run_loop(engine: Any) -> None:
+             engine._add_message("用户", user_input)
+             engine._round = rounds
+ 
++            # ── Auto memory recall: inject relevant memories before broadcast ──
++            try:
++                from nanobot.g… (2,150字)
+• exec(cd /root/nanobot-src && git diff 7e97d68^..7e97d68 -- nanobot/groupchat/orche...) → diff --git a/nanobot/groupchat/orchestra/broadcast.py b/nanobot/groupchat/orchestra/broadcast.py
+index 315bf47..248265f 100644
+--- a/nanobot/groupchat/orchestra/broadcast.py
++++ b/nanobot/groupchat/orchestra/broadcast.py
+@@ -551,6 +551,7 @@ async def broadcast_round(
+ 
+         is_leader = (name == leader_name)
+         _leader_ended_discussion = False
++        _leader_disabled_agent = False  # track if leader disabled/kicked an agent this cycle
+         _synthesis_retries = 0  # guard against i… (3,211字)
+• exec(cd /root/nanobot-src && git diff 7e97d68^..7e97d68 -- nanobot/groupchat/orche...) → diff --git a/nanobot/groupchat/orchestra/tools/tool_loop.py b/nanobot/groupchat/orchestra/tools/tool_loop.py
+index 81eb913..7af3a3e 100644
+--- a/nanobot/groupchat/orchestra/tools/tool_loop.py
++++ b/nanobot/groupchat/orchestra/tools/tool_loop.py
+@@ -683,6 +683,17 @@ async def tool_loop(
+                     result.finish_reason = "interrupted"
+                     break
+ 
++                # ── Checkpoint 2.5: end_discussion early exit ──
++                # When the agent calls end_discussion, bre… (1,102字)
+• exec(cd /root/nanobot-src && find nanobot/groupchat/orchestra/ -name "_auto*" 2>/d...) → nanobot/groupchat/orchestra/__pycache__/_auto_recall.cpython-312.pyc
+nanobot/groupchat/orchestra/__pycache__/_auto_memory.cpython-312.pyc
+---
+3033072 release: merge dev for v-stable-20260517
+9c7e253 feat: rank badges in broadcast banner & polish pool status display
+63b294a feat: add ▰▱ bars to per-agent pool status display
+56b52aa cleanup: remove dead thread_bar function (no callers remain)
+0dcf9ef fix: per-agen… (481字)
+  (还有 4 个工具调用，已省略)
+---
+[Harper]: ⚠️ [Harper] LLM调用出错（Error calling LLM: litellm.APIConnectionError: APIConnection），我仍在线。等待队友消息后将继续工作。
+---
+[Harper]: ⚠️ [Harper] LLM调用出错（Error calling LLM: litellm.APIConnectionError: APIConnection），我仍在线。等待队友消息后将继续工作。
+---

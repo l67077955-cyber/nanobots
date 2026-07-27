@@ -1,0 +1,27 @@
+[用户]: 继续
+---
+[Kirk]: ## 结论
+
+Skill 提示词体系审查完毕，**动态组装架构正确，无需结构性改动**。已完成 4 项规范化修复。
+
+## 关键发现
+
+| 改动 | 状态 |
+|------|------|
+| 12 个 skill 补齐 `always` 字段 | ✅ |
+| steve-jobs-perspective description 6行→1行 | ✅ |
+| loader.py `_parse_yaml_value` 死代码 bug | ✅ |
+| 配置架构：内嵌 frontmatter，不拆文件 | ✅ 确认 |
+
+**动态组装管线**：每次 LLM 调用前 `load_skills_for_context()` 三层运行——always-on 全量注入（5600 chars 预算）→ 非 always-on 摘要（8000 chars）→ 运行时按需 `read_file` 加载。`{baseDir}` 运行时替换，无缓存。
+
+## 备注
+
+- always 分布：cron/debug/memory/settings = `true`，其余 8 个 = `false`
+- 将来如需全局覆盖，可加 `workspace/config/skills-override.yaml`，优先级：frontmatter ← override ← loader 默认值
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/skill-prompt-review (hidden)
+  Drawer ID: drawer_wing_code_skill-prompt-review_846abd6a1d23e4d98b6eaeb1 (125字)
+• end_discussion() → ✅ 讨论已结束（原因: 全部任务完成：12个skill规范化、loader bug修复、配置架构决策、动态组装确认。记忆已存储。），即将进入总结阶段 (74字)
+---

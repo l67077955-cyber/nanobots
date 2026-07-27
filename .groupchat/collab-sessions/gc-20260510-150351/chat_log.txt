@@ -1,0 +1,56 @@
+[用户]: seq2048
+---
+[Kirk]: seq_len=2048，32头，hidden_dim=4096，FP16：
+
+**每层**：2048 × 2 × 4096 × 2B = **32 MB**
+
+| 模型 | 层数 | KV Cache 总大小 |
+|------|------|----------------|
+| LLaMA-7B | 32 | **~1 GB** |
+| LLaMA-13B | 40 | **~1.25 GB** |
+| LLaMA-33B | 58 | **~1.8 GB** |
+| LLaMA-70B | 80 | **~2.5 GB** |
+
+公式：`2 × layers × seq_len × hidden_dim × 2 bytes(FP16)`
+---
+[Harper]: Kirk 算得对，我补充一个细节。
+
+**公式确认**：`2 × layers × seq_len × hidden_dim × 2B(FP16)`
+
+32头在这里**抵消了**——因为 `hidden_dim = num_heads × head_dim`，展开后：
+
+```
+2 × seq_len × num_heads × head_dim × 2B
+= 2 × seq_len × hidden_dim × 2B
+```
+
+所以头数不影响总量，只影响每个头的维度分配。
+
+**你的配置（seq=2048, hidden=4096, FP16）：**
+
+| 层数 | KV Cache |
+|------|----------|
+| 32层（~7B） | **1 GB** |
+| 40层（~13B） | **1.25 GB** |
+| 80层（~70B） | **2.5 GB** |
+
+**一个实用点**：如果模型用了 **GQA（Grouped Query Attention）**，KV Cache 会按 `num_kv_heads / num_heads` 比例缩减。比如 GQA-8（8个KV头，32个Q头）→ KV cache 降到 **1/4**。
+---
+[Kirk]: **KV Cache 显存计算（seq=2048, hidden=4096, FP16）：**
+
+公式：`2 × layers × seq_len × hidden_dim × 2B`
+
+每层固定 **32 MB**，头数不影响总量（`hidden_dim = num_heads × head_dim`）。
+
+| 模型规模 | 层数 | KV Cache |
+|----------|------|----------|
+| ~7B | 32 | **1 GB** |
+| ~13B | 40 | **1.25 GB** |
+| ~33B | 58 | **1.8 GB** |
+| ~70B | 80 | **2.5 GB** |
+
+**GQA 加成**：如果用 Grouped Query Attention（如 8个KV头/32个Q头），KV Cache 再降为 **1/4**。
+
+[工具调用记录]
+• end_discussion() → ✅ 讨论已结束（原因: KV Cache计算已完成，公式+数值表+GQA补充均已给出，无新信息。），即将进入总结阶段 (58字)
+---

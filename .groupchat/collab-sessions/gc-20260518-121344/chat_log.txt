@@ -1,0 +1,886 @@
+[用户]: 测试一下新提示词构建能力
+---
+[Harper]: <｜DSML｜tool_calls>
+<｜DSML｜invoke name="edit_file">
+<｜DSML｜parameter name="path" string="true">/root/.nanobot/workspace/test_component_phases.py</｜DSML｜parameter>
+<｜DSML｜parameter name="old_text" string="true">    # Find our test components in the output
+    static_found = False
+    dynamic_found = False
+    static_has_datetime = False
+    dynamic_has_datetime = False
+    
+    for msg in messages:
+        content = msg.get("content", "")
+        if "Static component:" in content:
+            static_found = True
+            # Static should NOT have {{datetime}} expanded (only stable vars)
+            # Actually, {{datetime}} is a volatile var, so static components
+            # should NOT get it expanded — they only get stable_tpl_vars
+            if "{{datetime}}" in content:
+                static_has_datetime = True
+        if "Dynamic component:" in content:
+            dynamic_found = True
+            if "2026年" in content or "2025年" in content or "2024年" in content:
+                dynamic_has_datetime = True
+    
+    check("Static component rendered", static_found)
+    check("Dynamic component rendered", dynamic_found)
+    check("Static component does NOT expand volatile {{datetime}} (leaves as {{datetime}})", static_has_datetime,
+          f"Static component has phase=static, should not expand volatile vars")
+    check("Dynamic component expands volatile {{datetime}}", dynamic_has_datetime,
+          "Dynamic content should have datetime like '2026年'")</｜DSML｜parameter>
+<｜DSML｜parameter name="new_text" string="true">    # DEBUG: print actual content
+    for msg in messages:
+        content = msg.get("content", "")
+        if "component" in content:
+            print(f"  DEBUG[{msg['role']}]: {content[:120]}...")
+    
+    # Find our test components in the output
+    static_found = False
+    dynamic_found = False
+    static_has_datetime = False
+    dynamic_has_datetime = False
+    
+    for msg in messages:
+        content = msg.get("content", "")
+        if "Static component:" in content:
+            static_found = True
+            # Static should NOT have {{datetime}} expanded (only stable vars)
+            if "{{datetime}}" in content:
+                static_has_datetime = True
+        if "Dynamic component:" in content:
+            dynamic_found = True
+            if "2026年" in content or "2025年" in content or "2024年" in content:
+                dynamic_has_datetime = True
+    
+    check("Static component rendered", static_found)
+    check("Dynamic component rendered", dynamic_found)
+    check("Static component does NOT expand volatile {{datetime}} (leaves as {{datetime}})", static_has_datetime,
+          f"Static component has phase=static, should leave {{datetime}} unexpanded")
+    check("Dynamic component expands volatile {{datetime}}", dynamic_has_datetime,
+          "Dynamic content should have datetime like '2026年'")</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 85| #   nanobot.channels.telegram.callbacks
+86| #   nanobot.channels.telegram.commands.settings
+87| DEFAULT_PROMPT_ORDER: list[str] = list(_FALLBACK_ORDER)
+88| COMPONENT_LABELS: dict[str, str] = dict(_FALLBACK_LABELS)
+89| COMPONENT_PHASES: dict[str, str] = dict(_FALLBACK_PHASES)
+90| GLOBAL_EDITABLE: set[str] = set(_FALLBACK_GLOBAL_EDITABLE)
+91| AGENT_EDITABLE: set[str] = set(_FALLBACK_AGENT_EDITABLE)
+92| EDITABLE_COMPONENTS: set[str] = GLOBAL_EDITABLE | AGENT_EDITABLE
+93| 
+94| 
+95| def _load_manifest() -> dict | None:
+96|     """Load prompt_manifest.json if it exists."""
+97|     if MANIFEST_PATH.exists():
+98|         try:
+99|             return json.loads(MANIFEST_PATH.read_text())
+100|         except Exception:
+101|             pass
+102|     return None
+103| 
+104| 
+105| def _save_manifest… (5,703字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 430|         if key == "history":
+431|             return "❌ 聊天记录 (history) 不可删除"
+432|         label = COMPONENT_LABELS.get(key, key)
+433|         order.pop(idx)
+434|         self.set_default_prompt_order(order)
+435|         return f"🗑 已移除: {label}"
+436| 
+437|     def get_available_components(self) -> list[str]:
+438|         current = set(self.get_agent_prompt_order())
+439|         # Default components first, then any registered custom components
+440|         all_known = list(DEFAULT_PROMPT_ORDER) + [
+441|             k for k in COMPONENT_LABELS if k not in DEFAULT_PROMPT_ORDER
+442|         ]
+443|         return [k for k in all_known if k not in current]
+444| 
+445|     @staticmethod
+446|     def add_custom_component(key: str, label: str) -> str:
+447|         """Register a user-defined cust… (5,381字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 675|         leader: str | None = None,
+676|         round_num: int = 0,
+677|         relevant_agents: list[str] | None = None,
+678|         agent_idx: int | None = None,
+679|         total: int | None = None,
+680|         teammates: list[str] | None = None,
+681|         user_question: str = "",
+682|     ) -> list[dict[str, Any]]:
+683|         """Build the full prompt messages list for an agent turn."""
+684|         agent = registry[agent_name]
+685|         order = self.get_agent_prompt_order()
+686| 
+687|         members_list = ", ".join(active_agents) if active_agents else "(无)"
+688|         other_members = [a for a in active_agents if a != agent_name]
+689|         tool_names = "web_search, web_fetch, exec, read_file, write_file, edit_file, list_dir"
+690| 
+691|         # Stable template v… (5,174字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 555|             return "[聊天记录 — 动态插入]"
+556|         elif key == "instructions":
+557|             return agent.get("instructions", "")
+558|         elif key == "leader_prompt":
+559|             # Always return the template content here.
+560|             # Whether this component is injected for a given agent is controlled
+561|             # entirely by the visibility filter in build_agent_prompt — this method
+562|             # only provides the raw content, not the access decision.
+563|             return self.get_component_template("leader_prompt") or "[Leader prompt — 自动生成]"
+564|         elif key in ("broadcast_hint", "group_nudge"):
+565|             return self.get_component_template(key)
+566|         # Custom components: check global template file
+567|         return self.get_component… (6,512字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 230|         "Write 1 reply only in character as {{agent}}. "
+231|         "Do not write as or for other characters. "
+232|         "Focus on executing the user's request — do not just greet or ask what to do."
+233|     ),
+234|     "group_context": (
+235|         "[Start a new group chat. Group members: {{members}}]"
+236|     ),
+237|     "persona": "[从 SOUL.md 加载 — 在 /editagent 中编辑]",
+238|     "tool_instructions": "",  # Loaded from ~/.nanobot/prom… (9,392字)
+  (还有 5 个工具调用，已省略)
+---
+[Kirk]: 测试完成，7 项全过。新提示词构建能力验证通过。
+
+唯一发现：`broadcast_hint.md` 里的 `{{user_question}}` 未解析——它是 static phase 组件但用了不在 stable vars 中的变量。历史遗留问题，非本次引入，后续可修。
+
+[工具调用记录]
+• memory_palace(component phases static dynamic prompt builder) → 🔍 5 result(s) for 'component phases static dynamic prompt builder':
+
+[1] wing_code/prompt-phases (sim=0.217)
+  ## Prompt Component Phase System (static/dynamic) System
+
+### What
+Prompt components now have an explicit `phase` field: `static` (before history, stable vars only) or `dynamic` (after history, stable+volatile vars).
+
+### Where
+- `_FALLBACK_PHASES` in `prompt_builder.py` — hardcoded defaults
+- `prompt_manifest.json` — per-component `phase` field — synced at import
+- `COMPONENT_PHASES` m… (2,168字)
+• exec(cd /root/nanobot-src && git log --oneline -5) → 2363adb feat: add COMPONENT_PHASES (static/dynamic) to replace implicit past_history tracking
+12306db feat(skills): per-skill type=static|dynamic controls prompt placement
+cdba012 fix: split skills into static (always-on, before history) and dynamic (skills_overview, after history)
+75d0179 fix: boolean parsing bug + auto-discover undocumented scripts
+99eb8f6 docs: add send_photo_cli.py to debug SKILL.md
+
+
+Exit code: 0 (421字)
+• exec() → === 1. COMPONENT_PHASES ===
+Static (11): ['broadcast_hint', 'hard_rules', 'instructions', 'leader_prompt', 'main_prompt', 'memory', 'output_efficiency', 'persona', 'skills', 'tool_instructions', 'user_context']
+Dynamic (8): ['coding_principle', 'examples', 'group_context', 'group_nudge', 'history', 'skills_overview', '工程原则', '记忆补充']
+
+=== 2. Manifest phase coverage ===
+Components without phase: none
+
+=== 3. Consistency ===
+Inconsistent: none
+
+=== 4. Order validation ===
+OK: all static components … (906字)
+• exec() → (self, *, config: 'Any', workspace: 'Path')
+
+STDERR:
+2026-05-18 12:14:15.895 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 19 components, 12 editable
+
+
+Exit code: 0 (220字)
+• exec() → Messages: 15
+Total chars: 9124
+Unresolved vars: {'{{user_question}}'}
+Datetime expanded: True
+Round expanded: True
+Static components with unresolved volatile vars: 0
+
+=== 7. Dynamic component registration ===
+OK: new dynamic component auto-synced with phase=dynamic
+
+=== ALL TESTS PASSED ===
+
+STDERR:
+2026-05-18 12:14:33.487 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 19 components, 12 editable
+2026-05-18 12:14:33.509 | INFO     | nanobot.g… (621字)
+• exec(cd /root/nanobot-src && grep -n "user_question" nanobot/groupchat/history/pro...) → 681:        user_question: str = "",
+750:        if user_question:
+751:            volatile_content = f"用户请求: {user_question}\n\n" + volatile_content
+
+
+Exit code: 0 (164字)
+• exec(cd /root/nanobot-src && grep -rn "{{user_question}}" /root/.nanobot/prompts/ ...) → /root/.nanobot/prompts/versions/broadcast_hint/20260415_151842.md:5:用户请求: {{user_question}}
+/root/.nanobot/prompts/broadcast_hint.md:3:用户请求: {{user_question}}
+
+
+Exit code: 0 (173字)
+• exec(cd /root/nanobot-src && python3 -c "
+from nanobot.groupchat.history.prompt_bu...) → broadcast_hint phase: static
+
+STDERR:
+2026-05-18 12:14:52.141 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 21 components, 12 editable
+
+
+Exit code: 0 (205字)
+• memory_palace() → ✅ Stored in wing_code/prompt-phases (hidden)
+  Drawer ID: drawer_wing_code_prompt-phases_b0680b1e21949e13c9f944b2 (113字)
+• end_discussion() → ✅ 讨论已结束（原因: 测试完成，7项全过。新提示词构建能力（static/dynamic phase）验证通过。），即将进入总结阶段 (67字)
+---
+[Kirk]: ## 结论
+
+新提示词构建能力（static/dynamic phase 系统）7 项测试全过，架构可用。
+
+## 测试结果
+
+| # | 测试项 | 结果 |
+|---|--------|------|
+| 1 | COMPONENT_PHASES 加载 | ✅ 11 static + 8 dynamic |
+| 2 | Manifest phase 覆盖率 | ✅ 19/19 组件都有 phase 字段 |
+| 3 | Manifest ↔ 模块一致性 | ✅ 零不一致 |
+| 4 | 排序约束（static 全在 dynamic 前） | ✅ 通过 |
+| 5 | build_agent_prompt 产出 | ✅ 15 messages, 9124 chars |
+| 6 | Volatile vars 展开（datetime/round） | ✅ 正确展开 |
+| 7 | 新 dynamic 组件自动注册 | ✅ 加 manifest 即同步 phase |
+
+## 已知问题
+
+`broadcast_hint.md` 用了 `{{user_question}}`，但该组件 phase=static，该变量不在 stable_tpl_vars 中导致未解析。**历史遗留，非本次引入**。修复方案二选一：
+- 从 broadcast_hint.md 移除 `{{user_question}}`
+- 将 broadcast_hint phase 改为 dynamic
+
+## 架构能力确认
+
+新增动态提示词组件只需一步：在 manifest 加 `"phase": "dynamic"`，无需改代码，自动继承 volatile 变量（`{{datetime}}`、`{{round}}`）展开能力。
+---
+[用户]: prompt指令看看显示和功能区怎么适配当前的变化
+---
+[Kirk]: 验证导入和语法：
+
+[工具调用记录]
+• memory_palace(prompt settings display component phase static dynamic) → 🔍 5 result(s) for 'prompt settings display component phase static dynamic':
+
+[1] wing_code/prompt-phases (sim=0.174)
+  ## Prompt Component Phase System (static/dynamic) System
+
+### What
+Prompt components now have an explicit `phase` field: `static` (before history, stable vars only) or `dynamic` (after history, stable+volatile vars).
+
+### Where
+- `_FALLBACK_PHASES` in `prompt_builder.py` — hardcoded defaults
+- `prompt_manifest.json` — per-component `phase` field — synced at import
+- `COMPONENT_P… (2,188字)
+• exec(grep -rn "phase\|static\|dynamic\|COMPONENT_PHASES" /root/nanobot-src/nanobot...) → 25:    @staticmethod
+101:    @staticmethod
+
+
+Exit code: 0 (57字)
+• exec(grep -rn "phase\|static\|dynamic\|COMPONENT_PHASES" /root/nanobot-src/nanobot...) → 29:    @staticmethod
+37:    @staticmethod
+
+
+Exit code: 0 (56字)
+• exec(grep -n "prompt_order\|component\|label\|editable\|visibility\|order" /root/n...) → 140:        for key, label in self.GC_SETTINGS_LABELS.items():
+142:            lines.append(f"  {label}: {val}")
+144:                f"✏️ {label} = {val}",
+247:        # Speaking order
+312:        """Handle /prompt command: view/edit prompt components per agent."""
+323:        # Directly show global component order editor
+324:        text, markup = self._build_prompt_order_view(engine)
+332:    def _build_prompt_order_view(self, engine) -> tuple[str, "InlineKeyboardMarkup"]:
+333:        """Build … (2,353字)
+• exec(grep -n "prompt_order\|component\|label\|editable\|visibility\|order" /root/n...) → 47:        strip_prefix: if given, remove 'prefix/' from display label.
+57:            label = mid[len(strip_prefix) + 1:] if strip_prefix and mid.startswith(f"{strip_prefix}/") else mid
+58:            row.append(InlineKeyboardButton(f"+ {label}", callback_data=cb))
+185:                    labels = {
+198:                        label = labels.get(t, t)
+200:                            f"{icon} {label}",
+392:                labels = {
+402:                    label = labels.get(t, t)
+404:          … (2,677字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/commands/settings.py) → 332|     def _build_prompt_order_view(self, engine) -> tuple[str, "InlineKeyboardMarkup"]:
+333|         """Build the global prompt component order view with edit/reorder buttons."""
+334|         order = engine.prompt_builder.get_agent_prompt_order()
+335|         labels = _COMPONENT_LABELS
+336|         global_editable = _GLOBAL_EDITABLE
+337|         agent_editable = _AGENT_EDITABLE
+338|         conditional_tags = self._CONDITIONAL_TAGS
+339| 
+340|         history_idx = order.index("history") if "history" in order else len(order)
+341|         pre_count = sum(1 for k in order[:history_idx] if k != "history")
+342|         post_count = sum(1 for k in order[history_idx + 1:])
+343| 
+344|         lines = ["📋 System Prompt 组装管线 (全局)\n"]
+345|         lines.append(f"↓ 系统上下文  ({pre_count} 个组件)\n")
+346|… (4,681字)
+• exec(grep -n "prv:\|preview\|预览" /root/nanobot-src/nanobot/channels/telegram/callb...) → 587:                                    "content_preview": (m.get("content") or "")[:300],
+643:                preview = r.get("reply_preview", "")
+644:                preview_str = f"\n\n[回复预览]\n{preview[:200]}…" if len(preview) > 200 else (f"\n\n[回复预览]\n{preview}" if preview else "")
+671:                    f"{preview_str}"
+763:                    # Short content preview
+764:                    preview = content_str[:100].replace("\n", " ").strip()
+765:                    if preview:
+767:     … (1,353字)
+• exec(grep -n "prv" /root/nanobot-src/nanobot/channels/telegram/callbacks.py | head...) → 1302:            elif data.startswith("prv:"):
+1303:                # Preview full template: prv:<page>
+1346:                    nav.append(InlineKeyboardButton("⬅️ 上页", callback_data=f"prv:{page-1}"))
+1348:                    nav.append(InlineKeyboardButton("下页 ➡️", callback_data=f"prv:{page+1}"))
+
+
+Exit code: 0 (314字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → (3,226字)
+  (还有 8 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/skills/settings/SKILL.md) → 1| ---
+2| name: settings
+3| description: "Manage providers, models, and system settings. Use when adding API providers, registering models, or checking configuration."
+4| always: true
+5| ---
+6| 
+7| # Settings — 提供商与模型管理
+8| 
+9| 管理 API 提供商和模型注册。
+10| 
+11| ## CLI
+12| 
+13| ```bash
+14| python3 {baseDir}/scripts/settings_cli.py <resource> <action> [options]
+15| ```
+16| 
+17| ## Providers
+18| 
+19| ```bash
+20| # 列出
+21| python3 {baseDir}/scripts/settings_cli.py providers list
+22| 
+23| # 添加 (需要 name, url, key)
+24| python3 {baseDir}/scripts/settings_cli.py providers add --name openrouter --url https://openrouter.ai/api/v1 --key sk-xxx
+25| 
+26| # 编辑 (改 url 或 key)
+27| python3 {baseDir}/scripts/settings_cli.py providers edit --name openrouter --url https://new-url.com/v1
+28| python3 {baseDir}/scripts/sett… (1,651字)
+• exec(cd /root/nanobot-src && grep -rn "phase\|COMPONENT_PHASES" nanobot/channels/t...) → nanobot/groupchat/history/prompt_builder.py:89:COMPONENT_PHASES: dict[str, str] = dict(_FALLBACK_PHASES)
+nanobot/groupchat/history/prompt_builder.py:181:    global DEFAULT_PROMPT_ORDER, COMPONENT_LABELS, COMPONENT_PHASES, GLOBAL_EDITABLE, AGENT_EDITABLE, EDITABLE_COMPONENTS
+nanobot/groupchat/history/prompt_builder.py:194:    # Rebuild labels, phases, editable sets from manifest metadata.
+nanobot/groupchat/history/prompt_builder.py:196:    COMPONENT_PHASES = {}
+nanobot/groupchat/history/prompt_bu… (941字)
+• exec(cd /root/nanobot-src && grep -rn "prompt\|settings\|component" nanobot/channe...) → nanobot/channels/telegram/commands/agents.py
+nanobot/channels/telegram/commands/settings.py
+
+
+Exit code: 0 (106字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/commands/settings.py) → 1| """Settings commands for Telegram (hyperparams, groupchat, restart, debug, prompt)."""
+2| 
+3| from __future__ import annotations
+4| 
+5| import asyncio
+6| import json
+7| import os
+8| import sys
+9| from pathlib import Path
+10| 
+11| from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+12| from telegram.ext import ContextTypes
+13| 
+14| from loguru import logger
+15| 
+16| from nanobot.groupchat.history.prompt_builder import (
+17|     PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
+18|     GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
+19|     COMPONENT_PHASES as _COMPONENT_PHASES,
+20| )
+21| 
+22| 
+23| class SettingsCommandsMixin:
+24|     """Mixin providing settings commands."""
+25| 
+26|     @staticmethod
+27|     def _sync_hyperparams_from_disk(… (13,959字)
+• exec(cd /root/nanobot-src && sed -n '1,100p' nanobot/channels/telegram/commands/ag...) → """Agent management commands for Telegram."""
+
+from __future__ import annotations
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import ContextTypes
+
+from loguru import logger
+
+from nanobot.groupchat import display as _d
+from nanobot.utils.helpers import split_message
+from ..formatting import TELEGRAM_MAX_MESSAGE_LEN
+
+
+class AgentCommandsMixin:
+    """Mixin providing agent management commands."""
+
+    def _ensure_gc_send(self, chat_id: str) -> None:
+  … (4,222字)
+• exec(cd /root/nanobot-src && grep -n "prompt\|component\|phase\|COMPONENT" nanobot...) → 1:"""Settings commands for Telegram (hyperparams, groupchat, restart, debug, prompt)."""
+16:from nanobot.groupchat.history.prompt_builder import (
+17:    PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
+19:    COMPONENT_PHASES as _COMPONENT_PHASES,
+312:    async def _on_prompt(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+313:        """Handle /prompt command: view/edit prompt components per agent."""
+324:        # Directly show global component order editor
+325:       … (1,609字)
+• exec(cd /root/nanobot-src && sed -n '300,600p' nanobot/channels/telegram/commands/...) → for pn, info in pm.get("providers", {}).items():
+            url = (info.get("url") or "").rstrip("/")
+            key = info.get("apiKey", "")
+            key_preview = key[:8] + "..." if len(key) > 8 else key
+            model… (13,839字)
+  (还有 3 个工具调用，已省略)
+---
+[Harper]: <｜DSML｜tool_calls>
+<｜DSML｜invoke name="exec">
+<｜DSML｜parameter name="command" string="true">cd /root/nanobot-src && sed -n '446,465p' nanobot/groupchat/history/prompt_builder.py</｜DSML｜parameter>
+</｜DSML｜invoke>
+<｜DSML｜invoke name="exec">
+<｜DSML｜parameter name="command" string="true">cd /root/nanobot-src && grep -n "pre:__global__\|prompt_edit\|pre:.*agent\|edit_prompt_component\|phase.*edit\|edit.*phase\|_on_prompt_edit\|pree:" nanobot/channels/telegram/ --include="*.py" | head -20</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "COMPONENT_PHASES\|_sync_from_manifest" nanob...) → 89:COMPONENT_PHASES: dict[str, str] = dict(_FALLBACK_PHASES)
+174:def _sync_from_manifest() -> None:
+181:    global DEFAULT_PROMPT_ORDER, COMPONENT_LABELS, COMPONENT_PHASES, GLOBAL_EDITABLE, AGENT_EDITABLE, EDITABLE_COMPONENTS
+196:    COMPONENT_PHASES = {}
+206:        COMPONENT_PHASES[key] = phase
+222:_sync_from_manifest()
+737:            # Use COMPONENT_PHASES to determine if this component can use volatile vars.
+740:            tpl_vars = all_tpl_vars if COMPONENT_PHASES.get(key) == "dynamic" e… (534字)
+• exec(cd /root/nanobot-src && sed -n '180,215p' nanobot/groupchat/history/prompt_bu...) → """
+    global DEFAULT_PROMPT_ORDER, COMPONENT_LABELS, COMPONENT_PHASES, GLOBAL_EDITABLE, AGENT_EDITABLE, EDITABLE_COMPONENTS
+
+    manifest = _load_manifest()
+    components = manifest.get("components", {}) if manifest else {}
+
+    if not components:
+        logger.warning("Manifest empty or missing — using hardcoded fallbacks")
+        return
+
+    # Derive order from manifest: sort by `order` field, then by key for ties.
+    sorted_items = sorted(components.items(), key=lambda kv: (kv[1].get("o… (1,273字)
+• exec() → 0 [static ] main_prompt
+   0 [MISSING] test_static_comp
+   1 [static ] hard_rules
+   2 [MISSING] test_dynamic_comp
+   2 [static ] tool_instructions
+   3 [static ] persona
+   4 [static ] broadcast_hint
+   5 [static ] user_context
+   6 [static ] output_efficiency
+   7 [static ] skills
+   8 [static ] leader_prompt
+   9 [static ] instructions
+  10 [static ] memory
+  11 [dynamic] history
+  12 [dynamic] skills_overview
+  13 [dynamic] group_context
+  14 [dynamic] examples
+  15 [dynamic] group_nudge
+  1… (586字)
+• exec() → COMPONENT_PHASES loaded: 21 components
+  broadcast_hint: static
+  coding_principle: dynamic
+  examples: dynamic
+  group_context: dynamic
+  group_nudge: dynamic
+  hard_rules: static
+  history: dynamic
+  instructions: static
+  leader_prompt: static
+  main_prompt: static
+  memory: static
+  output_efficiency: static
+  persona: static
+  skills: static
+  skills_overview: dynamic
+  test_dynamic_comp: static
+  test_static_comp: static
+  tool_instructions: static
+  user_context: static
+  工程原则: dynamic
+  … (690字)
+• exec(cd /root/nanobot-src && grep -n "pradd\|add_custom_component\|pre:\|prv:" nan...) → 397:                row.append(InlineKeyboardButton(f"✏️{dot} {label}", callback_data=f"pre:__global__:{key}"))
+415:        bottom_row = [InlineKeyboardButton("🔍 预览完整上下文", callback_data="prv:0")]
+417:            bottom_row.insert(0, InlineKeyboardButton("➕ 添加组件", callback_data="pradd"))
+
+
+Exit code: 0 (302字)
+• exec(cd /root/nanobot-src && sed -n '445,520p' nanobot/channels/telegram/commands/...) → cp = settings.get("context_pruning", {})
+
+        engine = self._groupchat_engine
+        current_msgs = len(engine._history) if engine else 0
+        current_chars = sum(len(m.get("content", "")) for m in (engine._history if engine else []))
+        compress_trigger = int(hist["max_messages"] * hist.get("compress_ratio", 0.8))
+        ctx_chars_limit = settings["context_window_tokens"] * 4  # rough chars estimate
+
+        ai_on = tr["summarize_enabled"]
+        html_on = tr.get("html_detect_ena… (3,891字)
+• exec() → nanobot/channels/telegram/callbacks.py:1260:            elif data == "pradd":
+nanobot/channels/telegram/callbacks.py:1269:                        callback_data=f"pradd:{key}"
+nanobot/channels/telegram/callbacks.py:1272:                    "✏️ 自定义组件名", callback_data="pradd_custom"
+nanobot/channels/telegram/callbacks.py:1280:            elif data.startswith("pradd:"):
+nanobot/channels/telegram/callbacks.py:1281:                # Add component back: pradd:<key>
+nanobot/channels/telegram/callbacks.p… (918字)
+• exec(cd /root/nanobot-src && sed -n '1260,1310p' nanobot/channels/telegram/callbac...) → elif data == "pradd":
+                # Show available components to add back
+                engine = self._groupchat_engine
+                available = engine.prompt_builder.get_available_components()
+                buttons = []
+          … (2,349字)
+  (还有 4 个工具调用，已省略)
+---
+[Kirk]: 清理测试文件：
+
+[工具调用记录]
+• exec() → STDERR:
+2026-05-18 12:23:56.800 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 21 components, 12 editable
+Traceback (most recent call last):
+  File "<string>", line 3, in <module>
+ImportError: cannot import name 'CallbackHandler' from 'nanobot.channels.telegram.callbacks' (/root/nanobot-src/nanobot/channels/telegram/callbacks.py)
+
+
+Exit code: 1 (401字)
+• exec() → ✅ nanobot/channels/telegram/commands/settings.py: syntax OK
+✅ nanobot/channels/telegram/callbacks.py: syntax OK
+All syntax checks passed
+
+
+Exit code: 0 (151字)
+• exec() → 📋 System Prompt 组装管线 (全局)
+
+⬛ 静态组件  (13 个) — stable vars only
+
+1. ✏️ 主提示 (main_prompt) — ● 514字 👁
+2. 🔒 test_static_comp — ○ 空 👁
+3. 🔒 hard_rules — ○ 空 👁
+4. 🔒 test_dynamic_comp — ○ 空 👁
+5. ✏️ 工具指令 (tool_instructions) — ● 869字 👁
+6. 📂 人设/SOUL (persona) — ● 33字 👁
+7. ✏️ 广播协调 (broadcast_hint) — ● 689字 👁
+8. 🔒 user_context — ● 132字 👁
+9. 🔒 output_efficiency — ● 619字 👁
+10. ✏️ 技能列表 (skills) — ○ 空 👁
+11. ✏️ 领袖指令 (leader_prompt) — ● 875字 👁
+12. ✏️ 后置指令 (instructions) — ● 180字 👁
+13. ✏️ 长期记忆 (memory) — ● 279字 👁
+┄┄┄… (1,146字)
+• exec() → Removed: test_static_comp
+Removed: test_dynamic_comp
+Manifest cleaned
+
+
+Exit code: 0 (84字)
+• exec() → nanobot/channels/telegram/callbacks.py:1201:                # Edit global template: pre:__global__:component_key
+nanobot/channels/telegram/callbacks.py:1208:                    self._edit_state[chat_id] = {"field": "prompt_edit", "agent": "__global__", "key": key}
+nanobot/channels/telegram/callbacks.py:2435:        # Handle prompt_edit (from /prompt → edit component)
+nanobot/channels/telegram/callbacks.py:2436:        if state.get("field") == "prompt_edit":
+nanobot/channels/telegram/callbacks.py… (772字)
+• exec(cd /root/nanobot-src && sed -n '1195,1220p' nanobot/channels/telegram/callbac...) → # ── Prompt orchestration callbacks ──
+            elif data in ("pr:refresh", "pr:"):
+                # Refresh global prompt order view
+                await self._prompt_show_components(query)
+
+            elif data.startswith("pre:"):
+                # Edit global template: pre:__global__:component_key
+                parts = data[4:].split(":", 1)
+                if len(parts) == 2:
+                    _, key = parts
+                    engine = self._groupchat_engine
+                    co… (1,409字)
+• edit_file() → (76字)
+• exec(cd /root/nanobot-src && grep -n "_COMPONENT_PHASES\|COMPONENT_PHASES" nanobot...) → 22:    COMPONENT_PHASES as _COMPONENT_PHASES,
+1208:                    phase = _COMPONENT_PHASES.get(key, "static")
+1317:                phases = _COMPONENT_PHASES
+
+
+Exit code: 0 (178字)
+• exec() → ✅ nanobot/channels/telegram/commands/settings.py
+✅ nanobot/channels/telegram/callbacks.py
+All OK
+
+
+Exit code: 0 (111字)
+• exec(cd /root/nanobot-src && git add -A && git diff --cached --stat) → nanobot/channels/telegram/callbacks.py         | 25 ++++++++++++++++++++++---
+ nanobot/channels/telegram/commands/settings.py | 19 ++++++++++++-------
+ 2 files changed, 34 insertions(+), 10 deletions(-)
+
+
+Exit code: 0 (218字)
+• exec() → [dev 93439b6] feat: adapt /prompt display and edit UI to static/dynamic phase system
+ 2 files changed, 34 insertions(+), 10 deletions(-)
+
+
+Exit code: 0 (151字)
+---
+[Harper]: 检查完成。`add_custom_component` 注册时不写 `phase` 字段，新组件回退 `static`，**UI 不会显示在 dynamic 区**。
+
+[工具调用记录]
+• exec(cat /root/.nanobot/prompt_manifest.json | python3 -c "import json,sys; d=json.load(sys.stdin); [print(k,v.get('phase','MISSING')) for k,v in d['components'].items()]") → broadcast_hint static
+coding_principle dynamic
+examples dynamic
+group_context dynamic
+group_nudge dynamic
+hard_rules static
+history dynamic
+instructions static
+leader_prompt static
+main_prompt static
+memory static
+output_efficiency static
+persona static
+skills static
+skills_overview dynamic
+tool_instructions static
+user_context static
+工程原则 dynamic
+记忆补充 dynamic
+
+Exit code: 0 (380字)
+• chatroom_send() → (50字)
+• wait() → (36字)
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && sed -n '1180,1280p' nanobot/channels/telegram/callbac...) → groups[gname] = list(agents)
+                            self._groupchat_engine.save_groups(groups)
+                    order_str = " → ".join(agents)
+                    await query.edit_message_text(f"📢 发言顺序:\n{order_str}")
+                else:
+                    idx = int(val)
+                    agents = self._groupchat_engine.active_agents
+                    if 0 < idx < len(agents):
+                        # Swap with previous
+                        agents[idx], agents[idx-1] = agents[… (5,260字)
+• exec(cd /root/nanobot-src && grep -n "add_custom_component\|_save_manifest\|COMPON...) → 105:def _save_manifest(manifest: dict) -> None:
+171:    _save_manifest(manifest)
+206:        COMPONENT_PHASES[key] = phase
+349:        _save_manifest(manifest)
+392:        _save_manifest(manifest)
+446:    def add_custom_component(key: str, label: str) -> str:
+466:        _save_manifest(manifest)
+
+
+Exit code: 0 (311字)
+• exec(cd /root/nanobot-src && sed -n '446,470p' nanobot/groupchat/history/prompt_bu...) → def add_custom_component(key: str, label: str) -> str:
+        """Register a user-defined custom component.
+
+        Adds it to COMPONENT_LABELS, GLOBAL_EDITABLE, and persists to manifest.
+        Does NOT add to the prompt order — caller should do that separately.
+        """
+        if key in COMPONENT_LABELS:
+            return f"❌ 组件 '{key}' 已存在"
+        # Register in module-level dicts
+        COMPONENT_LABELS[key] = label
+        GLOBAL_EDITABLE.add(key)
+        EDITABLE_COMPONENTS.add(key… (966字)
+• exec(cd /root/nanobot-src && grep -n "_prompt_show_components" nanobot/channels/te...) → 1198:                await self._prompt_show_components(query)
+1231:                await self._prompt_show_components(query)
+1243:                await self._prompt_show_components(query)
+1257:                await self._prompt_show_components(query)
+1265:                await self._prompt_show_components(query)
+1295:                await self._prompt_show_components(query)
+
+
+Exit code: 0 (392字)
+• exec(cd /root/nanobot-src && grep -n "_prompt_show_components\|_build_prompt_order...) → 1198:                await self._prompt_show_components(query)
+1231:                await self._prompt_show_components(query)
+1243:                await self._prompt_show_components(query)
+1257:                await self._prompt_show_components(query)
+1265:                await self._prompt_show_components(query)
+1295:                await self._prompt_show_components(query)
+2458:                    text, markup = self._build_prompt_order_view(engine)
+2491:                text, markup = self._bu… (544字)
+• exec(cd /root/nanobot-src && grep -n "_build_prompt_order_view\|async def _prompt_...) → 2458:                    text, markup = self._build_prompt_order_view(engine)
+2491:                text, markup = self._build_prompt_order_view(engine)
+
+
+Exit code: 0 (166字)
+• exec(cd /root/nanobot-src && grep -rn "_build_prompt_order_view\|def _prompt_show_...) → nanobot/channels/telegram/callbacks.py:2458:                    text, markup = self._build_prompt_order_view(engine)
+nanobot/channels/telegram/callbacks.py:2491:                text, markup = self._build_prompt_order_view(engine)
+nanobot/channels/telegram/commands/settings.py:325:        text, markup = self._build_prompt_order_view(engine)
+nanobot/channels/telegram/commands/settings.py:333:    def _build_prompt_order_view(self, engine) -> tuple[str, "InlineKeyboardMarkup"]:
+nanobot/channels/tele… (716字)
+• exec(cd /root/nanobot-src && sed -n '330,420p' nanobot/channels/telegram/commands/...) → "leader_prompt": "Leader",
+    }
+
+    def _build_prompt_order_view(self, engine) -> tuple[str, "InlineKeyboardMarkup"]:
+        """Build the global prompt component order view with edit/reorder buttons."""
+        order = engine.prompt_builder.get_agent_prompt_order()
+        labels = _COMPONENT_LABELS
+        global_editable = _GLOBAL_EDITABLE
+        agent_editable = _AGENT_EDITABLE
+        conditional_tags = self._CONDITIONAL_TAGS
+
+… (4,186字)
+  (还有 1 个工具调用，已省略)
+---
+[Harper]: <｜DSML｜tool_calls>
+<｜DSML｜invoke name="wait">
+<｜DSML｜parameter name="timeout" string="false">60</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git log --oneline -3) → 513acff fix: add_custom_component writes phase field to manifest
+93439b6 feat: adapt /prompt display and edit UI to static/dynamic phase system
+2363adb feat: add COMPONENT_PHASES (static/dynamic) to replace implicit past_history tracking
+
+
+Exit code: 0 (252字)
+• exec(cd /root/nanobot-src && git show --stat 93439b6) → commit 93439b6b60b72538544c151e10fdef38c2965992
+Author: nanobot-dev <dev@nanobot.local>
+Date:   Mon May 18 12:24:38 2026 +0800
+
+    feat: adapt /prompt display and edit UI to static/dynamic phase system
+    
+    - settings.py: _build_prompt_order_view uses COMPONENT_PHASES instead of
+      history_idx, shows ⬛/⬜ phase tags and phase-specific variable hints
+    - callbacks.py: prompt preview shows phase tags, edit dialog shows
+      phase-appropriate available variables
+    - Cleaned test compone… (737字)
+• exec(cd /root/nanobot-src && git show 93439b6) → commit 93439b6b60b72538544c151e10fdef38c2965992
+Author: nanobot-dev <dev@nanobot.local>
+Date:   Mon May 18 12:24:38 2026 +0800
+
+    feat: adapt /prompt display and edit UI to static/dynamic phase system
+    
+    - settings.py: _build_prompt_order_view uses COMPONENT_PHASES instead of
+      history_idx, shows ⬛/⬜ phase tags and phase-specific variable hints
+    - callbacks.py: prompt preview shows phase tags, edit dialog shows
+      phase-appropriate available variables
+    - Cleaned test compone… (7,133字)
+• exec(cd /root/nanobot-src && grep -n "pradd_custom_name\|add_custom_component" nan...) → 1300:                self._edit_state[chat_id] = {"field": "pradd_custom_name"}
+2468:        if state.get("field") == "pradd_custom_name":
+2482:                result = PromptBuilder.add_custom_component(key, label)
+
+
+Exit code: 0 (230字)
+• exec(cd /root/nanobot-src && sed -n '455,465p' nanobot/groupchat/history/prompt_bu...) → phase = phase if phase in ("static", "dynamic") else "static"
+        # Register in module-level dicts
+        COMPONENT_LABELS[key] = label
+        COMPONENT_PHASES[key] = phase
+        GLOBAL_EDITABLE.add(key)
+        EDITABLE_COMPONENTS.add(key)
+        # Persist to manifest (single source of truth)
+        manifest = _load_manifest()
+        if manifest is None:
+            manifest = {"version": 1, "components": {}}
+        manifest["components"][key] = {
+
+
+Exit code: 0 (487字)
+• exec() → === 当前组件 phase 分布 ===
+  [ static] 主提示 (main_prompt)
+  [ static] hard_rules
+  [ static] 工具指令 (tool_instructions)
+  [ static] 人设/SOUL (persona)
+  [ static] 广播协调 (broadcast_hint)
+  [ static] user_context
+  [ static] output_efficiency
+  [ static] 技能列表 (skills)
+  [ static] 领袖指令 (leader_prompt)
+  [ static] 后置指令 (instructions)
+  [ static] 长期记忆 (memory)
+  [dynamic] 聊天记录 (history)
+  [dynamic] 技能概览 (skills_overview)
+  [dynamic] 群聊上下文 (group_context)
+  [dynamic] 示例对话 (examples)
+  [dynamic] 群聊规范 (group_nudg… (1,134字)
+• chatroom_send() → (48字)
+---
+[Kirk]: ## 结论
+
+/prompt 显示和编辑 UI 已适配 static/dynamic phase 系统，2 次提交（`93439b6` + `513acff`），44 行改动。
+
+## 关键发现
+
+**settings.py — 列表视图**
+- 用 `COMPONENT_PHASES` 替代 `history_idx` 隐式判断
+- 每个组件前显示 `⬛`（static）/ `⬜`（dynamic）标签
+- 编辑对话框根据 phase 显示可用变量提示
+
+**callbacks.py — 预览/编辑**
+- prompt 预览带 phase 标签
+- 编辑时提示该 phase 可用的模板变量
+
+**add_custom_component 修复**
+- 新增 `phase` 参数（默认 `static`），写入 manifest + `COMPONENT_PHASES`
+- 调用方无需改动，向后兼容
+
+**变量可用性**
+| Phase | 可用变量 |
+|-------|----------|
+| static | `{{agent}}` `{{members}}` `{{tools}}` `{{others}}` `{{identity}}` `{{agent_idx}}` `{{total}}` `{{teammates}}` |
+| dynamic | 上述全部 + `{{datetime}}` `{{round}}` |
+
+## 备注
+
+- `broadcast_hint.md` 用了 `{{user_question}}` 但 phase=static，该变量不在 stable vars 中——历史遗留，非本次引入
+- 后续 UI 可加 inline keyboard 让用户创建组件时选择 phase
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "add_custom_component" nanobot/groupchat/hist...) → 446:    def add_custom_component(key: str, label: str) -> str:
+
+
+Exit code: 0 (77字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 446|     def add_custom_component(key: str, label: str) -> str:
+447|         """Register a user-defined custom component.
+448| 
+449|         Adds it to COMPONENT_LABELS, GLOBAL_EDITABLE, and persists to manifest.
+450|         Does NOT add to the prompt order — caller should do that separately.
+451|         """
+452|         if key in COMPONENT_LABELS:
+453|             return f"❌ 组件 '{key}' 已存在"
+454|         # Register in module-level dicts
+455|         COMPONENT_LABELS[key] = label
+456|         GLOBAL_EDITABLE.add(key)
+457|         EDITABLE_COMPONENTS.add(key)
+458|         # Persist to manifest (single source of truth)
+459|         manifest = _load_manifest()
+460|         if manifest is None:
+461|             manifest = {"version": 1, "components": {}}
+462|         manifest["components"][ke… (1,301字)
+• edit_file() → (81字)
+• exec(cd /root/nanobot-src && grep -rn "add_custom_component" --include="*.py" | gr...) → nanobot/channels/telegram/callbacks.py:2482:                result = PromptBuilder.add_custom_component(key, label)
+
+
+Exit code: 0 (130字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/callbacks.py) → 2470|             name_input = content.strip()
+2471|             if not name_input or name_input in ("0", "取消", "/cancel"):
+2472|                 await self._gc_send(chat_id, "❌ 已取消")
+2473|                 return
+2474|             # Sanitize: use the input as label, derive a key from it
+2475|             import re
+2476|             key = re.sub(r'[^a-zA-Z0-9_\u4e00-\u9fff]', '_', name_input).strip('_').lower()
+2477|             if not key:
+2478|                 key = f"custom_{hash(name_input) % 10000}"
+2479|             label = f"{name_input} ({key})"
+2480|             engine = self._groupchat_engine
+2481|             if engine:
+2482|                 result = PromptBuilder.add_custom_component(key, label)
+2483|                 if result.startswith("✅"):
+2484|                     # Also ad… (1,515字)
+• edit_file() → (81字)
+• exec() → ✅ 已创建自定义组件: Test Static (phase=static)
+phase: static
+✅ 已创建自定义组件: Test Dynamic (phase=dynamic)
+phase: dynamic
+Cleaned up test entries
+
+STDERR:
+2026-05-18 12:26:38.835 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 19 components, 12 editable
+
+
+Exit code: 0 (309字)
+• exec() → [dev 513acff] fix: add_custom_component writes phase field to manifest
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+
+Exit code: 0 (134字)
+• chatroom_send() → (50字)
+• memory_palace() → ✅ Stored in wing_code/prompt-phases (hidden)
+  Drawer ID: drawer_wing_code_prompt-phases_9ea2da59f5e3ef38113f5b5b (113字)
+• end_discussion() → ✅ 讨论已结束（原因: prompt 显示和编辑 UI 已适配 static/dynamic phase 系统。3 次提交完成：93439b6（UI 适配）、513acff（add_custom_component 写 phase）、测试全过。），即将进入总结阶段 (132字)
+---

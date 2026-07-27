@@ -1,0 +1,360 @@
+[用户]: 位置2: broadcast.py 第560-564行（动态拼入Leader上下文的hint）
+规定end_discussion前必须按序完成两步：
+1. (a) 在最终文字回复中整合所有发现，给出完整答案
+2. (b) 用memory_palace(action='store')将关键结论写入记忆宫殿
+→ 存记忆 → end_discussion 是强制顺序
+
+这里结束后应该还有一个让leader生成结论的过程
+---
+[Kirk]: 现在关键问题清楚了。让我确认 broadcast_round 返回后，engine 是否有 synthesis 逻辑：
+
+[工具调用记录]
+• exec(grep -n "end_discussion\|EndDiscussion\|__SUMMARY__\|_generate_summary\|gener...) → 122:    async def finalize(self) -> None:
+123:        """Force a final panel edit regardless of throttle."""
+289:            ManageAgentTool, EndDiscussionTool, TransferCreditsTool, ClearContextTool,
+358:            end_tool = EndDiscussionTool(end_event=self.leader_end_event, engine=self.engine)
+496:        # Each agent sees user messages, system messages, and ALL teammates' final replies.
+538:                f"- end_discussion(reason): 结束讨论，进入最终总结\n"
+560:                f"6. 信息充分后，先完成以下两步，再调用 … (2,396字)
+• exec() → 237:        finally:
+826:            self._input_queue.put_nowait("__SUMMARY__")
+999:    async def _generate_summary(self) -> None:
+1001:        from nanobot.groupchat.orchestra.run_loop import generate_summary
+1002:        await generate_summary(self)
+1148:                await stream.finalize(display_content, fallback_send=engine._send)
+
+
+Exit code: 0 (355字)
+• exec() → 19:async def generate_summary(engine: Any) -> None:
+93:            if user_input == "__SUMMARY__":
+94:                await generate_summary(engine)
+128:    finally:
+
+
+Exit code: 0 (180字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 805|                 is_error = result.finish_reason == "error"
+806|                 is_timeout = result.finish_reason == "timeout"
+807|                 is_interrupted = result.finish_reason == "interrupted"
+808|                 latency = result.latency
+809|                 total_latency += latency
+810|                 total_iterations += result.iterations
+811|                 all_tools_used.extend(result.tools_used or [])
+812| 
+813|                 if is_leader and "end_discussion" in (result.tools_used or []):
+814|                     _leader_ended_discussion = True
+815| 
+816|                 if is_error or is_timeout:
+817|                     if is_timeout:
+818|                         _base_timeout = gc_settings.get(
+819|                             "leader_call_timeout" if is_leader e… (3,169字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1125|                             tok_suffix = "\n" + _d.format_token_stats(
+1126|                                 tok.get("prompt", 0), tok.get("completion", 0),
+1127|                                 elapsed=elapsed, cost=cost, cache_tokens=cache_t,
+1128|                                 reasoning_tokens=reasoning_t,
+1129|                             )
+1130| 
+1131|                         target_label = f"进展 [{cycle}]" if is_leader else "Self/Final"
+1132|                         await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
+1133|                         logger.info("Broadcast: displayed {} cycle {} output ({} chars) [Local Only]", name, cycle, len(content))
+1134|                     # else: chatroom_send already display… (2,140字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 690|                 # Hard cycle cap — prevent runaway agents from draining resources
+691|                 if cycle >= max_cycles:
+692|                     logger.warning(
+693|                         "Broadcast: {} hit max_cycles={}, forcing exit", name, max_cycles
+694|                     )
+695|                     if not content:
+696|                         messages.append({
+697|                             "role": "system",
+698|                             "content": "[已达到最大轮次限制，请立即输出最终总结，禁止再调用工具。]",
+699|                         })
+700|                         try:
+701|                             from nanobot.groupchat.orchestra.tools.tool_loop import tool_loop as _final_loop
+702|                             _r = await _final_loop(
+703|                                 provider=engin… (1,708字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1220|                         reply_len=len(content) if content else 0,
+1221|                         tools=all_tools_used, iterations=total_iterations,
+1222|                  … (3,958字)
+  (还有 10 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(grep -n "request_summary\|_generate_summary\|generate_summary\|__SUMMARY__" /...) → /root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py:1289:                if msg == "__SUMMARY__":
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py:823:    def request_summary(self) -> None:
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py:826:            self._input_queue.put_nowait("__SUMMARY__")
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py:999:    async def _generate_summary(self) -> None:
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py:1001:        from… (997字)
+• exec(grep -n "end_discussion\|EndDiscussion\|handle_end_discussion" /root/nanobot-...) → 289:            ManageAgentTool, EndDiscussionTool, TransferCreditsTool, ClearContextTool,
+358:            end_tool = EndDiscussionTool(end_event=self.leader_end_event, engine=self.engine)
+538:                f"- end_discussion(reason): 结束讨论，进入最终总结\n"
+560:                f"6. 信息充分后，先完成以下两步，再调用 end_discussion()：\n"
+564:                f"7. 完成记忆存入后，调用 end_discussion() 结束任务\n\n"
+566:                f"- 发现队友空转或无法完成任务时：果断 end_discussion\n"
+569:                f"- ⚠️ 如果你打算自己做搜索/验证，必须先完成工具调用，再调用 end_di… (1,381字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1060|                     content = ""  # reset for the new cycle
+1061|                     continue  # re-enter tool_loop with injected message
+1062| 
+1063|                 # ── Anti-idle guard: force re-entry if agent did nothing ──
+1064|                 if cycle == 1 and not content and not (set(result.tools_used or []) & _substantive_tools):
+1065|                     logger.warning(
+1066|                         "Broadcast: {} idle on cycle 1 (no content, tools={}), forcing retry",
+1067|                         name, result.tools_used,
+1068|                     )
+1069|                     messages.append({
+1070|                         "role": "system",
+1071|                         "content": get_system_warning("idle", name=name)
+1072|                     })
+1073|                     … (5,332字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1120|                             reasoning_t = sum(
+1121|                                 (m.get("reasoning_tokens") or 0)
+1122|                                 for m in (result.provider_meta or [])
+1123|                                 if isinstance(m, dict)
+1124|                             )
+1125|                             tok_suffix = "\n" + _d.format_token_stats(
+1126|                                 tok.get("prompt", 0), tok.get("completion", 0),
+1127|                                 elapsed=elapsed, cost=cost, cache_tokens=cache_t,
+1128|                                 reasoning_tokens=reasoning_t,
+1129|                             )
+1130| 
+1131|                         target_label = f"进展 [{cycle}]" if is_leader else "Self/Final"
+1132|                         await engine._send(… (4,052字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1270|     completed = 0
+1271| 
+1272|     # Auxiliary tasks that must be cleaned up even on CancelledError.
+1273|     # Initialised to None so the finally block is safe if creation fails.
+1274|     user_task: asyncio.Task | None = None
+1275|     join_task: asyncio.Task | None = None
+1276|     leader_end_sentinel: asyncio.Task | None = None
+1277|     _user_listener_running = True
+1278|     _join_listener_running = True
+1279| 
+1280|     try:
+1281|         # ── User interjection listener ──
+1282| 
+1283|         async def _user_listener() -> None:
+1284|             while _user_listener_running:
+1285|                 try:
+1286|                     msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+1287|                 except asyncio.TimeoutError:
+1288|                     cont… (1,945字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1190|                         name, dropped, _CONV_KEEP_TURNS * 3,
+1191|                     )
+1192| 
+1193|                 # Inject agent's own pre… (4,404字)
+  (还有 6 个工具调用，已省略)
+---
+[Harper]: 找到了完整链路。以下是确切情况：
+
+---
+
+**结论：不存在独立的"让leader生成结论的后置阶段"。**
+
+`end_discussion` → `EndDiscussionTool.execute()` (chatroom_tools.py:1096)：
+1. `self._end_event.set()` — notify sentinel coroutine
+2. `self._engine._running = False` — kill switch
+
+然后在 broadcast.py:1136‑1138：
+```python
+if _leader_ended_discussion:
+    break   # ← immediate exit from round loop, no post-processing
+```
+
+**关键洞察**：「结论生成」嵌入了 Leader **最后那次 tool_loop invocation** —— hint(broadcast.py:560‑564)明确规定三步都在同一轮完成：
+
+```
+Step-a: final reply with complete answer      ← "结论"
+Step-b: memory_palace store                   ← "存档"
+Step-c: end_discussion                        ← "关门"
+```
+
+没有任何异步的 synthesis/conclusion stage。Leader在自己最后一个 iteration 的输出(content字段)就是最终的总结文本——直接被当作这一轮的输出展示出去。
+
+唯一的例外是 Engine.request_summary(`__SUMMARY__`)路径(run_loop.py:19)，但那只在非广播模式的简化场景下走；广播模式下这条分支被 skip(你在前面看到的 `if msg=="__SUMMARY__": continue`)。
+
+所以你说的没错，「应该有」，但实际上架构没这么做——它是把结论责任压给了 Leader **在关门前的那一轮输出**来完成。
+
+[工具调用记录]
+• exec(grep -n "broadcast_round\|_generate_summary\|request_summary\|__SUMMARY__\|合成...) → 278:        # Broadcast round: per-agent tasks registered by broadcast_round()
+283:        # queued here so broadcast_round can pick them up and spawn tasks for them.
+823:    def request_summary(self) -> None:
+826:            self._input_queue.put_nowait("__SUMMARY__")
+999:    async def _generate_summary(self) -> None:
+
+
+Exit code: 0 (335字)
+• exec(grep -n "def run\|async def.*run\|def _run\|async def.*_run\|def start\|async...) → 1004:    async def _run_loop(self) -> None:
+1289:    async def on_tool_start(
+
+
+Exit code: 0 (92字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 1004|     async def _run_loop(self) -> None:
+1005|         """Main group chat loop — delegates to run_loop module."""
+1006|         from nanobot.groupchat.orchestra.run_loop import run_loop
+1007|         await run_loop(self)
+1008| 
+1009| 
+1010| """Direct 1-on-1 chat mode for group chat engine.
+1011| 
+1012| Handles single-agent conversations when exactly one agent is active.
+1013| Manages session setup, message building, streaming, and response handling.
+1014| 
+1015| Supports user interjection: after the agent replies, the loop waits
+1016| briefly for new user messages (via engine._direct_chat_queue).  If the
+1017| user "interrupts" before the agent finishes or sends a follow-up right
+1018| after, the agent immediately continues with the new context — similar
+1019| to how broadcast mode's _… (5,257字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 1| """Main group chat event loop and summary generation.
+2| 
+3| Contains the core run loop that processes user input and dispatches
+4| to broadcast mode, plus the summary generator.
+5| """
+6| 
+7| from __future__ import annotations
+8| 
+9| import asyncio
+10| from typing import Any
+11| 
+12| from loguru import logger
+13| 
+14| from nanobot.groupchat.display import display as _d
+15| # ── 关键修复：import 移到文件顶部，避免循环内重复 import ──
+16| from nanobot.groupchat.orchestra.broadcast import broadcast_round
+17| 
+18| 
+19| async def generate_summary(engine: Any) -> None:
+20|     """Generate a discussion summary using the first active agent's model."""
+21|     if not engine._history:
+22|         return
+23| 
+24|     # ── 关键修复：防止 _active_agents 为空时 IndexError ──
+25|     if not engine._active_agents:
+26|         awa… (4,966字)
+• exec(grep -n "class EndDiscussionTool\|def execute\|end_event\|_stop_group_loop\|_...) → 279:        self.leader_end_event = asyncio.Event()
+358:            end_tool = EndDiscussionTool(end_event=self.leader_end_event, engine=self.engine)
+474:    leader_end_event = orch.leader_end_event
+1402:        # Register auxiliary tasks on the engine so _stop_group_loop can cancel
+1410:            await leader_end_event.wait()
+1485:        _user_listener_running = False
+1486:        _join_listener_running = False
+
+
+Exit code: 0 (433字)
+• exec(grep -n "class EndDiscussionTool" /root/nanobot-src/nanobot/groupchat/orchest...) → Exit code: 1 (13字)
+• exec(grep -rn "class EndDiscussionTool" /root/nanobot-src/nanobot/) → /root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py:1059:class EndDiscussionTool(Tool):
+
+
+Exit code: 0 (120字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 1059| class EndDiscussionTool(Tool):
+1060|     """Leader-only tool: end the discussion phase immediately.
+1061| 
+1062|     When called, sets an asyncio.Event that the broadcast loop watches.
+1063|     All agent tasks are cancelled and the leader enters the synthesis phase.
+1064|     """
+1065| 
+1066|     def __init__(self, *, end_event: Any, engine: Any) -> None:
+1067|         self._end_event = end_event  # asyncio.Event
+1068|         self._engine = engine
+1069| 
+1070|     @property
+1071|     def name(self) -> str:
+1072|         return "end_discussion"
+1073| 
+1074|     @property
+1075|     def description(self) -> str:
+1076|         return (
+1077|             "结束当前讨论，立即进入总结阶段。"
+1078|             "当你判断信息已经足够、讨论陷入循环、或 agent 表现不佳时使用。"
+1079|             "调用后所有 agent 会被停止… (2,474字)
+---
+[用户]: 定位一下具体问题
+---
+[Kirk]: 
+
+[工具调用记录]
+• exec(grep -n "synthesis\|_run_loop\|broadcast_round\|handle_message\|process_messa...) → 278:        # Broadcast round: per-agent tasks registered by broadcast_round()
+283:        # queued here so broadcast_round can pick them up and spawn tasks for them.
+287:        self._on_round_done: Callable[[], Awaitable[None]] | None = None
+354:    def set_on_round_done(self, cb: Callable[[], Awaitable[None]]) -> None:
+356:        self._on_round_done = cb
+376:    def has_on_round_done(self) -> bool:
+378:        return self._on_round_done is not None
+873:        self._task = asyncio.create_tas… (578字)
+• exec() → 39:        # Registry is pre-loaded; active participants start empty
+41:        engine.add_agent("Grok")        # 2+ agents → group chat auto-starts
+109:        elif scope.startswith("/"):
+276:        self._task: asyncio.Task | None = None
+278:        # Broadcast round: per-agent tasks registered by broadcast_round()
+280:        self._broadcast_tasks: dict[str, asyncio.Task] = {}
+283:        # queued here so broadcast_round can pick them up and spawn tasks for them.
+287:        self._on_round_do… (2,369字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 845|     def _start_group_loop(self) -> None:
+846|         """Start the async group chat loop."""
+847|         # Always cancel any prior task to avoid duplicate loops
+848|         if self._task and not self._task.done():
+849|             self._task.cancel()
+850|         if self._running:
+851|             return
+852|         self._running = True
+853|         self._input_queue = asyncio.Queue()
+854|         if not self._topic:
+855|             self._topic = "自由讨论"
+856| 
+857|         # Session directory
+858|         timestamp = _cn_now().strftime("%Y%m%d-%H%M%S")
+859|         sessions_dir = Path.home() / ".nanobot" / "collab-sessions"
+860|         sessions_dir.mkdir(parents=True, exist_ok=True)
+861|         self._session_dir = sessions_dir / f"gc-{timestamp}"
+862|         self._session_dir.mk… (1,455字)
+• exec(grep -rn "set_on_round_done\|on_round_done" /root/nanobot-src/nanobot/ --incl...) → /root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py:117:            if engine._on_round_done:
+/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py:119:                    await engine._on_round_done()
+/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py:132:        if engine._on_round_done:
+/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py:134:                await engine._on_round_done()
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py:287:        self._on_round_d… (1,397字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/commands/agents.py) → 55| 
+56|             self._groupchat_engine.set_edit_fn(edit_fn, send_and_get_id_fn)
+57| 
+58|         if self._groupchat_engine and not self._groupchat_engine.has_on_round_done:
+59|             async def on_round_done() -> None:
+60|                 self._stop_typing(chat_id)
+61|             self._groupchat_engine.set_on_round_done(on_round_done)
+62| 
+63|     async def _gc_send(self, chat_id: str, text: str) -> None:
+64|         if not self._app:
+65|             return
+66|         for chunk in split_message(text, TELEGRAM_MAX_MESSAGE_LEN):
+67|             await self._send_text(int(chat_id), chunk)
+68| 
+69|     async def _on_agents(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+70|         if not update.message or not update.effective_user:
+71|             return
+72|     … (1,491字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 104|             # ── 关键修复：给 broadcast_round 加上全局超时保护 ──
+105|             # 防止某一轮卡死导致整个群聊永久阻塞
+106|             await broadcast_round(
+107|                 speak_order,
+108|                 engine,
+109|                 engine._mailbox,
+110|                 global_timeout=600.0,   # 10 分钟（可根据需要调整）
+111|             )
+112| 
+113|             # Compress history if approaching the message limit
+114|             await engine._maybe_compress_history()
+115| 
+116|             # Signal round complete
+117|            … (623字)
+  (还有 1 个工具调用，已省略)
+---
+[Kirk]: **问题定位：`end_discussion` 后缺少 synthesis 阶段**
+
+调用链中 `end_discussion` → `_end_event.set()` → broadcast break → run_loop 退出，中间没有任何总结生成逻辑。
+
+具体断裂点：
+- `generate_summary()` (run_loop.py:19) 只响应 `__SUMMARY__` 队列消息，但 `EndDiscussionTool` 走的是 `_end_event` 路径，两条路径互不相通
+- `_on_round_done` 回调只停 typing，无 synthesis
+- Leader 的"结论"只是 tool_loop 最后一次迭代的 content 输出，不是独立阶段
+
+**修复方向：** 在 `EndDiscussionTool.execute()` 中，`_end_event.set()` 之前（或 broadcast_round break 之后），触发 `generate_summary(engine)` 或等价的 synthesis 逻辑。
+
+[工具调用记录]
+• end_discussion() → ✅ 讨论已结束（原因: 问题已定位：end_discussion 后无 synthesis 阶段，generate_summary() 存在但广播模式下从未被触发），即将进入总结阶段 (91字)
+---

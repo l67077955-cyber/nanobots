@@ -1,0 +1,93 @@
+[用户]: 为什么传入token这么少还要压缩
+---
+[Kirk]: **那些 238-298 tok 的 GLM 5.1 调用不是压缩，是 `web_fetch` 的网页内容提取。**
+
+### 根因
+
+```
+~/.nanobot/agents/reader/config.json
+  → {"model": "z-ai/glm-5.1", "provider": "openrouter"}
+    → SmartFetchTool 用这个模型做每次 web_fetch 的内容提取
+```
+
+`chatroom_tools.py:468` 的 `_extract_content()` 每次网页抓取后都会调用 GLM 5.1 提取关键内容。prompt 只有 1 条 user 消息（无 system），网页内容截断到 12,000 字符，所以 input 只有 200-300 tok — **这是正常的，不是压缩**。
+
+### 真正的压缩路径（跟这些调用无关）
+
+| 路径 | 触发条件 | 代码 |
+|---|---|---|
+| 工具输出摘要 | 输出 > **8,000** 字符 | `summarizer.py` |
+| 历史压缩 | 消息数 ≥ 40 条 | `context.py` |
+
+### 如果想改
+
+不想让 web_fetch 用 GLM 5.1 → 改 `~/.nanobot/agents/reader/config.json` 的 `model` 字段。
+
+[工具调用记录]
+• exec() → nanobot/groupchat/history/history_settings.py:43:        "summarize_model": "openai/gpt-4.1-nano",
+nanobot/groupchat/history/history_settings.py:165:def summarize_model() -> str:
+nanobot/groupchat/history/history_settings.py:166:    return str(_load()["tool_results"]["summarize_model"])
+nanobot/groupchat/history/context.py:155:            summarize_model,
+nanobot/groupchat/history/context.py:217:                    model=summarize_model(),
+nanobot/groupchat/orchestra/engine.py:161:        reader… (3,484字)
+• exec(cd /root/nanobot-src && grep -rn "网页内容提取\|content.*extract\|extract.*content\...) → nanobot/groupchat/orchestra/tools/chatroom_tools.py:382:    """Wrapper around WebFetchTool that uses a cheap model to extract key content.
+nanobot/groupchat/orchestra/tools/chatroom_tools.py:390:        "Fetch URL and extract readable content. "
+nanobot/groupchat/orchestra/tools/chatroom_tools.py:408:                "Optional: specify what to focus on during content extraction. "
+nanobot/groupchat/orchestra/tools/chatroom_tools.py:439:            extracted, nano_usage = await self._extract_conte… (2,091字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 460|                 return _json.dumps(result_data, ensure_ascii=False)
+461|         except Exception as e:
+462|             from loguru import logger
+463|             logger.warning("SmartFetch: AI extraction failed for {}: {}", url, e)
+464| 
+465|         # Fallback: return raw content
+466|         return raw_result
+467| 
+468|     async def _extract_content(self, url: str, raw_text: str,
+469|                                focus: str = "") -> tuple[str | None, dict]:
+470|         """Use cheap LLM to extract key content from raw fetched text.
+471| 
+472|         Returns (extracted_text, usage_dict).
+473|         """
+474|         from loguru import logger
+475| 
+476|         # Truncate input to avoid excessive token usage
+477|         input_text = raw_text[:self._max_extract_chars]
+478| 
+479… (2,602字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 155| 
+156|         registry = ToolRegistry()
+157|         raw_search = WebSearchTool(config=self.web_search_config, proxy=self.web_proxy)
+158|         registry.register(SmartSearchTool(raw_search, provider=self.provider))
+159|         # Wrap web_fetch with AI reader — model configurable via agents/reader/
+160|         raw_fetch = WebFetchTool()
+161|         reader_model = self._get_reader_model()
+162|         registry.register(SmartFetchTool(raw_fetch, reader_model=reader_model, provider=self.provider))
+163|         registry.register(ExecTool(timeout=120, working_dir=str(ws)))
+164|         from nanobot.tools.process import ProcessTool
+165|         registry.register(ProcessTool())
+166|         registry.register(ReadFileTool(workspace=ws, allowed_dir=None))
+167|         registry.register(Wri… (1,942字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 185|                 cfg = _json.loads(reader_cfg_path.read_text())
+186|                 model = cfg.get("model")
+187|                 if model:
+188|                     return model
+189|             except Exception:
+190|                 pass
+191|         return default_model
+192| 
+193|     def _get_agent_registry(self, agent_name: str) -> "ToolRegistry":
+194|         """Get (or build and cache) the tool registry for an agent's workspace scope."""
+195|         ws = self._resolve_agent_workspace(agent_name)
+196|         key = str(ws)
+197|         if key not in self._tool_registry_cache:
+198|             reg = self._build_tool_registry(ws)
+199|             # Add chatroom tools to custom registries too
+200|             from nanobot.groupchat.orchestra.tools.chatroom_tools import ChatroomSend… (1,155字)
+• exec(cat ~/.nanobot/agents/reader/config.json 2>/dev/null || echo "FILE NOT FOUND") → {"model":"z-ai/glm-5.1","provider":"openrouter"}
+
+
+Exit code: 0 (63字)
+• exec(cd /root/nanobot-src && grep -n "_max_extract_chars" nanobot/groupchat/orches...) → 399:        self._max_extract_chars = max_extract_chars
+477:    … (130字)
+  (还有 3 个工具调用，已省略)
+---

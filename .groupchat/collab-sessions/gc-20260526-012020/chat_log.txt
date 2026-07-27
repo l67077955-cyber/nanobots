@@ -1,0 +1,412 @@
+[用户]: 是否有一下激进的修改
+---
+[Kirk]: 13 个 commit 中有 **3 个激进修改**：
+
+### 🔴 1. Rank-based 工具调用隔离（`f0a51db`）— 最激进
+- 引入 pawn→king 等级体系，高 rank agent **看不到**低 rank agent 的 `[工具调用记录]`
+- `strip_tool_log()` 用正则 `r"\n*\[工具调用记录\].*$"` 整块删除
+- 5 个文件联动修改，多 agent 场景行为突变
+- **如果出现"Leader 不知道 worker 做了什么"，就是这个 commit**
+
+### 🟡 2. end_discussion 移除 60s autowait（`8e58eb1`）
+- 旧版自动等 60s；新版**立即拒绝**，Leader 必须自己判断何时重试
+- 破坏性接口变更，把协调责任推给 LLM
+
+### 🟡 3. Leader 崩溃自动结束（`f5f44dd`）
+- Leader 连续 3 次 LLM 错误 → 整个群聊强制终止
+- 瞬态错误也会触发，不可逆
+
+其余 10 个 commit 均为常规 bugfix（synthesis 交付修复、退化重复检测）或死代码清理（-62 行），无激进变更。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git show f0a51db --stat && echo "===DIFF===" && git s...) → commit f0a51db4a33b2d394e8c59f271a8d08bacb9b44b
+Author: nanobot-dev <dev@nanobot.local>
+Date:   Sat May 23 10:06:37 2026 +0800
+
+    feat(rank): rank-based tool call isolation for multi-agent context
+    
+    - message_converter: add strip_tool_log() to remove [工具调用记录] blocks
+    - message_converter: history_to_messages() strips tool logs from lower-rank agents
+    - prompt_builder/engine: pass agent_ranks through the prompt build chain
+    - broadcast: compute agent_ranks from registry, Leader g… (3,653字)
+• exec(cd /root/nanobot-src && git show f0a51db --format="" -- nanobot/groupchat/his...) → diff --git a/nanobot/groupchat/history/message_converter.py b/nanobot/groupchat/history/message_converter.py
+index 32898f1..76d859c 100644
+--- a/nanobot/groupchat/history/message_converter.py
++++ b/nanobot/groupchat/history/message_converter.py
+@@ -19,6 +19,12 @@ _TOOL_LOG_RE = re.compile(
+     re.DOTALL,
+ )
+ 
++# Matches the entire [工具调用记录]... block at the end of a message
++_TOOL_LOG_BLOCK_RE = re.compile(
++    r"\n*\[工具调用记录\].*$",
++    re.DOTALL,
++)
++
+ 
+ def age_tool_log(content: str) -> str:
+ … (2,361字)
+• exec(cd /root/nanobot-src && git show 46cf083 --format="" -- nanobot/groupchat/orc...) → diff --git a/nanobot/groupchat/orchestra/tools/tool_loop.py b/nanobot/groupchat/orchestra/tools/tool_loop.py
+index 7a76984..81eb913 100644
+--- a/nanobot/groupchat/orchestra/tools/tool_loop.py
++++ b/nanobot/groupchat/orchestra/tools/tool_loop.py
+@@ -61,6 +61,9 @@ class ToolLoopResult:
+     tools_available: bool = False
+     """Whether tool definitions were provided for this call."""
+ 
++    degenerate_repetition: bool = False
++    """``True`` if the loop was terminated due to degenerate repetition… (4,701字)
+• exec(cd /root/nanobot-src && git show f5f44dd --format="" -- nanobot/groupchat/orc...) → diff --git a/nanobot/groupchat/orchestra/broadcast.py b/nanobot/groupchat/orchestra/broadcast.py
+index db88f5f..bce0635 100644
+--- a/nanobot/groupchat/orchestra/broadcast.py
++++ b/nanobot/groupchat/orchestra/broadcast.py
+@@ -945,6 +945,17 @@ async def broadcast_round(
+                             await engine._send(
+                                 f"  ✗ {name} 连续 {_consecutive_error_count} 次 LLM 错误，强制退出"
+                             )
++                            # If the leader crashes, end th… (1,294字)
+• exec(cd /root/nanobot-src && git show 8e58eb1 --format="" -- nanobot/groupchat/orc...) → diff --git a/nanobot/groupchat/orchestra/tools/chatroom_tools.py b/nanobot/groupchat/orchestra/tools/chatroom_tools.py
+index 2c9dab2..afb7b30 100644
+--- a/nanobot/groupchat/orchestra/tools/chatroom_tools.py
++++ b/nanobot/groupchat/orchestra/tools/chatroom_tools.py
+@@ -1102,7 +1102,7 @@ class EndDiscussionTool(Tool):
+         }
+ 
+     async def execute(self, reason: str = "", **kwargs: Any) -> str:
+-        # ── Autowait guard: if any non-leader agent is busy, wait for them ──
++        # ── Guard… (1,825字)
+• exec(cd /root/nanobot-src && git show 4ac4fda --format="" -- nanobot/providers/lit...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && git show 4ac4fda --format="" -- nanobot/providers/htt...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && git show fc4f504 --format="") → diff --git a/nanobot/security/network.py b/nanobot/security/network.py
+index e510a35..8cdc4fb 100644
+--- a/nanobot/security/network.py
++++ b/nanobot/security/network.py
+@@ -94,17 +94,40 @@ def validate_resolved_url(url: str) -> tuple[bool, str]:
+     return True, ""
+ 
+ 
++_LOOPBACK_NETWORKS = [
++    ipaddress.ip_network("127.0.0.0/8"),
++    ipaddress.ip_network("::1/128"),
++]
++
++_NON_LOOPBACK_BLOCKED = [n for n in _BLOCKED_NETWORKS if n not in _LOOPBACK_NETWORKS]
++
++
+ def contains_internal_url(co… (2,119字)
+• exec(cd /root/nanobot-src && git show 4ac4fda --stat && echo "===DIFF===" && git s...) → commit 4ac4fda77ac81178ba87d1309efb8ef9fd50c0b0
+Author: nanobot-dev <dev@nanobot.local>
+Date:   Thu May 21 12:26:48 2026 +0800
+
+    fix: cap _request_log at 1000 entries to prevent memory leak
+    
+    - … (6,979字)
+  (还有 2 个工具调用，已省略)
+---
+[Kirk]: ## 结论
+
+13 个 commit 中有 **3 个激进修改**，其余为常规 bugfix 或清理。
+
+## 关键发现
+
+### 🔴 1. Rank-based 工具调用隔离（`f0a51db`）— 架构级激进
+
+**5 个文件联动**：broadcast.py(+22)、message_converter.py(+28)、prompt_builder.py(+4)、engine.py(+2)、callbacks.py(±1)
+
+核心实现：
+- `broadcast.py` 新增 `_RANK_ORDER = {"pawn": 0, "knight": 1, "bishop": 2, "queen": 3, "king": 4}`，Leader 自动获得 `max_rank + 1`
+- `message_converter.py` 新增 `strip_tool_log()` 函数，正则 `r"\n*\[工具调用记录\].*$"` 整块删除低 rank agent 的工具日志
+- `history_to_messages()` 新增 `agent_ranks` 参数，构建 prompt 时按 rank 过滤：`if sender_rank < my_rank and "[工具调用记录]" in content: content = strip_tool_log(content)`
+- 文本消息（chatroom_send）不受影响，仅隔离 `[工具调用记录]` 块
+
+**风险**：高 rank agent 对低 rank agent 做了什么完全不知情。如果 agent 把工具结果写在文本里而非工具日志里，隔离失效。
+
+### 🟡 2. end_discussion 移除 60s autowait（`8e58eb1`）
+
+**删除代码**：`chatroom_tools.py` 移除 60s 轮询循环（`for _ in range(60): await asyncio.sleep(1)`），改为立即返回错误：
+```
+❌ 结束讨论失败：以下 agent 尚未进入等待状态：{names}。
+请在所有 agent 进入等待状态后，再次调用 end_discussion。
+```
+协调责任从系统层推给 LLM 层。
+
+### 🟡 3. Leader 崩溃自动结束（`f5f44dd`）
+
+**新增逻辑**（broadcast.py +11 行）：Leader 连续 3 次 LLM 错误时：
+```python
+engine._leader_end_reason = _reason
+engine._running = False
+leader_end_event.set()
+```
+整个群聊强制终止，无重试缓冲。瞬态错误（rate limit、网络抖动）也会触发。
+
+### 非激进改动
+
+| Commit | 改动 | 评估 |
+|--------|------|------|
+| `46cf083` | 退化重复检测：`_has_contiguous_repeat()` ≥3 次相同句子 → break | 防御性，阈值合理 |
+| `4ac4fda` | `_request_log` 超 1000 条裁剪到 500；删除 6 个未用 getter + `prune_conversation_tail`（-62 行） | 纯内存保护+死代码清理 |
+| `fc4f504` | 安全策略：`_NON_LOOPBACK_BLOCKED` 排除 127.0.0.0/8 和 ::1/128 | 逻辑正确，同机不是 SSRF |
+| `778c00c` `61b466d` | Synthesis 交付修复：移除 `_used_chatroom_send` 静默丢弃条件 | 纯 bugfix |
+| `66091eb` | Skill 系统：compact mode、docless skill 发现 | 功能增强，无破坏性 |
+
+## 备注
+
+Rank isolation 是唯一架构级激进改动。如果多 agent 协作中出现过"Leader 不知道 worker 做了什么"的情况，根因在此。
+---
+[用户]: 【前程无忧】（重要通知）同学您好！浙江移动2026届春招第一批拟录用结果已发布，查询路径：“浙江移动人才招聘”微信公众号—“连接我们”—“校招进度查询”。状态说明请详见春招笔面试Q Q 群公告（群号1093492216或650181121）。  如果拟录用了会怎么样
+---
+[用户]: 我还不知道自己的状态
+---
+[Kirk]: 
+
+[工具调用记录]
+• web_search() → === Query: 浙江移动2026届春招拟录用后续流程 ===
+Results for: 浙江移动2026届春招拟录用后续流程
+
+1. 金三银四，你的春招进行到哪个阶段了？ - 话题 - 牛客网
+   https://www.nowcoder.com/creation/subject/8c76681807b049f495cd6ecae018661f?entranceType_var=内容条目
+   春招如火如荼的进行着，各位牛友们的春招都进行到哪个阶段了？ 快来跟大家一起分享你的春招阶段吧~. 此刻你想和大家分享什么. 热门 最新. 05-03 18:54.
+2. 浙江联通7折福利：套餐合约月费7折B一年 | 爱吾线报
+   https://25xianbao.com/archives/19388
+   浙江联通的朋友们看过来，最近有个非常给力的“永久7折”活动。 只要操作到位，每个月能省下一顿饭钱，非常适合给家里老人用或者当主力副卡。 CleanShot 2026-05-19 at 10.15.52@2x. 一、 活动核心内容.
+3. 推特大屌白人单男 Gattouz 大战冰凌紫萱女主版 70分钟露脸狂操-黑料网
+   https://d1mwja11yzndo4.cloudfront.net/archives/97273/
+   推特大屌白人单男 Gattouz 大战冰凌紫萱女主版 70分钟露脸狂操. 黑料网-小酷 • 2026年04月22日 收藏 分享链接.
+4. 【鳳凰衛視#24... - YouTube
+   https://www.youtube.com/watch?v=fN9uYWCjQaw
+   © 2026 Google LLC.
+5. 如何让 Gemini 不再使用 Nano Banana：真正能关闭的是什么 | YingTu
+   https://yingtu.ai/zh/blog/turn-off-nano-banana-in-gemini
+   截至 2026 年 5 月 17 日，Google 的公开资料把 Gemini 图片生成、Gemini 应用活动记录、Workspace 管理控制和 Gemini API 图片模型 ID 放在不同入口里说明。
+[search pool: Kirk:4💰(1用)]
+
+=== Query: 中国移动校招拟录用后体检签约流程 ===
+Results for: 中国移动校招拟录用后体检签约流程
+
+1. zhuanlan.zhihu.com/p/627356428
+   https://zhuanlan.zhihu.com/p/627356428
+   在编写完图表定义后，用户可以通过将其 嵌入 到网页或其他文档中来展示图表。
+2. 通知公告51风流
+   https://www.fengliu51.net/xygg_3652/39a78b47b7a44a58a41aa4a9b3c0df40.htm
+   五、体检与拟录取. 1. 按照教育部、卫生部、中国残联印发的《普通高等学校招生体检工作指导意见》（教学〔2003〕3 号），各类考生于复试考核或入学时进行体检，体检合格者方具有拟.
+3. 新用户专区
+   https://wap.gd.10086.cn/xyhzq/xybxlxb38.shtml
+   4、激活后默认开通4G上网功能，套餐内包含的移动数据流量可用于中国移动高速4G/3G/2G网络。 5、更多业务规则详询10086，视频流量使用规则后续如有更新不再另行通知。
+4. [M… (3,079字)
+• memory_palace(浙江移动 校招 拟录用 流程) → 🔍 5 result(s) for '浙江移动 校招 拟录用 流程':
+
+[1] wing_user/art-preferences (sim=-0.044)
+  用户艺术偏好：前卫×AI×材质感×极简。推荐5位核心艺术家：Refik Anadol（AI数据雕塑）、Mario Klingemann（GAN神经美学）、Sofia Crespo（AI生物纹理）、Memo Akten（生成艺术粒子物理）、Linda Dounia（AI推测性档案）。用户要求直接发图片不想自己搜索。
+
+[2] wing_user/movie-taste (sim=-0.089)
+  用户2026年5月香港观影：与王生活的男人(왕과 사는 남자/The King's Warden)、真人快打2(Mortal Kombat II)、寂静的朋友(Silent Friend)。用户品味覆盖韩国年度国民片+好莱坞爆米花+欧洲艺术片，选片面广。用户偏好：要实在对比、多维度广度、优先参考国外网站评分。
+
+[3] wing_games/weapon-data-file (sim=-0.141)
+  用户请求的武器数据文件已生成… (1,060字)
+• web_fetch(https://www.nowcoder.com/discuss/comment/15070960) → {"url": "https://www.nowcoder.com/discuss/comment/15070960", "finalUrl": "https://www.nowcoder.com/discuss/comment/15070960", "status": 200, "extractor": "ai_reader", "reader_model": "openai/gpt-4.1-nano", "truncated": false, "original_length": 130, "extracted_length": 144, "text": "网页中未提及“浙江移动预录用”、“拟录用后续流程”、“体检”或“签约”的相关内容。仅有的内容为网站的标题和部分无关信息。\n\n`[nano:fetch] 130→60c -54% focus=\"浙江移动预录用拟录用后续流程 体检 签约\" | nano in:271 out:45 Σ316`"} (434字)
+• web_fetch(https://zhuanlan.zhihu.com/p/582238618) → {"error": "Client error '403 Forbidden' for url 'https://zhuanlan.zhihu.com/p/582238618'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403", "url": "https://zhuanlan.zhihu.com/p/582238618"} (229字)
+• web_search() → === Query: 浙江移动校招预录用状态体检签约offer流程 牛客 ===
+Results for: 浙江移动校招预录用状态体检签约offer流程 牛客
+
+1. 牛客-大学生求职招聘找工作神器-App-Statistiken für iOS... | Similarweb
+   https://www.similarweb.com/de/app/apple/962209511/
+   牛客-大学生求职招聘找工作神器-App-Statistiken auf iOS für 6. November – Nutzer- und Download-Analytics, 牛客-大学生求职招聘找工作神器-Wettbewerber, tägliche und historische App-Store-Rankings und vieles mehr! Hier klicken.
+2. d18ts0f5wn9dh4.cloudfront.net/archives/98354
+   https://d18ts0f5wn9dh4.cloudfront.net/archives/98354/
+   抖音知名清纯博主液体喵以乖巧可爱双马尾形象吸粉无数，表面上和男友地上动漫甜蜜互动，私下却被曝背着对方多次酒店开房疯狂出轨。液体喵人设彻底崩塌，两人本是抖音情侣博主圈一对甜蜜情侣，如今绿帽大戏引爆全网。事件起因于欠款纠纷，地上动漫忍无可忍收集证据公开一切，液体...
+3. 两周拿到字节offer（纯干货分享）_牛客网
+   https://www.nowcoder.com/discuss/353158497925799936
+   薪酬主要由面评和个人基本指标相关，个人基本指标包括学历、工作年限、当前薪资、目前所持offer等。
+4. 浙江联通7折福利：套餐合约月费7折B一年 | 爱吾线报
+   https://25xianbao.com/archives/19388
+   浙江联通7折福利：套餐合约月费7折B一年. 2天前 • 卡圈线报｜公众号：卡圈刘亮.2024年2月28日 浙江移动免费领1个月云手机和云电脑.
+5. update docs · bol-van/zapret2@7a69d56 · GitHub
+   https://git.hubp.de/bol-van/zapret2/commit/7a69d56a4b35f814fb2d42e7bddb2f21c2314ff9
+   操作自动化任何工作流程. 代码空间即时开发环境. 议题计划和追踪工作. 代码审查管理代码更改.
+[search pool: Kirk:7💰(2用)]
+
+=== … (2,421字)
+---
+[Kirk]: ## 结论
+
+**拟录用（预录用）≠ 正式录用，但基本等于稳了。** 后续流程一般是：**体检 → 背调 → 签三方协议 → 发正式offer → 毕业后入职。**
+
+## 你现在该做的
+
+1. **去查状态**：微信搜"浙江移动人才招聘"公众号 → 连接我们 → 校招进度查询
+2. **加QQ群看公告**：1093492216 或 650181121，群公告里有各状态的详细说明
+
+## 拟录用后会发生什么（按顺序）
+
+| 阶段 | 内容 | 注意事项 |
+|------|------|----------|
+| **体检** | 公司统一安排或指定医院，一般1-2周内通知 | 差额体检（多叫几个人，淘汰不合格的），别掉以轻心 |
+| **背调** | 部分岗位会做背景调查（核实学历、实习经历等） | 如实填写，别造假 |
+| **签约** | HR联系你沟通薪资、工作地点，签三方协议 | 手头有其他offer可以谈薪，HR可能要求看其他offer截图 |
+| **正式offer** | 签约后发正式录用通知 | 确认岗位、薪资、入职时间 |
+| **入职** | 毕业拿到双证（毕业证+学位证）后按通知入职 | **双证必须齐全**，否则录用作废 |
+
+## 关键提醒
+
+- **状态显示"体检"** = 你已经通过了，offer即将到手（牛客上浙江移动2023秋招原话）
+- **没查到拟录用** ≠ 彻底没戏，后续可能还有**第二批**或**调剂补录**
+- **体检不合格**会被刷，注意休息别熬夜
+- 签三方前想清楚，毁约有违约金风险
+
+先去查状态吧，查完告诉我结果，我帮你分析下一步。
+---
+[Kirk]: 信息已存档。去查状态吧，有结果随时来问。
+
+[工具调用记录]
+• end_discussion() → ✅ 讨论已结束（原因: 用户问题已完整回答，无队友可分配任务，无待补充信息。），即将进入总结阶段 (48字)
+• memory_palace() → ✅ Stored in wing_user/zhejiang-mobile-campus-recruit-2026 (hidden)
+  Drawer ID: drawer_wing_user_zhejiang-mobile-campus-recruit-2026_9459d3b02982e6fee83107f3 (157字)
+---
+[Kirk]: 上面已经完整回答了。核心就一句：**拟录用基本稳了，接下来是体检→背调→签三方→发offer→毕业入职。** 先去公众号查状态，查完来找我分析。
+---
+[Kirk]: ## 结论
+
+**拟录用（预录用）≠ 正式录用，但基本等于稳了。** 后续流程：**体检 → 背调 → 签三方协议 → 发正式offer → 毕业后入职。**
+
+## 你现在该做的
+
+1. **去查状态**：微信搜"浙江移动人才招聘"公众号 → 连接我们 → 校招进度查询
+2. **加QQ群看公告**：1093492216 或 650181121，群公告里有各状态详细说明
+
+## 拟录用后会发生什么
+
+| 阶段 | 内容 | 注意事项 |
+|------|------|----------|
+| **体检** | 公司统一安排或指定医院，1-2周内通知 | 差额体检，别掉以轻心 |
+| **背调** | 部分岗位核实学历、实习经历 | 如实填写 |
+| **签约** | HR联系沟通薪资、工作地点，签三方 | 有其他offer可以谈薪 |
+| **正式offer** | 签约后发录用通知 | 确认岗位、薪资、入职时间 |
+| **入职** | 毕业拿到双证后按通知入职 | **双证必须齐全，否则录用作废** |
+
+## 关键提醒
+
+- **状态显示"体检"** = 通过了，offer即将到手
+- **没查到拟录用** ≠ 没戏，后续可能有第二批或调剂补录
+- 体检不合格会被刷，注意休息
+- 签三方前想清楚，毁约有违约金风险
+---
+[用户]: 状态显示复面
+---
+[Kirk]: **"复面" = 最后一轮面试，你还没到拟录用。** 通过复面后状态才会变成"体检"，体检=offer稳了。
+
+赶紧准备复面，去牛客搜"浙江移动复面"看面经，加QQ群（1093492216）关注复面通知。
+
+[工具调用记录]
+• web_search() → === Query: 浙江移动校招复面状态是什么意思 ===
+Results for: 浙江移动校招复面状态是什么意思
+
+1. chudai... - YouTube
+   https://www.youtube.com/watch?v=IOZ0Zv1tK-c
+2. 最高点击-最劲爆黄片级揭秘 | 91吃瓜网
+   https://wiki.jaomjye.com/category/rsdg/
+   浙江传媒学院大二班花 极品骚货被爹系男友被无情爆肏 最后颜射满脸！ 135 热度. 9.
+3. 推特大屌白人单男 Gattouz 大战冰凌紫萱女主版 70分钟露脸狂操-黑料网
+   https://d1mwja11yzndo4.cloudfront.net/archives/97273/
+   推特肌肉大神这次直接把冰凌紫萱女主版干炸了白人单男身材爆炸，肌肉线条清晰，大屌又粗又长，冰凌紫萱这次彻底露脸拍摄，两人大战足足分钟，从床上各种姿势猛干到沙发骑乘再到站立抬腿，冰凌紫萱被操得浪叫不断，表情又爽又崩溃。体力简直变态，鸡巴一直硬着狂顶，冰凌紫萱从开...
+4. AWS Builder Center
+   https://builder.aws.com/
+   Connect with builders who understand your journey. Share solutions, influence AWS product development, and access useful content that accelerates your growth. Your community starts here.
+5. Google Gemini
+   https://gemini.google.com/
+   Meet Gemini, Google’s AI assistant. Get help with writing, planning, brainstorming, and more. Experience the power of generative AI.
+[search pool: Kirk:4💰(1用)]
+
+=== Query: 中国移动校招复面流程 通过率 ===
+Results for: 中国移动校招复面流程 通过率
+
+1. 新用户专区
+   https://wap.gd.10086.cn/xyhzq/xybxlxb38.shtml
+   4、激活后默认开通4G上网功能，套餐内包含的移动数据流量可用于中国移动高速4G/3G/2G网络。 5、更多业务规则详询10086，视频流量使用规则后续如有更新不再另行通知。
+2. 中国研究生大跃进，“本研倒挂”瞄向解决就业还是高等教育升级 - BBC...
+   https://www.bbc.com/zhongwen/simp/chinese-news-69417409
+   图像加注文字，读研被一些中国学生视为转换人生方向的方式。 本科毕业后，他工作两年，逐渐攒出一小笔钱支持自己通过考研进入上海外国语大学。
+3. zhuanlan.zhihu.com/p/627356428
+   https://zhuanlan.zhihu.com/p/627356428
+   在编写完图表定义后，用户可以通过将其 嵌入 到网页或其他文档中来展示图表。
+4. MoMA... | AI工具箱
+   https://ai-bio.cn/sites/6305.html
+   MoMA的应用场景自媒… (1,871字)
+• memory_palace(浙江移动校招复面状态流程) → 🔍 5 result(s) for '浙江移动校招复面状态流程':
+
+[1] wing_user/zhejiang-mobile-campus-recruit-2026 (sim=0.452)
+  浙江移动2026届春招第一批拟录用结果查询路径："浙江移动人才招聘"微信公众号—连接我们—校招进度查询。QQ群号1093492216或650181121。拟录用后流程：体检→背调→签三方→正式offer→毕业后入职。差额体检，双证必须齐全。
+
+[2] wing_user/art-preferences (sim=-0.051)
+  用户艺术偏好：前卫×AI×材质感×极简。推荐5位核心艺术家：Refik Anadol（AI数据雕塑）、Mario Klingemann（GAN神经美学）、Sofia Crespo（AI生物纹理）、Memo Akten（生成艺术粒子物理）、Linda Dounia（AI推测性档案）。用户要求直接发图片不想自己搜索。
+
+[3] wing_user/movie-taste (sim=-0.06)
+  用户2026年5月香港观影：与王生活的男人(왕과 사는 남자/The … (912字)
+• web_search() → === Query: 浙江移动春招复面是什么意思 牛客 ===
+Results for: 浙江移动春招复面是什么意思 牛客
+
+1. 中9本目前无offer_牛客网
+   https://www.nowcoder.com/feed/main/detail/0f1519a4d8274076a6a464f6279cd54e?sourceSSR=home
+   移动版. 关于我们.牛客网 牛客网在线编程 牛客网题解 牛客企业服务.
+2. chudai... - YouTube
+   https://www.youtube.com/watch?v=IOZ0Zv1tK-c
+3. 春节联欢晚会追觅是什么意思-抖音
+   https://www.douyin.com/shipin/7609131180403361811
+   智能科技生态登上春晚，但为什么是追觅？ 中央广播电视总台官宣，追觅科技成为《2026年春节联欢晚会》智能科技生态战略合作伙伴。
+4. 老汉推车是什么意思-HTML建站博客（CMS模板建站教程网）
+   https://www.htmlbk.com/fun/1446.html
+   老汉推车是什么意思. 2024年07月10日1年前 夜雨轻寒 0次围观. 老汉推车是一种后入式的啪啪姿势，也是非常受欢迎的姿势，尤其是男生更为喜欢，能够带来最原始刺激感。
+5. 你问我答：返乡路上让人抓狂的“高科技黄牛” - BBC News 中文
+   https://www.bbc.com/zhongwen/simp/chinese-news-43022101
+   图像加注文字，2月6日清晨，数百辆外来务工者集体骑摩托车从福建晋江一起出发返乡过年。 摩托车返乡是近年来中国出现的春运回家新方式，但大多数人还是要依靠铁路公路客运。 网友建议. 面对升级的黄牛，今年中国网友又有什么建议呢？
+[search pool: Kirk:5💰(2用)]
+
+=== Query: 中国移动校招面试流程 初面复面终面 ===
+Results for: 中国移动校招面试流程 初面复面终面
+
+1. Link to zhuanlan.zhihu.com
+   https://zhuanlan.zhihu.com/p/627356428
+   The site owner hides the web page description.
+2. 招聘面试邀请邮件模板示例 · Ding店—阿里钉钉旗下企业服务平台
+   https://dingstore.cn/contents/solution/interview-invitation-email-template/
+   为什么面试邀请邮件如此重要？ 面试邀请邮件标准模板（可直接使用）. 如何个性化定制邮件内容？— —招聘沟通话术建议. 1. 称呼个性化. 2. 加入简短的认可语句. 3. 明确后续流程.招聘面试邀请邮件模板示例 #. 在招聘流程中，第一印象往往从一封邮件开始。
+3. 分享一套校招前端笔试题
+   https://yanhaijing.com/web/2016/09/14/a-fe-question-of-toutiao/
+   我说我去面试了，你信不信？ 这是头条的校招前端笔试题，如果侵权了，请联系我。
+4. 顺丰校招面试（信息安全岗：一面+二面）_牛客网
+   https://www.nowcoder.com/discuss/353159002559291392
+   其他记不清了. 总结一下： 面试官很nice，问题都… (1,740字)
+• web_fetch(https://www.nowcoder.com/feed/main/detail/0f1519a4d8274076a6a464f6279cd54e?so...) → {"url": "https://www.nowcoder.com/feed/main/detail/0f1519a4d8274076a6a464f6279cd54e?sourceSSR=home", "finalUrl": "https://www.nowcoder.com/feed/main/detail/0f1519a4d8274076a6a464f6279cd54e?sourceSSR=home", "status": 200, "extractor": "ai_reader", "reader_model": "openai/gpt-4.1-nano", "truncated": false, "original_length": 103, "extracted_length": 111, "text": "网页内容中没有关于“浙江移动 复面 校招 面试流程”的相关信息。\n\n`[nano… (481字)
+  (还有 6 个工具调用，已省略)
+---
+[Kirk]: ## 结论
+
+**"复面" = 复试/第二轮面试，是浙江移动校招的最后一轮面试。** 你还没到拟录用阶段，需要先通过复面。
+
+## 浙江移动校招完整流程
+
+```
+笔试 → 初面（AI面试）→ 复面（最后一轮人工面试）→ 拟录用/体检 → 签约 → 入职
+                                    ↑ 你在这里
+```
+
+## 复面是什么
+
+- **最后一轮面试**，通过后状态变为"体检"，体检=offer稳了（牛客2023秋招面经确认）
+- 通常是**人工面试**（区别于初面的AI面试），面试官是部门领导或HR
+- 时长约30分钟：自我介绍 + 项目/实习深挖 + 技术问题 + 综合素质
+- 初面是AI面试（9道题，60秒思考+视频录制）
+
+## 你现在该做的
+
+1. **准备复面**：复习项目经历、技术基础、准备1分钟自我介绍
+2. **加QQ群**：1093492216 或 650181121，群公告有复面安排和状态说明
+3. **关注公众号**："浙江移动人才招聘"，复面通知通过公众号或短信发送
+4. **去牛客搜面经**：搜"浙江移动复面"，有历年面试题和经验分享
+
+## 备注
+
+- 能走到复面说明初筛已过，复面通过率相对更高
+- 面试官可能压力面，正常回答即可
+- 复面通过后流程很快：体检→签三方→发offer
+---

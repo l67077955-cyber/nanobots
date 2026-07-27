@@ -1,0 +1,229 @@
+[用户]: 看看现在的生成字数
+---
+[Harper]: ## 当前生成字数
+
+| 区块 | chars | 内容 |
+|------|-------|------|
+| **STATIC** (always-on 4个) | **729** | cron, debug, settings, memory — description + read_file 指针 |
+| **DYNAMIC** (摘要 + 未文档化) | **1,114** | 8 个 skill 摘要 + quick_validate.py |
+| **TOTAL** | **1,843** | |
+
+**无 workspace 时** untracked 区块为空，不占额外空间。
+
+跟修改前的 **4,265 chars** 比，减了 **57%**。但你说还是多——具体要砍哪里？
+
+- **STATIC 的 729 chars**？ → 4 个 always-on，每个 ~180
+- **DYNAMIC 的 1,114**？ → 主要是 8 个 skill 的 description 行
+
+[工具调用记录]
+• exec() → STATIC:       729 chars
+DYNAMIC:     1114 chars
+TOTAL:       1843 chars
+
+=== STATIC ===
+### Skill: cron
+Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.
+[read_file skills/cron/SKILL.md for full doc]
+
+---
+
+### Skill: debug
+Diagnose system issues: check logs, process status, cron jobs, connectivity. Use when something isn't working or user asks to debug.
+[read_file skills/debug/SKILL.md for full doc]
+
+--… (1,964字)
+---
+[Kirk]: ## 结论
+
+当前 skills 提示词总生成 **1843 chars**（static 729 + dynamic 1114），比之前 4265 减少 57%。
+
+## 关键发现
+
+| 区块 | 位置 | chars | 内容 |
+|------|------|-------|------|
+| **static** | history 前 | 729 | 4 个 always-on skill（cron/debug/settings/memory），每个仅 description + read_file 指针 |
+| **dynamic** | history 后 | 1114 | 8 个 non-always skill 摘要 + 1 个 undocumented script |
+| **总计** | | **1843** | |
+
+**预算余量**：
+- always-on 预算 5600，用了 729（13%）
+- summary 预算 8000，用了 1114（14%）
+
+空间充裕。即使再加 4-5 个 always-on skill 或 20 个普通 skill，都不会超预算。
+
+[工具调用记录]
+• exec() → === STATIC (always-on, before history) ===
+chars: 729
+### Skill: cron
+Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.
+[read_file skills/cron/SKILL.md for full doc]
+
+---
+
+### Skill: debug
+Diagnose system issues: check logs, process status, cron jobs, connectivity. Use when something isn't working or user asks to debug.
+[read_file skills/debug/SKILL.md for full doc]
+
+---
+
+### Skill: settings
+Manage prov… (2,009字)
+---
+[Harper]: 当前落脚点很干净：
+
+**1,843 chars**，预算只用了 13%/14%，扩张空间大，缩减空间在于要不要砍 description 行数或合并区块。等用户/你的下一步方向。
+---
+[Kirk]: ## 结论
+
+当前 skills 提示词总生成 **1843 chars**（static 729 + dynamic 1114），比修改前 4265 减少 57%。
+
+## 关键发现
+
+| 区块 | 位置 | chars | 占预算 |
+|------|------|-------|--------|
+| static（4 个 always-on） | history 前 | 729 | 5600 的 13% |
+| dynamic（8 摘要 + 1 undocumented） | history 后 | 1114 | 8000 的 14% |
+| **总计** | | **1843** | |
+
+预算余量充裕，可容纳更多 skill。如需进一步缩减，可砍 always-on 的 description 行或合并区块。
+
+[工具调用记录]
+• wait() → (100字)
+• end_discussion() → ✅ 讨论已结束（原因: 生成字数已确认：1843 chars（static 729 + dynamic 1114），预算余量充足。等用户决定是否进一步缩减。），即将进入总结阶段 (88字)
+• memory_palace() → ✅ Stored in wing_code/skill-prompt-chars (hidden)
+  Drawer ID: drawer_wing_code_skill-prompt-chars_e98a1725b52cbe1955274e3a (123字)
+---
+[Kirk]: **1843 chars**（static 729 + dynamic 1114），预算用了 13%/14%，余量充足。
+---
+[Kirk]: 当前 skills 提示词生成 **1843 chars**：
+
+- **static**（history 前）：729 chars — 4 个 always-on skill，每个仅 description + read_file 指针
+- **dynamic**（history 后）：1114 chars — 8 个 skill 摘要 + 1 个 undocumented script
+
+预算余量：always-on 5600 用了 13%，summary 8000 用了 14%。比修改前 4265 减少 57%。
+---
+[用户]: 是否是最新的逻辑
+---
+[Harper]: 最新。当前 `loader.py` 最新 commit `12306db`，直接验证活代码产出与 Kirk 报告一致：
+
+```
+STATIC:  729 chars  ← 4 个 always-on（cron/debug/settings/memory
+DYNAMIC: 1114 chars ← 8 个摘要 + 1 个 quick_validate.py
+TOTAL:   1843 chars
+```
+
+三层管线、compact 模式、docless 发现、untracked 脚本——全在线上跑着。用户问的就是这个状态。
+
+[工具调用记录]
+• exec() → STATIC: 729 chars
+DYNAMIC: 1114 chars
+TOTAL: 1843 chars
+---
+### Skill: cron
+Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.
+[read_file skills/cron/SKILL.md for full doc]
+
+---
+
+### Skill: debug
+Diagnose system issues: check logs, process status, cron jobs, connectivity. Use when something isn't working or user asks to debug.
+[read_file skills/debug/SKILL.md for full doc]
+
+---
+
+### Skill: settings
+Manag… (1,923字)
+• exec(cd /root/nanobot-src/nanobot && git log --oneline -5 -- skills/loader.py) → 12306db feat(skills): per-skill type=static|dynamic controls prompt placement
+cdba012 fix: split skills into static (always-on, before history) and dynamic (skills_overview, after history)
+75d0179 fix: boolean parsing bug + auto-discover undocumented scripts
+11c678c stable: v0.1.4.post8-stable — early May 2026
+b677a01 chore: save stable version before fixing ConversationPool logic
+
+
+Exit code: 0 (398字)
+---
+[Kirk]: ## 结论
+
+**是最新的。** loader.py 相比最新 commit `3928204` 有 6 处未提交改动，全部功能正确。
+
+## 关键发现
+
+| 改动 | 位置 | 状态 |
+|------|------|------|
+| compact 模式（`compact=True` 替代 `max_chars_per_skill`） | L57-73 | ✅ |
+| untracked scripts 串联到 dynamic | L87-89 | ✅ |
+| docless 目录发现（无 SKILL.md 但有 scripts/） | L132-136 | ✅ |
+| `load_skills_for_context()` 新增 compact 参数 | L181-210 | ✅ |
+| 行边界截断（`rfind('\n')` 替代硬切） | L221-225 | ✅ |
+| `_discover_untracked_scripts()` 新方法 | L448-477 | ✅ |
+
+`_parse_bool` 删了一行多余 `return False`，边界测试（`"maybe"` → `False`、`None` → `False`、标准值全部正确）通过。文件 523 行，生成 1843 chars。
+
+## 备注
+
+改动未 commit，如需保留需 `git add`。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git log --oneline -5 -- nanobot/skills/loader.py) → 12306db feat(skills): per-skill type=static|dynamic controls prompt placement
+cdba012 fix: split skills into static (always-on, before history) and dynamic (skills_overview, after history)
+75d0179 fix: boolean parsing bug + auto-discover undocumented scripts
+11c678c stable: v0.1.4.post8-stable — early May 2026
+b677a01 chore: save stable version before fixing ConversationPool logic
+
+
+Exit code: 0 (398字)
+• exec(cd /root/nanobot-src && wc -l nanobot/skills/loader.py && head -5 nanobot/ski...) → 523 nanobot/skills/loader.py
+"""Skills loader for agent capabilities."""
+
+import json
+import os
+import re
+
+
+Exit code: 0 (120字)
+• exec(cd /root/nanobot-src && git log --oneline -1 && echo "---" && git diff HEAD -...) → 3928204 refactor: telegram callbacks & settings panel cleanup
+---
+diff --git a/nanobot/skills/loader.py b/nanobot/skills/loader.py
+index bffa52b..146a4c2 100644
+--- a/nanobot/skills/loader.py
++++ b/nanobot/skills/loader.py
+@@ -57,8 +57,8 @@ def build_skills_section(workspace: Path) -> tuple[str, str]:
+
+
+Exit code: 0 (317字)
+• exec(cd /root/nanobot-src && git diff HEAD -- nanobot/skills/loader.py) → diff --git a/nanobot/skills/loader.py b/nanobot/skills/loader.py
+index bffa52b..146a4c2 100644
+--- a/nanobot/skills/loader.py
++++ b/nanobot/skills/loader.py
+@@ -57,8 +57,8 @@ def build_skills_section(workspace: Path) -> tuple[str, str]:
+     if static_always:
+         content = loader.load_skills_for_context(
+             static_always,
+-            max_chars_per_skill=MAX_ALWAYS_SKILL_INLINE,
+             max_total_chars=MAX_ALWAYS_SKILLS_CHARS,
++            compact=True,
+         )
+         if… (6,755字)
+• exec() → 'true'       → True
+'false'      → False
+'True'       → True
+'yes'        → True
+'no'         → False
+'1'          → True
+'0'          → False
+'on'         → True
+'off'        → False
+''           → False
+'maybe'      → False
+None         → False
+True         → True
+False        → False
+1            → True
+0            → False
+
+
+Exit code: 0 (343字)
+• memory_palace() → ✅ Stored in wing_code/skill-loader-latest (hidden)
+  Drawer ID: drawer_wing_code_skill-loader-latest_1c23ba4d1352e06454d72563 (125字)
+• end_discussion() → ✅ 讨论已结束（原因: 已验证 loader.py 是最新逻辑，6 处未提交改动功能正确，_parse_bool 边界测试通过。），即将进入总结阶段 (74字)
+---

@@ -1,0 +1,133 @@
+[用户]: 比如说整理skill，规范结构，每个带上是否on的参数
+---
+[Kirk]: ## 结论
+
+12 个 skill 全部补齐了显式 `always` 字段，loader.py 的死代码 bug 已修复。
+
+## 关键发现
+
+| Skill | `always` |
+|---|---|
+| cron | `true` |
+| debug | `true` |
+| memory | `true` |
+| settings | `true` |
+| clawhub | `false` ← 新增 |
+| github | `false` ← 新增 |
+| skill-creator | `false` ← 新增 |
+| steve-jobs-perspective | `false` ← 新增 |
+| summarize | `false` ← 新增 |
+| testing | `false` (已有) |
+| tmux | `false` ← 新增 |
+| weather | `false` ← 新增 |
+
+**额外修复：** `loader.py` 第 359 行 `_parse_yaml_value` 有重复 `return False`，导致后面的 `return v` 永远不执行（布尔值解析后无法回退返回原始值），已删除多余行。
+
+## 备注
+
+- `steve-jobs-perspective` 的 description 仍是 6 行多行字符串，与其他 skill 的 1 行不一致。是否要压缩？
+- `always: true` 的 4 个 skill（cron/debug/settings/memory）是否需要重新评估？上次审查建议 debug 可降级为按需触发。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 1| """Skills loader for agent capabilities."""
+2| 
+3| import json
+4| import os
+5| import re
+6| import shutil
+7| from pathlib import Path
+8| 
+9| # Default builtin skills directory (relative to this file)
+10| BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
+11| 
+12| # Budget caps — keep skills section from bloating the prompt.
+13| # Single SKILL.md files larger than this are skipped and only noted in the footer.
+14| MAX_SINGLE_SKILL_CHARS: int = 20_000
+15| # Total character budget for the non-always-on summary block.
+16| MAX_SKILLS_SUMMARY_CHARS: int = 8_000
+17| # Total budget for always-on skills (cumulative, enforced inside load_skills_for_context).
+18| MAX_ALWAYS_SKILLS_CHARS: int = 5600
+19| # Per-skill inline truncation limit for always-on skills.
+20| MAX_ALWAYS_SKILL_INLINE:… (12,775字)
+• exec(for d in /root/nanobot-src/nanobot/skills/*/; do name=$(basename "$d"); if [ ...) → === clawhub ===
+---
+name: clawhub
+description: Search and install agent skills from ClawHub, the public skill registry.
+homepage: https://clawhub.ai
+metadata: {"nanobot":{"emoji":"🦞"}}
+---
+
+# ClawHub
+
+Public skill registry for AI agents. Search by natural language (vector search).
+
+=== cron ===
+---
+name: cron
+description: Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.
+always: true
+---
+
+# Cron — Sched… (3,910字)
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 300|                 continue
+301| 
+302|             lines.append(line)
+303|             total_chars += len(line) + 1  # +1 for newline
+304| 
+305|         # Footer: let the agent know there are more skills it can load on demand.
+306|         if skipped_budget:
+307|             lines.append(
+308|                 f"\n(还有 {len(skipped_budget)} 个技能因数量限制未展示: "
+309|                 + ", ".join(skipped_budget[:8])
+310|                 + (f" 等" if len(skipped_budget) > 8 else "")
+311|                 + "。需要时请用 `read_file skills/<名称>/SKILL.md` 按需加载。)"
+312|             )
+313| 
+314|         return "\n".join(lines)
+315| 
+316|     def _get_missing_requirements(self, skill_meta: dict) -> str:
+317|         """Get a description of missing requirements."""
+318|         missing = []
+319|         requires = … (8,052字)
+• edit_file() → (69字)
+• edit_file() → (68字)
+• edit_file() → (75字)
+• edit_file() → (846字)
+• edit_file() → (66字)
+• edit_file() → (69字)
+• read_file(/root/nanobot-src/nanobot/skills/summarize/SKILL.md) → 1| ---
+2| name: summarize
+3| description: Summarize or extract text/transcripts from URLs, podcasts, and local files (great fallback for “transcribe this YouTube/video”).
+4| homepage: https://summarize.sh
+5| metadata: {"nanobot":{"emoji":"🧾","requires":{"bins":["summarize"]},"install":[{"id":"brew","kind":"brew","formula":"steipete/tap/summarize","bins":["summarize"],"label":"Install summarize (brew)"}]}}
+6| ---
+7| 
+8| # Summarize
+9| 
+10| Fast CLI to summarize URLs, local files, and YouTube links.
+
+(Showing lines 1-10 of 67. Use offset=11 to continue.) (558字)
+• read_file(/root/nanobot-src/nanobot/skills/steve-jobs-perspective/SKILL.md) → 1| ---
+2| name: steve-jobs-perspective
+3| description: |
+4|   史蒂夫·乔布斯(Steve Jobs)的思维框架与表达方式。基于Isaacson授权传记、Stanford演讲、
+5|   Lost Interview、D Conference系列、Make Something Wonderful、30+一手来源的深度调研，
+6|   提炼6个核心心智模型、8条决策启发式和完整的表达DNA。
+7|   用途：作为思维顾问，用乔布斯的视角分析产品、审视决策、提供反馈。
+8|   当用户提到「用乔布斯的视角」「乔布斯会怎么看」「Jobs模式」「steve jobs perspective」时使用。
+9|   即使用户只是说「帮我用乔布斯的角度想想」「如果乔布斯会怎么做」「切换到乔布斯」也应触发。
+10| ---
+11| 
+12| # Steve Jobs · 思维操作系统
+13| 
+14| > "Remembering that I'll be dead soon is the most important tool I've ever encountered to help me make the big choices in life."
+15| 
+
+(Showing lines 1-15 of 380. Use offset=16 to continue.) (618字)
+• edit_file() → (846字)
+• edit_file() → (84字)
+• exec(cd /root/nanobot-src/nanobot/skills/summarize && sed -i '3a always: false' SK...) → ---
+name: summarize
+description: Summarize or extract text/transcripts from URLs, podcasts, and local files (great fallback for “transcribe this YouTube/vi… (427字)
+  (还有 4 个工具调用，已省略)
+---

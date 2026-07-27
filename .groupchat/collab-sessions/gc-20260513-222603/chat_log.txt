@@ -1,0 +1,490 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 帮我看看/prompt指令
+---
+[用户]: 的逻辑
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(ls -la /prompt 2>/dev/null; ls -la /root/.nanobot/workspace/ 2>/dev/null; fin...) → total 287840
+drwxr-xr-x 14 root root     20480 May 12 13:01 .
+drwxr-xr-x 18 root root      4096 May 12 09:27 ..
+drwxr-xr-x  8 root root      4096 May 13 22:18 .git
+-rw-r--r--  1 root root       891 May  9 15:21 AGENTS.md
+drwxr-xr-x  3 root root      4096 May  9 15:10 AI-Researcher
+-rw-r--r--  1 root root       370 May  9 15:21 HEARTBEAT.md
+drwxr-xr-x  3 root root      4096 May  9 15:10 RAG-Anything
+-rw-r--r--  1 root root       353 May  9 15:21 SOUL.md
+-rw-r--r--  1 root root       487 May  9 15… (2,876字)
+• exec(ls -la /root/.nanobot/prompts/ 2>/dev/null) → total 72
+drwxr-xr-x  4 root root 4096 May  4 22:44 .
+drwxr-xr-x 18 root root 4096 May 12 09:27 ..
+-rw-r--r--  1 root root 1185 May  4 19:39 broadcast_hint.md
+-rw-r--r--  1 root root  468 Apr 17 19:02 coding_principle.md
+-rw-r--r--  1 root root   29 Apr 22 23:45 group_context.md
+-rw-r--r--  1 root root  297 May  4 17:31 group_nudge.md
+-rw-r--r--  1 root root  493 May  4 17:31 instructions.md
+-rw-r--r--  1 root root 1815 May 13 20:24 leader_prompt.md
+-rw-r--r--  1 root root 1072 Apr 17 15:25 leade… (1,034字)
+• read_file(/root/.nanobot/prompt_order.json) → 1| {
+2|   "default": [
+3|     "main_prompt",
+4|     "hard_rules",
+5|     "tool_instructions",
+6|     "persona",
+7|     "broadcast_hint",
+8|     "user_context",
+9|     "output_efficiency",
+10|     "skills",
+11|     "leader_prompt",
+12|     "instructions",
+13|     "memory",
+14|     "history",
+15|     "group_context"
+16|   ]
+17| }
+
+(End of file — 17 lines total) (361字)
+• read_file(/root/.nanobot/prompt_visibility.json) → 1| {
+2|   "persona": "all",
+3|   "leader_prompt": "leader"
+4| }
+
+(End of file — 4 lines total) (94字)
+• read_file(/root/.nanobot/prompts/main_prompt.md) → 1| 完成任务、遵守约束、团队协作不放弃。用记忆和skill提效减错，主动理解意图避免额外提问。保护信息安全。
+2| 
+3| ⚡ 速度优先：结论先行再解释；跳过套话前言；批量并行调工具。
+4| ⚡ act don't ask：说要做就立刻用工具执行，不许承诺"我将要…"然后结束回合。
+5| ⚡ verification：关键操作后验证结果，不要假设成功。
+6| 
+7| <tool_persistence>
+8| - 工具返回空/部分结果时，换策略重试再放弃，不要停在半成品上
+9| - 持续调用工具直到：(1)任务完成 AND (2)结果已验证
+10| - Plan A失败→Plan B正交方向→Plan C终极手段，每级有明确预算
+11| </tool_persistence>
+12| 
+13| <prerequisite_checks>
+14| - 行动前检查前置条件：依赖的文件是否存在？API是否可达？权限是否足够？
+15| - 不要因为最终动作看起来明显就跳过前置步骤
+16| </prerequisite_checks>
+17| 
+18| <missing_context>
+19| - 缺少必要信息时不猜测不幻觉，用工具查
+20| - 工具查不到才问用户，且一次问完所有需要的信息
+21| - 信息不完整时必须标注假设
+22| </missing_context>
+
+(End of file — 22 lines total) (625字)
+• read_file(/root/.nanobot/prompts/instructions.md) → 1| 完成所有工作后输出个人产出。任务产出与计划一一对应，条理清晰技术准确。
+2| 
+3| ### 执行准则
+4| - 有明确默认答案的问题直接执行，不问"你指的是不是XX"
+5| - 需要查的用工具查，不凭记忆回答（时间、系统状态、文件内容、计算）
+6| - 前提条件先验证再行动
+7| - 结果交付前检查：正确性、格式、是否满足需求
+8| 
+9| 任务完成且无新实质信息时立即停止输出。结果本身就是最好的收尾。
+
+(End of file — 9 lines total) (238字)
+• read_file(/root/.nanobot/prompts/tool_instructions.md) → 1| 外部信息/文件读写/代码/网络查询必须通过工具完成。可用：exec, read_file, write_file, edit_file, web_search, web_fetch
+2| 
+3| ⚠️ 必须用工具执行，不许在文本中模拟调用。文本里写 `<web_search>`、`[Search...]` 等XML/伪调用均无效——必须通过 JSON Function Calling。
+4| 
+5| ### 执行纪律
+6| - 说"我会做XX"时必须立即在**同一次回复**中调工具执行
+7| - 不以下次再执行为由提前结束回复
+8| - 工具返回空/不全时换策略重试再放弃
+9| - 验证通过才算完成
+10| 
+11| ### 思维链
+12| 目标→已有信息→高效调用计划→执行验证→输出检查
+13| 
+14| ⚡ 批量调用：一次回复同时调多个独立工具，减少往返。
+15| 
+16| ### 搜索降级策略（三级框架）
+17| 
+18| **Plan A — 直接搜索（预算：2次）**
+19| - 用最精确的关键词直接搜
+20| - 失败信号：TOP-3结果无具体URL/无图片链接/全来自同一低质量站点/403/空结果
+21| 
+22| **Plan B — 正交方向（预算：2次）**
+23| - 换完全不同的方法，不是微调关键词：
+24|   - 搜不到图片 → 直接猜CDN URL模式（如wallhaven的 w.wallhaven.cc/full/{id前2}/wallhaven-{id}.jpg）
+25|   - 搜不到数据 → web_fetch已知权威页面提取
+26|   - 搜不到文件 → exec直接curl/wget
+27|   - 搜不到API → 读文档/源码找endpoint
+28| - 失败信号：Plan B也返回空/403/无关结果
+29| 
+30… (1,040字)
+• read_file(/root/.nanobot/prompts/leader_prompt.md) → 1| [leader]
+2| 你是GROUP LEADER，最高决策者和回复整合者。
+3| 
+4| 职责链：分析意图→制定计划→分发任务→管理团队→验证闭环→输出用户
+5| 
+6| ### 任务分发格式（强制四要素）
+7| 给队友分配任务时必须包含：
+8| 1. **目标**：要达成什么（具体、可验证）
+9| 2. **输入**：已知信息/起点
+10| 3. **输出格式**：期望的结果形式（列表/JSON/摘要等）
+11| 4. **约束**：限制条件（搜索次数、时间、工具限制等）
+12| 
+13| ### 验证闭环
+14| - 队友返回结果后评估：是否满足任务目标？缺什么补什么
+15| - 如质量不达预期，明确指正后重新分配
+16| - 如有agent持续低质量，可移除该agent
+17| 
+18| ### 终止条件（满足任一即end_discussion）
+19| 1. 任务完成 2. 信息充足无新价值 3. … (1,025字)
+  (还有 17 个工具调用，已省略)
+---
+[用户]: 是否有问题
+---
+[Kirk]: 
+
+[工具调用记录]
+• exec(find /root/nanobot-src -type f -name "*.py" | xargs grep -l "/prompt\|prompt....) → /root/nanobot-src/fix_single_agent.py
+/root/nanobot-src/tests/test_prompt_robustness.py
+/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py
+/root/nanobot-src/nanobot/channels/telegram/callbacks.py
+/root/nanobot-src/nanobot/channels/telegram/commands/settings.py
+/root/nanobot-src/nanobot/channels/telegram/__init__.py
+
+
+Exit code: 0 (401字)
+• exec(find /root/nanobot-src -type f \( -name "*.py" -o -name "*.md" \) | xargs gre...) → /root/nanobot-src/nanobot/cli/commands.py
+/root/nanobot-src/nanobot/channels/telegram/commands/agents.py
+/root/nanobot-src/nanobot/channels/telegram/commands/settings.py
+
+
+Exit code: 0 (184字)
+• exec(grep -n "prompt" /root/nanobot-src/nanobot/channels/telegram/callbacks.py | h...) → 19:from nanobot.groupchat.history.prompt_builder import (
+253:                    current = self._groupchat_engine.registry.get(name, {}).get("prompt", "")
+267:                    prompts = {"name": "新名字"}
+268:                    await query.edit_message_text(f"请输入{prompts.get(field, field)}:")
+474:                # Persistent log prompt viewer: rlogp:<idx>:<msg_page>
+659:                prompt_tok = usage.get("prompt", usage.get("prompt_tokens", 0)) or 0
+662:                chars_per_tok = roun… (1,590字)
+• exec(grep -rn "prompt" /root/nanobot-src/nanobot/channels/telegram/commands/ | hea...) → /root/nanobot-src/nanobot/channels/telegram/commands/agents.py:262:            f"人设: {agent['prompt'][:100]}..."
+/root/nanobot-src/nanobot/channels/telegram/commands/settings.py:1:"""Settings commands for Telegram (hyperparams, groupchat, restart, debug, prompt)."""
+/root/nanobot-src/nanobot/channels/telegram/commands/settings.py:16:from nanobot.groupchat.history.prompt_builder import (
+/root/nanobot-src/nanobot/channels/telegram/commands/settings.py:311:    async def _on_prompt(self, update: Up… (2,732字)
+• exec(grep -rn "/prompt\|prompt_cmd\|handle_prompt\|prompt_command" /root/nanobot-s...) → /root/nanobot-src/nanobot/channels/telegram/callbacks.py:1944:                "位置: groupchat/prompt_builder.py 构建 prompt 时检查\n\n"
+/root/nanobot-src/nanobot/channels/telegram/callbacks.py:2423:        # Handle prompt_edit (from /prompt → edit component)
+/root/nanobot-src/nanobot/channels/telegram/commands/settings.py:312:        """Handle /prompt command: view/edit prompt components per agent."""
+/root/nanobot-src/nanobot/channels/telegram/callbacks.py.bak:1572:                "位置: groupchat/prom… (782字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/commands/settings.py) → 311|     async def _on_prompt(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+312|         """Handle /prompt command: view/edit prompt components per agent."""
+313|         if not update.message or not update.effective_user:
+314|             return
+315|         if not self.is_allowed(self._sender_id(update.effective_user)):
+316|             return
+317| 
+318|         engine = self._groupchat_engine
+319|         if not engine:
+320|             await update.message.reply_text("⚠️ 群聊引擎未初始化")
+321|             return
+322| 
+323|         # Directly show global component order editor
+324|         text, markup = self._build_prompt_order_view(engine)
+325|         await update.message.reply_text(text, reply_markup=markup)
+326| 
+327|     # Components that are only injected under spec… (6,024字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 1| """Prompt construction for group chat agents.
+2| 
+3| Extracts all prompt-related logic from GroupChatEngine:
+4| - Component ordering and management
+5| - Template expansion
+6| - Per-agent and global overrides
+7| - History → messages conversion
+8| """
+9| 
+10| from __future__ import annotations
+11| 
+12| import json
+13| from pathlib import Path
+14| from typing import Any
+15| 
+16| from loguru import logger
+17| 
+18| import platform
+19| 
+20| from nanobot.utils.helpers import cn_now as _cn_now
+21| 
+22| from nanobot.groupchat.hi… (2,926字)
+  (还有 8 个工具调用，已省略)
+---
+[Kirk]: 我已经完整读完了 `/prompt` 的全部逻辑（`settings.py` 的 UI 层 + `prompt_builder.py` 的核心引擎）。直接给结论。
+
+## 结论
+
+`/prompt` 整体架构清晰——组件化管线、模板变量展开、可见性控制、排序/增删都设计得不错。但有一个**确认的 bug** 和几个设计瑕疵。
+
+---
+
+## 确认的 Bug：`broadcast_hint` 模板变量未定义
+
+`prompt_builder.py` 第 101-137 行，`broadcast_hint` 模板使用了 4 个变量：
+
+```
+{{agent_idx}}  {{total}}  {{teammates}}  {{user_question}}
+```
+
+但 `build_agent_prompt()` 第 500-513 行定义的模板变量只有：
+
+| 变量 | 是否定义 |
+|---|---|
+| `{{agent}}` | ✅ stable |
+| `{{members}}` | ✅ stable |
+| `{{tools}}` | ✅ stable |
+| `{{others}}` | ✅ stable |
+| `{{identity}}` | ✅ stable |
+| `{{datetime}}` | ✅ volatile |
+| `{{round}}` | ✅ volatile |
+| **`{{agent_idx}}`** | ❌ **未定义** |
+| **`{{total}}`** | ❌ **未定义** |
+| **`{{teammates}}`** | ❌ **未定义** |
+| **`{{user_question}}`** | ❌ **未定义** |
+
+**结果**：这 4 个变量会原样保留为字面字符串注入到 agent 的 system prompt 中。你可以验证——我自己的系统提示里就写着 `你是 {{agent_idx}}/{{total}} 号成员，代号 Kirk | 队友: {{teammates}}`，`{{agent}}` 被正确展开了，但其余 4 个没有。
+
+**修复方案**：在 `build_agent_prompt()` 的 `stable_tpl_vars` 中补充这 4 个变量。`agent_idx` 和 `total` 需要从调用方传入（当前函数签名没有这些参数）。
+
+---
+
+## 设计瑕疵（非 bug）
+
+### 1. `_CONDITIONAL_TAGS` 误导
+`settings.py` 第 328-331 行：
+```python
+_CONDITIONAL_TAGS = {
+    "broadcast_hint": "广播模式",
+    "leader_prompt": "Leader",
+}
+```
+UI 上显示 `[仅广播模式]`，暗示 broadcast_hint 只在广播模式下注入。但 `build_agent_prompt()` 里**没有任何条件判断**——只要模板非空就注入。`leader_prompt` 的条件注入是通过 visibility 系统实现的，而 `broadcast_hint` 没有。标签是假的。
+
+### 2. Pre-history 组件无法使用 `{{datetime}}` / `{{round}}`
+第 542 行：
+```python
+content = self._expand_template_vars(raw, all_tpl_vars if past_history else stable_tpl_vars)
+```
+history 之前的组件只拿到 stable vars。这是为了 KV cache 稳定性（设计意图正确），但 UI 的变量提示 `💡 变量: {{agent}} {{members}} {{datetime}} {{round}}...` 没有说明这个限制，用户可能在 pre-history 组件里用 `{{datetime}}` 然后发现不生效。
+
+### 3. `{{identity}}` 是个隐藏炸弹
+`stable_tpl_vars` 里包含 `{{identity}}`，展开后是整个 `_build_identity()` 的输出（平台信息、workspace 路径、guidelines，约 1500 字）。如果用户在某个模板里不小心用了 `{{identity}}`，会注入一大段内容。当前默认模板没有使用，但作为可用变量暴露在 UI 提示里，容易误用。
+
+---
+
+## 备注
+
+- 核心管线逻辑（排序、增删、
+---
+[Harper]: 现在让我看 broadcast.py 如何传递变量的：
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -rn "agent_idx\|\\{\\{total\}\}\\|teammates\|use...) → STDERR:
+grep: Invalid content of \{\}
+
+
+Exit code: 0 (52字)
+• exec(cd /root/nanobot-src && grep -rn "_CONDITIONAL_TAGS\|conditional_tags\|condit...) → nanobot/channels/telegram/commands/settings.py:328:    _CONDITIONAL_TAGS: dict[str, str] = {
+nanobot/channels/telegram/commands/settings.py:339:        conditional_tags = self._CONDITIONAL_TAGS
+nanobot/channels/telegram/commands/settings.py:370:            cond = conditional_tags.get(key, "")
+
+
+Exit code: 0 (308字)
+• exec(cd /root/nanobot-src && grep -rn "broadcast_hint\|broadcast" nanobot/groupcha...) → nanobot/groupchat/orchestra/mailbox.py:4:to each other (or broadcast to all) and wait for replies.
+nanobot/groupchat/orchestra/mailbox.py:25:    targets: list[str] = field(default_factory=list)  # ["All"] for broadcast, or specific names
+nanobot/groupchat/orchestra/mailbox.py:38:    count, naturally penalizing All-broadcasts.
+nanobot/groupchat/orchestra/mailbox.py:478:            targets: List of agent names, or ``["All"]`` for broadcast.
+nanobot/groupchat/orchestra/run_loop.py:1:"""Main group c… (3,270字)
+• exec(cd /root/nanobot-src && grep -rn "\\(agent_idx\\|total\\|teammates\\|user_que...) → nanobot/providers/cache_probe.py:45:        total = 0
+nanobot/providers/cache_probe.py:48:                total += len(block.get("text", "") or "")
+nanobot/providers/cache_probe.py:49:        return total
+nanobot/providers/cache_probe.py:78:    total_chars: int = 0
+nanobot/providers/cache_probe.py:116:    # ── 1. Measure total chars ──────────────────────────────────────────────
+nanobot/providers/cache_probe.py:117:    total_chars = 0
+nanobot/providers/cache_probe.py:124:        total_chars += t… (2,656字)
+• exec(cd /root/nanobot-src && grep -rn "broadcast_hint\|BROADCAST_HINT\|broadcast_h...) → nanobot/groupchat/history/prompt_builder.py:31:    "tool_instructions", "skills", "broadcast_hint", "examples",
+nanobot/groupchat/history/prompt_builder.py:42:    "broadcast_hint": "广播协调 (broadcast_hint)",
+nanobot/groupchat/history/prompt_builder.py:52:    "broadcast_hint", "examples", "instructions", "leader_prompt", "group_nudge",
+nanobot/groupchat/history/prompt_builder.py:101:    "broadcast_hint": (
+nanobot/groupchat/history/prompt_builder.py:381:        elif key in ("broadcast_hint", "group… (745字)
+• read_file(/root/.nanobot/prompts/broadcast_hint.md) → 1| [广播模式]
+2| 你是 {{agent_idx}}/{{total}} 号成员，代号 {{agent}} | 队友: {{teammates}}
+3| 用户请求: {{user_question}}
+4| 
+5| 历史说明：[早期对话摘要]=压缩，[...N条省略...]=截断，以最近为准。
+6| 
+7| ### 工具
+8| - chatroom_send(to, message)：发消息。发All=3槽，发个人=1槽
+9| - wait(timeout≤60)：等消息。池满阻塞，需wait释放
+10| 
+11| ### 协作协议
+12| 1. 先干活再发言——禁止先wait
+13| 2. 搜索后立即 chatroom_send(to="All") 分享结果（标准格式见下方）
+14| 3. 收到队友结果直接用，不重复搜；需补充换关键词
+15| 4. 只发含新信息的消息，合并低信息量消息
+16| 5. 单轮网络调用最多3次
+17| 6. 发送前自检：信息量≤上一条已发则禁止发送（避免空确认）
+18| 
+19| ### 搜索降级策略
+20| 遵循tool_instructions.md的三级降级框架（Plan A→B→C）。
+21| Worker每次搜索前自检：本次方法是否与上次正交？预算是否耗尽？
+22| 
+23| ### 退出条件（任一即停）
+24| 1. 结果已发给Leader
+25| 2. 连续2轮无新信息
+26| 3. Leader发送end_discussion
+27| 4. 搜索全失败已报告
+28| 
+29| ### 结果共享格式
+30| ```
+31| ## [类型] 来源: URL
+32| - 发现1
+33| - 发现2
+34| 备注：补充说明
+35| ```
+
+(End of file — 35 lines total) (785字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 570|                 f"      ## 备注\n"
+571|                 f"      （可选：分歧说明、局限、后续建议）\n\n"
+572|                 f"   b. 用 memory_palace(action='store') 将关键结论写入记忆宫殿\n"
+573|                 f"      示例: memory_palace(action='store', content='用户偏好：...', wing='用户', hall='偏好', room='main')\n"
+574|                 f"7. 完成记忆存入后，调用 end_discussion() 结束任务\n\n"
+575|                 f"## 关键规则\n"
+576|                 f"- 发现队友空转或无法完成任务时：果断 end_discussion\n"
+577|                 f"- 可以一次给多个队友同时发任务（并行工作）\n"
+578|                 f"- ⚠️ 如果你打算自己做搜索/验证，必须先完成工具调用，再调用 end_discussion。\n"
+579|                 f"  end_discussion 一旦触发无法撤销，之后再说'我来搜索'只是文字，不会执行。\n"
+580|                 f"- ⚠️ 原假设被否证时，不要立即结束。应转向：'那么最近的可验证链条是什么？'\n"
+581|                 f"  继续搜索直到能给出正面结论（即使度数更高），而不是仅报告'不成立'。\n"
+582|                 f"… (4,359字)
+  (还有 6 个工具调用，已省略)
+---
+[Harper]: Now I understand the full picture. Let me also look at how variables are populated:
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -rn "'/prompt'" nanobot/channels/telegram/ --inc...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && grep -rn '"\/prompt"' nanobot/channels/telegram/ --in...) → Exit code: 0 (13字)
+• exec(ls /root/.nanobot/prompts/ 2>/dev/null; echo "---"; cat /root/.nanobot/prompt...) → broadcast_hint.md
+coding_principle.md
+group_context.md
+group_nudge.md
+instructions.md
+leader_prompt.md
+leader_prompt.md.backup
+library
+main_prompt.md
+memory.md
+output_efficiency.md
+tool_instructions.md
+user_context.md
+versions
+worker_hint.md
+记忆补充.md
+---
+[广播模式]
+你是 {{agent_idx}}/{{total}} 号成员，代号 {{agent}} | 队友: {{teammates}}
+用户请求: {{user_question}}
+
+历史说明：[早期对话摘要]=压缩，[...N条省略...]=截断，以最近为准。
+
+### 工具
+- chatroom_send(to, message)：发消息。发All=3槽，发个人=1槽
+- wait(timeout≤60)：等消息。池满阻塞，需wait释放
+
+### 协作协议
+1. 先干活再发… (4,994字)
+• exec(cd /root/nanobot-src && grep -rn "class.*CommandHandler\|'/prompt'\|handle_co...) → nanobot/channels/telegram/commands/settings.py:311:    async def _on_prompt(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+nanobot/channels/telegram/commands/settings.py:417:    async def _prompt_show_components(self, query) -> None:
+
+
+Exit code: 0 (268字)
+• exec(cat /root/.nanobot/prompts/main_prompt.md 2>/dev/null | head -80) → 完成任务、遵守约束、团队协作不放弃。用记忆和skill提效减错，主动理解意图避免额外提问。保护信息安全。
+
+⚡ 速度优先：结论先行再解释；跳过套话前言；批量并行调工具。
+⚡ act don't ask：说要做就立刻用工具执行，不许承诺"我将要…"然后结束回合。
+⚡ verification：关键操作后验证结果，不要假设成功。
+
+<tool_persistence>
+- 工具返回空/部分结果时，换策略重试再放弃，不要停在半成品上
+- 持续调用工具直到：(1)任务完成 AND (2)结果已验证
+- Plan A失败→Plan B正交方向→Plan C终极手段，每级有明确预算
+</tool_persistence>
+
+<prerequisite_checks>
+- 行动前检查前置条件：依赖的文件是否存在？API是否可达？权限是否足够？
+- 不要因为最终动作看起来明显就跳过前置步骤
+</prerequisite_checks>
+
+<missing_context>
+- 缺少必要信息时不猜测不幻觉，用工具查
+- 工具查不到才问用户，且一次问完所有需要的信息
+- 信息不完整时必须标注假设
+</mi… (529字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/commands/settings.py) → 300|             url = (info.get("url") or "").rstrip("/")
+301|             key = info.get("apiKey", "")
+302|             key_preview = key[:8] + "..." if len(key) > 8 else key
+303|             model_count = len(pm.get("models", {}).get(pn, []))
+304|             lines.append(f"  {pn}: {url or '(native)'} ({model_count}模型) key={key_preview}")
+305| 
+306|         text = "\n".join(lines)
+307|         await update.message.reply_text(text[:4096])
+308| 
+309|     # ── Prompt Orchestration ────────────────────────────────
+310| 
+311|     async def _on_prompt(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+312|         """Handle /prompt command: view/edit prompt components per agent."""
+313|         if not update.message or not update.effective_user:
+314|             return
+315|   … (7,540字)
+• exec(cd /root/nanobot-src && grep -n "stable_tpl_vars\|all_tpl_vars\|template_var\...) → 500:        stable_tpl_vars = {
+514:        all_tpl_vars = {**stable_tpl_vars, **volatile_tpl_vars}
+542:            content = self._expand_template_vars(raw, all_tpl_vars if past_history else stable_tpl_vars)
+548:            f"[Current date and time: {volatile_tpl_vars['{{datetime}}']}]"
+549:            f"\n[Round: {volatile_tpl_vars['{{round}}']}]"
+598:    def _expand_template_vars(text: str, tpl_vars: dict[str, str]) -> str:
+
+
+Exit code: 0 (445字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 495|         tool_names = "web_search, web_fetch, exec, read_file, write_file, edit_file, list_dir"
+496| 
+497|         # Stable template vars — safe to use anywhere in the prompt.
+498|         # These do NOT change between consecutive turns for the same agent,
+499|         # so they don't break server-side KV cache prefix stability.
+500|         stable_tpl_vars = {
+501|             "{{agent}}": agent_name,
+502|             "{{members}}": members_list,
+503|             "{{tools}}": tool_names,
+504|             "{{others}}": ", ".join(other_members),
+505|             "{{identity}}": self._build_identity(),
+506|         }
+507|         # Volatile vars — change every turn/minute.  They are available for use
+508|         # in templates but are injected separately at the END of the prompt (after… (3,070字)
+  (还有 2 个工具调用，已省略)
+---
+[Kirk]: ## 结论
+
+`/prompt` 有一个确认的 bug + 三个设计瑕疵。
+
+## 确认的 Bug：`broadcast_hint` 模板变量未定义
+
+`broadcast_hint` 模板用了 `{{agent_idx}}` `{{total}}` `{{teammates}}` `{{user_question}}` 四个变量，但 `build_agent_prompt()` 的模板变量表里**一个都没定义**，函数签名也没接收这些参数。结果：变量原样作为字面字符串注入 agent prompt（我自己的系统提示里就能看到 `你是 {{agent_idx}}/{{total}} 号成员`）。
+
+**修复**：`build_agent_prompt()` 签名加 `agent_idx, total, teammates, user_question` 参数，`stable_tpl_vars` 补上这四个变量。
+
+## 设计瑕疵
+
+1. **`_CONDITIONAL_TAGS` 标签造假** — `broadcast_hint` 标注 `[仅广播模式]`，但实际无条件注入（`leader_prompt` 的条件注入是通过 visibility 系统实现的，`broadcast_hint` 没有）
+2. **Pre-history 组件变量限制未说明** — history 之前的组件只能用 stable vars，`{{datetime}}` `{{round}}` 不可用，但 UI 提示里列出了所有变量
+3. **`{{identity}}` 隐藏炸弹** — 展开后约 1500 字，作为可用变量暴露在 UI 中容易误用
+
+[工具调用记录]
+• wait() → (29字)
+• memory_palace() → ✅ Stored in wing_code/prompt-command-review (hidden)
+  Drawer ID: drawer_wing_code_prompt-command-review_0901c99d70ed7e2812e22408 (129字)
+• end_discussion() → ✅ 讨论已结束（原因: 代码审查完成，bug和设计瑕疵已确认并记录），即将进入总结阶段 (43字)
+---

@@ -1,0 +1,318 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 上下文压缩时的触发的ai压缩是否有bug
+---
+[Harper]: 
+
+[工具调用记录]
+• list_dir(/root/nanobot-src/nanobot) → 📄 __init__.py
+📄 __main__.py
+📁 bus
+📁 channels
+📁 cli
+📁 config
+📁 cron
+📁 groupchat
+📁 heartbeat
+📁 providers
+📁 security
+📁 session
+📁 skills
+📁 templates
+📄 test_litellm.py
+📁 tools
+📁 utils (178字)
+• exec(grep -rl "压缩\|compress\|summary\|summarize" /root/nanobot-src/nanobot/ --incl...) → /root/nanobot-src/nanobot/providers/cache_probe.py
+/root/nanobot-src/nanobot/providers/litellm_provider.py
+/root/nanobot-src/nanobot/providers/httpx_provider.py
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py
+/root/nanobot-src/nanobot/groupchat/history/persistence.py
+/root/nanobot-src/nanobot/groupchat/history/context_validator.py
+/root/nanobot-src/nanobot/groupchat/history/context.py
+/root/nanobot-src/nanobot/groupchat/… (1,775字)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 1| """HistoryContext — single source of truth for conversation history.
+2| 
+3| Owns the message list and all related operations:
+4|   - add_message     : append + enforce message-count & char-budget limits
+5|   - maybe_compress  : AI summarize (or drop) the middle region on overflow
+6|   - clear / format  : utility helpers
+7| 
+8| Engine and Broadcast delegate to this class instead of maintaining
+9| ``self._history`` directly.  Persistence is still delegated to
+10| ``GroupChatState.save_message()``.
+11| """
+12| 
+13| from __future__ import annotations
+14| 
+15| import asyncio
+16| from typing import TYPE_CHECKING, Any
+17| 
+18| from loguru import logger
+19| 
+20| if TYPE_CHECKING:
+21|     from nanobot.groupchat.history.persistence import GroupChatState
+22| 
+23| 
+24| class HistoryContext:
+25|    … (9,879字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 1| """Prompt construction for group chat agents.
+2| 
+3| Extracts all prompt-related logic from GroupChatEngine:
+4| - Component ordering and management
+5| - Template expansion
+6| - Per-agent and global overrides
+7| - History → messages conversion
+8| """
+9| 
+10| from __future__ import annotations
+11| 
+12| import json
+13| from pathlib import Path
+14| from typing import Any
+15| 
+16| from loguru import logger
+17| 
+18| import platform
+19| 
+20| from nanobot.utils.helpers import cn_now as _cn_now
+21| 
+22| from nanobot.groupchat.history.component_manager import get_system_warning
+23| from nanobot.groupchat.history.message_converter import history_to_messages
+24| from nanobot.groupchat.history.context_validator import validate_context
+25| 
+26| 
+27| # ── Constants ────────────────────────────────────… (12,371字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/history_settings.py) → 1| """Centralized history, summarization, and context-pruning settings.
+2| 
+3| Loads ``~/.nanobot/history_settings.json`` once and exposes typed getters
+4| so that shell.py, summarizer.py, tool_loop.py, context_pruning.py,
+5| engine.py, broadcast.py, tool_chat.py, and the Telegram UI can all
+6| read the same configuration without hardcoding defaults.
+7| 
+8| Settings are organized into four sections:
+9| 
+10| - **Top-level**: global limits (context window, tool result hard cap)
+11| - **tool_results**: per-tool truncation + AI summarization
+12| - **history**: conversation history window
+13| - **context_pruning**: iterative context pruning thresholds
+14| """
+15| 
+16| from __future__ import annotations
+17| 
+18| import json
+19| from pathlib import Path
+20| from typing import Any
+21| 
+22| from lo… (9,022字)
+• exec(grep -rn "maybe_compress\|\.messages\[" /root/nanobot-src/nanobot/groupchat/o...) → /root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py:114:            await engine._maybe_compress_history()
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py:956:    async def _maybe_compress_history(self) -> None:
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py:958:        await self.history.maybe_compress()
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py:1142:                await engine._maybe_compress_history()
+
+
+Exit code: 0 (460字)
+• exec(grep -rn "maybe_compress" /root/nanobot-src/nanobot/ --include="*.py" | head -20) → /root/nanobot-src/nanobot/groupchat/history/context.py:5:  - maybe_compress  : AI summarize (or drop) the middle region on overflow
+/root/nanobot-src/nanobot/groupchat/history/context.py:146:    async def maybe_compress(self) -> None:
+/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py:114:            await engine._maybe_compress_history()
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py:956:    async def _maybe_compress_history(self) -> None:
+/root/nanobot-src/nanobot/groupchat/orc… (695字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 1| """Main group chat event loop and summary generation.
+2| 
+3| Contains the core run loop that processes user input and dispatches
+4| to broadcast mode, plus the summary generator.
+5| "… (4,966字)
+  (还有 7 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• chatroom_send() → (48字)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/persistence.py) → 1| """State persistence for group chat engine.
+2| 
+3| Manages all file I/O for group chat state:
+4| - Active agents list
+5| - Leader selection
+6| - Named agent groups
+7| - Session event logging
+8| """
+9| 
+10| from __future__ import annotations
+11| 
+12| import json
+13| from pathlib import Path
+14| from typing import Any
+15| 
+16| from loguru import logger
+17| 
+18| from nanobot.utils.helpers import cn_now as _cn_now
+19| 
+20| 
+21| _NANOBOT_DIR = Path.home() / ".nanobot"
+22| 
+23| 
+24| class GroupChatState:
+25|     """Unified persistence layer for group chat state.
+26| 
+27|     All state files live under ``~/.nanobot/``:
+28|     - ``active_agents.json``  — ordered list of active agent names
+29|     - ``leader.txt``          — current leader name (or absent)
+30|     - ``groups.json``         — sa… (6,586字)
+• exec(grep -n "class GroupChatState\|def save_\|def _save_" /root/nanobot-src/nanob...) → /root/nanobot-src/nanobot/groupchat/history/persistence.py:24:class GroupChatState:
+/root/nanobot-src/nanobot/groupchat/history/persistence.py:44:    def save_active(self, agents: list[str]) -> None:
+/root/nanobot-src/nanobot/groupchat/history/persistence.py:67:    def save_leader(self, leader: str | None) -> None:
+/root/nanobot-src/nanobot/groupchat/history/persistence.py:103:    def save_groups(self, groups: dict[str, list[str]]) -> None:
+/root/nanobot-src/nanobot/groupchat/history/persistence… (1,937字)
+• exec(grep -rn "save_message\|save_state\|persist.*his\|dump.*msg\|write.*jsonl" /r...) → Exit code: 0 (13字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/raft/persistence.py) → Error: offset 370 is beyond end of file (177 lines)
+
+[Analyze the error above and try a different approach.] (108字)
+• exec(grep -rn "load_mes\|restore.*mes\|replay\|rebuild.*hist\|_history =" /root/na...) → 273:        self._history = self.history.messages
+399:        self._history = self.history.messages  # keep shim in sync
+406:        self._history = self.history.messages  # keep shim in sync
+927:        self._history = self.history.messages
+959:        self._history = self.history.messages  # keep shim in sync
+
+
+Exit code: 0 (327字)
+• exec() → /root/nanobot-src/nanobot/groupchat/history/context.py:146:    async def maybe_compress(self) -> None:
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py:206:    async def _connect_mcp(self) -> None:
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py:240:    async def _disconnect_mcp(self) -> None:
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py:732:    async def _chat_with_tools(
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py:810:    async def direct_chat(self, user_m… (1,531字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 230|                     logger.info(
+231|                         "HistoryContext: AI compressed {} middle → summary "
+232|                         "(head: {}, tail: {})",
+233|                         len(to_compress),
+234|                         len(head),
+235|                         len(tail),
+236|                     )
+237|                     return
+238|             except Exception as e:
+239|                 logger.warning(
+240|                     "HistoryContext: AI compress failed: {}, falling back to drop", e
+241|                 )
+242| 
+243|         # ── 4b. Fallback: drop middle region ──
+244|         self.messages = head + tail
+245|         logger.info(
+246|             "HistoryContext: dropped {} middle messages (head: {}, tail: {})",
+247|             len(to_compress),
+248|… (899字)
+• exec(grep -rn "class HistoryContext\|def __init__\|self.messages\|self._state\|@pr...) → 24:class HistoryContext:
+37:    def __init__(
+42:        self._state = state
+44:        self.messages: list[dict[str, str]] = []
+66:        return len(self.messages)
+69:        return bool(self.messages)
+72:        return iter(self.messages)
+75:        return self.messages[idx]
+79:        self.messages.clear()
+84:            f"[{m['sender']}]: {m['content']}" for m in self.messages
+93:… (1,473字)
+  (还有 14 个工具调用，已省略)
+---
+[Harper]: 好的，我在。下面是完整的验证结果。
+
+---
+
+## Bug #1 验证 —— CRITICAL: 压缩结果永不持久化
+
+**结论：Bug confirmed.** `save_message()` 接收 `history` 参数但从不保存它。
+
+证据链条：
+
+1. **`context.py:L144`** — `add_message()` 最后一行：
+   ```python
+   self._state.save_message(sender, content, self.messages)
+   ```
+   传入了 `self.messages`（此时包含了修剪后的完整历史）。
+
+2. **`persistence.py:L172-L177`** — `save_message()` 签名接受第三个参数 `history: list[dict]`，但函数体**完全不使用这个参数**：
+   ```python
+   def save_message(self, sender: str, content: str, history: list[dict[str, str]]) -> None:
+       """Log a message to session chat_log.txt and session.jsonl."""
+       if self._session_dir:
+           with open(self._session_dir / "chat_log.txt", "a") as f:
+               f.write(f"[{sender}]: {content}\n---\n")
+       self.save_event("message", agent=sender, content=content)
+   ```
+   只写了单个消息到 `chat_log.txt` 和事件流，从未序列化完整 `self.messages`。
+
+3. **`maybe_compress()` (L229/L244)** — AI压缩成功或fallback丢消息后都修改了 `self.messages`，但两个分支都没有调用任何形式的持久化。对比之下 `add_message(L144)` 每次都调用了。
+
+4. **重启恢复能力为零** — 整个代码库没有任何地方能从磁盘重建 `self.messages`。没有 `load_messages()`、没有反序列化、没有replay逻辑。进程崩溃后重新启动时，HistoryContext初始化就是空的(`self.messages = []`, L44)。
+
+所以这不是"压缩没持久化"这么简单——是整个会话历史的运行时内存副本根本没有备份机制。唯一留存的是逐条的append-only事件日志，而那是单向不可逆的。
+
+---
+
+## Bug #2 验证 —— MEDIUM-HIGH: add_message ↔ maybe_compress 竞态条件
+
+两者之间完全没有锁保护。虽然目前Python协程的单线程特性降低了风险概率，但在以下场景仍可能出问题：
+
+- `add_message()` 在第107行计算了 `head_indices`
+- 如果在第107和第115行之间有另一个异步操作切换出去（虽然没有显式await，但如果未来加了IO就会出事）
+- `maybe_compress()` 在同一时刻重写了整个 `.messages`
+
+更现实的威胁：多次连续的AI压缩调用可能在同一个event loop tick中被调度两次（例如engine层的wrapper在不同位置被调用）。
+
+---
+
+## Bug #3 验证 —— LOW-MEDIUM: SummaryMsg可被二次压缩
+
+`sender="系统"` (L223)。下一次触发压缩时：
+
+- **Head保护**(L56-61)：只保护index=0和第一个sender为"User"/"user"/"用户"的消息
+- **Tail保护**(L171-174)：固定保护倒数6条
+- summary_msg既不属于head也不属于tail区间 → 落在中间的"可压缩区"，下次可能会再次被喂进AI或者直接被drop掉
+
+这意味着经过几轮反复压缩，"关于之前的摘要的摘要"会出现信息衰减。
+
+---
+
+## Bug #4 （新增）—— HIGH: Char-Budget Trimming算法缺陷
+
+**文件**: `context.py:L117-L342`
+
+char-budget裁剪的逻辑是从尾部反向遍历收集消息直到budget用完(L126-133)，然后把head拼在前面。但是这里有一个严重的语义问题：
+
+```python
+tail: list[dict] = []
+head_id_set = {id(m) for m in head_msgs}
+for m in reversed(self.messages):
+    if id(m) in head_id_set:
+        continue
+    c = len(m.get("content", ""))
+    if available - c < 0:
+        break      # ← BREAK而不是continue！
+    tail.insert(0, m)
+    available -= c
+```
+
+一旦遇到第一条超出剩余budget的消息就直接break停止处理后面的所有消息。这会导致大量较新的消息也被丢掉——即使它们单独来看很小。应该改成skip这条大的然后继续处理剩下的。
+
+另外这里的dedup逻辑(L136-142)用`id(m)`来判重也很脆弱——如果两条字典对象的id相同但不是同一个对象会有误报；而且既然前面已经从原始列表中筛选过了不应该有重复才对。
+
+---
+
+## Bug #5 （新增）—— INFO: keep_recent=6硬编码未暴露为配置项
+
+**文件**: `context.py:L171`
+```python
+keep_recent = 6
+```
+这是决定有多少条最近的尾巴不被压缩的唯一阈值。但它没有被纳入 `history_settings.json` schema中的任何一个section（包括已有的context_pruning下的keep_recent键名冲突）。如果要精细调节压缩粒度就必须改源代码。
+
+---
+
+要我进一步深挖哪个方向的细节？
+---

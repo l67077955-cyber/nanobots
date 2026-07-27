@@ -1,0 +1,191 @@
+[用户]: 执行
+---
+[Harper]: <｜DSML｜tool_calls>
+<｜DSML｜invoke name="read_file">
+<｜DSML｜parameter name="path" string="true">/root/nanobot-src/nanobot/groupchat/history/result_processor.py</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/tools/summarizer.py) → 1| """Lightweight tool-output summarizer using a cheap reader model.
+2| 
+3| When a tool (e.g. ``exec``) produces output larger than a threshold,
+4| this module compresses it via a small LLM (default: gpt-4.1-nano)
+5| before the result is injected back into the conversation context.
+6| 
+7| Falls back to head+tail truncation on any failure.
+8| """
+9| 
+10| from __future__ import annotations
+11| 
+12| import json
+13| from pathlib import Path
+14| from typing import Any
+15| 
+16| from loguru import logger
+17| 
+18| # ── Defaults ──────────────────────────────────────────────────────────────
+19| 
+20| _DEFAULT_READER_MODEL = "openai/gpt-4.1-nano"
+21| _DEFAULT_PROVIDER = "openrouter"
+22| 
+23| 
+24| def _load_reader_config() -> dict[str, Any]:
+25|     """Load reader agent config from ``~/.nanobot/agents… (7,269字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 1| """HistoryContext — single source of truth for conversation history.
+2| 
+3| Owns the message list and all related operations:
+4|   - add_message     : append + enforce message-count & char-budget limits
+5|   - maybe_compress  : AI summarize (or drop) the middle region on overflow
+6|   - clear / format  : utility helpers
+7| 
+8| Engine and Broadcast delegate to this class instead of maintaining
+9| ``self._history`` directly.  Persistence is still delegated to
+10| ``GroupChatState.save_message()``.
+11| """
+12| 
+13| from __future__ import annotations
+14| 
+15| import asyncio
+16| from typing import TYPE_CHECKING, Any
+17| 
+18| from loguru import logger
+19| 
+20| if TYPE_CHECKING:
+21|     from nanobot.groupchat.history.persistence import GroupChatState
+22| 
+23| 
+24| class HistoryContext:
+25|    … (10,387字)
+• exec(grep -rn "summarize_tool_output\|summarize_enabled\|summarize_model\|glm-5.1"...) → /root/nanobot-src/nanobot/groupchat/history/history_settings.py:41:        "summarize_enabled": True,
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py:43:        "summarize_model": "openai/gpt-4.1-nano",
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py:69:        "history_summarize_enabled": True,
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py:162:def summarize_enabled() -> bool:
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py:163:  … (4,748字)
+• exec(grep -rn "summarize_tool_output\|from.*summarizer\|import.*summarizer" /root/...) → /root/nanobot-src/nanobot/tools/summarizer.py:55:async def summarize_tool_output(
+/root/nanobot-src/nanobot/tools/summarizer.py:108:                    "summarize_tool_output: {}() {}c → {}c (-{}%)",
+/root/nanobot-src/nanobot/tools/summarizer.py:113:                "summarize_tool_output: summary was longer than original, using truncation"
+/root/nanobot-src/nanobot/tools/summarizer.py:116:        logger.warning("summarize_tool_output: LLM failed for {}(): {}", tool_name, e)
+/root/nanobot-src/nan… (612字)
+• exec(grep -rn "summarize_tool_output\|from.*summarizer\|import.*summarizer" /root/...) → /root/nanobot-src/nanobot/tools/summarizer.py:55:async def summarize_tool_output(
+/root/nanobot-src/nanobot/tools/summarizer.py:108:                    "summarize_tool_output: {}() {}c → {}c (-{}%)",
+/root/nanobot-src/nanobot/tools/summarizer.py:113:                "summarize_tool_output: summary was longer than original, using truncation"
+/root/nanobot-src/nanobot/tools/summarizer.py:116:        logger.warning("summarize_tool_output: LLM failed for {}(): {}", tool_name, e)
+/root/nanobot-src/nan… (612字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/history_settings.py) → 1| """Centralized history, summarization, and context-pruning settings.
+2| 
+3| Loads ``~/.nanobot/history_settings.json`` once and exposes typed getters
+4| so that shell.py, summarizer.py, tool_loop.py, context_pruning.py,
+5| engine.py, broadcast.py, tool_chat.py, and the Telegram UI can all
+6| read the same configuration without hardcoding defaults.
+7| 
+8| Settings are organized into four sections:
+9| 
+10| - **Top-level**: global limits (contex… (9,777字)
+  (还有 7 个工具调用，已省略)
+---
+[Kirk]: <｜DSML｜tool_calls>
+<｜DSML｜invoke name="exec">
+<｜DSML｜parameter name="command" string="true">grep -n "summarize_enabled\|summarize_threshold\|summarize_max_input\|summarize_max_output" /root/nanobot-src/nanobot/groupchat/history/result_processor.py</｜DSML｜parameter>
+</｜DSML｜invoke>
+<｜DSML｜invoke name="exec">
+<｜DSML｜parameter name="command" string="true">grep -n "summarize_enabled\|summarize_threshold\|summarize_max_input\|summarize_max_output" /root/nanobot-src/nanobot/channels/telegram/callbacks.py | head -20</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>
+
+[工具调用记录]
+• memory_palace(AI总结模块 架构 重构 死代码 summarizer context compression) → 🔍 5 result(s) for 'AI总结模块 架构 重构 死代码 summarizer context compression':
+
+[1] wing_code/ai-compression-diagnosis (sim=0.05)
+  ## nanobot AI压缩功能诊断 (2026-05-11)
+
+### 两个独立功能：
+
+**功能1: 工具输出AI摘要 (summarizer.py)**
+- `summarize_tool_output()` 函数已实现，配置在 history_settings.json
+- **死代码**: 整个代码库无任何 import 或调用
+- 配置项: summarize_threshold=20000, summarize_model="z-ai/glm-5.1", summarize_max_input_chars=10000, summarize_max_output_chars=5000
+- 当前工具输出处理链: 工具执行 → result_processor.py (机械截断到exec_max_chars=10k) → 结束
+
+**功… (2,065字)
+• memory_palace(context compression architecture 压缩 arch) → 🔍 5 result(s) for 'context compression architecture 压缩 arch':
+
+[1] wing_code/rollback (sim=-0.331)
+  回滚操作记录 2026-05-12:
+- 代码仓库 /root/nanobot-src: 回滚到 v0.1.5-stable (commit 30d7454, 2026-05-08)
+- 配置仓库 /root/.nanobot: 回滚到 dbcba9e (stable checkpoint before context compression fix)
+- 原因: 用户要求回滚到5月10日版本，5月10日无提交，选择最近的稳定版 v0.1.5-stable
+
+[2] wing_code/context-compression-fixes (sim=-0.355)
+  上下文压缩逻辑三处修复已验证通过：1) keep_recent从硬编码改为配置驱动(compression_keep_recent)，2) summarize_enabled从false改为true(启用AI摘要保留语义)，… (1,719字)
+• read_file(/root/nanobot-src/nanobot/tools/summarizer.py) → 1| """Lightweight tool-output summarizer using a cheap reader model.
+2| 
+3| When a tool (e.g. ``exec``) produces output larger than a threshold,
+4| this module compresses it via a small LLM (default: gpt-4.1-nano)
+5| before the result is injected back into the conversation context.
+6| 
+7| Falls back to head+tail truncation on any failure.
+8| """
+9| 
+10| from __future__ import annotations
+11| 
+12| import json
+13| from pathlib import Path
+14| from typing import Any
+15| 
+16| from loguru import logger
+17| 
+18| # ── Defaults ──────────────────────────────────────────────────────────────
+19| 
+20| _DEFAULT_READER_MODEL = "openai/gpt-4.1-nano"
+21| _DEFAULT_PROVIDER = "openrouter"
+22| 
+23| 
+24| def _load_reader_config() -> dict[str, Any]:
+25|     """Load reader agent config from ``~/.nanobot/agents… (7,269字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 1| """HistoryContext — single source of truth for conversation history.
+2| 
+3| Owns the message list and all related operations:
+4|   - add_message     : append + enforce message-count & char-budget limits
+5|   - maybe_compress  : AI summarize (or drop) the middle region on overflow
+6|   - clear / format  : utility helpers
+7| 
+8| Engine and Broadcast delegate to this class instead of maintaining
+9| ``self._history`` directly.  Persistence is still delegated to
+10| ``GroupChatState.save_message()``.
+11| """
+12| 
+13| from __future__ import annotations
+14| 
+15| import asyncio
+16| from typing import TYPE_CHECKING, Any
+17| 
+18| from loguru import logger
+19| 
+20| if TYPE_CHECKING:
+21|     from nanobot.groupchat.history.persistence import GroupChatState
+22| 
+23| 
+24| class HistoryContext:
+25|    … (10,387字)
+• exec(grep -rn "summarize\|summarizer\|summarize_enabled\|summarize_tool_output" /r...) → /root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:80:def _summarize_tool_result(tool_name: str, tool_args: str, tool_content: str) -> str:
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py:202:        summary = _summarize_tool_result(tool_name, tool_args, content)
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py:4:so that shell.py, summarizer.py, tool_loop.py, context_pruning.py,
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py:41:        "summar… (12,175字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 1| """Context pruning for tool results.
+2| 
+3| Prunes old tool-result messages to keep the prompt within token budgets.
+4| When token limits are exceeded, replaces old voluminous tool outputs with
+5| a concise 1-line summary (e.g. `[exec] ran 'npm test' -> exit 0, 47 lines`).
+6| 
+7| Only tool-result messages *before* the last ``keep_recent`` assistant turns
+8| are eligible for pruning. User and assistant messages are never modified.
+9| """
+10| 
+11| from __future__ import annotations
+12| 
+13| im… (11,864字)
+  (还有 14 个工具调用，已省略)
+---
+[用户]: ✗ Harper error: name 'self' is not defined这是什么报错
+---

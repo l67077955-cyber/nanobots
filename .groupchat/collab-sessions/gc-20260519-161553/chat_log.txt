@@ -1,0 +1,266 @@
+[用户]: 帮我准备一下别的问答，比如项目拷打
+---
+[Harper]: 
+
+[工具调用记录]
+• memory_palace(CMHK interview resume projects experience details) → 🔍 5 result(s) for 'CMHK interview resume projects experience details':
+
+[1] wing_user/cmhk-interview-prep (sim=0.189)
+  Created English version of CMHK interview prep at /root/interview_prep_cmhk_en.md. Covers company profile, strategic direction (5G-A, AICDE), Six Dares→Six Senses culture, high-frequency Q&A with sample English answers, STAR framework, day-of checklist.
+
+[2] wing_user/cmhk-interview-2026 (sim=-0.044)
+  CMHK 2026 Graduate Trainee Programme 面试信息：
+- 二面时间：2026年5月19日 16:30
+- 地点：葵涌葵昌… (1,937字)
+• memory_palace(resume parsing浙江移动之江实验室项目 details CV) → 🔍 5 result(s) for 'resume parsing浙江移动之江实验室项目 details CV':
+
+[1] wing_user/cmhk-interview-2026 (sim=-0.044)
+  CMHK Graduate Trainee Programme 2026 面试信息：
+- 二面时间：2026年5月19日 16:30
+- 地点：葵涌葵昌路51號九龍貿易中心1座20樓（葵興站E出口）
+- Dress Code: Business Attire
+- 提前15分钟到达
+- 面试语言：英文为主，可能穿插粤语/普通话
+- 形式：Panel Interview（HR+业务主管），30-45分钟
+- HR联系邮箱：hrdept@hk.chinamobile.com
+- 初面(Assessment Day)为中文群面，二面升级为英文individual/panel
+
+[2] wing_user/cmhk-interview-prep (sim=-0.158)
+  CMHK GT压力面试模拟（2026-05-19）：3轮压力面问答已演练。Q1: 实习成就→用STAR+数据量… (1,592字)
+• read_file(/root/.nanobot/media/telegram/BQACAgEAAxkBAAEC.pdf) → Error: Cannot read binary file /root/.nanobot/media/telegram/BQACAgEAAxkBAAEC.pdf (MIME: application/pdf). Only UTF-8 text and images are supported.
+
+[Analyze the error above and try a different approach.] (205字)
+• memory_palace() → ## L2 — ON-DEMAND (5 drawers)
+  [cmhk-interview-prep] ## CMHK Graduate Trainee 2nd Round Interview — 准备指南 (2026-05-17)  ### 面试信息 - 日期: 2026-05-19 (Tue) 16:30 - 地点: 20/F, Tower 1, Kowloon Commerce Centre, No.51 Kwai Cheong Road, Kwai Chung (葵兴站E出口) - Dress Code: Business Attire - 提前15分钟到达 (16:15)  ### 行程 - 2026-05-18 (Mon): 高铁前往香港 - 高铁西九龙站 → 柯士甸站/九龙站...  (user email + web research 2026-05-17)
+  [cmhk-interview-prep] CMHK 2026 Graduate Trainee Programme 面试信息： - 二面时间：2026-05-19 16:30 - 地址：20/F, Tow… (1,645字)
+---
+[Harper]: Kirk，收到。我出CMHK业务追问部分。
+
+## 项目拷打 — CMHK业务追问（English）
+
+### P1: 之江实验室 RAG财报问答 → CMHK追问
+
+**Q (English):** *"We have 800万+ customer service call logs, stored as Cantonese + English mixed audio transcripts. How would you build a RAG system for CS agents that doesn't hallucinate pricing plans?"*
+
+**你的回答要点：**
+
+| 你的经验 | CMHK场景映射 |
+|---------|-------------|
+| 财报PDF结构化 → 半结构化文档 | CS transcript比财报更noisy：中英混杂+口语缩写+打码号 |
+| HNSW向量库 → 高精度召回 | Pricing不能错→Hybrid retrieval（dense+BM25）锁定条款原文 |
+| Top-20 reranking | 加一层**grounding check**：答案必须引用具体条款ID，无引用不输出 |
+
+### P2: KDD 2026 Neural-collapse Prompt Tuning → CMHK追问
+
+**Q:** *"You published on cross-modal alignment. We have 3,000+ cell towers with RF signal strength, temperature, power consumption data — plus customer complaint text. Can you align these two modalities to predict tower failures before they happen?"*
+
+**你的回答要点：**
+
+| 论文技术 | CMHK场景应用 |
+|---------|-------------|
+| Cross-modal alignment | RF时序数据 ↔ 投诉文本（"葵涌站E出口网速慢"→ tower ID mapping） |
+| Neural-collapse理论 → tighter class cluster | 每种故障类型（过载/过热/信号漂移）的embedding更compact，few-shot检测新故障 |
+| Prompt tuning优化 | 为每个tower learn一个lightweight prompt，而不是fine-tune整个模型→Edge可部署 |
+
+### P3: 浙江移动 反欺诈决策树 → CMHK追问
+
+**Q:** *"Our competitor HKT is using Graph Neural Networks for fraud detection. You built a decision tree 3 years ago. Why should we believe you can handle 2026-level fraud?"*
+
+**你的回答要点：**
+
+**承认+翻转：**
+| 承认 | 翻转 |
+|-----|------|
+| "You're right — decision tree is not state-of-art" | "I built that pipeline from scratch on TB-scale subscriber data **3 years into my undergrad**. I wasn't choosing between tree vs GNN — I was proving I can take a business problem, figure out the data schema nobody wrote down, pick the right tool for the constraints（当时存的Spark 2.x只能跑tree）, and deliver 30% false positive reduction in production." |
+| "If the constraint was accuracy at the cost of explainability, I'd pick GNN today" | "But in telecom fraud — when you flag a customer wrongly and they call to complain — the CS agent needs to say **why**. A GNN is a black box. An interpretable model + explanation layer is often more valuable. I know how to choose based on business context, not just benchmarks." |
+
+---
+
+**总结：面试官问题不论多技术，最后都落在business impact。每次回答完技术细节，加一句：**
+
+> *"And here's how this would apply to CMHK's specific scenario..."*
+
+（还有14分钟，深呼吸。上场了。）
+---
+[用户]: cmhk是算国企还是港企
+---
+[Kirk]: 
+
+[工具调用记录]
+• memory_palace() → ## L2 — ON-DEMAND (1 drawers)
+  [cmhk-resume] 用户简历关键信息（陆嘉翔）： - HKU计算机硕士（2024.09-2025.11），ML/CV方向，IELTS 7.0 - 浙大软件工程本科（2020.09-2024.06），GPA 3.5/4.0 - 之江实验室2个月（2023.09-11）：RAG财报问答，SMP 2023 Top 20/2000+，专利CN117235233B（被引9次） - 浙江移动3个月（2021.03-06）：Hive/Spark TB级电信数据，反欺诈决策树模型 - KDD 2026在审：Neural-collapse-anchored Prompt Tuning（类别不平衡+跨模态对齐） - 阿里巴巴W... (346字)
+• memory_palace() → ## L2 — ON-DEMAND (5 drawers)
+  [cmhk-interview-prep] ## CMHK Graduate Trainee 2nd Round Interview — 准备指南 (2026-05-17)  ### 面试信息 - 日期: 2026-05-19 (Tue) 16:30 - 地点: 20/F, Tower 1, Kowloon Commerce Centre, No.51 Kwai Cheong Road, Kwai Chung (葵兴站E出口) - Dress Code: Business Attire - 提前15分钟到达 (16:15)  ### 行程 - 2026-05-18 (Mon): 高铁前往香港 - 高铁西九龙站 → 柯士甸站/九龙站...  (user email + web research 2026-05-17)
+  [cmhk-interview-prep] CMHK 2026 Graduate Trainee Programme 面试信息： - 二面时间：2026-05-19 16:30 - 地址：20/F, Tow… (1,645字)
+• memory_palace() → ## L2 — ON-DEMAND (1 drawers)
+  [cmhk-resume] 用户简历关键信息（陆嘉翔）： - HKU计算机硕士（2024.09-2025.11），ML/CV方向，IELTS 7.0 - 浙大软件工程本科（2020.09-2024.06），GPA 3.5/4.0 - 之江实验室2个月（2023.09-11）：RAG财报问答，SMP 2023 Top 20/2000+，专利CN117235233B（被引9次） - 浙江移动3个月（2021.03-06）：Hive/Spark TB级电信数据，反欺诈决策树模型 - KDD 2026在审：Neural-collapse-anchored Prompt Tuning（类别不平衡+跨模态对齐） - 阿里巴巴W... (346字)
+• exec(pdftotext /root/.nanobot/media/telegram/BQACAgEAAxkBAAEC.pdf - 2>/dev/null) → 求职意向城市：北京 / 杭州 / 香港 / 上海 / 深圳
+I +86 13588030144
+# l67077955@gmail.com
+求 职 意 向 ： 大 模 型 算 法 工 程 师 / AI研
+研发 工 程 师 / 算 法 工 程 师
+
+陆嘉翔
+教育背景
+2024.09 – 2025.11 硕士
+○
+
+2020.09 – 2024.06 本科
+○
+○
+
+计算机科学, 香港大学, 香港
+
+研究方向：机器学习与计算机视觉
+
+|
+
+雅 思 ： 7.0 分
+
+软件工程, 浙江大学, 杭州
+
+学业成绩：GPA 3.5/4.0
+荣誉奖项：2022 浙江省大学生物理学科竞赛 三 等 奖 、2022 浙江省大学生数学竞赛 三 等奖
+
+实习经历
+2023.09 – 2023.11 公司：之江实验室, 职位：研究助理
+部 门 ： 金融科技研究中心
+内 容 ： 主导财报 PDF 结构化文档解析，负责 RAG 检索增强模块的向量库构建与语义召回优化。
+成 果 ： 研究成果形成发明专利 1 项，团队获 SMP 2023 挑战赛决赛 Top 20。
+
+2021.03 – 2021.06 公司：浙江移动,… (2,480字)
+• chatroom_send() → (50字)
+• wait() → (2,356字)
+---
+[Harper]: **CMHK = 国企（央企）在港子公司**
+
+- **母公司**：中国移动（港交所941.HK）— 国务院国资委100%控股，正儿八经央企
+- **CMHK**：中国移动全资子公司，注册在香港，受香港法律管辖
+- **所以**：根子是国企，但运营在香港本地化程度很高
+
+**面试官问这个的潜台词**：想看你知不知道CMHK的特殊定位——既有国企的资源（母公司万亿级），又有港企的灵活性（本地竞争激烈，不能靠行政命令吃饭）。
+
+**回答建议：**
+> *"CMHK is a wholly-owned subsidiary of China Mobile — a state-owned enterprise — but it operates as a Hong Kong business. It has the resources of a央企 but competes like a local player against HKT and SmarTone. That dual identity is actually its biggest advantage for GBA expansion."*
+---
+[Kirk]: **两者都是，取决于你从哪个维度看：**
+
+| 维度 | 结论 |
+|------|------|
+| **注册地** | 港企 — 在香港注册成立，受香港公司法管辖 |
+| **股权** | 国企 — 中国移动（央企，港交所941）100%全资持有 |
+| **实际属性** | **央企境外子公司** — 香港运营，但最终控制人是国务院国资委 |
+
+面试中如果被问到，标准说法：
+
+> *"CMHK is a Hong Kong-incorporated company, but it's a wholly-owned subsidiary of China Mobile, which is a central SOE under SASAC. So it operates under Hong Kong's commercial framework while benefiting from China Mobile's national infrastructure."*
+
+别纠结这个分类，不影响面试。上场。
+---
+[Harper]: （静默。已准备完毕。）
+---
+[用户]: 我的岗位我忘记投了哪个
+---
+[Kirk]: 根据记忆，CMHK有两个管培项目：
+
+| 项目 | 要求 | 你的匹配度 |
+|------|------|-----------|
+| **Graduate Trainee Programme** | 任何学科本科+，轮岗Marketing/Finance/HR/Legal | ✅ 符合（浙大本科+HKU硕士） |
+| **TechNova Trainee Programme** | PhD/MPhil应届，方向Big Data/AI/Cybersecurity/IT/Cloud/5G | ❌ 要求PhD/MPhil，你是MSc |
+
+**你投的几乎肯定是 Graduate Trainee Programme。** TechNova要求PhD/MPhil，你的HKU是MSc（授课型硕士），不符合硬性门槛。
+
+邮件里也没提具体项目名，只说"2nd round interview"，说明初面Assessment Day时已经分流了。
+
+**进场前如果不确定，直接问前台或HR："Could you confirm which programme this interview is for?"** 不丢人，比答错好。
+
+[工具调用记录]
+• memory_palace(CMHK岗位 投递 position graduate trainee programme) → 🔍 5 result(s) for 'CMHK岗位 投递 position graduate trainee programme':
+
+[1] wing_user/cmhk-interview-prep (sim=0.26)
+  CMHK 2026 Graduate Trainee Programme 面试信息：
+- 二面时间：2026-05-19 16:30
+- 地址：20/F, Tower 1, Kowloon Commerce Centre, No.51 Kwai Cheong Road, Kwai Chung (葵兴站E出口)
+- Dress Code: Business Attire
+- 提前15分钟到达
+- 已通过Assessment Day，二面大概率Panel Interview（HR+业务主管），30-45分钟
+- CMHK：中国移动全资子公司，香港最大移动运营商，800万+用户，5G领先
+- 天气：25°C左右，雷阵雨，75%降水概率
+
+[2] wing_user/cmhk-interview-2026 (sim=0.254)
+  CMHK 2026 Graduat… (2,076字)
+---
+[Harper]: 
+
+[工具调用记录]
+• memory_palace(CMHK 岗位 track stream 申请职位) → 🔍 5 result(s) for 'CMHK 岗位 track stream 申请职位':
+
+[1] wing_user/the-boys-s5 (sim=-0.075)
+  黑袍纠察队(The Boys) S5预告片信息：
+- 官方正式预告片 YouTube: https://www.youtube.com/watch?v=UPHz1oUU_J8
+- 发布时间: 约2026年3月
+- S5是最终季
+- Teaser版: 2025年12月发布
+
+[2] wing_user/xbox-cloud-gaming-touch (sim=-0.14)
+  用户问题：Xbox Game Pass手机云游戏，部分屏幕区域识别不到点划操作。根因：手机系统边缘防误触屏蔽了虚拟按键输入。解决方案：1)关闭手机边缘防误触设置 2)Better xCloud自定义按键布局避开边缘 3)检查贴膜 4)touch-screen-test.com排查硬件 5)确认biubiu延迟稳定。用户使用biubiu加速器。
+
+[3] wing_user/gaming-cloud-fps (sim=-0.144)
+  用户… (1,108字)
+• exec(grep -i "cmhk\|中国移动\|mobile\|track\|stream\|岗位\|GT\|graduate" memory/HISTORY....) → Exit code: 0 (13字)
+• exec(cat /root/.nanobot/data/memory/HISTORY.md 2>/dev/null | grep -i "cmhk\|mobile...) → Exit code: 0 (13字)
+• memory_palace() → ## L2 — ON-DEMAND (2 drawers)
+  [cmhk-interview-2026] CMHK Graduate Trainee Programme 2026 面试信息： - 二面时间：2026年5月19日 16:30 - 地点：葵涌葵昌路51號九龍貿易中心1座20樓（葵興站E出口） - Dress Code: Business Attire - 提前15分钟到达 - 面试语言：英文为主，可能穿插粤语/普通话 - 形式：Panel Interview（HR+业务主管），30-45分钟 - HR联系邮箱：hrdept@hk.chinamobile.com - 初面(Assessment Day)为中文群面，二面升级为英文individual/panel
+  [cmhk-interview-2026] CMHK 2026 Graduate Trainee Programme 面试信息： - 二面时间：2026年5月19日 16:30 - 地点：葵涌葵昌路51号九龙贸易中心1座20楼（葵兴站E出口） - 邮件全英文，二面大概率英文为主 - 形式：Panel Interv… (665字)
+• memory_palace() → ## L2 — ON-DEMAND (10 drawers)
+  [cmhk-interview-prep] ## CMHK Graduate Trainee 2nd Round Interview — 准备指南 (2026-05-17)  ### 面试信息 - 日期: 2026-05-19 (Tue) 16:30 - 地点: 20/F, Tower 1, Kowloon Commerce Centre, No.51 Kwai Cheong Road, Kwai Chung (葵兴站E出口) - Dress Code: Business Attire - 提前15分钟到达 (16:15)  ### 行程 - 2026-05-18 (Mon): 高铁前往香港 - 高铁西九龙站 → 柯士甸站/九龙站...  (user email + web research 2026-05-17)
+  [cmhk-interview-prep] CMHK 2026 Graduate Trainee Programme 面试信息： - 二面时间：2026-05-19 16:30 - 地址：20/F, To… (2,850字)
+---
+[Harper]: 根据记忆，CMHK 2026年有两个管培项目：
+
+**你投的 = Graduate Trainee Programme（通用管培）**
+
+理由：
+- **TechNova Trainee** 要求 PhD/MPhil，你是 HKU MSc（授课型硕士），硬性门槛不符
+- 邮件标题只说 "2nd round interview"，没指定项目名 → 初面 Assessment Day 时已分流
+- 你的简历上写的是"大模型算法工程师/AI研发工程师"，这是通用GT的typical placement方向
+
+**如果不放心，进门前问前台一句：**
+> *"Could I just confirm — this interview is for the Graduate Trainee Programme, right?"*
+
+不丢人，比进去答错方向强。
+---
+[Kirk]: Harper和我结论一致：**Graduate Trainee Programme**。不重复了。
+
+还有15分钟。别再查新东西了，进场。
+---
+[Harper]: （静默。已准备完毕。）
+---
+[Kirk]: 进场。15分钟后见。
+
+[工具调用记录]
+• end_discussion() → ✅ 讨论已结束（原因: 面试16:30，现在16:15。所有准备工作已完成，用户已在现场。不再发送消息打扰。），即将进入总结阶段 (64字)
+• memory_palace() → ✅ Stored in wing_user/cmhk-interview-2026 (hidden)
+  Drawer ID: drawer_wing_user_cmhk-interview-2026_586067d07293524647b8264b (125字)
+---
+[Kirk]: ## 结论
+
+你投的是 **Graduate Trainee Programme（通用管培）**，不是TechNova。TechNova硬性要求PhD/MPhil，你的HKU MSc不符合。
+
+## 关键确认
+
+| 项目 | 要求 | 你的情况 |
+|------|------|---------|
+| Graduate Trainee | 本科+，任何学科 | ✅ 浙大本科+HKU硕士 |
+| TechNova Trainee | PhD/MPhil应届 | ❌ MSc不符 |
+
+进场前不确定就问前台一句：*"Could I confirm — this is for the Graduate Trainee Programme?"*
+
+## 备注
+
+- 还有15分钟，深呼吸，过一遍自我介绍
+- 10轮压力面模拟+精选速查表都已准备好，不用再翻
+- 上场
+---
+[Kirk]: 进场。15分钟后见。
+---

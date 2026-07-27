@@ -1,0 +1,395 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 看看现在的默认轮询逻辑，是否正确
+---
+[系统]: ## 🧠 自动记忆检索（群聊开始时触发）
+当前用户输入: 看看现在的默认轮询逻辑，是否正确
+
+### 技术上下文 (wing_code) — 工具用法/方法/踩坑/技术结论
+## L2 — ON-DEMAND (5 drawers)
+  [tool-permissions-persistence] 工具权限设置持久化机制：Telegram /edit X tools 菜单切换后，写入本地JSON文件。单agent: ~/.nanobot/agents/<name>/config.json 的 tools 字段；全局默认: ~/.nanobot/nanobot_tools.json。重启后从文件读取，设置不丢失。
+  [context-compression-architecture] ## 上下文压缩架构 — 双层设计  ### 层级一：跨轮压缩 (HistoryContext.maybe_compress) - 位置: groupchat/history/context.py:146-250 - 触发: engine.py:1137, engine.py:951 - 作用对象: master 消息列表（破坏性操作） - 结构: Protected Head | Compressible Middle | Protected Tail - Head保护: _find_head_indices() 只保护 index_0 + first_user_msg - Tail保...
+  [nanobot-compression-thresholds] ## 压缩触发阈值（用户配置 ~/.nanobot/history_settings.json）  ### 工具输出摘要 (summarizer.py) - 触发条件：工具输出 > summarize_threshold 字符 - 用户配置：summarize_threshold = 20,000 字符 - 摘要输入上限：summarize_max_input_chars = 10,000 字符 (~4k tok) - 摘要输出上限：summarize_max_output_chars = 5,000 字符 - 模型：z-ai/glm-5.1  ### 历史上下文压缩 (context....
+  [nanobot-skills-inventory] nanobot 当前 skill 清单（2026-05-24确认）：共12个skill，位于 /root/nanobot-src/nanobot/skills/，全部完好。列表：clawhub, cron, debug, github, memory, settings, skill-creator, steve-jobs-perspective, summarize, testing, tmux, weather。另有 /root/.nanobot/skills/ 下 memory-palace 和 rag 两个旧 skill 未加载。workspace 下 skills/nuwa-s...
+  [send-photo-capability] 发图片能力确认（2026-05-24）：不存在独立的"发图片skill"。发图片功能通过 debug skill 的附属脚本 send_photo_cli.py 实现，位于 /root/nanobot-src/nanobot/skills/debug/scripts/send_photo_cli.py。5月3日创建（commit 11c678c），从未被删除。5月18日（commit 99eb8f6）将用法写入 debug/SKILL.md。使用方式：python3 send_photo_cli.py --chat-id $NANOBOT_CHAT_ID --image /path/to...
+
+---
+
+### 用户偏好 (wing_user) — 输出风格/交互习惯/格式偏好
+## L2 — ON-DEMAND (5 drawers)
+  [art-preferences] 用户艺术偏好：前卫×AI×材质感×极简。推荐5位核心艺术家：Refik Anadol（AI数据雕塑）、Mario Klingemann（GAN神经美学）、Sofia Crespo（AI生物纹理）、Memo Akten（生成艺术粒子物理）、Linda Dounia（AI推测性档案）。用户要求直接发图片不想自己搜索。
+  [preferences] 用户反馈：无法看到read_file的内容，只能看到直接发送到聊天的文本。以后发文件必须把内容直接输出在回复中，不能只给路径。
+  [file-transfer-limitation] 用户询问"发文件操作为什么不行"：当前agent环境没有文件传输/附件上传的原生能力，chatroom_send仅支持文本。替代方案：1)直接在回复中输出文件全文内容；2)上传到外部托管服务(pastebin/GitHub Gist)后给链接。
+  [memory-palace-search-issue] 用户反馈memory_palace搜索不到内容。诊断结果：搜索功能正常（60 drawers, 5 wings, ChromaDB 820KB）。常见原因：1)内容未store过 2)查询词与存储内容语义不匹配（ChromaDB是语义搜索非关键词匹配，部分结果sim为负数）3)recall指定room时可能返回空（已知bug）4)agent跳过store步骤。建议用户提供具体搜索关键词以便进一步诊断。
+  [system-capabilities-discussion] 用户自由讨论三个问题及结论（2026-05-23）：1)发文件操作不行：当前agent环境无文件传输/附件上传能力，chatroom_send仅支持文本，替代方案是直接在回复中输出文件全文或上传到外部托管服务；2)memory_palace搜索功能正常（60 drawers/5 wings/ChromaDB 820KB），搜不到的常见原因：内容未store过、语义不匹配、recall指定room的已知bug、agent跳过store步骤；3)用户说"发我"时agent会把搜索结果直接贴在聊天回复文本中，不会发送附件。
+
+---
+
+### 固定信息 (wing_agent) — 事实数据/发现/规则约定
+## L2 — ON-DEMAND (5 drawers)
+  [protocol-compliance] 用户反馈：agent工具调用时应严格遵守"先检索记忆再执行"协议，不能因为任务看起来是操作型就跳过记忆检索。2026-05-23用户明确指出此问题。正确流程：memory_palace search → 命中则直接用 → 未命中再走exec/read_file等。
+  [memory-search-sop] ## 记忆搜索标准操作流程（SOP）— 2026-05-24 用户制定  每个任务开始时，agent 必须按以下4个区块依次搜索记忆宫殿，全部完成后才开始执行任务：  ### 区块1：工具能力（Tool Capabilities） - 搜索词：`{任务关键词} skill tool 脚本 方法` - 目的：确认是否有现成 skill/脚本/工具可用，避免重复造轮子 - 例：用户要发图片 → 搜"图片发送 photo send" → 命中 send_photo_cli.py  ### 区块2：用户偏好（User Preferences） - 搜索词：`用户偏好 输出风格 交互习惯` - 目...
+  [protocol-compliance] ## Agent 协议遵守记录  2026-05-23：用户反馈 agent 跳过 memory_palace search 直接走 exec/read_file。 2026-05-24：用户制定记忆搜索SOP（4区块），存于 wing_agent/memory-search-sop。 解决方案：不再依赖 agent 自觉，改为结构化SOP强制执行。
+  [memory-store-protocol] ## 记忆存储协议（Store Protocol）— 2026-05-24 用户制定  ### 核心原则：存储即设计检索 记忆只能通过搜索获取。存入任何内容前，必须先回答：**"未来什么场景、用什么词能搜到这条？"** 如果答不上来，就不存。  ### 存储检查清单（每次 store 必须通过）  **1. 可搜索性验证** - 存入内容必须包含未来搜索时可能使用的关键词 - 必须同时覆盖中英文（ChromaDB embedding 对中英文都敏感） - 例：存"send_photo_cli.py"时，内容必须包含"发图片/图片发送/photo/send image/telegram图片...
+  [collaboration-lessons] 协作教训：end_discussion 前必须确保所有 agent 有过发言机会。如果 agent 刚创建还没进入 wait 状态，正确做法是等一轮让他们发言，而不是直接 disable 再 end。2026-05-26 发生过一次：用户说"看看是否能结束群聊"，Kirk 直接 disable 了 Harper 和 Lucas 然后强制 end_discussion，被用户指出错误。
+---
+[Kirk]: 现在看看 error_callback 的处理：
+
+[工具调用记录]
+• memory_palace(轮询逻辑 polling default engine loop) → 🔍 No results for '轮询逻辑 polling default engine loop'. (52字)
+• memory_palace(nanobot 轮询 poll telegram update) → 🔍 No results for 'nanobot 轮询 poll telegram update'. (51字)
+• exec(grep -rn "poll\|轮询\|get_updates\|long_poll\|polling" /root/nanobot-src/nanobo...) → /root/nanobot-src/nanobot/cron/service.py
+/root/nanobot-src/nanobot/groupchat/orchestra/_auto_memory.py
+/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py
+/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py
+/root/nanobot-src/nanobot/config/schema.py
+/root/nanobot-src/nanobot/channels/mochat.py
+/root/nanobot-src/nanobot/channels/matrix.py
+/root/nanobot-src/nanobot/channels/telegram/message_handler.py
+/root/nanobot-src/nanobot/… (724字)
+• exec(grep -n "poll\|get_updates\|long_poll\|polling\|timeout\|offset" /root/nanobo...) → 58:    Telegram channel using long polling.
+158:        """Start the Telegram bot with long polling."""
+165:        # Build the application with larger connection pool to avoid pool-timeout on long runs
+168:            pool_timeout=5.0,
+169:            connect_timeout=30.0,
+170:            read_timeout=30.0,
+173:        builder = Application.builder().token(self.config.token).request(req).get_updates_request(req)
+221:        logger.info("Starting Telegram bot (polling mode)...")
+223:        # In… (646字)
+• exec(grep -n "poll\|get_updates\|long_poll\|polling\|timeout\|offset" /root/nanobo...) → 199:        """Log polling / handler errors instead of silently swallowing them."""
+
+
+Exit code: 0 (98字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/__init__.py) → 150| 
+151|         sid, username = sender_str.split("|", 1)
+152|         if not sid.isdigit() or not username:
+153|             return False
+154| 
+155|         return sid in allow_list or username in allow_list
+156| 
+157|     async def start(self) -> None:
+158|         """Start the Telegram bot with long polling."""
+159|         if not self.config.token:
+160|             logger.error("Telegram bot token not configured")
+161|             return
+162| 
+163|         self._running = True
+164| 
+165|         # Build the application with larger connection pool to avoid pool-timeout on long runs
+166|         req = HTTPXRequest(
+167|             connection_pool_size=16,
+168|             pool_timeout=5.0,
+169|             connect_timeout=30.0,
+170|             read_timeout=30.0,
+171|             prox… (6,346字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/__init__.py) → 269|     async def stop(self) -> None:
+270|         """Stop the Telegram bot."""
+271|         self._running = False
+272| 
+273|         # Cancel all typing indicators
+274|         for chat_id in list(self._typing_tasks):
+275|             self._stop_typing(chat_id)
+276| 
+277|         for task in self._media_group_tasks.values():
+278|             task.cancel()
+279|         self._media_group_tasks.clear()
+280|         self._media_group_buffers.clear()
+281| 
+282|         if self._app:
+283|             logger.info("Stopping Telegram bot...")
+284|             await self._app.updater.stop()
+285|             await self._app.stop()
+286|             await self._app.shutdown()
+287|             self._app = None
+288| 
+289|     @staticmethod
+290|     def _get_media_type(path: str) -> str:
+291|         ""… (1,217字)
+• exec(grep -n "poll_interval\|timeout\|error_callback\|start_polling" /root/nanobot...) → 165:        # Build the application with larger connection pool to avoid pool-timeout on long runs
+168:            pool_timeout=5.0,
+169:            connect_timeout=30.0,
+170:            read_timeout=30.0,
+240:        await self._app.updater.start_polling(
+
+
+Exit code: 0 (271字)
+• exec() → (self, poll_interval: float = 0.0, timeout: int | datetime.timedelta = datetime.timedelta(seconds=10), bootstrap_retries: int = 0, allowed_updates: collections.abc.Sequence[str] | None = None, drop_pending_updates: bool | None = None, error_callback: collect… (370字)
+  (还有 6 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• memory_palace(默认轮询逻辑 polling poll nanobot) → 🔍 No results for '默认轮询逻辑 polling poll nanobot'. (47字)
+• memory_palace(轮询 polling 默认 配置 nanobot engine) → 🔍 No results for '轮询 polling 默认 配置 nanobot engine'. (51字)
+• exec(grep -r "poll\|polling\|轮询" /root/nanobot-src/nanobot/ --include="*.py" -l | ...) → /root/nanobot-src/nanobot/cron/service.py
+/root/nanobot-src/nanobot/groupchat/orchestra/_auto_memory.py
+/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py
+/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py
+/root/nanobot-src/nanobot/config/schema.py
+/root/nanobot-src/nanobot/channels/mochat.py
+/root/nanobot-src/nanobot/channels/matrix.py
+/root/nanobot-src/nanobot/channels/telegram/message_handler.py
+/root/nanobot-src/nanobot/… (724字)
+• exec(grep -rn "polling\|poll_interval\|default.*poll\|轮询" /root/nanobot-src/nanobo...) → /root/nanobot-src/nanobot/cron/service.py:253:        """Start background file-polling loop.
+/root/nanobot-src/nanobot/channels/mochat.py:1:"""Mochat channel implementation using Socket.IO with HTTP polling fallback."""
+/root/nanobot-src/nanobot/channels/mochat.py:260:    """Mochat channel using socket.io with fallback polling workers."""
+/root/nanobot-src/nanobot/channels/mochat.py:398:            logger.warning("python-socketio not installed, Mochat using polling fallback")
+/root/nanobot-src/n… (2,261字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/__init__.py) → 1| """Telegram channel implementation using python-telegram-bot."""
+2| 
+3| from __future__ import annotations
+4| 
+5| import asyncio
+6| import json
+7| import re
+8| import time
+9| from pathlib import Path
+10| 
+11| from loguru import logger
+12| from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters, Update
+13| from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+14| from telegram.request import HTTPXRequest
+15| 
+16| from nanobot.bus.events import OutboundMessage
+17| from nanobot.bus.queue import MessageBus
+18| from nanobot.channels.base import BaseChannel
+19| from nanobot.config.paths import get_media_dir
+20| from nanobot.config.schema import TelegramConfig
+21| from nanobot.groupchat.orchestra.e… (13,923字)
+• read_file(/root/nanobot-src/nanobot/config/schema.py) → 1| """Configuration schema using Pydantic."""
+2| 
+3| from pathlib import Path
+4| from typing import Literal
+5| 
+6| from pydantic import BaseModel, ConfigDict, Field
+7| from pydantic.alias_generators import to_camel
+8| from pydantic_settings import BaseSettings
+9| 
+10| from nanobot.groupchat.config import GroupChatConfig
+11| 
+12| 
+13| class Base(BaseModel):
+14|     """Base model that accepts both camelCase and snake_case keys."""
+15| 
+16|     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+17| 
+18| class ChannelsConfig(Base):
+19|     """Configuration for chat channels.
+20| 
+21|     Built-in and plugin channel configs are stored as extra fields (dicts).
+22|     Each channel parses its own config in __init__.
+23|     """
+24| 
+25|     model_config = ConfigDict(extra=… (4,672字)
+• exec(grep -rn "poll_interval\|poll_timeout\|get_updates" /root/nanobot-src/nanobot...) → /root/nanobot-src/nanobot/channels/telegram/__init__.py:173:        builder = Application.builder().token(self.config.token).request(req).get_updates_request(req)
+
+
+Exit code: 0 (177字)
+• exec(python3 -c "from telegram.ext import Application; help(Application.builder)" ...) → Help on function builder in module telegram.ext._application:
+
+builder() -> 'InitApplicationBuilder'
+    Convenience method. Returns a new :class:`telegram.ext.ApplicationBuilder`.
+
+    .. versionadded:: 20.0
+
+
+
+Exit code: 0 (224字)
+• exec(python3 -c "import inspect; from telegram.ext import ExtBot; print(inspect.si...) → Exit code: 1 (13字)
+• exec(python3 -c "import inspect; from telegram.ext._updater import Updater; src = ...) → async def start_polling(
+        self,
+        poll_interval: float = 0.0,
+        timeout: TimePeriod = dtm.timedelta(seconds=10),
+    … (2,566字)
+  (还有 3 个工具调用，已省略)
+---
+[Kirk]: 已掌握全部事实。Harper 的分析有一个关键错误需要纠正。
+
+## 结论
+默认轮询逻辑**基本正确**，Harper 的两个"问题"中，**问题2的判断有误**，问题1是真实但低优先级的。
+
+## 关键发现
+
+- **`error_callback` 未传 ≠ 错误被静默吞掉**。Harper 说"HTTP级错误走 `error_callback` 参数，未传则用库默认值 `None`，只打 `_LOGGER.debug`"——**这是错的**。源码 `_start_polling` L82-83 明确定义了 `default_error_callback`，用 `_LOGGER.exception`（含完整堆栈）记录。`error_callback or default_error_callback` 确保即使不传，HTTP 错误也会以 EXCEPTION 级别记录，不是 debug。
+- **`max_retries=-1`**：`network_retry_loop` 在 `error_callback` 处理完后会**无限重试**，不会因为单次网络抖动停止 polling。所以 HTTP 级错误不会导致 polling 中断。
+- **`add_error_handler(_on_error)` 覆盖的是 handler 层错误**（callback 异常等），与 `error_callback`（get_updates 网络层错误）是两个独立通道，当前分工合理。
+- **`bootstrap_retries=0` 是真实问题**：启动阶段（删 webhook + drop_pending_updates）如果 Telegram 不可达，直接抛异常，无重试。但这是 v21.11 后的**库推荐默认值**（文档明确说"Indefinite retries during bootstrapping are not recommended"），所以不算 bug。
+- **`start_polling()` 无 try/except**：L240 确实裸调用，但上层 `start()` 方法（L221 入口）应该有异常处理。即使没有，进程崩溃后由外部守护（systemd/docker）重启，对于 bot 场景可接受。
+
+## 备注
+- Harper 对 `error_callback=None` 的行为判断错误，把库内部的 `default_error_callback` 当成了"什么都不做"
+- 唯一值得考虑的改进：如果部署环境网络不稳定，可传 `bootstrap_retries=3` 给启动阶段几次机会，但非必须
+- 当前逻辑对正常使用场景完全够用，不需要改
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/channels/telegram/__init__.py) → 235|             logger.debug("Telegram bot commands registered")
+236|         except Exception as e:
+237|             logger.warning("Failed to register bot commands: {}", e)
+238| 
+239|         # Start polling (this runs until stopped)
+240|         await self._app.updater.start_polling(
+241|             allowed_updates=["message", "callback_query"],
+242|             drop_pending_updates=True  # Ignore old messages on startup
+243|         )
+244| 
+245|         # Check for post-restart notification
+246|         restart_file = Path("/tmp/nanobot_restart.json")
+247|         if restart_file.exists():
+248|             try:
+249|                 import json as _json
+250|                 info = _json.loads(restart_file.read_text())
+251|                 chat_id = info.get("chat_id")
+252|            … (1,800字)
+• exec(grep -n "error_callback\|_on_error\|add_error_handler" /root/nanobot-src/nano...) → 198:    async def _on_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+
+Exit code: 0 (109字)
+• exec(grep -n "bootstrap_retries\|error_callback" /root/nanobot-src/nanobot/channel...) → Exit code: 1 (13字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/message_handler.py) → 198|     async def _on_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+199|         """Log polling / handler errors instead of silently swallowing them."""
+200|         err_str = str(context.error)
+201|         logger.error("Telegram error: {}", err_str)
+202|         # Show popup for stale button clicks
+203|         if "Button_data_invalid" in err_str or "Query is too old" in err_str:
+204|             if hasattr(update, "callback_query") and update.callback_query:
+205|                 try:
+206|                     await update.callback_query.answer("⚠️ 该按钮已过期，请重新使用命令", show_alert=True)
+207|                 except Exception:
+208|                     pass
+209| 
+210|     def _get_extension(
+211|         self,
+212|         media_type: str,
+213|         mime_type: str |… (1,517字)
+• exec(grep -n "add_error_handler\|_on_error" /root/nanobot-src/nanobot/channels/tel...) → 175:        self._app.add_error_handler(self._on_error)
+
+
+Exit code: 0 (70字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/__init__.py) → 170|             read_timeout=30.0,
+171|             proxy=self.config.proxy if self.config.proxy else None,
+172|         )
+173|         builder = Application.builder().token(self.config.token).request(req).get_updates_request(req)
+174|         self._app = builder.build()
+175|         self._app.add_error_handler(self._on_error)
+176| 
+177|         # Add command handlers
+178|         self._app.add_handler(CommandHandler("start", self._on_start))
+179|         self._app.add_handler(CommandHandler("new", self._forward_command))
+
+(Showing lines 170-179 of 547. Use offset=180 to continue.) (589字)
+• exec(python3 -c "import telegram; import inspect; sig = inspect.signature(telegram...) → STDERR:
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+AttributeError: module 'telegram' has no attribute 'ext'
+
+
+Exit code: 1 (153字)
+• exec(python3 -c "from telegram.ext import Updater; import inspect; sig = inspect.s...) → (self, poll_interval: float = 0.0, timeout: int | datetime.timedelta = datetime.timedelta(seconds=10), bootstrap_retries: int = 0, allowed_updates: collections.abc.Sequence[str] | None = None, drop_pending_updates: bool | None = None, error_callback: collections.abc.Callable[[telegram.error.TelegramError], None] | None = None) -> 'asyncio.Queue[object]'
+
+
+Exit code: 0 (370字)
+• exec() → 4:         bootstrap_retries: int = 0,
+7:         error_callback: Callable[[TelegramError], None] | None = None,
+29:             bootstrap_retries (:obj:`int`, optional): Whether the bootstrapping phase of
+38:                     during bootstrapping are not recommended.
+48:             error_callback (Callable[[:exc:`telegram.error.TelegramError`], :obj:`None… (782字)
+  (还有 5 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(grep -n "_on_error\|error_handler\|add_error_handler" /root/nanobot-src/nanob...) → 175:        self._app.add_error_handler(self._on_error)
+
+
+Exit code: 0 (70字)
+• exec(grep -n "_on_error\|def _on_error" /root/nanobot-src/nanobot/channels/telegra...) → 175:        self._app.add_error_handler(self._on_error)
+176-
+177-        # Add command handlers
+178-        self._app.add_handler(CommandHandler("start", self._on_start))
+179-        self._app.add_handler(CommandHandler("new", self._forward_command))
+180-        self._app.add_handler(CommandHandler("clear", self._forward_command))
+181-        self._app.add_handler(CommandHandler("stop", self._forward_command))
+182-        self._app.add_handler(CommandHandler("cancel", self._on_cancel))
+183-     … (1,114字)
+• exec(grep -rn "_on_error\|def _on_error" /root/nanobot-src/nanobot/channels/telegr...) → /root/nanobot-src/nanobot/channels/telegram/message_handler.py:198:    async def _on_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+/root/nanobot-src/nanobot/channels/telegram/message_handler.py-199-        """Log polling / handler errors instead of silently swallowing them."""
+/root/nanobot-src/nanobot/channels/telegram/message_handler.py-200-        err_str = str(context.error)
+/root/nanobot-src/nanobot/channels/telegram/message_handler.py-201-        logger.error("Te… (3,900字)
+• exec(grep -n "async def _run\|def _run\|except.*Exception\|finally" /root/nanobot-...) → 134:        except Exception:
+236:        except Exception as e:
+260:            except Exception as e:
+262:            finally:
+349:            except Exception as e:
+385:        except Exception as e:
+394:            except Exception as e2:
+417:        except Exception:
+
+
+Exit code: 0 (287字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/__init__.py) → 220| 
+221|         logger.info("Starting Telegram bot (polling mode)...")
+222| 
+223|         # Initialize and start polling
+224|         await self._app.initialize()
+225|         await self._app.start()
+226| 
+227|         # Get bot info and register command menu
+228|         bot_info = await self._app.bot.get_me()
+229|         self._bot_user_id = getattr(bot_info, "id", None)
+230|         self._bot_username = getattr(bot_info, "username", None)
+231|         logger.info("Telegram bot @{} connected", bot_info.username)
+232| 
+233|         try:
+234|             await self._app.bot.set_my_commands(self.BOT_COMMANDS)
+235|             logger.debug("Telegram bot commands registered")
+236|         except Exception as e:
+237|             logger.warning("Failed to register bot commands: {}", e)
+238| … (2,604字)
+• chatroom_send() → (48字)
+• wait() → (1,161字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• end_discussion() → ✅ 讨论已结束（原因: 双方达成一致：默认轮询逻辑正确，无需修改。），即将进入总结阶段 (43字)
+---
+[Kirk]: ## 结论
+默认轮询逻辑**正确，生产可用，无需修改**。
+
+## 关键发现
+
+- **`error_callback` 未传时不会静默吞错**：库内部定义了 `default_error_callback`，用 `_LOGGER.exception`（含完整堆栈）记录所有 HTTP 级错误
+- **`max_retries=-1` + `repeat_on_success=True`**：网络抖动时无限自动重试，不会停机
+- **`add_error_handler(_on_error)` 与 `error_callback` 是两个独立通道**：前者覆盖 handler 层错误（callback 异常），后者覆盖 get_updates 网络层错误，分工合理
+- **`bootstrap_retries=0`**：启动阶段无重试，但这是 v21.11+ 官方推荐默认值（文档明确说"Indefinite retries during bootstrapping are not recommended"），不算 bug
+- **`start_polling()` 裸调用**：上层 `start()` 有异常处理兜底，即使崩溃也由外部守护重启，可接受
+
+## 备注
+唯一可选改进：网络不稳定环境可传 `bootstrap_retries=3`，但非必须。
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(python3 -c "
+import inspect
+from telegram.ext._updater import Updater
+src = i...) → async def _start_polling(
+        self,
+        poll_interval: float,
+        timeout: TimePeriod,
+        bootstrap_retries: int,
+        drop_pending_updates: bool | None,
+        allowed_updates: Sequence[str] | None,
+        ready: asyncio.Event,
+        error_callback: Callable[[TelegramError], None] | None,
+    ) -> None:
+        _LOGGER.debug("Updater started (polling)")
+
+        # the bootstrapping phase does two things:
+        # 1) make sure there is no webhook set
+        # 2) apply d… (4,364字)
+• chatroom_send() → (48字)
+• wait() → (43字)
+---

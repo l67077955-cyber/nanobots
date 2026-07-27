@@ -1,0 +1,58 @@
+[用户]: 另外forget自身操作自身不会计入工具结果，调用不写入上下文
+---
+[Harper]: 收到，这条设计细节很重要——`forget` 自调不写上下文，避免了递归自引用问题。工具完整可用。
+
+等待下一任务。
+---
+[Kirk]: 
+
+[工具调用记录]
+• exec(grep -n "forget\|__FORGET__\|sentinel" /root/nanobot-src/nanobot/tools/forget.py) → 8:  - By keyword:  forget(keywords="curl xxx")   — matches tool name or args
+9:  - By index:    forget(indices=0)             — 0-based index in last tool batch
+10:  - Multi-index: forget(indices=[0, 1])        — delete first 2 calls in last batch
+12:The tool returns a special sentinel ``__FORGET__:…`` that tool_loop.py
+37:        return "forget"
+43:            "By keyword: forget(keywords='curl xxx') matches tool name/args. "
+44:            "By index: forget(indices=0) deletes the 1st tool call… (755字)
+• exec(grep -rn "forget\|__FORGET__" /root/nanobot-src/nanobot/engine.py /root/nanob...) → Exit code: 0 (13字)
+• exec(find /root/nanobot-src/nanobot -name "*.py" | xargs grep -l "__FORGET__" 2>/d...) → /root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py
+/root/nanobot-src/nanobot/tools/forget.py
+
+
+Exit code: 0 (121字)
+• exec(grep -n -B2 -A10 "__FORGET__" /root/nanobot-src/nanobot/groupchat/orchestra/t...) → 696-                        continue
+697-                    tool_result, _, _ = raw
+698:                    if isinstance(tool_result, str) and tool_result.startswith("__FORGET__:"):
+699-                        try:
+700-                            import json as _json
+701:                            info = _json.loads(tool_result[len("__FORGET__:"):])
+702-                            _forget_ids.update(info.get("tool_call_ids", []))
+703-                            _forget_names.extend(info.get("… (1,647字)
+• exec(grep -n -A30 "_forget_self_ids" /root/nanobot-src/nanobot/groupchat/orchestra...) → 710:                    _forget_self_ids: set[str] = set()
+711-                    for (tc, args_str, dedup_key), raw in zip(pending, exec_results):
+712-                        if isinstance(raw, BaseException):
+713-                            continue
+714-                        tool_result, _, _ = raw
+715-                        if isinstance(tool_result, str) and tool_result.startswith("__FORGET__:"):
+716:                            _forget_self_ids.add(tc.id)
+717-
+718:                    _al… (2,349字)
+• memory_palace() → ✅ Stored in wing_code/forget-tool-behavior (hidden)
+  Drawer ID: drawer_wing_code_forget-tool-behavior_f4704c2419578c5138bb8aac (127字)
+• end_discussion() → ✅ 讨论已结束（原因: 用户陈述已通过代码验证确认，记忆已存储。），即将进入总结阶段 (42字)
+---
+[Kirk]: ## 结论
+
+用户说的完全正确：**forget 调用自身不会残留在上下文中**。
+
+## 关键发现
+
+- `tool_loop.py` L710-716 专门收集 forget 自身的 tool_call ID（`_forget_self_ids`）
+- L718 与目标删除 ID 合并：`_all_remove_ids = _forget_ids | _forget_self_ids`
+- L720-745 统一清除：tool result 消息 → tool_calls 条目 → 变空的 assistant 消息
+- 效果：forget 调用完全自洁，零 token 残留
+
+## 备注
+
+已存入记忆宫殿 `wing_code/forget-tool-behavior`，后续可检索复用。
+---

@@ -1,0 +1,139 @@
+[用户]: 但是我也不想频繁裁剪，最好看看算法逻辑
+---
+[Harper]: 用户担心频繁裁剪。让我完整审一遍算法逻辑，然后给出精确的触发条件分析。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 1| """Context pruning for tool results.
+2| 
+3| Prunes old tool-result messages to keep the prompt within token budgets.
+4| When token limits are exceeded, replaces old voluminous tool outputs with
+5| a concise 1-line summary (e.g. `[exec] ran 'npm test' -> exit 0, 47 lines`).
+6| 
+7| Only tool-result messages *before* the last ``keep_recent`` assistant turns
+8| are eligible for pruning. User and assistant messages are never modified.
+9| """
+10| 
+11| from __future__ import annotations
+12| 
+13| import json
+14| import re
+15| from typing import Any
+16| 
+17| CHARS_PER_TOKEN = 4  # conservative estimate
+18| 
+19| # ── Defaults ──────────────────────────────────────────────────────────────
+20| 
+21| DEFAULT_SOFT_RATIO = 0.3     # start pruning when > 30% of window
+22| DEFAULT_KEEP_RECENT = 3      # … (12,030字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 135| def prune_messages(
+136|     messages: list[dict[str, Any]],
+137|     context_window_tokens: int,
+138|     *,
+139|     soft_ratio: float | None = None,
+140|     keep_recent: int | None = None,
+141|     max_chars: int | None = None,
+142| ) -> list[dict[str, Any]]:
+143|     """Prune old tool-result messages to fit within the context window.
+144| 
+145|     Returns a new list (shallow copy) with pruned messages. User/assistant messages
+146|     are never modified. Only tool results before the last ``keep_recent`` assistant
+147|     turns are pruned by substituting large outputs with a single generic summary line.
+148|     """
+149|     try:
+150|         from nanobot.groupchat.history import history_settings as hs
+151|         if soft_ratio is None:
+152|             soft_ratio = hs.pruning_… (2,977字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 231| def _find_cutoff_index(messages: list[dict[str, Any]], keep_recent: int) -> int:
+232|     """Find the message index before which tool results can be pruned.
+233| 
+234|     Walks backwards from the end of the message list, counting assistant
+235|     turns (messages with role='assistant'). Everything before the
+236|     ``keep_recent``-th assistant turn is eligible for pruning.
+237|     """
+238|     assistant_count = 0
+239|     for i in range(len(messages) - 1, -1, -1):
+240|         if messages[i].get("role") == "assistant":
+241|             assistant_count += 1
+242|         if assistant_count >= keep_recent:
+243|             return i
+244|     return 0
+245| 
+246| 
+247| # ── Public API ────────────────────────────────────────────────────────────
+248| 
+249| def prune_messages(
+250|     messages: list[dict[str, Any]],
+251|     context_window_tokens: int,
+252|     *,
+253|     soft_ratio: float | None = None,
+254|     keep_recent: int | None = None,
+255|     max_chars: int | None = None,
+256| ) -> list[dict[str, Any]]:
+257|     """Prune old tool-result messages to fit within the context window.
+258| 
+259|     Returns a new list (shallow copy) with pruned messages. User/assistant messages
+260|     are never modified. Only tool results before the last ``keep_recent`` assistant
+261|     turns are pruned by substituting large outputs with a single generic summary line.
+262|     """
+263|     try:
+264|         from nanobot.groupchat.history import history_settings as hs
+265|         if soft_ratio is None:
+266|             soft_ratio = hs.pruning_… (2,975字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 249| def prune_messages(
+250|     messages: list[dict[str, Any]],
+251|     context_window_tokens: int,
+252|     *,
+253|     soft_ratio: float | None = None,
+254|     keep_recent: int | None = None,
+255|     max_chars: int | None = None,
+256| ) -> list[dict[str, Any]]:
+257|     """Prune old tool-result messages to fit within the context window.
+258| 
+259|     Returns a new list (shallow copy) with pruned messages. User/assistant messages
+260|     are never modified. Only tool results before the last ``keep_recent`` assistant
+261|     turns are pruned by substituting large outputs with a single generic summary line.
+262|     """
+263|     try:
+264|         from nanobot.groupchat.history import history_settings as hs
+265|         if soft_ratio is None:
+266|             soft_ratio = hs.pruning_… (5,722字)
+---
+[用户]: 你们最好能实验一下
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 249|         if isinstance(content, list):
+250|             text_parts = []
+251|             for block in content:
+252|                 if isinstance(block, dict) and block.get("type") == "text":
+253|                     text_parts.append(block.get("text", ""))
+254|             content = " ".join(text_parts)
+255|         if isinstance(content, str) and content.strip():
+256|             truncated = content[:2000] + ("..." if len(content) > 2000 else "")
+257|             lines.append(f"[{role}]: {truncated}")
+258| 
+259|     if not lines:
+260|         messages[sys_msg_count:] = kept_msgs
+261|         return dropped_count
+262| 
+263|     conversation_text = "\n".join(lines)
+264| 
+265|     # ── Structured summary prompt ──
+266|     prompt = (
+267|         f"以下是群聊中已超出上下文窗口的早期对话（共 {dropped_count} … (3,293字)
+• exec() → context_window_tokens: 35000
+soft_ratio: 0.1
+hard_ratio: 0.5
+keep_recent: 2
+soft_max_chars: 3000
+soft_head_chars: 2000
+soft_tail_chars: 3000
+---
+char_window (ctx*4): 140000
+soft_threshold = soft_ratio * char_window = 0.1 * 140000 = 14000 chars
+soft_max_chars = 3000 (single msg max before pruning)
+
+
+Exit code: 0 (312字)
+---

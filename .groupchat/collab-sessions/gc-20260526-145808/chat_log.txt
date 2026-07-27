@@ -1,0 +1,401 @@
+[用户]: ?
+---
+[Lucas]: 用户请求是 "?"，不明确。作为 Lucas（pawn），我需要更多上下文才能行动。
+
+如果你是想问关于项目的问题，请具体说明。如果是测试连接，我知道我在等待任务。
+---
+[Harper]: 代码已经是最新状态了——`display.py` 第366行已经在用 `tool_call_label(sender_rank, agent_ranks, agent_name, is_leader=is_leader)`，传入了 `agent_ranks` 和 `agent_name`。`broadcast_view.py` 第80行也在传 `agent_ranks=self.agent_ranks`。
+
+**Kirk，这个调用点已经更新好了。** `tool_activity_msg()` 的签名已有 `agent_ranks: dict[str, int] | None = None`，并且第363-366行正确地用它生成带具体人名的可见性标注（如 `→ Lucas, Harper, Kirk`）。
+
+唯一调用点 `broadcast_view.py:80` 也已传入 `agent_ranks=self.agent_ranks`。
+
+无需额外改动。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 295|     Returns: '↳ Results for: Trump… (1,234字)'
+296|     """
+297|     ellipsis = "…" if result_len > 80 else ""
+298|     return f"↳ {preview}{ellipsis} ({result_len:,}字)"
+299| 
+300| 
+301| # ── Tool Activity Display (broadcast mode) ───────────────────
+302| 
+303| def tool_activity_msg(
+304|     agent_name: str,
+305|     tool_name: str,
+306|     args: dict,
+307|     leader: str | None = None,
+308|     agent_ranks: dict[str, int] | None = None,
+309| ) -> str:
+310|     """Format a tool call for broadcast display.
+311| 
+312|     Leader:     👑▸ Nanobot · search "酒馆战棋"  → King+
+313|     Non-leader: ▸ Lucas · search "Trump latest news"  → Pawn+
+314|     """
+315|     from nanobot.groupchat.display.visibility import tool_call_label
+316| 
+317|     label = TOOL_LABELS.get(tool_name, tool_name)
+318|… (3,347字)
+• exec(grep -rn "tool_activity_msg" /root/nanobot-src/nanobot/groupchat/ --include='...) → /root/nanobot-src/nanobot/groupchat/display/broadcast_view.py:80:            line = _d.tool_activity_msg(name, tool_name, args, leader=self.leader_name, agent_ranks=self.agent_ranks)
+/root/nanobot-src/nanobot/groupchat/display/display.py:303:def tool_activity_msg(
+
+
+Exit code: 0 (279字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/visibility.py) → 1| """Single source of truth for tool call visibility.
+2| 
+3| All visibility logic lives here. Display layer and message converter
+4| MUST import from this module — no inline rank comparisons elsewhere.
+5| """
+6| 
+7| from __future__ import annotations
+8| 
+9| RANK_ORDER: dict[str, int] = {
+10|     "pawn": 0,
+11|     "knight": 1,
+12|     "bishop": 2,
+13|     "queen": 3,
+14|     "king": 4,
+15| }
+16| 
+17| RANK_NAME: dict[int, str] = {v: k.capitalize() for k, v in RANK_ORDER.items()}
+18| 
+19| 
+20| def compute_agent_ranks(
+21|     agents: list[str],
+22|     registry: dict,
+23|     leader_name: str | None,
+24| ) -> dict[str, int]:
+25|     """Compute {agent_name: rank_int} from registry config.
+26| 
+27|     Leader always gets the highest rank (max + 1).
+28|     """
+29|     ranks: dict[str, int] = … (2,027字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/broadcast_view.py) → 70|                 c = cycle_usage.get("completion_tokens", 0)
+71|                 stats_suffix = "\n" + _d.format_token_stats(p, c, elapsed=elapsed)
+72|                 
+73|             await self.engine._send(_d.chatroom_send_msg(name, to_str, msg_full + stats_suffix, leader=self.leader_name))
+74|             
+75|         elif tool_name == "wait":
+76|             from_who = args.get("from_agent", "")
+77|             pass # wait is internal, log handled locally in broadcast if needed
+78|             
+79|         else:
+80|             line = _d.tool_activity_msg(name, tool_name, args, leader=self.leader_name, agent_ranks=self.agent_ranks)
+81|             text = f"🟡 {line}"
+82|             msg_id = None
+83|             if self.engine._send_and_get_id_fn:
+84|                 try:
+85|       … (1,238字)
+---
+[Harper]: 对，`+` 符号是旧格式的遗留——它表示"该等级及以上"，比如 `→ Knight+` 意思是 knight、bishop、queen、king 都能看到。这种缩写对用户不友好。
+
+现在的代码已经改成显示具体人名了，例如 `→ Lucas, Harper, Kirk`，一目了然谁能看到。
+
+**结论：旧格式已废弃，当前标注直接列人名，无需改动。**
+---
+[Lucas]: 理解了。旧格式中的 `+` 表示"该级别及以上"，比如 `→ Knight+` 指 Knight 及更高 rank 能看到。现在代码已修复为显示具体人名，如 `→ Kirk`。
+
+无需进一步操作。
+---
+[Kirk]: ## 结论
+
+你看到的 `→ Pawn+` / `→ Knight+` 是**修复前的旧格式**（历史消息残留）。代码已改为显示具体人名。
+
+## 修复后的效果
+
+| 谁执行 | 旧标注 | 新标注 |
+|---|---|---|
+| Lucas (pawn) | `→ Pawn+` | `→ Lucas, Harper, Kirk` |
+| Harper (knight) | `→ Knight+` | `→ Harper, Kirk` |
+| Kirk (leader) | `→ Leader` | `→ Kirk` |
+
+`+` 原本意思是"该等级及以上都能看到"，但确实不直观，已替换为直接列出能看到这条工具调用的 agent 名字。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/display/visibility.py) → 1| """Single source of truth for tool call visibility.
+2| 
+3| All visibility logic lives here. Display layer and message converter
+4| MUST import from this module — no inline rank comparisons elsewhere.
+5| """
+6| 
+7| from __future__ import annotations
+8| 
+9| RANK_ORDER: dict[str, int] = {
+10|     "pawn": 0,
+11|     "knight": 1,
+12|     "bishop": 2,
+13|     "queen": 3,
+14|     "king": 4,
+15| }
+16| 
+17| RANK_NAME: dict[int, str] = {v: k.capitalize() for k, v in RANK_ORDER.items()}
+18| 
+19| 
+20| def compute_agent_ranks(
+21|     agents: list[str],
+22|     registry: dict,
+23|     leader_name: str | None,
+24| ) -> dict[str, int]:
+25|     """Compute {agent_name: rank_int} from registry config.
+26| 
+27|     Leader always gets the highest rank (max + 1).
+28|     """
+29|     ranks: dict[str, int] = … (2,027字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 355|         if args:
+356|             first = list(args.values())[0]
+357|             if isinstance(first, str):
+358|                 short = first[:40]
+359|         suffix = f" {short}" if short else ""
+360|         line = f"{prefix} {agent_name} · {label}{suffix}"
+361| 
+362|     # Append visibility label with actual agent names
+363|     if agent_ranks is not None:
+364|         sender_rank = agent_ranks.get(agent_name, 0)
+365|         is_leader = (agent_name == leader)
+366|         line += f"  {tool_call_label(sender_rank, agent_ranks, agent_name, is_leader=is_leader)}"
+367| 
+368|     return line
+369| 
+370| 
+371| def tool_result_brief(
+372|     agent_name: str,
+373|     tool_name: str,
+374|     result: str,
+
+(Showing lines 355-374 of 577. Use offset=375 to continue.) (779字)
+• exec() → Ranks: {'Kirk': 3, 'Harper': 1, 'Lucas': 0}
+Lucas exec: → Harper, Kirk, Lucas
+Harper exec: → Harper, Kirk
+Kirk exec: → Kirk
+
+STDERR:
+2026-05-26 14:58:48.769 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 18 components, 13 editable
+
+
+Exit code: 0 (300字)
+• chatroom_send(用户的问题是关于旧格式 `→ Knight+` / `→ Pawn+` 的含义。代码已修复为显示具体人名，无需进一步操作。) → (47字)
+• memory_palace() → ✅ Stored in wing_code/tool-call-visibility-design (hidden)
+  Drawer ID: drawer_wing_code_tool-call-visibility-design_17ca94c054d4b8312980295c (141字)
+• end_discussion() → ✅ 讨论已结束（原因: 用户问题已解答，代码已修复），即将进入总结阶段 (35字)
+---
+[Kirk]: 你看到的 `→ Pawn+` / `→ Knight+` 是**修复前的旧格式**（历史消息残留）。代码已改为显示具体人名。
+
+| 谁执行 | 旧标注 | 新标注 |
+|---|---|---|
+| Lucas (pawn) | `→ Pawn+` | `→ Lucas, Harper, Kirk` |
+| Harper (knight) | `→ Knight+` | `→ Harper, Kirk` |
+| Kirk (leader) | `→ Leader` | `→ Kirk` |
+
+`+` 原本意思是"该等级及以上都能看到"，但确实不直观，已替换为直接列出能看到这条工具调用的 agent 名字。
+---
+[Kirk]: 已修复。`→ Knight+` / `→ Pawn+` 是旧格式残留，现在改为直接显示具体人名：
+
+- Lucas 执行 → `→ Lucas, Harper, Kirk`
+- Harper 执行 → `→ Harper, Kirk`  
+- Kirk 执行 → `→ Kirk`
+
+`+` 原意是"该等级及以上可见"，已废弃。新消息会用人名，旧消息里的 `+` 标注忽略即可。
+---
+[用户]: 这种显示是否真正被看到还是只是显示做做样子
+---
+[Harper]: **是真的隔离，不是做样子。**
+
+代码逻辑很清晰：
+
+1. **`message_converter.py:87`** — 当构建发给某个 agent 的历史消息时，检查 `can_see_tool_call(sender_rank, my_rank)`。如果 viewer 的 rank < sender 的 rank，且内容包含 `[工具调用记录]`，则**直接 strip 掉整个工具调用记录块**。
+
+2. **`visibility.py:38-40`** — `can_see_tool_call` 规则：`viewer_rank >= sender_rank` 才能看到。Pawn(0) < Knight(1)，所以 pawn **看不到** knight 的工具调用记录。
+
+3. **只 strip `[工具调用记录]`，不影响正文消息**。chatroom_send 的文字内容始终可见。
+
+所以：
+- **Lucas (pawn)** → Harper (knight) 和 Kirk (leader) 执行的工具调用记录对他不可见（被真实删除）
+- **Harper (knight)** → Kirk (leader) 的工具调用记录不可见
+- **Kirk (leader)** → 所有人的都可见
+
+标注和人名显示是 UI 层的事，底层的消息过滤是真切切实实的隔离。
+
+[工具调用记录]
+• exec(grep -n "strip\|\[工具调用记录\]\|can_see_tool_call\|visible_to\|filter.*tool" /roo...) → STDERR:
+grep: /root/nanobot-src/nanobot/groupchat/message_converter.py: No such file or directory
+
+
+Exit code: 0 (112字)
+• exec(grep -rn "can_see_tool_call" /root/nanobot-src/nanobot/groupchat/ --include='...) → /root/nanobot-src/nanobot/groupchat/history/message_converter.py:78:    from nanobot.groupchat.display.visibility import can_see_tool_call
+/root/nanobot-src/nanobot/groupchat/history/message_converter.py:87:            if not can_see_tool_call(sender_rank, my_rank) and "[工具调用记录]" in content:
+/root/nanobot-src/nanobot/groupchat/display/visibility.py:38:def can_see_tool_call(sender_rank: int, viewer_rank: int) -> bool:
+
+
+Exit code: 0 (435字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/message_converter.py) → 65|     """Convert history dicts into LLM API messages.
+66| 
+67|     新策略（2026.4 推薦）：
+68|     - 自動偵測輸入格式：支援 groupchat (sender) 和 LLM (role) 兩種
+69|     - 強制保留：第1條消息 + 所有 user 消息 + 所有 system 消息
+70|     - 僅在中間裁剪 assistant 消息，從尾部補齊最近對話
+71|     - 單 Agent 模式現在也會走此邏輯
+72| 
+73|     Rank-based tool call isolation (2026.5):
+74|     - agent_ranks: {agent_name: rank_int} — higher number = higher privilege
+75|     - An agent can only see tool calls from agents with rank <= its own rank
+76|     - Text messages are never stripped, only [工具调用记录] blocks
+77|     """
+78|     from nanobot.groupchat.display.visibility import can_see_tool_call
+79| 
+80|     my_rank = (agent_ranks or {}).get(current_agent, 0)
+81| 
+82|     def _to_msg(m: dict[str, str]) -> dict[str, Any]:
+83|         sender, content = m["sender"], m… (1,934字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/visibility.py) → 35|     return ranks
+36| 
+37| 
+38| def can_see_tool_call(sender_rank: int, viewer_rank: int) -> bool:
+39|     """Viewer can see sender's tool call iff viewer rank >= sender rank."""
+40|     return viewer_rank >= sender_rank
+41| 
+42| 
+43| def tool_call_label(
+44|     sender_rank: int,
+45|     agent_ranks: dict[str, int],
+46|     sender_name: str,
+47|     is_leader: bool = False,
+48| ) -> str:
+49|     """Visibility label showing actual agent names who can see the tool call.
+50| 
+51|     Examples:
+52|         '→ Kirk'                    (leader call, only leader sees)
+53|         '→ Harper, Kirk'            (knight call, knight+ sees)
+54|         '→ Lucas, Harper, Kirk'     (pawn call, all see)
+
+(Showing lines 35-54 of 61. Use offset=55 to continue.) (757字)
+---
+[Lucas]: 显示是真实的，不是做样子。
+
+**实际机制：**
+- `message_converter.py` 按 rank 过滤 `[工具调用记录]` 块，低 rank agent 的消息里不包含高 rank 的工具调用
+- 新标注反映的是"谁真正会收到这条记录"
+
+| 标注 | 实际效果 |
+|---|---|
+| `→ Lucas, Harper, Kirk` | 三人都看到 |
+| `→ Harper, Kirk` | Lucas 看**不到**这条工具调用 |
+| `→ Kirk` | 只有 Kirk 看到 |
+
+所以标注和隔离逻辑是一致的——不是装饰，是真实可见性。
+---
+[Kirk]: **是真的。** 标注和实际隔离共用同一个函数 `can_see_tool_call()`，标注列出的名字就是真正能看到工具调用的人。
+
+隔离机制：`message_converter.py` 在构建发给 agent 的消息时，如果 viewer_rank < sender_rank，直接删掉 `[工具调用记录]` 块——低 rank agent 物理上看不到高 rank agent 的工具调用。标注只是把这个逻辑可视化出来了。
+
+[工具调用记录]
+• memory_palace(message_converter tool call visibility filtering strip isolation actual behavior) → 🔍 5 result(s) for 'message_converter tool call visibility filtering strip isolation actual behavior':
+
+[1] wing_code/tool-call-visibility-fix-20260526 (sim=-0.159)
+  ## 工具调用可见性修复（2026-05-26）
+
+### 问题
+`display.py` 的 `_tool_visibility()` 统一标注 `→ all`，但 `message_converter.py` 实际按 rank 隔离（低 rank agent 看不到高 rank agent 的 `[工具调用记录]` 块）。显示与逻辑不一致。
+
+### 修复
+1. **新建 `visibility.py`**：单一真相源，包含 `compute_agent_ranks()`、`can_see_tool_call()`、`tool_call_label()`
+2. **改 `display.py`**：`tool_activity_msg()` 调用 `too… (2,170字)
+• exec(grep -n "can_see_tool_call\|strip.*tool\|\[工具调用记录\]\|_filter\|_visible\|sende...) → STDERR:
+grep: /root/nanobot-src/nanobot/groupchat/message_converter.py: No such file or directory
+
+
+Exit code: 0 (112字)
+• exec(find /root/nanobot-src -name "message_converter.py" -o -name "message_convert...) → /root/nanobot-src/nanobot/groupchat/history/message_converter.py
+/root/nanobot-src/nanobot/groupchat/history/__pycache__/message_converter.cpython-312.pyc
+
+
+Exit code: 0 (169字)
+• exec() → /root/nanobot-src/nanobot/groupchat/history/message_converter.py
+/root/nanobot-src/nanobot/groupchat/history/response_cleanup.py
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py
+/root/nanobot-src/nanobot/groupchat/display/visibility.py
+
+
+Exit code: 0 (316字)
+• exec() → 22:# Matches the entire [工具调用记录]... block at the end of a message
+37:    Returns the content unchanged if no tool log block is found.
+39:    if "[工具调用记录]" not in content:
+48:def strip_tool_log(content: str) -> str:
+49:    """Remove the entire [工具调用记录] block from a message.
+76:    - Text messages are never stripped, only [工具调用记录] blocks
+78:    from nanobot.groupchat.display.visibility import can_see_tool_call
+84:        # Rank-based tool call isolation: strip tool logs from lower-rank agents
+87: … (652字)
+• exec() → 13:    """Clean up model response: strip think blocks, name prefixes, fake tool calls.
+
+
+Exit code: 0 (101字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/message_converter.py) → 60|     max_chars: int = 0,
+61|     pin_first_user: bool = True,          # 保留參數，向後相容
+62|     relevant_agents: list[str] | None = None,
+63|     agent_ranks: dict[str, int] | None = None,
+64| ) -> list[dict[str, Any]]:
+65|     """Convert history dicts into LLM API messages.
+66| 
+67|     新策略（2026.4 推薦）：
+68|     - 自動偵測輸入格式：支援 groupchat (sender) 和 LLM (role) 兩種
+69|     - 強制保留：第1條消息 + 所有 user 消息 + 所有 system 消息
+70|     - 僅在中間裁剪 assistant 消息，從尾部補齊最近對話
+71|     - 單 Agent 模式現在也會走此邏輯
+72| 
+73|     Rank-based tool call isolation (2026.5):
+74|     - agent_ranks: {agent_name: rank_int} — higher number = higher privilege
+75|     - An agent can only see tool calls from agents with rank <= its own rank
+76|     - Text messages are never stripped, only [工具调用记录] blocks
+77|     """
+78|     from nanobot.groupcha… (1,872字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/visibility.py) → 38| def can_see_tool_call(sender_rank: int, viewer_rank: int) -> bool:
+39|     """Viewer can see sender's tool call iff viewer rank >= sender rank."""
+40|     return viewer_rank >= sender_rank
+41| 
+42| 
+43| def tool_call_label(
+44|     sender_rank: int,
+45|     agent_ranks: dict[str, int],
+46|     sender_name: str,
+47|     is_leader: bool = False,
+48| ) -> str:
+49|     """Visibility label showing actual agent names who can see the tool call.
+50| 
+51|     Examples:
+52|         '→ Kirk'                    (leader call, only leader sees)
+53|         '→ Harper, Kirk'            (knight call, knight+ sees)
+54|         '→ Lucas, Harper, Kirk'     (pawn call, all see)
+55|     """
+56|     if is_leader:
+57|         return f"→ {sender_name}"
+58|     visible = sorted(
+59|         name for name, rank … (928字)
+• exec() → === can_see_tool_call 验证 ===
+Harper(1) 能看到 Lucas(0) 的工具调用: True
+Lucas(0) 能看到 Harper(1) 的工具调用: False
+Kirk(3) 能看到 Harper(1) 的工具调用: True
+
+=== 标注 vs 隔离 一致性 ===
+Lucas(rank=0):… (504字)
+  (还有 2 个工具调用，已省略)
+---
+[Kirk]: **是真的，不是做样子。**
+
+标注和实际隔离共用同一个函数 `can_see_tool_call()`，标注列出的名字就是真正能看到工具调用的人。
+
+**隔离机制**：`message_converter.py` L84-88 在构建发给 agent 的消息时，如果 viewer_rank < sender_rank，直接 `strip_tool_log()` 删掉 `[工具调用记录]` 块。低 rank agent 物理上看不到高 rank agent 的工具调用。
+
+**标注机制**：`display.py` L363-366 调用 `tool_call_label()` 列出所有 rank ≥ sender_rank 的 agent 名字。
+
+两者用的是 `visibility.py` 里同一个 `can_see_tool_call(sender_rank, viewer_rank)` 函数（`viewer_rank >= sender_rank`），运行时验证结果：
+
+| 执行者 | 标注 | 实际可见 | 一致？ |
+|---|---|---|---|
+| Lucas (rank=0) | `→ Lucas, Harper, Kirk` | Lucas, Harper, Kirk | ✅ |
+| Harper (rank=1) | `→ Harper, Kirk` | Harper, Kirk | ✅ |
+| Kirk (rank=3) | `→ Kirk` | Kirk | ✅ |
+
+零偏差。标注只是把隔离逻辑可视化出来了。
+---

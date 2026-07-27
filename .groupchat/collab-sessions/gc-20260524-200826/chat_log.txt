@@ -1,0 +1,641 @@
+[用户]: 这个不是用户消息，是模型的输出
+---
+[Kirk]: 代码逻辑看起来没问题。那问题可能出在**模型输出的实际内容**上。让我重新审视用户展示的消息：
+
+```
+👑 Kirk → 进展 [7] ━━
+现在让我看看 chatroom_tools.py 中 clear_context 的完整实现，以理解其模式：我需要查看 clear_context 工具是如何定义的：我需要查看 clear_context 工具是如何定义的：...
+```
+
+`👑 Kirk → 进展 [7] ━━` 这个前缀是 **broadcast 层添加的**，不是模型原始输出。模型原始输出（`raw_content`）可能只是：
+
+```
+现在让我看看 chatroom_tools.py 中 clear_context 的完整实现，以理解其模式：我需要查看 clear_context 工具是如何定义的：×25
+```
+
+但即使这样，ngram 也应该能检测到。除非……**模型输出的是工具调用而非纯文本**，而重复文本在工具调用的 `name` 或 `arguments` 中？
+
+让我检查 L625 的工具参数检测：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 112| def _has_contiguous_repeat(text: str, min_repeat: int = 3) -> bool:
+113|     """Detect if the same sentence/segment appears consecutively ≥ *min_repeat* times.
+114| 
+115|     Splits on sentence-ending punctuation or newlines, then checks for runs
+116|     of identical (whitespace-normalised) segments.  O(n) — suitable for
+117|     calling on every iteration without measurable overhead.
+118|     """
+119|     if not text:
+120|         return False
+121|     segments = re.split(r'[\n。！？.!?\u3002]', text)
+122|     # Normalise and filter empty
+123|     segs = [s.strip() for s in segments if s.strip()]
+124|     if len(segs) < min_repeat:
+125|         return False
+126|     count = 1
+127|     for i in range(1, len(segs)):
+128|         if segs[i] == segs[i - 1]:
+129|             count += 1
+130|… (3,378字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 510|         })
+511| 
+512|         raw_content = response.content or ""
+513|         logger.info(
+514|             "tool_loop iter {}: finish={} tools={} content='{}'",
+515|             iteration, response.finish_reason,
+516|             bool(response.has_tool_calls), raw_content,
+517|         )
+518| 
+519|         # ── Degenerate repetition guard ──────────────────────────────────
+520|         # Detect when the model falls into a self-reinforcing repetition
+521|         # loop (same sentence repeated ≥3 times).  Break immediately to
+522|         # avoid burning iterations / tokens on useless output.
+523|         _check_text = raw_content
+524|         # Also check reasoning/thinking content if present
+525|         if not _check_text and hasattr(response, "reasoning_content") and response.re… (2,634字)
+• exec() → Text length: 725
+_REPEAT_NGRAM_MAX_LEN: 8000
+Would be checked: True
+_REPEAT_NGRAM_MIN * _REPEAT_NGRAM_COUNT = 40 * 3 = 120
+len(text) >= 120: True
+Normalized length: 725
+WOULD DETECT at window=20: gram='我需要查看 clear_context '..., non_overlap=3
+
+
+Exit code: 0 (256字)
+• exec() → [DEGENERATE_REPETITION] (52字)
+• write_file() → (52字)
+• write_file() → (52字)
+• write_file() → (43字)
+• exec(python3 /tmp/tr.py) → u20: contig=False ngram=True len=500
+u15: contig=False ngram=True len=375
+u10: contig=False ngram=True len=250
+u25: contig=False ngram=True len=625
+u30: contig=False ngram=True len=750
+u35: contig=False ngram=True len=875
+u40: contig=False ngram=True len=1000
+real_colon: contig=False ngram=True len=925
+prefixed: contig=False ngram=True len=949
+
+
+Exit code: 0 (360字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 519|         # ── Degenerate repetition guard ──────────────────────────────────
+520|         # Detect when the model falls into a self-reinforcing repetition
+521|         # loop (same sentence repeated ≥3 times).  Break immediately to
+522|         # avoid burning iterations / tokens on useless output.
+523|         _check_text = raw_content
+524|         # Also check reasoning/thinking content if present
+525|         if not _check_text and hasattr(response, "reasoning_content") and response.reasoning_content:
+526|             _check_text = response.reasoning_content
+527|         if _has_degenerate_repeat(_check_text):
+528|             logger.warning(
+529|                 "tool_loop iter %d: degenerate repetition detected, breaking loop",
+530|                 iteration,
+531|             )
+53… (1,723字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 137| def _has_ngram_repeat(text: str) -> bool:
+138|     """Detect repetition via sliding-window character n-grams.
+139| 
+140|     Catches repeated blocks that span across punctuation boundaries (which
+141|     the segment-based check misses).  Normalises whitespace before hashing
+142|     so minor spacing differences don't evade detection.
+143| 
+144|     Strategy: for each window length from _REPEAT_NGRAM_MIN down to 20,
+145|     build a dict of normalised n-gram → list of start positions.  If any
+146|     n-gram appears in ≥ _REPEAT_NGRAM_COUNT no… (2,273字)
+---
+[Kirk]: L512: `raw_content = response.content or ""`。如果 LLM provider 在模型输出工具调用时把 `response.content` 设为 `None`，那 `raw_content = ""`，检测直接跳过。
+
+让我验证这个假设——看 LLM provider 如何处理同时有文本和工具调用的响应：
+
+[工具调用记录]
+• exec(grep -n "进展\|raw_content\|response\.content\|text_content\|content_part" /roo...) → 512:        raw_content = response.content or ""
+516:            bool(response.has_tool_calls), raw_content,
+523:        _check_text = raw_content
+533:            _non_repeated = _truncate_repeated_tail(raw_content)
+534:            if _non_repeated != raw_content:
+535:                raw_content = _non_repeated
+536:            result.content = raw_content
+553:            if _can_stream and response.content and on_content_reset:
+557:            thought = _strip_think(response.content)
+574:       … (993字)
+• exec(grep -n "进展\|→.*━\|broadcast.*format\|_format_agent\|agent_output\|iteration....) → 1149:                            "content": f"[打断通知] 你的执行被中断，请立即总结当前进展并响应队友的最新需求。",
+1227:                        target_label = f"进展 [{cycle}]" if is_leader else "Self/Final"
+1300:                        target_label = f"进展 [{cycle}]"
+
+
+Exit code: 0 (249字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1290|                             reasoning_t = sum(
+1291|                                 (m.get("reasoning_tokens") or 0)
+1292|                                 for m in (result.provider_meta or [])
+1293|                                 if isinstance(m, dict)
+1294|                             )
+1295|                             tok_suffix = "\n" + _d.format_token_stats(
+1296|                                 tok.get("prompt", 0), tok.get("completion", 0),
+1297|                                 elapsed=elapsed, cost=cost, cache_tokens=cache_t,
+1298|                                 reasoning_tokens=reasoning_t,
+1299|                             )
+1300|                         target_label = f"进展 [{cycle}]"
+1301|                         await engine._send(_d.chatroom_send_msg(name, target_labe… (2,782字)
+• exec(grep -n "content\s*=" /root/nanobot-src/nanobot/groupchat/orchestra/broadcast...) → 470:            content = msg.get("content", "")
+602:                f"- memory_palace(action='store', content=..., wing=..., hall=..., room=...)\n"
+628:                f"      示例: memory_palace(action='store', content='用户偏好：...', wing='用户', hall='偏好', room='main')\n"
+725:        content = ""  # last cycle's text output
+777:                            content = _r.content or ""
+873:                content = result.content or ""
+917:                                    content = _r.content
+944:   … (926字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 865|                     )
+866|                 finally:
+867|                     # Always mark idle when tool_loop exits (interrupt, stop, normal, error)
+868|                     mailbox.mark_idle(name)
+869| 
+870| 
+871|                 # Flush any remaining buffered search lines
+872| 
+873|                 content = result.content or ""
+874|                 is_error = result.finish_reason == "error"
+875|                 is_timeout = result.finish_reason == "timeout"
+876|                 is_interrupted = result.finish_reason == "interrupted"
+877|                 latency = result.latency
+878|                 total_latency += latency
+879|                 total_iterations += result.iterations
+880|                 all_tools_used.extend(result.tools_used or [])
+881| 
+882|                 if is_l… (1,544字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 540|         if response.has_tool_calls:
+541|             # Notify per-iteration token usage (before tool execution)
+542|             # Enrich usage with cost and cache_tokens so display callbacks
+543|             # can show a complete token suffix.
+544|             if on_iteration_usage and usage:
+545|                 enriched = dict(usage)
+546|                 if response.cost:
+547|                     enriched["cost"] = response.cost
+548|                 if response.cache_tokens:
+549|                     enriched["cache_tokens"] = response.cache_tokens
+550|                 await on_iteration_usage(enriched)
+551|             # If content was streamed before tool calls were det… (1,576字)
+  (还有 5 个工具调用，已省略)
+---
+[Kirk]: 不对，`build_tool_log` 只记录工具调用详情，不会包含模型的自由文本。
+
+让我重新思考。用户展示的格式是 `👑 Kirk → 进展 [7] ━━` 后面跟重复文本。这个文本一定来自 `result.content`。那说明 `response.content` 确实不为空。
+
+那为什么 L527 的 `_has_degenerate_repeat` 没拦截？让我直接测试这个函数：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 519|         # ── Degenerate repetition guard ──────────────────────────────────
+520|         # Detect when the model falls into a self-reinforcing repetition
+521|         # loop (same sentence repeated ≥3 times).  Break immediately to
+522|         # avoid burning iterations / tokens on useless output.
+523|         _check_text = raw_content
+524|         # Also check reasoning/thinking content if present
+525|         if not _check_text and hasattr(response, "reasoning_content") and response.reasoning_content:
+526|             _check_text = response.reasoning_content
+527|         if _has_degenerate_repeat(_check_text):
+528|             logger.warning(
+529|                 "tool_loop iter %d: degenerate repetition detected, breaking loop",
+530|                 iteration,
+531|             )
+53… (1,485字)
+• exec(grep -rn "content.*None\|tool_calls.*content\|\.content\s*=" /root/nanobot-sr...) → STDERR:
+grep: /root/nanobot-src/nanobot/llm/: No such file or directory
+
+
+Exit code: 0 (86字)
+• exec(find /root/nanobot-src -name "*.py" -path "*/llm*" -o -name "*.py" -path "*/p...) → /root/nanobot-src/nanobot/providers/registry.py
+/root/nanobot-src/nanobot/providers/base.py
+/root/nanobot-src/nanobot/providers/transcription.py
+/root/nanobot-src/nanobot/providers/cache_probe.py
+/root/nanobot-src/nanobot/providers/openai_codex_provider.py
+/root/nanobot-src/nanobot/providers/litellm_provider.py
+/root/nanobot-src/nanobot/providers/azure_openai_provider.py
+/root/nanobot-src/nanobot/providers/custom_provider.py
+/root/nanobot-src/nanobot/providers/httpx_provider.py
+/root/nanobot-src… (611字)
+• exec(grep -n "content\|tool_call\|has_tool" /root/nanobot-src/nanobot/providers/li...) → 20:_ALLOWED_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name", "reasoning_content"})
+173:        """Return True when the provider supports cache_control on content blocks.
+181:        content structure and potentially break the provider's native prefix
+220:                content = msg["content"]
+221:                if isinstance(content, str):
+222:                    new_content = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
+224:       … (2,023字)
+• exec(grep -n "class.*Response\|def.*chat\|\.content\s*=" /root/nanobot-src/nanobot...) → 741:    async def chat(
+804:    async def chat_stream(
+
+
+Exit code: 0 (69字)
+• read_file(/root/nanobot-src/nanobot/providers/litellm_provider.py) → 741|     async def chat(
+742|         self,
+743|         messages: list[dict[str, Any]],
+744|         tools: list[dict[str, Any]] | None = None,
+745|         model: str | None = None,
+746|         max_tokens: int = 4096,
+747|         temperature: float = 0.7,
+748|         reasoning_effort: str | None = None,
+749|         metadata: dict[str, Any] | None = None,
+750|         tool_choice: str | dict[str, Any] | None = None,
+751|         api_base: str | None = None,
+752|         api_key: str | None = None,
+753|     ) -> LLMResponse:
+754|         """Send a chat completion request via LiteLLM."""
+755|         import time as _time
+756|         kwargs = self._build_kwargs(
+757|             messages, tools, model, max_tokens, reasoning_effort, metadata, api_base, api_key,
+758|         )
+759|       … (3,699字)
+• exec(grep -n "_parse_response" /root/nanobot-src/nanobot/providers/litellm_provide...) → 767:            return self._parse_response(response)
+1027:    def _parse_response(self, response: Any) -> LLMResponse:
+
+
+Exit code: 0 (134字)
+• read_file(/root/nanobot-src/nanobot/providers/litellm_provider.py) → 1027|     def _parse_response(self, response: Any) -> LLMResponse:
+1028|         """Parse LiteLLM response into our standard format."""
+1029|         if response is None or not hasattr(response, "choices") or not response.choices:
+1030|             return LLMResponse(
+1031|                 content="Error: provider returned empty response",
+1032|                 finish_reason="error",
+1033|             )
+1034|         choice = response.choices[0… (2,952字)
+  (还有 3 个工具调用，已省略)
+---
+[Kirk]: 好，L625 确实检测 tool arguments。但 `args_str` 是 `json.dumps(tc.arguments)`，如果重复文本在 arguments 的某个字段里，JSON 序列化后会有引号和转义，可能影响检测。
+
+但更关键的问题是：**用户看到的重复文本到底来自哪里？** 让我看 broadcast 是怎么显示 agent 输出的：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 112| def _has_contiguous_repeat(text: str, min_repeat: int = 3) -> bool:
+113|     """Detect if the same sentence/segment appears consecutively ≥ *min_repeat* times.
+114| 
+115|     Splits on sentence-ending punctuation or newlines, then checks for runs
+116|     of identical (whitespace-normalised) segments.  O(n) — suitable for
+117|     calling on every iteration without measurable overhead.
+118|     """
+119|     if not text:
+120|         return False
+121|     segments = re.split(r'[\n。！？.!?\u3002]', text)
+122|     # Normalise and filter empty
+123|     segs = [s.strip() for s in segments if s.strip()]
+124|     if len(segs) < min_repeat:
+125|         return False
+126|     count = 1
+127|     for i in range(1, len(segs)):
+128|         if segs[i] == segs[i - 1]:
+129|             count += 1
+130|… (3,378字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 510|         })
+511| 
+512|         raw_content = response.content or ""
+513|         logger.info(
+514|             "tool_loop iter {}: finish={} tools={} content='{}'",
+515|             iteration, response.finish_reason,
+516|             bool(response.has_tool_calls), raw_content,
+517|         )
+518| 
+519|         # ── Degenerate repetition guard ──────────────────────────────────
+520|         # Detect when the model falls into a self-reinforcing repetition
+521|         # loop (same sentence repeated ≥3 times).  Break immediately to
+522|         # avoid burning iterations / tokens on useless output.
+523|         _check_text = raw_content
+524|         # Also check reasoning/thinking content if present
+525|         if not _check_text and hasattr(response, "reasoning_content") and response.re… (2,634字)
+• exec() → [DEGENERATE_REPETITION] (52字)
+• write_file() → (52字)
+• exec() → STDERR:
+<string>:4: SyntaxWarning: invalid escape sequence '\s'
+Traceback (most recent call last):
+  File "<string>", line 35, in <module>
+  File "<string>", line 10
+    segments = re.split(r'([
+                        ^
+SyntaxError: unterminated string literal (detected at line 10)
+
+
+Exit code: 1 (298字)
+• write_file() → (53字)
+• exec(python3 /tmp/test_repeat2.py) → Repeat unit: '我需要查看 clear_context 工具是如何定义的：'
+Repeat unit len: 29
+Text len: 725
+Segment count: 1
+All same? True
+Seg[0][:50]: '我需要查看 clear_context 工具是如何定义的：我需要查看 clear_context 工'
+
+ngram check:
+  min_len needed: 120 actual: 725
+  max_len: 8000 ok: True
+  win=40: DETECTED! non_overlap=12
+  win=35: DETECTED! non_overlap=12
+  win=30: DETECTED! non_overlap=12
+  win=25: DETECTED! non_overlap=25
+  win=20: DETECTED! non_overlap=25
+
+
+Exit code: 0 (439字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 112| def _has_contiguous_repeat(text: str, min_repeat: int = 3) -> bool:
+113|     """Detect if the same sentence/segment appears consecutively ≥ *min_repeat* times.
+114| 
+115|     Splits on sentence-ending punctuation or newlines, then checks for runs
+116|     of identical (whitespace-normalised) segments.  O(n) — suitable for
+117|     calling on every iteration without measurable overhead.
+118|     """
+119|     if not text:
+120|         return False
+121|     segments = re.split(r'[\n。！？.!?\u3002]', text)
+122|     # Normalise and filter empty
+123|     segs = [s.strip() for s in segments if s.strip()]
+124|     if len(segs) < min_repeat:
+125|         return False
+126|     count = 1
+127|     for i in range(1, len(segs)):
+128|         if segs[i] == segs[i - 1]:
+129|             count += 1
+130|… (2,211字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 162|         for i in range(len(norm) - win + 1):
+163|             gram = norm[i:i + win]
+164|             if gram not in seen:
+165|                 seen[gram] = [i]
+166|             else:
+167|                 seen[gram].append(i)
+168| 
+169|         for positions in seen.values():
+170|             if len(positions) < _REPEAT_NGRAM_COUNT:
+171|                 continue
+172|             # Check for non-overlapping occurrences
+173|             n… (1,227字)
+  (还有 2 个工具调用，已省略)
+---
+[Kirk]: 好，L512-538 的检测在每次 iteration 都会执行。那理论上应该能拦截。
+
+让我换个思路——**直接用 Python 测试这段文本能否被检测到**：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 500|         result.call_details.append({
+501|             "iter": iteration,
+502|             "latency": round(latency, 2),
+503|             "tokens": dict(usage),
+504|             "finish": response.finish_reason,
+505|             "retry_log": response.retry_log,
+506|             "tools": (
+507|                 [tc.name for tc in response.tool_calls]
+508|                 if response.has_tool_calls else []
+509|             ),
+510|         })
+511| 
+512|         raw_content = response.content or ""
+513|         logger.info(
+514|             "tool_loop iter {}: finish={} tools={} content='{}'",
+515|             iteration, response.finish_reason,
+516|             bool(response.has_tool_calls), raw_content,
+517|         )
+518| 
+519|         # ── Degenerate repetition guard ────────────────────… (3,065字)
+• exec() → 94:# chatroom_send is included to prevent agents from looping identical messages
+97:    "web_search", "web_fetch", "chatroom_send",
+274:    on_tool_start: Callable[..., Awaitable[None]] | None = None,
+275:    on_tool_result: Callable[[str, str, str], Awaitable[None]] | None = None,
+667:                if on_tool_start:
+668:                    await on_tool_start(tc.name, tc.arguments, tool_call_id=tc.id)
+745:                    if on_tool_result:
+747:                        # (broadcast_view.on_… (650字)
+• exec(grep -n "on_tool_start\|def on_tool_start\|tool_start" /root/nanobot-src/nano...) → 145:    async def update_from_tool_start(self, agent: str, tool_name: str, args: dict) -> None:
+677:        # Shared state between _on_tool_start and _on_tool_result for chatroom_send args
+685:        async def _on_tool_start(tool_name: str, args: dict, **_kw) -> None:
+689:            await view.on_tool_start(name, tool_name, args, tool_call_id, _cycle_t0, _cycle_usage)
+856:                        on_tool_start=_on_tool_start,
+
+
+Exit code: 0 (445字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 145|     async def update_from_tool_start(self, agent: str, tool_name: str, args: dict) -> None:
+146|         """Update tracker state based on tool arguments."""
+147|         _st = _TOOL_STATE_MAP.get(tool_name, "thinking")
+148|         _dt = ""
+149|         if tool_name == "web_search":
+150|             _dt = (args.get("query") or args.get("queries", ""))
+151|             if isinstance(_dt, list):
+152|                 _dt = ", ".join(_dt)
+153|         elif tool_name == "web_fetch":
+154|             _dt = (args.get("url", "") or "")[:35]
+155|         elif tool_name == "exec":
+156|             _dt = (args.get("command", "") or "")[:25]
+157|         elif tool_name in ("read_file", "write_file", "edit_file"):
+158|             _dt = (args.get("path", "") or "").split("/")[-1]
+159|         elif… (2,222字)
+• exec() → 120:        """Build the panel text using the display module."""
+202:    def _save_event(self, event_type: str, *, agent: str = "", content: str = "", extra: dict | None = None) -> None: ...
+203:    def _add_message(self, sender: str, content: str) -> None: ...
+205:    def _clean_response(self, content: str, agent_name: str) -> str: ...
+416:        List of (agent_name, content) tuples in completion order.
+470:            content = msg.get("content", "")
+471:            if content.startswith("[")… (2,070字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 870| 
+871|                 # Flush any remaining buffered search lines
+872| 
+873|                 content = result.content or ""
+874|                 is_error = result.finish_reason == "error"
+875|                 is_timeout = result.finish_reason == "timeout"
+876|                 is_interrupted = result.finish_reason == "interrupted"
+877|                 latency = result.latency
+878|                 total_latency += latency
+879|                 total_iterations += result.iterations
+880|                 all_tools_used.extend(result.tools_used or [])
+881| 
+882|                 if is_leader and "end_discussion" in (result.tools_used or [… (3,740字)
+  (还有 5 个工具调用，已省略)
+---
+[Kirk]: 现在我看清了实际代码。让我分析为什么没拦截：
+
+**`_has_contiguous_repeat`** (L112-134):
+- L121: `re.split(r'[\n。！？.!?\u3002]', text)` — 分隔符里**没有 `：`（全宽冒号）**
+- 重复文本 `"我需要查看 clear_context 工具是如何定义的："` 以 `：` 结尾
+- 所以整段重复文本被当作**一个 segment**，segment 级检测失效
+
+**`_has_ngram_repeat`** (L137-181):
+- L150: `len(text) < _REPEAT_NGRAM_MIN * _REPEAT_NGRAM_COUNT` → `40 * 3 = 120`
+- 重复文本 `"我需要查看 clear_context 工具是如何定义的："` 长度约 22 字符
+- 25 次重复 = 550 字符 > 120，所以不会被 L150 拦截
+- 但 L158: `for win in range(40, 19, -5)` → 窗口从 40 开始
+- 每个 n-gram 长度 40，而单次重复只有 22 字符
+- 所以 n-gram 会**跨越重复边界**，产生大量不同的 n-gram（偏移不同）
+- 但等等——如果文本是 `"ABCABCABC..."` 模式，40 字符窗口在不同位置会产生不同的 gram...
+
+让我仔细想：`base = "我需要查看 clear_context 工具是如何定义的："` (22 chars)，重复 25 次 = 550 chars。
+
+n-gram 窗口 40 字符。位置 0 的 gram = `base[0:40]` = `base + base[0:18]`。位置 1 的 gram = `base[1:41]` = `base[1:] + base[0:19]`。这些**都不相同**！
+
+因为 40 > 22（单次重复长度），每个窗口跨越了不同的边界组合，产生不同的 gram。只有当窗口长度恰好是 base 长度的倍数时，gram 才会重复。
+
+**窗口 40，base 22，gcd(40,22)=2。** 所以位置 0 和位置 22 的 gram 会相同（都跨越恰好 1 个 base + 18 chars of next）。位置 22 和 44 也相同。所以有 25/1 ≈ 12 个非重叠出现？不对，让我更仔细算...
+
+位置 0: chars 0-39
+位置 22: chars 22-61
+位置 44: chars 44-83
+...
+
+这些 gram 是相同的吗？位置 0 的 gram = text[0:40]，位置 22 的 gram = text[22:62]。因为 text 是 base 的重复，text[0:40] = base + base[0:18]，text[22:62] = base[0:18] + base + base[0:18]... 不，这不一样。
+
+实际上 text[k:40+k] 和 text[0:40] 是否相同取决于 k 是否是 22 的倍数。只有 k=0, 22, 44, ... 时，text 的周期性才能保证 gram 相同。
+
+所以位置 0, 22, 44, 66, 88, 110, 132, 154, 176, 198, 220, 242, 264, 286, 308, 330, 352, 374, 396, 418, 440, 462, 484, 506, 528 — 共 25 个位置，但 528+40=568 > 550，所以最后一个不完整。
+
+非重叠检查：位置 0 结束于 40，位置 22 >= 40 ✓，位置 44 >= 62 ✓... 每次间隔 22 < 40，所以**有重叠**。
+
+L176: `if p >= last_end` — last_end = 0+40=40, p=22 < 40 → 不计数。p=44 >= 40 → non_overlap=2, last_end=84。p=66 < 84 → 不计数。p=88 >= 84 → non_overlap=3, last_end=128。
+
+**non_overlap 达到 3！** 所以 `_has_ngram_repeat` 应该返回 True。
+
+那为什么没拦截？让我看看是不是有其他条件...
+
+[工具调用记录]
+• exec() → [DEGENERATE_REPETITION] (52字)
+• write_file() → (52字)
+• write_file() → (52字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 112| def _has_contiguous_repeat(text: str, min_repeat: int = 3) -> bool:
+113|     """Detect if the same sentence/segment appears consecutively ≥ *min_repeat* times.
+114| 
+115|     Splits on sentence-ending punctuation or newlines, then checks for runs
+116|     of identical (whitespace-normalised) segments.  O(n) — suitable for
+117|     calling on every iteration without measurable overhead.
+118|     """
+119|     if not text:
+120|         return False
+121|     segments = re.split(r'[\n。！？.!?\u3002]', text)
+122|     # Normalise and filter empty
+123|     segs = [s.strip() for s in segments if s.strip()]
+124|     if len(segs) < min_repeat:
+125|         return False
+126|     count = 1
+127|     for i in range(1, len(segs)):
+128|         if segs[i] == segs[i - 1]:
+129|             count += 1
+130|… (3,378字)
+---
+[Kirk]: 好，L523 `_check_text = raw_content`。`raw_content` 是 `response.content`。
+
+现在关键问题：**模型输出的重复文本是否在 `response.content` 中？**
+
+看用户展示的消息：重复文本后面跟着 `[工具调用记录]`，说明模型在**同一次 response 中**既输出了重复文本又发出了工具调用。
+
+如果 `response.content` 包含重复文本，那 L527 应该调用 `_has_degenerate_repeat`。
+
+让我精确计算 `_has_ngram_repeat` 对这段文本的行为：
+
+- base = `"我需要查看 clear_context 工具是如何定义的："` 
+- 长度：我(1)需(2)要(3)查(4)看(5) (6)c(7)l(8)e(9)a(10)r(11)_(12)c(13)o(14)n(15)t(16)e(17)x(18)t(19) (20)工(21)具(22)是(23)如(24)何(25)定(26)义(27)的(28)：(29) = **29 字符**（含空格）
+
+等等，让我精确数。中文字符每个1个，英文字母每个1个，空格1个：
+- 我需要查看 = 5
+- (空格) = 1
+- clear_context = 13
+- (空格) = 1
+- 工具是如何定义的 = 7
+- ： = 1
+- 总计 = 28 字符
+
+25次重复 = 700 字符。加上前缀 "现在让我看看 chatroom_tools.py 中 clear_context 的完整实现，以理解其模式：" ≈ 40字符。总计 ≈ 740 字符。
+
+`_has_ngram_repeat` L150: `len(text) < 40 * 3 = 120` → 740 > 120 ✓
+L152: `len(text) > 8000` → 740 < 8000 ✓
+
+L158: `for win in range(40, 19, -5)` → win = 40, 35, 30, 25, 20
+
+**win=40**: base=28。text 是 base 的28字符周期重复。
+- 位置 0 的 gram: text[0:40] = base + text[28:40] = base + base[0:12]
+- 位置 28 的 gram: text[28:68] = base + base[0:12] = **相同！**
+- 位置 56 的 gram: text[56:96] = base + base[0:12] = **相同！**
+
+非重叠检查：
+- non_overlap=1, last_end=0+40=40
+- p=28: 28 < 40 → 不计数
+- p=56: 56 >= 40 → non_overlap=2, last_end=56+40=96
+- p=84: 84 >= 96? **NO** → 不计数
+- p=112: 112 >= 96 → non_overlap=3 → **返回 True！**
+
+所以 `_has_ngram_repeat` 在 win=40 时就应该返回 True。
+
+**那到底为什么没拦截？**
+
+可能原因：
+1. `raw_content` 实际为空（文本在 reasoning_content 中）
+2. 重复文本不在 `response.content` 中，而是在其他地方
+3. 有其他代码路径绕过了检测
+
+让我检查是否有 `response.content` 为空但文本出现在别处的情况。看 broadcast.py 中 agent 消息是如何被展示的：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 510|         })
+511| 
+512|         raw_content = response.content or ""
+513|         logger.info(
+514|             "tool_loop iter {}: finish={} tools={} content='{}'",
+515|             iteration, response.finish_reason,
+516|             bool(response.has_tool_calls), raw_content,
+517|         )
+518| 
+519|         # ── Degenerate repetition guard ──────────────────────────────────
+520|         # Detect when the model falls into a self-reinforcing repetition
+521|         # loop (same sentence repeated ≥3 times).  Break immediately to
+522|         # avoid burning iterations / tokens on useless output.
+523|         _check_text = raw_content
+524|         # Also check reasoning/thinking content if present
+525|         if not _check_text and hasattr(response, "reasoning_content") and response.re… (3,054字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 595|                         tool_result = (
+596|                             (_seen_calls.get(dedup_key, "") or "")
+597|                             + "\n\n[DUPLICATE] 你已经用完全相同的参数调用过此工具，结果与上次一致。"
+598|                             "请使用不同的搜索词，或直接基于已有结果回答用户的问题。"
+599|                         )
+600|                         logger.warning(
+601|                             "tool_loop: DUPLICATE call skipped: {}({})",
+602|                             tc.name, args_str[:100],
+603|                         )
+604|                         result.tool_calls_detail.append({
+605|                             "name": tc.name,
+606|                             "args": args_str[:200],
+607|                             "result_len": len(tool_result),
+608|                             "result_preview": "[DUPLICATE… (2,720字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 88|     r"(?:</(?:minimax|anthropic|openai|meta):[^>]*>|$)",
+89|     re.I,
+90| )
+91| _TOOL_CALL_TAG_RE = re.compile(r"</?tool_call>[\s\S]*?(?:</tool_call>|$)", re.I)
+92| 
+93| # Tools that are idempotent and safe to dedup (same args => same result).
+94| # chatroom_send is included to prevent agents from looping identical messages
+95| # (e.g. sending the same greeting over and over, consuming all iterations).
+96| _DEDUP_TOOLS = frozenset({
+97|     "web_search", "web_fetch", "chatroom_send",
+98|     "exec", "list_dir", "read_file",
+99| })
+100| 
+101| # ── Degenerate repetition detection ────────────────────────────────────────
+102| 
+103| # Minimum n-gram length for sliding-window duplicate detection.
+104| # Shorter values catch more repetitions but increase false positives.
+105| _REPEAT_NGRAM_… (1,481字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 570|                 }
+571|                 for tc in response.tool_calls
+572|             ]
+573|             messages.append(_build(
+574|                 response.content,
+575|                 tool_calls=tool_call_dicts,
+576|                 reasoning_content=response.reasoning_content,
+577|                 thinking_blocks=response.thinking_blocks,
+578|             ))
+579| 
+580|             # ── Phase 1: Sequential pre-check (dedup, permission, progress) ──
+581|             pending: list[tuple] = []  # (tc, args_str, dedup_key)
+582|             _batch_dedup_keys: set[str] = set()  # track dedup keys within this batch
+583|             for tc in response.tool_calls:
+584|                 result.tools_used.append(tc.name)
+585| 
+586|                 args_str = json.dumps(tc.arguments, ensure_a… (2,246字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 645|                     })
+646|                     messages.append({
+647|                         "role": "tool",
+648|                         "tool_call_id": tc.id,
+649|                         "content": tool_result,
+650|                     })
+651|                     continue
+652| 
+653|                 # Permission guard: block unauthorized tool calls
+654|                 if _allowed_tools is not None and tc.name not in _allowed_t… (2,591字)
+  (还有 2 个工具调用，已省略)
+---

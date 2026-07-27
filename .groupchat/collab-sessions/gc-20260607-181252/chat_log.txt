@@ -1,0 +1,117 @@
+[用户]: hook是懒加载的脚本吗
+---
+[Harper]: 不是懒加载，是**事件驱动触发**。
+
+Git hook 是 Git 内置的脚本机制，放在 `.git/hooks/` 目录下。当特定 Git 事件发生时（比如 `checkout`、`commit`、`push`），Git 自动查找并执行对应名字的脚本。
+
+```
+.git/hooks/
+├── post-checkout      ← checkout完成后自动触发
+├── pre-commit
+├── prepare-commit-msg
+└── ...
+```
+
+**懒加载 vs 事件驱动的区别：**
+
+| | 懒加载 | 事件驱动（hook） |
+|---|---|---|
+| 触发方式 | 需要手动调用或定时轮询 | Git 操作自动触发 |
+| 时机 | 按需/按计划 | 绑定到具体 Git 事件 |
+| 示例 | systemd timer、cron job | post-checkout、pre-commit |
+
+这个项目的 post-checkout hook 只要你执行任何 `git checkout`，无论何时何地都会自动运行，不需要手动调用。
+---
+[Retriever]: 不是懒加载。hook 是 **Git 原生的事件回调机制**，每次 `git checkout` 都会同步触发。
+
+具体来说：
+
+**不是懒加载**——它不是在"用到的时候才加载"，而是：
+- **安装时机**：手动放到 `.git/hooks/post-checkout`（或者用 `git init` 时默认带模板）
+- **触发时机**：每次 `git checkout` 完成后立即执行（同步阻塞）
+- **生命周期**：脚本跑完才返回 shell 控制权给你
+
+所以当你执行：
+```bash
+git checkout v-stable-20260517
+```
+这条命令不会直接返回——它会等 hook 跑完（包括去配置仓库切版本、写 version-lock.json）才会回到提示符。整个过程是同步的，没有延迟加载的概念。
+
+类比：就像 npm 的 `postinstall` hook——装完包立刻跑，不是等你要用时才跑。
+
+[工具调用记录]
+• memory_palace(post-checkout hook 实现 触发时机 懒加载) → 🔍 5 result(s) for 'post-checkout hook 实现 触发时机 懒加载':
+
+[1] wing_code/post-checkout-hook (sim=0.347)
+  ## post-checkout hook 已落地（2026-06-05）
+
+**目标**：代码仓库切换版本时，自动将 /root/.nanobot（配置仓库）切到对应配置版本。
+
+**方案**：代码仓库的 `.git/hooks/post-checkout` 脚本，监听 checkout 事件，根据新签出的 tag/commit 自动切换配置仓库。
+
+**映射逻辑**（策略1→策略2）：
+1. **策略1**：代码 tag 在配置仓库中有同名 tag → 直接切过去
+2. **策略2**：无同名 tag → 找配置仓库中日期最接近的 commit
+
+**已验证映射**：
+| 代码标签 | .nanobot 切到 |
+|----------|--------------|
+| v-stable-20260511 | dbcba9e (v-stable-20260511) |
+| v-sta… (1,433字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• memory_palace(post-checkout hook 懒加载 lazy load 脚本 执行时机) → 🔍 5 result(s) for 'post-checkout hook 懒加载 lazy load 脚本 执行时机':
+
+[1] wing_code/post-checkout-hook (sim=0.286)
+  ## post-checkout hook 已落地（2026-06-05）
+
+**目标**：代码仓库切换版本时，自动将 /root/.nanobot（配置仓库）切到对应配置版本。
+
+**方案**：代码仓库的 `.git/hooks/post-checkout` 脚本，监听 checkout 事件，根据新签出的 tag/commit 自动切换配置仓库。
+
+**映射逻辑**（策略1→策略2）：
+1. **策略1**：代码 tag 在配置仓库中有同名 tag → 直接切过去
+2. **策略2**：无同名 tag → 找配置仓库中日期最接近的 commit
+
+**已验证映射**：
+| 代码标签 | .nanobot 切到 |
+|----------|--------------|
+| v-stable-20260511 | dbcba9e (v-stable-20260511)… (1,443字)
+• exec(cat /root/nanobot-src/.git/hooks/post-checkout 2>/dev/null || echo "NOT FOUND...) → #!/bin/bash
+# post-checkout hook: 代码仓库切换版本时，自动将配置仓库(.nanobot)切到对应版本
+# 映射规则：区间覆盖 — 以配置仓库中"最后一个 ≤ 代码版本日期"的里程碑为映射目标
+# 使用 git reset --hard 确保配置仓库干净切换
+
+CONFIG_REPO="/root/.nanobot"
+
+PREV_HEAD="$1"
+NEW_HEAD="$2"
+BRANCH_FLAG="$3"
+
+# 只在切换分支/标签时触发，跳过文件checkout (BRANCH_FLAG=0)
+[ "$BRANCH_FLAG" = "0" ] && exit 0
+
+# 获取新HEAD的标签名（优先取v-stable-*）
+CODE_TAG=$(git tag --points-at "$NEW_HEAD" | grep '^v-stable-' | sort -V | tail -1)
+
+if [ -z "$CODE_TAG" ]; then
+    echo "[config-lock] 无v-stable标签，跳过配置同步"
+    exit 0… (3,944字)
+• memory_palace() → ✅ Stored in wing_code/hook-execution-model (hidden)
+  Drawer ID: drawer_wing_code_hook-execution-model_1fbec566d0d70bf4a53d0fb0 (127字)
+• end_discussion() → ✅ 讨论已结束（原因: 用户问题已直接回答，hook代码已读取验证。），即将进入总结阶段 (44字)
+---
+[Kirk]: ## 结论
+
+**不是懒加载。** 是 Git 原生同步 hook，`git checkout` 时同步阻塞执行。
+
+## 关键发现
+
+- **触发方式**：Git 在 `git checkout`（切分支/标签）时自动调用 `.git/hooks/post-checkout`，hook 执行完之前 checkout 不返回
+- **前置过滤**：`BRANCH_FLAG=0`（文件级 checkout）直接 `exit 0` 跳过；`BRANCH_FLAG=1`（分支/标签切换）才执行配置同步
+- **执行模型**：同步阻塞，不是后台异步，不是按需加载
+
+懒加载 = 用到时才加载。这个 hook = 切版本时立刻执行，执行完才放行。本质是**事件驱动的同步脚本**。
+---

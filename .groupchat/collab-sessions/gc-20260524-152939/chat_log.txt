@@ -1,0 +1,458 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 📋 PROMPT PIPELINE
+
+▸ STATIC · before history · cache-friendly
+  → 💬 HISTORY · runtime
+▸ DYNAMIC · after history · per-turn
+
+🔒 auto · ✏️ global · 📂 agent · ● full · ○ empty · 👁 all · 👑 leader
+
+▸ STATIC
+  1. ✏️ 主提示 (main_prompt) · ●514字 · 👁
+  2. 📂 人设/SOUL (persona) · ●33字 · 👁
+  3. 🔒 hard_rules · ○空 · 👁
+  4. ✏️ 工具指令 (tool_instructions) · ●1,376字 · 👁
+  5. ✏️ 技能列表 (skills) · ○空 · 👁
+  6. 🔒 user_context · ●132字 · 👁
+  7. ✏️ 广播协调 (broadcast_hint) · ●689字 · 👁
+  8. ✏️ 群聊上下文 (group_context) · ●28字 · 👁
+  9. ✏️ 长期记忆 (memory) · ●850字 · 👁
+  10. 🔒 output_efficiency · ●619字 · 👁
+  11. ✏️ 后置指令 (instructions) · ●180字 · 👁
+  12. ✏️ 领袖指令 (leader_prompt) · ●875字 · Leader · 👑
+  13. ✏️ 群聊规范 (group_nudge) · ●154字 · 👁
+  14. ✏️ coding_principle (coding_principle) · ●181字 · 👁
+  15. ✏️ 记忆补充 (记忆补充) · ●137字 · 👁
+── 💬 HISTORY ──
+▸ DYNAMIC
+  16. 🔒 技能概览 (skills_overview) · ○空 · 👁
+  17. ✏️ 示例对话 (examples) · ○空 · 👁
+
+动态生成的显示却是空的
+---
+[Kirk]: 现在逻辑清楚了。让我确认一下 `examples` 为空的原因：
+
+[工具调用记录]
+• memory_palace(prompt pipeline 动态生成 skills_overview examples 配置) → 🔍 5 result(s) for 'prompt pipeline 动态生成 skills_overview examples 配置':
+
+[1] wing_code/prompt-memory-separation (sim=-0.201)
+  ## Prompt vs Memory 分层原则（2026-05-24 用户制定）
+
+核心逻辑：Prompt 每轮必定加载（零检索成本），Memory 需主动搜索（ChromaDB 语义匹配不可靠，短文本 sim 常为负）。
+
+### 写入 Prompt 的内容
+- 行为规则：工具调用优先级、搜索降级策略、输出格式
+- 操作协议：记忆搜索SOP、存储检查清单
+- 硬常量：≤300 chars 的运行时配置
+- 用户核心偏好：极简输出、结果导向
+
+### 写入 Memory 的内容
+- 环境配置详情：skill 清单、工具权限、路径
+- 调查结论：bug 根因、修复方案、架构决策
+- 用户领域偏好：艺术家列表、游戏数据
+- 项目状态：git 提交记录、配置变更历史
+
+### 判断标准
+- 每次任务都需要？→ Prompt
+- 只在特定场景需要… (1,995字)
+• memory_palace(prompt pipeline architecture static dynamic sections) → 🔍 5 result(s) for 'prompt pipeline architecture static dynamic sections':
+
+[1] wing_prompt/prompt-order-optimization (sim=-0.504)
+  ## prompt_order 加载优先级（2026-05-23 验证）
+
+**关键发现**：`_load_prompt_order()` 代码（prompt_builder.py L314-332）的加载顺序是：
+1. **prompt_manifest.json 优先** — 按 components[].order 排序
+2. prompt_order.json 是 fallback
+
+所以只改 prompt_order.json 不够，必须同步改 prompt_manifest.json 中 memory 的 order 值。
+
+**已修复**：
+- prompt_manifest.json: memory order 8→1（紧跟 main_prompt）
+- prompt_order.json: memory 已在… (2,030字)
+• memory_palace() → ## L2 — ON-DEMAND (1 drawers)
+  [prompt-order-optimization] ## prompt_order 加载优先级（2026-05-23 验证）  **关键发现**：`_load_prompt_order()` 代码（prompt_builder.py L314-332）的加载顺序是： 1. **prompt_manifest.json 优先** — 按 components[].order 排序 2. prompt_order.json 是 fallback  所以只改 prompt_order.json 不够，必须同步改 prompt_manifest.json 中 memory 的 order 值。  **已修复**： - prompt_manifes... (360字)
+• memory_palace() → ## L2 — ON-DEMAND (1 drawers)
+  [per-agent-prompt-mechanism] ## Per-Agent 独立 Prompt 机制分析（2026-05-24）  用户需求：每个 agent 有独立 prompt，只有该 agent 可见；只有 leader 能编辑全局 prompt。  ### 现有机制 1. **INSTRUCTIONS.md** — 每个 agent 目录下的独立文件，只有该 agent 加载和可见。这就是 per-agent 独立 prompt。 2. **editable_by** — 控制编辑权限：`global`（任何agent可编辑）、`agent`（仅该agent可编辑）、`none`（不可编辑） 3. **visibility** ... (361字)
+• exec(find /root/nanobot-src/nanobot -name "prompt_builder.py" -o -name "prompt_man...) → /root/nanobot-src/nanobot/groupchat/history/prompt_builder.py
+
+
+Exit code: 0 (76字)
+• exec(find /root/nanobot-src/nanobot -name "prompt_manifest.json" -o -name "prompt_...) → Exit code: 0 (13字)
+• exec(find /root/nanobot-src -name "prompt_manifest*" -o -name "prompt_order*" -o -...) → /root/nanobot-src/.git/config-versions.git/prompt_order.json
+/root/nanobot-src/.git/config-versions.git/prompt_visibility_v1_backup.json
+/root/nanobot-src/.git/config-versions.git/prompt_order.json.backup_20260417_v2
+/root/nanobot-src/.git/config-versions.git/prompt_visibility.json
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/prompt_order.json
+/root/nanobot-src/.git/config-versions.git/.backup_pre_vcs/prompt_visibility_v1_backup.json
+/root/nanobot-src/.git/config-versions.git/.back… (814字)
+• exec(find /root/nanobot-src/nanobot -name "*.py" | xargs grep -l "skills_overview\...) → /root/nanobot-src/nanobot/providers/registry.py
+/root/nanobot-src/nanobot/groupchat/history/agent_loader.py
+/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py
+/root/nanobot-src/nanobot/channels/telegram/callbacks.py
+/root/nanobot-src/nanobot/channels/telegram/commands/settings.py
+/root/nanobot-src/nanobot/skills/skill-creator/scripts/init_skill.py
+/root/nanobot-src/nanobot/skills/loader.py
+
+
+Exit code: 0 (418字)
+• exec(grep -n "skills_overview\|examples\|DYNAMIC\|dynamic" /root/nanobot-src/nanob...) → 36:    "history", "skills_overview", "examples", "group_nudge",
+47:    "examples": "示例对话 (examples)",
+52:    "skills_overview": "技能概览 (skills_overview)",
+56:    "broadcast_hint", "examples", "instructions", "leader_prompt", "group_nudge",
+57:    "skills_overview",
+73:    # dynamic = after history, volatile template vars available ({{datetime}}, {{round}})
+74:    "history": "dynamic",
+75:    "skills_overview": "dynamic",
+76:    "group_context": "dynamic",
+77:    "examples": "dynamic",
+78:    "gro… (1,440字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 620| 
+621|     def _build_skills_overview(self) -> str:
+622|       … (2,034字)
+  (还有 4 个工具调用，已省略)
+---
+[Kirk]: 逻辑链条完整了。修复方案很明确——第379-380行对动态组件用了错误的检测方法。直接改：
+
+[工具调用记录]
+• exec(grep -rn "PROMPT PIPELINE\|prompt_pipeline\|pipeline.*display\|组件.*字" /root/n...) → /root/nanobot-src/nanobot/channels/telegram/commands/settings.py:347:        lines = ["📋 PROMPT PIPELINE\n"]
+
+
+Exit code: 0 (123字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/commands/settings.py) → 330|         "leader_prompt": "Leader",
+331|     }
+332| 
+333|     def _build_prompt_order_view(self, engine, manage_mode: bool = False) -> tuple[str, "InlineKeyboardMarkup"]:
+334|         """Build the global prompt component order view.
+335| 
+336|         manage_mode=False: compact — one button per component (name only).
+337|         manage_mode=True:  full — name + reorder/delete/visibility buttons.
+338|         """
+339|         order = engine.prompt_builder.get_agent_prompt_order()
+340|         labels = _COMPONENT_LABELS
+341|         global_editable = _GLOBAL_EDITABLE
+342|         agent_editable = _AGENT_EDITABLE
+343|         conditional_tags = self._CONDITIONAL_TAGS
+344| 
+345|         phases = _COMPONENT_PHASES
+346| 
+347|         lines = ["📋 PROMPT PIPELINE\n"]
+348|         lines.append… (5,703字)
+• exec() → ---
+534:            return self.get_component_template("main_prompt") or (
+541:            tpl = self.get_component_template("group_context")
+549:            return self.get_component_template("memory")
+551:            return self.get_component_template("tool_instructions")
+567:            return self.get_component_template("leader_prompt") or "[Leader prompt — 自动生成]"
+569:            return self.get_component_template(key)
+571:        return self.get_component_template(key)
+659:    def get_compo… (546字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 659|     def get_component_template(key: str) -> str:
+660|         # ~/.nanobot/prompts/{key}.md is authoritative — always checked first.
+661|         f = Path.home() / ".nanobot" / "prompts" / f"{key}.md"
+662|         if f.exists():
+663|             try:
+664|                 content = f.read_text().strip()
+665|                 if content:
+666|                     return content
+667|             except Exception:
+668|                 pass
+669|         # Fall back to in-code defaults.
+670|         return TEMPLATES.get(key, "")
+671| 
+672|     # ── Prompt building ──
+673| 
+674|     def build_agent_prompt(
+675|         self,
+676|         agent_name: str,
+677|         *,
+678|         registry: dict[str, dict],
+679|         active_agents: list[str],
+680|         history: list[dict[str, str]],
+68… (1,211字)
+• exec(grep -n "TEMPLATES\s*=" /root/nanobot-src/nanobot/groupchat/history/prompt_bu...) → Exit code: 0 (13字)
+• exec(grep -rn "^TEMPLATES\|^_TEMPLATES\|TEMPLATES\s*=" /root/nanobot-src/nanobot/g...) → /root/nanobot-src/nanobot/groupchat/history/prompt_builder.py:227:TEMPLATES: dict[str, str] = {
+
+
+Exit code: 0 (110字)
+• exec() → ===
+    "examples": "",
+
+
+Exit code: 0 (38字)
+• exec(sed -n '227,350p' /root/nanobot-src/nanobot/groupchat/history/prompt_builder....) → "main_prompt": (
+        "Write {{agent}}'s next reply in a group chat. "
+        "Write 1 reply only in character as {{agent}}. "
+        "Do not write as or for other characters. "
+        "Focus on executing the user's request — do not just greet or ask what to do."
+    "group_context": (
+        "[Start a new group chat. Group members: {{members}}]"
+    "persona": "[从 SOUL.md 加载 — 在 /editagent 中编辑]",
+    "tool_instructions": "",  # Loaded from ~/.nanobot/prompts/tool_instructions.md
+    "bro… (2,895字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/commands/settings.py) → 340|         labels = _COMPONENT_LABELS
+341|         global_editable = _GLOBAL_EDITABLE
+342|         agent_editable = _AGENT_EDITABLE
+343|         conditional_tags = self._CONDITIONAL_TAGS
+344| 
+345|         phases = _COMPONENT_PHASES
+346| 
+347|         lines = ["📋 PROMPT PIPELINE\n"]
+348|         lines.append("▸ STATIC · before history · cache-friendly")
+349|         lines.append("  → 💬 HISTORY · runtime")
+350|         lines.append("▸ DYNAMIC · after history · per-turn\n")
+351|         lines.append("🔒 au… (3,594字)
+  (还有 2 个工具调用，已省略)
+---
+[Kirk]: 验证修复：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/channels/telegram/commands/settings.py) → 375|             else:
+376|                 edit_icon = "🔒"
+377| 
+378|             label = labels.get(key, key)
+379|             tpl = PromptBuilder.get_component_template(key)
+380|             status = f"●{len(tpl):,}字" if tpl else "○空"
+381| 
+382|             cond = conditional_tags.get(key, "")
+383|             cond_str = f" · {cond}" if cond else ""
+384| 
+385|             vis = engine.prompt_builder.get_component_visibility(key)
+386|             vis_icon = "👁" if vis == "all" else "👑"
+387| 
+388|             lines.append(f"  {display_num}. {edit_icon} {label} · {status}{cond_str} · {vis_icon}")
+389| 
+
+(Showing lines 375-389 of 619. Use offset=390 to continue.) (670字)
+• exec(grep -n "get_component_template\|get_component_content\|render_component\|_re...) → 485:            content = self._get_component_content(agent_name, agent, key, active_agents)
+518:    def _get_component_content(
+534:            return self.get_component_template("main_prompt") or (
+541:            tpl = self.get_component_template("group_context")
+549:            return self.get_component_template("memory")
+551:            return self.get_component_template("tool_instructions")
+553:            return self._build_skills_content()
+567:            return self.get_component_templa… (1,323字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 659|     def get_component_template(key: str) -> str:
+660|         # ~/.nanobot/prompts/{key}.md is authoritative — always checked first.
+661|         f = Path.home() / ".nanobot" / "prompts" / f"{key}.md"
+662|         if f.exists():
+663|             try:
+664|                 content = f.read_text().strip()
+665|                 if content:
+666|                     return content
+667|             except Exception:
+668|                 pass
+669|         # Fall back to in-code defaults.
+670|         return TEMPLATES.get(key, "")
+671| 
+672|     # ── Prompt building ──
+673| 
+674|     def build_agent_prompt(
+675|         self,
+676|         agent_name: str,
+677|         *,
+678|         registry: dict[str, dict],
+
+(Showing lines 659-678 of 878. Use offset=679 to continue.) (775字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 518|     def _get_component_content(
+519|         self,
+520|         agent_name: str,
+521|         agent: dict,
+522|         key: str,
+523|         active_agents: list[str],
+524|         leader: str | None = None,
+525|     ) -> str:
+526|         # Per-agent .md override (for keys that support it)
+527|         if key in self._PER_AGENT_FILES:
+528|             per_agent = self._get_agent_file(agent, self._PER_AGENT_FILES[key])
+529|             if per_agent:
+530|                 return per_agent
+531| 
+532|         if key == "main_prompt":
+533|             # Fall back to global template, then hardcoded default
+534|             return self.get_component_template("main_prompt") or (
+535|                 f"Write {agent_name}'s next reply in a fictional group chat. "
+536|                 f"Write 1… (1,476字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 548|         elif key == "memory":
+549|             return self.get_component_template("memory")
+550|         elif key == "tool_instructions":
+551|             return self.get_component_template("tool_instructions")
+552|         elif key == "skills":
+553|             return self._build_skills_content()
+554|         elif key == "skills_overview":
+555|             return self._build_skills_overview()
+556|         elif key == "examples":
+557|             return agent.get("examples", "")
+558|         elif key == "history":
+559|             return "[聊天记录 — 动态插入]"
+560|         elif key == "instructions":
+561|             return agent.get("instructions", "")
+562|         elif key == "leader_prompt":
+563|             # Always return the template content here.
+564|             # Whether this compon… (1,775字)
+• exec(grep -n "_build_skills_overview" /root/nanobot-src/nanobot/groupchat/history/...) → (116字)
+  (还有 5 个工具调用，已省略)
+---
+[Kirk]: 问题已修复。dynamic 组件（`skills_overview`、`examples`）现在会显示 `⚡动态` 而非误导性的 `○空`。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/channels/telegram/commands/settings.py) → 378|             label = labels.get(key, key)
+379|             if phase == "dynamic":
+380|                 # Dynamic components are rendered at runtime, not stored as
+381|                 # static templates.  Show a runtime indicator instead of a
+382|                 # char count which would always be 0.
+383|                 status = "⚡动态"
+384|             else:
+385|                 tpl = PromptBuilder.get_component_template(key)
+386|                 status = f"●{len(tpl):,}字" if tpl else "○空"
+387| 
+388|             cond = conditional_tags.get(key, "")
+389|             cond_str = f" · {cond}" if cond else ""
+390| 
+391|             vis = engine.prompt_builder.get_component_visibility(key)
+392|             vis_icon = "👁" if vis == "all" else "👑"
+
+(Showing lines 378-392 of 625. Use offset=393… (814字)
+• memory_palace() → ✅ Stored in wing_code/prompt-pipeline-display-fix (hidden)
+  Drawer ID: drawer_wing_code_prompt-pipeline-display-fix_3521326cfcbf7c834767d904 (141字)
+• end_discussion() → ✅ 讨论已结束（原因: 问题已定位并修复，dynamic组件不再误显示为空），即将进入总结阶段 (47字)
+---
+[Kirk]: ## 结论
+
+Dynamic 组件显示"○空"是误报，不是真的空。
+
+**根因**：pipeline 视图用 `get_component_template()` 查**静态模板文件**来判断内容。但 `skills_overview` 和 `examples` 是运行时动态生成的（`_build_skills_overview()` + agent 配置），根本没有静态模板文件，所以永远返回空。
+
+**修复**：`settings.py` 第378-386行，对 `phase == "dynamic"` 的组件显示 `⚡动态` 标记：
+
+```python
+if phase == "dynamic":
+    status = "⚡动态"
+else:
+    tpl = PromptBuilder.get_component_template(key)
+    status = f"●{len(tpl):,}字" if tpl else "○空"
+```
+
+修复后效果：
+```
+▸ DYNAMIC
+  16. 🔒 技能概览 (skills_overview) · ⚡动态 · 👁
+  17. ✏️ 示例对话 (examples) · ⚡动态 · 👁
+```
+---
+[用户]: 动态生成的提示词需要显示具体的生成代码文件名或者函数名，确保直观
+---
+[Kirk]: ## 结论
+
+`settings.py` 第382-390行新增 `_DYN_SOURCE` 映射，dynamic 组件不再显示笼统的 `⚡动态`，而是显示具体生成来源。
+
+## 修改效果
+
+```
+▸ DYNAMIC
+  16. 🔒 技能概览 (skills_overview) · ⚡_build_skills_overview() · 👁
+  17. ✏️ 示例对话 (examples) · ⚡agent.examples · 👁
+  18. ✏️ 群聊规范 (group_nudge) · ⚡group_nudge.md · 👁
+  19. ✏️ coding_principle · ⚡coding_principle.md · 👁
+  20. ✏️ 记忆补充 · ⚡记忆补充.md · 👁
+```
+
+## 来源映射
+
+| 组件 | 显示 | 实际生成方式 |
+|---|---|---|
+| `history` | `⚡runtime` | 聊天记录动态插入 |
+| `skills_overview` | `⚡_build_skills_overview()` | prompt_builder.py 函数 |
+| `group_context` | `⚡模板+{{members}}` | 模板+变量展开 |
+| `examples` | `⚡agent.examples` | agent 配置字段 |
+| `group_nudge` | `⚡group_nudge.md` | `~/.nanobot/prompts/` 模板文件 |
+| `coding_principle` | `⚡coding_principle.md` | 同上 |
+| `记忆补充` | `⚡记忆补充.md` | 同上 |
+
+[工具调用记录]
+• memory_palace(prompt pipeline dynamic components skills_overview examples display settings.py) → 🔍 5 result(s) for 'prompt pipeline dynamic components skills_overview examples display settings.py':
+
+[1] wing_code/prompt-pipeline-display-fix (sim=0.049)
+  修复 prompt pipeline 显示问题：dynamic 组件（skills_overview, examples）显示"○空"是因为 pipeline 视图用 get_component_template() 查静态模板，但 dynamic 组件是运行时生成的，没有静态模板文件。修复：对 phase=="dynamic" 的组件显示"⚡动态"标记而非字数统计。文件：/root/nanobot-src/nanobot/channels/telegram/commands/settings.py 第378-386行。
+
+[2] wing_prompt/prompt-order-optimization (sim=-0.268)
+  ## prompt_order 加载优先… (2,053字)
+• read_file(/root/nanobot-src/nanobot/channels/telegram/commands/settings.py) → 370| 
+371|             if key in global_editable:
+372|                 edit_icon = "✏️"
+373|             elif key in agent_editable:
+374|                 edit_icon = "📂"
+375|             else:
+376|                 edit_icon = "🔒"
+377| 
+378|             label = labels.get(key, key)
+379|             if phase == "dynamic":
+380|                 # Dynamic components are rendered at runtime, not stored as
+381|                 # static templates.  Show a runtime indicator instead of a
+382|                 # char count which would always be 0.
+383|                 status = "⚡动态"
+384|             else:
+385|                 tpl = PromptBuilder.get_component_template(key)
+386|                 status = f"●{len(tpl):,}字" if tpl else "○空"
+387| 
+388|             cond = conditional_tags.get(key, "")
+389| … (1,274字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 548|         elif key == "memory":
+549|             return self.get_component_template("memory")
+550|         elif key == "tool_instructions":
+551|             return self.get_component_template("tool_instructions")
+552|         elif key == "skills":
+553|             return self._build_skills_content()
+554|         elif key == "skills_overview":
+555|             return self._build_skills_overview()
+556|         elif key == "examples":
+557|             return agent.get("examples", "")
+558|         elif key == "history":
+559|             return "[聊天记录 — 动态插入]"
+560|         elif key == "instructions":
+561|             return agent.get("instructions", "")
+562|         elif key == "leader_prompt":
+563|             # Always return the template content here.
+564|             # Whether this compon… (1,775字)
+• exec(grep -n '"dynamic"' /root/nanobot-src/nanobot/groupchat/history/prompt_builde...) → 74:    "history": "dynamic",
+75:    "skills_overview": "dynamic",
+76:    "group_context": "dynamic",
+77:    "examples": "dynamic",
+78:    "group_nudge": "dynamic",
+79:    "coding_principle": "dynamic",
+80:    "记忆补充": "dynamic",
+455:        phase = phase if phase in ("static", "dynamic") else "static"
+746:            # "dynamic" components (after history in manifest) get all_tpl_vars;
+748:            tpl_vars = all_tpl_vars if COMPONENT_PHASES.get(key) == "dynamic" else stable_tpl_vars
+
+
+Exit cod… (504字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 70|     "leader_prompt": "static",
+71|     "instructions": "static",
+72|     "memory": "static",
+73|     # dynamic = after history, volatile template vars available ({{datetime}}, {{round}})
+74|     "history": "dynamic",
+75|     "skills_overview": "dynamic",
+76|     "group_context": "dynamic",
+77|     "examples": "dynamic",
+78|     "group_nudge": "dynamic",
+79|     "coding_principle": "dynamic",
+80|     "记忆补充": "dynamic",
+81| }
+82| 
+83| # Module-level dicts/sets — populated from manifest at import time.
+84| # These remain the public API consumed by:
+
+(Showing lines 70-84 of 878. Use offset=85 to continue.) (613字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py) → 518|     def _get_component_content(
+519|         self,
+520|         agent_name: str,
+521|         agent: dict,
+522|         key: str,
+523|         active_agents: list[str],
+524|         leader: str | None = None,
+525|     ) -> str:
+526|         # Per-agent .md override (for keys that support it)
+527|         if key … (1,965字)
+  (还有 9 个工具调用，已省略)
+---

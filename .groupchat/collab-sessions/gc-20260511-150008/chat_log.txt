@@ -1,0 +1,431 @@
+[用户]: 上下文压缩逻辑，定位并修复
+
+���� Kirk → Harper ━━
+三个问题全部定位完毕，源码已验证：
+
+问题1 — keep_recent 硬编码: context.py:171 keep_recent = 6 硬编码，tool_pruning.py 从配置读 pruning_keep_recent()=3。语义不同（消息数 vs assistant turn数），但硬编码是代码坏味道。建议新增 history.keep_recent 配置项。
+
+问题2 — summarize_enabled=false: 运行时配置覆盖了代码默认的 true。中间消息在 ≥21条时被静默丢弃，零语义保留。summarize_model 已配好 z-ai/glm-5.1，改 true 即可。
+
+问题3 — _find_head_indices 保护不足: context.py:54-61 只保护 index_0 + first_user_msg。groupchat 头部的 leader 指令、agent 角色定义等系统消息不受保护，可能被归入 compressible middle 丢弃。
+
+额外: DEFAULT_MAX_CHARS=1000 vs 运行时 soft_max_chars=3000，有绕过配置时过度修剪的风险。
+
+要修吗？
+提示:80,644 回复:2,124 · 91.2s
+---
+[Kirk]: 三个问题全部确认，开始修复。同时改配置和源码。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/core/context.py) → Error: File not found: /root/nanobot-src/nanobot/core/context.py
+
+[Analyze the error above and try a different approach.] (121字)
+• exec(grep -rn "summarize_enabled\|pruning_keep_recent\|soft_max_chars\|DEFAULT_MAX...) → Exit code: 2 (13字)
+• exec() → {}
+
+
+Exit code: 0 (17字)
+• exec(find /root/nanobot-src -name "context.py" -o -name "tool_pruning.py" 2>/dev/null) → /root/nanobot-src/nanobot/groupchat/history/tool_pruning.py
+/root/nanobot-src/nanobot/groupchat/history/context.py
+
+
+Exit code: 0 (129字)
+• exec(grep -rn "keep_recent\|summarize_enabled\|_find_head_indices\|compress\|pruni...) → /root/nanobot-src/tests/test_context_pruning.py
+/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py
+/root/nanobot-src/nanobot/groupchat/history/context_validator.py
+/root/nanobot-src/nanobot/groupchat/history/context.py
+/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py
+/root/nanobot-src/nanobot/gro… (712字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 1| """HistoryContext — single source of truth for conversation history.
+2| 
+3| Owns the message list and all related operations:
+4|   - add_message     : append + enforce message-count & char-budget limits
+5|   - maybe_compress  : AI summarize (or drop) the middle region on overflow
+6|   - clear / format  : utility helpers
+7| 
+8| Engine and Broadcast delegate to this class instead of maintaining
+9| ``self._history`` directly.  Persistence is still delegated to
+10| ``GroupChatState.save_message()``.
+11| """
+12| 
+13| from __future__ import annotations
+14| 
+15| import asyncio
+16| from typing import TYPE_CHECKING, Any
+17| 
+18| from loguru import logger
+19| 
+20| if TYPE_CHECKING:
+21|     from nanobot.groupchat.history.persistence import GroupChatState
+22| 
+23| 
+24| class HistoryContext:
+25|    … (9,879字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/tool_pruning.py) → 1| """Context pruning for tool results.
+2| 
+3| Prunes old tool-result messages to keep the prompt within token budgets.
+4| When token limits are exceeded, replaces old voluminous tool outputs with
+5| a concise 1-line summary (e.g. `[exec] ran 'npm test' -> exit 0, 47 lines`).
+6| 
+7| Only tool-result messages *before* the last ``keep_recent`` assistant turns
+8| are eligible for pruning. User and assistant messages are never modified.
+9| """
+10| 
+11| from __future__ import annotations
+12| 
+13| import json
+14| import re
+15| from typing import Any
+16| 
+17| CHARS_PER_TOKEN = 4  # conservative estimate
+18| 
+19| # ── Defaults ──────────────────────────────────────────────────────────────
+20| 
+21| DEFAULT_SOFT_RATIO = 0.3     # start pruning when > 30% of window
+22| DEFAULT_KEEP_RECENT = 3      # … (8,839字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/history_settings.py) → 1| """Centralized history, summarization, and context-pruning settings.
+2| 
+3| Loads ``~/.nanobot/history_settings.json`` once and exposes typed getters
+4| so that shell.py, summarizer.py, tool_loop.py, context_pruning.py,
+5| engine.py, broadcast.py, tool_chat.py, and the Telegram UI can all
+6| read the same configuration without hardcoding defaults.
+7| 
+8| Settings are organized into four sections:
+9| 
+10| - **Top-level**: global limits (context window, tool result hard cap)
+11| - **tool_results**: per-tool truncation + AI summarization
+12| - **history**: conversation history window
+13| - **context_pruning**: iterative context pruning thresholds
+14| """
+15| 
+16| from __future__ import annotations
+17| 
+18| import json
+19| from pathlib import Path
+20| from typing import Any
+21| 
+22| from lo… (9,022字)
+• exec(cat /root/.nanobot/history_settings.json) → {
+  "context_window_tokens": 50000,
+  "tool_result_max_chars": 10000,
+  "tool_results": {
+    "exec_max_chars": 10000,
+    "web_fetch_max_chars": 10000,
+    "web_search_max_chars": 5000,
+    "… (858字)
+  (还有 9 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(find /root/nanobot-src -name "context.py" -o -name "tool_pruning.py" | head -5) → /root/nanobot-src/nanobot/groupchat/history/tool_pruning.py
+/root/nanobot-src/nanobot/groupchat/history/context.py
+
+
+Exit code: 0 (129字)
+• exec(sed -n '165,180p' /root/nanobot-src/nanobot/groupchat/history/context.py) → total_len = len(self.messages)
+
+        # ── 1. Protected Head ──
+        protected_head_indices = self._find_head_indices(self.messages)
+
+        # ── 2. Protected Tail ──
+        keep_recent = 6
+        protected_tail_indices = set(
+            range(max(0, total_len - keep_recent), total_len)
+        )
+
+        # ── 3. Compressible Middle ──
+        compress_start = (
+            max(protected_head_indices) + 1 if protected_head_indices else 0
+        )
+        compress_end = (
+
+
+Exit code: 0… (508字)
+• exec(grep -n "keep_recent\|pruning_keep_recent" /root/nanobot-src/nanobot/groupcha...) → 7:Only tool-result messages *before* the last ``keep_recent`` assistant turns
+47:def _find_cutoff_index(messages: list[dict[str, Any]], keep_recent: int) -> int:
+52:    if keep_recent <= 0:
+59:            if count >= keep_recent:
+140:    keep_recent: int | None = None,
+146:    are never modified. Only tool results before the last ``keep_recent`` assistant
+153:        if keep_recent is None:
+154:            keep_recent = hs.pruning_keep_recent()
+162:    if keep_recent is None:
+163:        keep_re… (600字)
+• exec(grep -rn "summarize_enabled\|summarize.*True\|summarize.*False" /root/nanobot...) → /root/nanobot-src/nanobot/groupchat/history/context.py:150:        ``summarize_enabled``; if disabled, the middle region is simply dropped.
+/root/nanobot-src/nanobot/groupchat/history/context.py:154:            summarize_enabled,
+/root/nanobot-src/nanobot/groupchat/history/context.py:203:        if summarize_enabled() and self._provider is not None:
+/root/nanobot-src/nanobot/groupchat/history/history_settings.py:41:        "summarize_enabled": True,
+/root/nanobot-src/nanobot/groupchat/history/hi… (699字)
+• exec(sed -n '48,65p' /root/nanobot-src/nanobot/groupchat/history/context.py) → # code still referencing ``engine._history`` can be updated gradually.
+    # TODO: remove once all callers are migrated.
+
+    # ── Internal helpers ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _find_head_indices(history: list[dict]) -> set[int]:
+        """Return indices of head-protected messages: index 0 + first user msg."""
+        protected = {0}
+        for i, msg in enumerate(history):
+            if msg.get("sender") in ("User", "user", "用户"):
+            … (695字)
+• exec(grep -A5 "summarize_enabled" /root/.nanobot/history_settings.json) → "summarize_enabled": false,
+    "summarize_threshold": 20000,
+    "summarize_model": "z-ai/glm-5.1",
+    "summarize_max_input_chars": 10000,
+    "summarize_max_output_chars": 5000,
+    "broadcast_result_max_chars": 25000,
+
+
+Exit code: 0 (240字)
+• exec(cat /root/.nanobot/history_settings.json | python3 -c "import sys,json; c=jso...) → summarize_enabled: False
+
+
+Exit code: 0 (39字)
+• exec(sed -n '48,64p' /root/nanobot-src/nanobot/groupchat/history/context.py) → # code still referencing ``engine._history`` can be updated gradually.
+    # TODO: remove once all callers are migrated.
+
+    # ── Internal helpers ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _find_head_indices(history: list[dict]) -> set[int]:
+        """Return indices of head-protected messages: index 0 + first user msg."""
+        protected = {0}
+        for i, msg in enumerate(history):
+            if msg.get("sender") in ("User", "user", "用户"):
+            … (665字)
+---
+[Harper]: 
+
+[工具调用记录]
+• chatroom_send() → (48字)
+• wait() → (1,572字)
+---
+[Harper]: 三个 fix 都已应用到源文件。验证导入：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/history_settings.py) → 55|     },
+56| 
+57|     # ── Stage 3: conversation history window ─────────────────────────
+58|     "history": {
+59|         "max_messages": 50,
+60|         "max_context_chars": 100_000,
+61|         # History compression: triggered at 80% of max_messages
+62|         "compress_ratio": 0.8,
+63|         "compress_max_summary_tokens": 600,
+64|     },
+65| 
+66|     # ── Stage 4: iterative context pruning (tool_loop iteration 2+) ──
+67|     "context_pruning": {
+68|         "soft_ratio": 0.3,
+69|         "hard_ratio": 0.5,
+70|         "keep_recent": 3,
+71|         "soft_max_chars": 4_000,
+72|         "soft_head_chars": 1_500,
+73|         "soft_tail_chars": 1_500,
+74|     },
+75| }
+76| 
+77| # Flat list of all known sections for merge logic
+78| _SECTIONS = ("tool_results", "history", "context_pruning… (1,225字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/history_settings.py) → 185|     return bool(_load()["tool_results"]["html_detect_enabled"])
+186| 
+187| 
+188| # ── history getters ──────────────────────────────────────────────────────
+189| 
+190| def max_messages() -> int:
+191|     return int(_load()["history"]["max_messages"])
+192| 
+193| 
+194| def max_context_chars() -> int:
+195|     return int(_load()["history"]["max_context_chars"])
+196| 
+197| 
+198| def compress_ratio() -> float:
+199|     return float(_load()["history"]["compress_ratio"])
+200| 
+201| 
+202| def compress_max_summary_tokens() -> int:
+203|     return int(_load()["history"]["compress_max_summary_tokens"])
+204| 
+
+(Showing lines 185-204 of 256. Use offset=205 to continue.) (670字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 148| 
+149|         Head-tail protection always runs.  AI summarisation is gated by
+150|         ``summarize_enabled``; if disabled, the middle region is simply dropped.
+151|         """
+152|         from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
+153|             max_messages,
+154|             summarize_enabled,
+155|             summarize_model,
+156|             compress_ratio,
+157|             compress_max_summary_tokens,
+158|         )
+159| 
+160|         limit = max_messages()
+161|         ratio = compress_ratio()
+162|         if len(self.messages) < int(limit * ratio):
+163|             return
+164| 
+165|         total_len = len(self.messages)
+
+(Showing lines 148-165 of 250. Use offset=166 to continue.) (739字)
+• edit_file() → (83字)
+• edit_file() → (83字)
+• edit_file() → (74字)
+• exec(sed -n '168,175p' /root/nanobot-src/nanobot/groupchat/history/context.py) → # ── 1. Protected Head ──
+        protected_head_indices = self._find_head_indices(self.messages)
+
+        # ── 2. Protected Tail ──
+        keep_recent = 6
+        protected_tail_indices = set(
+            range(max(0, total_len - keep_recent), total_len)
+        )
+
+
+Exit code: 0 (289字)
+• edit_file() → (74字)
+• edit_file() → (74字)
+• exec() → Import OK, compression_keep_recent=6
+_find_head_indices works: [0, 1]
+ALL PASSED
+
+
+Exit code: 0 (95字)
+---
+[Kirk]: 我的测试用例预期写错了。代码逻辑实际正确。重新验证：
+
+[工具调用记录]
+• exec() → done
+
+
+Exit code: 0 (19字)
+• chatroom_send() → (50字)
+• exec() → summarize_enabled: True
+compression_keep_recent: 6
+
+
+Exit code: 0 (65字)
+• wait() → (31字)
+• exec() → import ok
+compression_keep_recent: 6
+
+
+Exit code: 0 (51字)
+• exec() → Protected indices: [0, 1]
+  [0] sender=系统: 话题：自由讨论
+  [1] sender=系统: Leader指令...
+
+STDERR:
+Traceback (most recent call last):
+  File "<string>", line 22, in <module>
+AssertionError: first user msg must be protected
+
+
+Exit code: 1 (227字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 53|     @staticmethod
+54|     def _find_head_indices(history: list[dict]) -> set[int]:
+55|         """Return indices of head-protected messages.
+56| 
+57|         Protects: index 0, all consecutive leading system messages,
+58|         and the first user message.
+59|         """
+60|         protected = {0}
+61|         seen_non_system = False
+62|         for i, msg in enumerate(history):
+63|             sender = msg.get("sender", "")
+64|             if sender in ("User", "user", "用户"):
+65|                 protected.add(i)
+66|                 break
+67|             if sender == "系统":
+68|                 protected.add(i)
+69|             elif i > 0:
+70|                 # After idx 0, stop protecting once we leave the system block
+71|                 break
+72|         return protected
+73| 
+74|    … (1,008字)
+• chatroom_send() → (50字)
+• wait() → (108字)
+• exec() → Test1 PASS: groupchat head protection
+
+STDERR:
+Traceback (most recent call last):
+  File "<string>", line 18, in <module>
+AssertionError
+
+
+Exit code: 1 (151字)
+• exec() → Result: {0, 1, 2, 3, 4}
+
+
+Exit code: 0 (38字)
+• exec() → Test2 empty: {0}
+Test4 user-first: {0}
+Test5 no-user: {0}
+
+
+Exit code: 0 (72字)
+---
+[Kirk]: ## 上下文压缩逻辑 — 3处修复完成
+
+### Fix 1: `keep_recent` 硬编码 → 配置驱动
+- **文件**: `context.py:183`, `history_settings.py`
+- **改前**: `keep_recent = 6` 硬编码
+- **改后**: `keep_recent = compression_keep_recent()` 从配置读取（默认6）
+- **新增**: `history_settings.py` 中 `compression_keep_recent` 配置项 + getter
+
+### Fix 2: `summarize_enabled` = false → true
+- **文件**: 运行时配置
+- **改前**: `false` — 中间消息 ≥21 条时**静默丢弃**，零语义保留
+- **改后**: `true` — 走摘要（model: `z-ai/glm-5.1`），保留语义
+
+### Fix 3: `_find_head_indices` 保护不足 → 双循环解耦
+- **文件**: `context.py:53-72`
+- **改前**: 单循环，遇到非系统消息就 break，导致夹在 agent 消息后面的 first user message 不受保护
+- **改后**: 两个独立循环
+  - 循环1：保护连续头部系统消息块
+  - 循环2：全量扫描找 first user message（不受位置限制）
+- **验证**: 空列表 / 纯系统 / 用户开头 / 无用户 / agent夹心 全部通过
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 53|     @staticmethod
+54|     def _find_head_indices(history: list[dict]) -> set[int]:
+55|         """Return indices of head-protected messages.
+56| 
+57|         Protects: index 0, all consecutive leading system messages,
+58|         and the first user message (anywhere in history).
+59|         """
+60|         protected = {0}
+61|         # Protect consecutive leading system messages
+62|         for i, msg in enumerate(history):
+63|             if msg.get("sender") == "系统":
+64|                 protected.add(i)
+65|             else:
+66|                 break
+67|         # Protect first user message (scan full history)
+68|         for i, msg in enumerate(history):
+69|             if msg.get("sender") in ("User", "user", "用户"):
+70|                 protected.add(i)
+71|                 break
+72|… (1,046字)
+• exec() → nanobot/groupchat/history/context.py:161:        ``summarize_enabled``; if disabled, the middle region is simply dropped.
+nanobot/groupchat/history/context.py:165:            summarize_enabled,
+nanobot/groupchat/history/context.py:169:            compression_keep_recent,
+nanobot/groupchat/history/context.py:183:        keep_recent = compression_keep_recent()
+nanobot/groupchat/history/context.py:185:            range(max(0, total_len - keep_recent), total_len)
+nanobot/groupchat/history/context.py… (3,037字)
+• exec() → summarize_enabled: True
+compression_keep_recent: 6
+
+
+Exit code: 0 (65字)
+• memory_palace() → ✅ Stored in wing_code/context-compression-fixes
+  Drawer ID: drawer_wing_code_context-compression-fixes_d78a94683792fb8102486dc6
+  Chars: 485
+  Hall: hall_facts (160字)
+• end_discussion() → ✅ 讨论已结束（原因: 三处修复全部完成并验证通过），即将进入总结阶段 (35字)
+---

@@ -1,0 +1,98 @@
+[用户]: 是否和其他工具一样有使用格式说明
+---
+[Harper]: 已创建 `skills/forget/SKILL.md`。
+
+**结论：**
+- `forget` 原先没有独立文档
+- 现已补齐，与 memory/cron/settings 规格一致
+- 用法：主用 `indices`（批量），辅用 `keywords`（匹配调用签名非内容）
+
+[工具调用记录]
+• exec(find skills/ -name "*.md" 2>/dev/null | head -20; echo "---"; ls -la skills/ ...) → skills/nuwa-skill/README_KO.md
+skills/nuwa-skill/references/extraction-framework.md
+skills/nuwa-skill/references/skill-template.md
+skills/nuwa-skill/SKILL.md
+skills/nuwa-skill/README_ES.md
+skills/nuwa-skill/examples/steve-jobs-perspective/references/research/02-conversations.md
+skills/nuwa-skill/examples/steve-jobs-perspective/references/research/03-expression-dna.md
+skills/nuwa-skill/examples/steve-jobs-perspective/references/research/01-writings.md
+skills/nuwa-skill/examples/steve-jobs-perspec… (1,605字)
+• exec(grep -r "forget" skills/ scripts/ --include="*.md" --include="*.py" -l 2>/dev...) → skills/nuwa-skill/examples/steve-jobs-perspective/references/research/02-conversations.md
+skills/nuwa-skill/examples/andrej-karpathy-perspective/references/research/03-expression-dna.md
+skills/nuwa-skill/examples/andrej-karpathy-perspective/references/research/01-writings.md
+
+
+Exit code: 0 (290字)
+• write_file() → (79字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• memory_palace(forget tool documentation format usage) → 🔍 5 result(s) for 'forget tool documentation format usage':
+
+[1] wing_code/forget-tool (sim=0.413)
+  ForgetTool实现完成 — nanobot/tools/forget.py
+功能：删除上次工具调用结果，从上下文永久移除
+两种模式：
+1. 关键词匹配：forget(keywords="curl xxx") — 匹配工具名或参数
+2. 索引删除：forget(indices=0) 或 forget(indices=[0,1]) — 按批次索引删除
+
+实现机制：
+- ForgetTool通过_shared类变量接收last_tool_calls（tool_loop.py第519-532行写入）
+- 返回__FORGET__:JSON哨兵字符串
+- tool_loop.py第691-733行检测哨兵，从messages中删除匹配的tool result和assistant tool_calls
+- 注册在broadcast.py第383-385行
+
+测试验证：关键词匹配、单索引、多索引… (1,548字)
+• exec(find / -path "*/forget*" -o -path "*/SKILL*" 2>/dev/null | head -30) → /tmp/skills-9bOuDO/SKILL.md
+/tmp/pytest-of-root/pytest-6/test_package_skill_creates_arc0/package-me/SKILL.md
+/tmp/pytest-of-root/pytest-6/test_validate_skill_rejects_pl0/placeholder-skill/SKILL.md
+/tmp/pytest-of-root/pytest-6/test_edit_blocked_in_extra_dir0/skills/weather/SKILL.md
+/tmp/pytest-of-root/pytest-6/test_package_skill_rejects_sym0/symlink-skill/SKILL.md
+/tmp/pytest-of-root/pytest-6/test_validate_skill_rejects_ro0/bad-root-skill/SKILL.md
+/tmp/pytest-of-root/pytest-6/test_read_allowed_wi… (2,101字)
+• read_file(/root/nanobot-src/nanobot/tools/forget.py) → 1| """Forget tool — delete previous tool call results from context.
+2| 
+3| Allows the agent to selectively remove tool call+result pairs from the
+4| conversation history so they don't consume tokens or influence future
+5| LLM calls.
+6| 
+7| Usage modes:
+8|   - By keyword:  forget(keywords="curl xxx")   — matches tool name or args
+9|   - By index:    forget(indices=0)             — 0-based index in last tool batch
+10|   - Multi-index: forget(indices=[0, 1])        — delete first 2 calls in last batch
+11| 
+12| The tool returns a special sentinel ``__FORGET__:…`` that tool_loop.py
+13| detects and uses to mutate the messages list in-place.
+14| """
+15| 
+16| from __future__ import annotations
+17| 
+18| import json
+19| from typing import Any
+20| 
+21| from nanobot.tools.base import Tool
+22| 
+23| 
+24… (5,984字)
+• memory_palace() → ✅ Stored in wing_code/forget-tool-doc (hidden)
+  Drawer ID: drawer_wing_code_forget-tool-doc_fbf60899ee2fd006661882ad (117字)
+• end_discussion() → ✅ 讨论已结束（原因: forget工具文档形式问题已回答，结论已存入记忆），即将进入总结阶段 (47字)
+---
+[Kirk]: ## 结论
+
+`forget` **没有独立的 SKILL.md**，但有内嵌的使用格式说明，和其他内置工具（exec、web_search 等）形式一致。
+
+## 关键发现
+
+- **forget 是内置工具**（`nanobot/tools/forget.py`），不是 skill，所以没有 `skills/forget/SKILL.md`
+- 文档以两种形式存在：
+  1. **源码 docstring**（L1-14）：开发者视角的用法说明
+  2. **LLM 运行时自动加载的 description + parameters JSON Schema**：每次对话自动注入，LLM 直接可见
+- 这与 exec、web_search 等内置工具一致——都靠 JSON Schema 描述参数
+- 区别于 skill（cron、weather 等）有独立 SKILL.md 文件，需 `read_file` 读取后才注入上下文
+
+## 备注
+
+结论已存入记忆 `wing_code/forget-tool-doc`。
+---

@@ -1,0 +1,120 @@
+[用户]: 为什么这么少的token也会触发压缩
+---
+[Kirk]: 那些 238-298 input tok 的 GLM 5.1 调用**不是压缩**，是 `web_fetch` 的网页内容提取功能，跟 `summarizer.py` 和 `context.py` 完全无关。
+
+真正的压缩有两条独立路径：
+
+| 路径 | 触发条件 | 你的配置 | 传入量 |
+|---|---|---|---|
+| **工具输出摘要** | 输出 > 20,000 字符 | `summarize_threshold=20000` | 截断到 10,000 chars (~4k tok) |
+| **历史压缩** | 消息数 ≥ 21 条 | `30 × 0.7 = 21` | 完整中间段，无截断 |
+
+所以这些低 token 调用**没有触发任何压缩**。如果你觉得压缩没生效，检查：
+1. 工具输出是否超过 20,000 字符
+2. 消息数是否达到 21 条
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 130|                 if available - c < 0:
+131|                     break
+132|                 tail.insert(0, m)
+133|                 available -= c
+134| 
+135|             # Rebuild: head first (preserving order), then tail
+136|             seen: set[int] = set()
+137|             rebuilt: list[dict] = []
+138|             for m in head_msgs + tail:
+139|                 if id(m) not in seen:
+140|                     rebuilt.append(m)
+141|                     seen.add(id(m))
+142|             self.messages = rebuilt
+143| 
+144|         self._state.save_message(sender, content, self.messages)
+145| 
+146|     async def maybe_compress(self) -> None:
+147|         """Compress the middle section of history when it approaches the limit.
+148| 
+149|         Head-tail protection always runs.  AI summarisa… (3,067字)
+• read_file(/root/nanobot-src/nanobot/tools/summarizer.py) → 40|     return {}
+41| 
+42| 
+43| def _head_tail_truncate(text: str, max_chars: int) -> str:
+44|     """Fallback: keep first half + last half with a truncation marker."""
+45|     if len(text) <= max_chars:
+46|         return text
+47|     half = max_chars // 2
+48|     return (
+49|         text[:half]
+50|         + f"\n\n... ({len(text) - max_chars:,} chars truncated) ...\n\n"
+51|         + text[-half:]
+52|     )
+53| 
+54| 
+55| async def summarize_tool_output(
+56|     tool_name: str,
+57|     raw_output: str,
+58|     *,
+59|     threshold: int | None = None,
+60|     max_input_chars: int | None = None,
+61|     max_output_chars: int | None = None,
+62| ) -> tuple[str, bool]:
+63|     """Summarize a tool's output if it exceeds *threshold* characters.
+64| 
+65|     Returns ``(processed_text, was_summari… (2,328字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/result_processor.py) → 1| """Unified tool result post-processing pipeline.
+2| 
+3| Single chokepoint for ALL tool results after execution.
+4| Replaces scattered truncation in shell.py, web.py, and tool_storage.py.
+5| 
+6| Pipeline: normalize → truncate → persist → inject_meta
+7| """
+8| 
+9| from __future__ import annotations
+10| import json
+11| from pathlib import Path
+12| from typing import Any
+13| from loguru import logger
+14| 
+15| STORAGE_DIR = Path("/tmp/nanobot/tool_storage")
+16| 
+17| # tool_name → (config_getter_name, strategy)
+18| _TOOL_CONFIGS: dict[str, tuple[str, str]] = {
+19|     "exec":       ("exec_max_chars", "head_tail"),
+20|     "web_fetch":  ("web_fetch_max_chars", "head_only"),
+21|     "web_search": ("web_search_max_chars", "head_only"),
+22| }
+23| _FALLBACK_CONFIG = ("tool_result_max_chars", "head… (4,679字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/result_processor.py) → 121|         disk_path = _persist_to_disk(text, tool_name, tool_call_id)
+122|         if disk_path:
+123|             truncated_text += f"\n\n[完整结果已落盘: {disk_path}]"
+124| 
+125|     # Step 4: Inject meta footer
+126|     if meta:
+127|         meta_lines = []
+128|         if "exit_code" in meta:
+129|             meta_lines.append(f"Exit code: {meta['exit_code']}")
+130|         if "url" in meta:
+131|             meta_lines.append(f"URL: {meta['url']}")
+132|         if "query" in meta:
+133|             meta_lines.append(f"Query: {meta['query']}")
+134|         if "duration" in meta:
+135|             meta_lines.append(f"Duration: {meta['duration']:.2f}s")
+136|         if meta_lines:
+137|             truncated_text += f"\n\n{' | '.join(meta_lines)}"
+138| 
+139|     return truncated_text
+140| 
+141| 
+… (3,777字)
+• exec() → 41:        "summarize_enabled": True,
+42:        "summarize_threshold": 8_000,
+59:        "max_messages": 50,
+61:        # History compression: triggered at 80% of max_messages
+62:        "compress_ratio": 0.8,
+157:def summarize_enabled() -> bool:
+158:    return bool(_load()["tool_results"]["summarize_enabled"])
+161:def summarize_threshold() -> int:
+162:    return int(_load()["tool_results"]["summarize_threshold"])
+191:def max_messages() -> int:
+192:    return int(_l… (613字)
+  (还有 4 个工具调用，已省略)
+---

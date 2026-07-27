@@ -1,0 +1,164 @@
+[用户]: 先看看视觉界面，刚刚的优化我认为一般
+---
+[Lucas]: 
+
+[工具调用记录]
+• memory_palace(status box broadcast header display.py render code) → 🔍 5 result(s) for 'status box broadcast header display.py render code':
+
+[1] wing_code/groupchat-600s-timeout (sim=-0.158)
+  600s的来源追踪（2026-05-26）：
+
+调用链：
+1. run_loop.py:139 — `broadcast_round(..., global_timeout=600.0)` 硬编码600秒（10分钟）
+2. broadcast.py:400 — 函数签名 `global_timeout: float = 3600.0`（默认1小时，但被run_loop覆盖为600）
+3. broadcast.py:462 — `engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout), ...))` 传给display
+4. display.py:168 — `f"══ Broadcast · {total} agents · {timeout}s ══"` … (2,207字)
+---
+[Harper]: 看到了。问题很清楚。
+
+当前 `status_panel` 的问题：
+
+1. **右边界缺失** — 第560行 `f"┃ {emoji} {badge} {name_pad}  {activity}"` 没有计算总宽度并补空格到右边界
+2. **header/footer硬编码30字符宽**，但内容行可能更长或更短
+3. **emoji宽度不确定** — 🟡🔵🟣在不同终端占1-2字符不等
+
+直接改：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 1| """Centralized display formatting for group chat.
+2| 
+3| # Verified: Harper has write access to source.
+4| 
+5| All visual formatting, headers, and status message templates live here.
+6| Design: clean Unicode, role-aware badges, compact and readable.
+7| """
+8| 
+9| from __future__ import annotations
+10| 
+11| 
+12| def format_token_stats(
+13|     prompt: int,
+14|     completion: int,
+15|     elapsed: float | None = None,
+16|     cost: float | None = None,
+17|     cache_tokens: int = 0,
+18|     reasoning_tokens: int = 0,
+19| ) -> str:
+20|     """Format token usage into a compact, human-readable status line.
+21| 
+22|     Returns a backtick-wrapped string for Telegram monospace rendering.
+23|     Example: `提示:46,902 回复:68 · 9.9s $0.034 💾缓存:23,305`
+24|     With reasoning: `提示:21,811 回复:36+💭56 ·… (10,328字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/broadcast_view.py) → 1| import time as _t
+2| import json as _json
+3| from typing import Any
+4| from loguru import logger
+5| from nanobot.groupchat.display import display as _d
+6| from nanobot.groupchat.orchestra.broadcast import _trigger_realtime_interrupts
+7| 
+8| class BroadcastView:
+9|     """Handles Telegram UI rendering for broadcast events."""
+10| 
+11|     def __init__(self, engine: Any, tracker: Any, mailbox: Any, pool: Any, search_pool: Any, agents: list[str], leader_name: str | None):
+12|         self.engine = engine
+13|         self.tracker = tracker
+14|         self.mailbox = mailbox
+15|         self.pool = pool
+16|         self.search_pool = search_pool
+17|         self.agents = agents
+18|         self.leader_name = leader_name
+19|         
+20|         # Per-agent states
+21|         self.pending_too… (7,149字)
+• exec(grep -rn "status\|Status\|STATUS" /root/nanobot-src/nanobot/groupchat/display...) → /root/nanobot-src/nanobot/groupchat/display/broadcast_view.py:34:        # ── Update status dashboard ──
+/root/nanobot-src/nanobot/groupchat/display/broadcast_view.py:115:                    f"✗ {name} dropped ── {self.pool.status()}"
+/root/nanobot-src/nanobot/groupchat/display/broadcast_view.py:119:                    f"  {self.pool.status()}"
+/root/nanobot-src/nanobot/groupchat/display/broadcast_view.py:144:                brief += f"  🔧 {self.search_pool.status()}"
+/root/nanobot-src/nanobot/g… (1,923字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 500|     return f"👑🔄 {result}"
+501| 
+502| 
+503| # ── Agent Status Dashboard ──────────────────────────────────
+504| 
+505| STATUS_INDICATORS: dict[str, tuple[str, str]] = {
+506|     "thinking":     ("🟡", "Thinking..."),
+507|     "searching":    ("🔵", "Searching"),
+508|     "fetching":     ("🔵", "Fetching"),
+509|     "executing":    ("🟣", "Executing"),
+510|     "reading":      ("📖", "Reading"),
+511|     "writing":      ("✏️", "Writing"),
+512|     "sending":      ("🟢", "Sending"),
+513|     "waiting":      ("⚪", "Waiting..."),
+514|     "blocked":      ("🔴", "Blocked"),
+515|     "interrupted":  ("⚡", "Interrupted"),
+516|     "done":         ("✅", "Done"),
+517|     "error":        ("❌", "Error"),
+518|     "cancelled":    ("⬛", "Cancelled"),
+519| }
+520| 
+521| 
+522| def status_panel(
+523|     agen… (2,519字)
+---
+[Harper]: 
+
+[工具调用记录]
+• chatroom_send() → (48字)
+• wait() → (27字)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 1| """Centralized display formatting for group chat.
+2| 
+3| # Verified: Harper has write access to source.
+4| 
+5| All visual formatting, headers, and status message templates live here.
+6| Design: clean Unicode, role-aware badges, compact and readable.
+7| """
+8| 
+9| from __future__ import annotations
+10| 
+11| 
+12| def format_token_stats(
+13|     prompt: int,
+14|     completion: int,
+15|     elapsed: float | None = None,
+16|     cost: float | None = None,
+17|     cache_tokens: int = 0,
+18|     reasoning_tokens: int = 0,
+19| ) -> str:
+20|     """Format token usage into a compact, human-readable status line.
+21| 
+22|     Returns a backtick-wrapped string for Telegram monospace rendering.
+23|     Example: `提示:46,902 回复:68 · 9.9s $0.034 💾缓存:23,305`
+24|     With reasoning: `提示:21,811 回复:36+💭56 ·… (10,328字)
+---
+[用户]: 不是重构，只是群聊开始时的界面部分
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 301| # ── Tool Activity Display (broadcast mode) ───────────────────
+302| 
+303| def tool_activity_msg(
+304|     agent_name: str,
+305|     tool_name: str,
+306|     args: dict,
+307|     leader: str | None = None,
+308| ) -> str:
+309|     """Format a tool call for broadcast display.
+310| 
+311|     Leader:     👑▸ Nanobot · search "酒馆战棋"
+312|     Non-leader: ▸ Lucas · search "Trump latest news"
+313|     """
+314|     label = TOOL_LABELS.get(tool_name, tool_name)
+315|     prefix = "👑▸" if agent_name == leader else "  ▸"
+316|     if tool_name == "web_search":
+317|         query = args.get("query", "")
+318|         return f"{prefix} {agent_name} · {label} \"{query}\""
+319|     elif tool_name == "web_fetch":
+320|         url = (args.get("url", "") or "")
+321|         if len(url) > 65:
+322|           … (9,964字)
+---

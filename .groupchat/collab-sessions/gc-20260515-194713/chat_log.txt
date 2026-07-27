@@ -1,0 +1,204 @@
+[用户]: 验证无报错
+---
+[Harper]: 任务完成。最终状态已写记忆。
+
+**核心成果**：
+- schema.py:191 老回退逻辑已砍
+- 心跳已禁用
+- 旧 hermes_cli gateway (PID 3129082) 已杀
+- 19:21后9条请求零报错，零kimi
+
+[工具调用记录]
+• exec() → 最近200条: 总数=200, 错误=13, kimi请求=13
+  ❌ 2026-05-15 16:20:30 model=openai/kimi-k2.5 error=litellm.AuthenticationError: AuthenticationError: OpenAIException - Invalid token (request id: 20260515082030845861418268d9d6W7O2so06)
+  ❌ 2026-05-15 16:50:31 model=openai/kimi-k2.5 error=litellm.AuthenticationError: AuthenticationError: OpenAIException - Invalid token (request id: 202605150850311503332238268d9d6iJ4IEz7w)
+  ❌ 2026-05-15 16:50:32 model=openai/kimi-k2.5 error=litellm.AuthenticationError: Authenti… (661字)
+• exec() → 18:50之后: 总请求=122, 错误=2, kimi=2
+  ❌ 2026-05-15 18:50:52 openai/kimi-k2.5 litellm.AuthenticationError: AuthenticationError: OpenAIException - Invalid token (request id: 202605151050523147342578268d9d6UY9YQhTu)
+  ❌ 2026-05-15 19:20:52 openrouter/kimi-k2.5 litellm.APIError: APIError: OpenrouterException - {"error":{"message":"This request requires more credits, or fewer max_tokens. You requested up to 8192 tokens, but can only afford 667. To increase, visit https://openrouter.ai/settings/credits and… (625字)
+• exec() → {
+  "ts": "2026-05-15 19:20:52",
+  "agent": null,
+  "session": null,
+  "topic": null,
+  "mode": null,
+  "model": "openrouter/kimi-k2.5",
+  "api_base": "https://openrouter.ai/api/v1",
+  "max_tokens": 8192,
+  "stream": false,
+  "params": {
+    "temperature": 1.0,
+    "top_p": 0.9,
+    "top_k": 40,
+    "min_p": 0.07,
+    "repetition_penalty": 1.05,
+    "frequency_penalty": 0.0,
+    "presence_penalty": 0.0,
+    "top_a": 0
+  },
+  "tools_count": 1,
+  "total_chars": 570,
+  "msg_count": 2,
+  "latency": … (1,232字)
+• exec(kill 3129082 2>/dev/null && echo "KILLED" || echo "FAILED"
+sleep 1
+ps aux | g...) → KILLED
+无hermes_cli进程存活
+
+
+Exit code: 0 (37字)
+• exec() → /root/.nanobot/.backup_pre_vcs/config.json
+无hermes_cli配置目录
+无hermes_cli目录
+
+
+Exit code: 0 (87字)
+• exec() → 19:21之后: 总请求=9, 错误=0, kimi=0
+模型分布: {'openrouter/deepseek/deepseek-v4-flash': 6, 'openrouter/deepseek/deepseek-v4-pro': 3}
+  ✅ 零报错
+
+
+Exit code: 0 (144字)
+• memory_palace() → ✅ Stored in wing_code/kimi-k2.5-fix (hidden)
+  Drawer ID: drawer_wing_code_kimi-k2.5-fix_55b38aa9205f78d7af10b49b (113字)
+---
+[Kirk]: ## 结论
+
+kimi-k2.5 问题已根治。今日 OpenRouter：**1235 请求，99.1% 成功率，11 次失败（10 次 prompt 超长 + 1 次余额不足），零认证错误。**
+
+## 关键发现
+
+- **kimi-k2.5 已清零**：OpenRouter 仅 1 次（19:20:52，余额不足，来自已死的 hermes_cli）。国产模型 API 的 184 次走 mcxhm.cn，非 OpenRouter
+- **schema.py:191 已修复**：`model or self.agents.defaults.model` → `if not model: return None, None`
+- **心跳已禁用**：不再每 30 分钟空转调 LLM
+- **仅 nanobot gateway 运行**（PID 3085222），hermes_cli 已消失
+- 模型分布：deepseek-v4-pro 58%、deepseek-v4-flash 29%、gpt-4.1-nano 12%
+
+## 备注
+
+- 10 次 prompt 超长错误是独立问题，与 kimi 无关
+- 国产模型 API 的 kimi-k2.5 key 仍失效，如需使用需更新或移除
+
+[工具调用记录]
+• memory_palace(kimi-k2.5 默认模型 回退逻辑 修复 heartbeat 日志) → 🔍 5 result(s) for 'kimi-k2.5 默认模型 回退逻辑 修复 heartbeat 日志':
+
+[1] wing_code/kimi-k2.5-fix (sim=0.19)
+  2026-05-15：修复了 kimi-k2.5 默认模型回退逻辑导致的认证错误问题。
+
+根因：config/schema.py:191 的 `model or self.agents.defaults.model` 硬编码回退，当心跳服务不传 model 时自动使用 config.json 的默认模型 kimi-k2.5，而该模型的 API key 已失效。
+
+修复：
+1. schema.py:191 — 删除硬编码回退，改为 `if not model: return None, None`
+2. gateway.heartbeat.enabled 设为 false，避免无任务时调 LLM
+3. 杀掉旧 gateway 进程
+
+结果：kimi-k2.5 请求从 18:50 后归零，日志恢复正常。
+
+[2] wing_kirk/diary (sim=0.07)
+  MemPalace 功能… (1,031字)
+• exec() → total 325780
+-rw-r--r-- 1 root root  69070048 May 15 19:47 2026-05-15.jsonl
+-rw-r--r-- 1 root root 123731389 May 14 23:52 2026-05-14.jsonl
+---
+2026-05-15 19:13:45 | openrouter/deepseek/deepseek-v4-flash | ok | 
+2026-05-15 19:13:57 | openrouter/deepseek/deepseek-v4-pro | ok | 
+2026-05-15 19:14:00 | openrouter/deepseek/deepseek-v4-flash | ok | 
+2026-05-15 19:14:09 | openrouter/deepseek/deepseek-v4-flash | ok | 
+2026-05-15 19:14:10 | openrouter/deepseek/deepseek-v4-pro | ok | 
+2026-05-15 19:14:18 |… (1,539字)
+• exec(ps aux | grep -E 'gateway|hermes_cli|nanobot' | grep -v grep) → root     3085220  0.0  0.0   7740  2008 ?        S    15:50   0:00 /bin/bash -c kill 3018176 && sleep 2 && nohup /usr/bin/python3 /usr/local/bin/nanobot gateway > /dev/null 2>&1 & echo "restarted, new PID: $!"
+root     3085222  0.2  7.6 2472196 623092 ?      Sl   15:50   0:41 /usr/bin/python3 /usr/local/bin/nanobot gateway
+root     3129082  0.3  1.5 366460 126852 ?       Ssl  19:10   0:06 /usr/bin/python3 -m hermes_cli.main gateway run --replace
+root     3137038  0.0  0.0   7740  3376 ?        S… (970字)
+• exec() → 时间: 2026-05-15 19:47:36
+模型: openrouter/deepseek/deepseek-v4-flash
+状态: ok
+错误: 
+Agent: Harper
+Session: None
+API Base: https://openrouter.ai/api/v1
+---
+时间: 2026-05-15 19:47:41
+模型: openrouter/deepseek/deepseek-v4-pro
+状态: ok
+错误: 
+Agent: Kirk
+Session: None
+API Base: https://openrouter.ai/api/v1
+---
+时间: 2026-05-15 19:47:45
+模型: openrouter/deepseek/deepseek-v4-flash
+状态: ok
+错误: 
+Agent: Harper
+Session: None
+API Base: https://openrouter.ai/api/v1
+---
+时间: 2026-05-15 19:47:56
+模型: openrouter/deepseek/deepseek-… (751字)
+• exec(cat /proc/3129082/cmdline | tr '\0' ' ' && echo && echo "---" && cat /proc/30...) → ---
+/usr/bin/python3 /usr/local/bin/nanobot gateway 
+STDERR:
+cat: /proc/3129082/cmdline: No such file or directory
+
+
+Exit code: 0 (130字)
+• exec() → 199
+---最新3条---
+时间: 2026-05-15 19:47:57
+模型: openrouter/deepseek/deepseek-v4-pro
+状态: ok
+错误: 
+Agent: Kirk
+API Base: https://openrouter.ai/api/v1
+---
+时间: 2026-05-15 19:48:04
+模型: openrouter/deepseek/deepseek-v4-flash
+状态: ok
+错误: 
+Agent: Harper
+API Base: https://openrouter.ai/api/v1
+---
+时间: 2026-05-15 19:48:09
+模型: openrouter/deepseek/deepseek-v4-pro
+状态: ok
+错误: 
+Agent: Kirk
+API Base: https://openrouter.ai/api/v1
+---
+
+
+Exit code: 0 (426字)
+• exec(ps aux | grep -E 'gateway|hermes' | grep -v grep) → root     3085220  0.0  0.0   7740  2008 ?        S    15:50   0:00 /bin/bash -c kill 3018176 && sleep 2 && nohup /usr/bin/python3 /usr/local/bin/nanobot gateway > /dev/null 2>&1 & echo "restarted, new PID: $!"
+root     3085222  0.2  7.6 2472196 623140 ?      Sl   15:50   0:41 /usr/bin/python3 /usr/local/bin/nanobot gateway
+
+
+Exit code: 0 (339字)
+• exec() → 时间: 2026-05-15 19:20:52
+模型: openrouter/kimi-k2.5
+状态: error
+错误: litellm.APIError: APIError: OpenrouterException - {"error":{"message":"This request requires more credits, or fewer max_tokens. You requested up to 8192 tokens, but can only afford 667. To increase, visit https://openrouter.ai/settings/credits and add more credits","code":402,"metadata":{"provider_n
+Agent: None
+API Base: https://openrouter.ai/api/v1
+---
+
+
+Exit code: 0 (433字)
+• exec() → 1
+---按小时分布---
+  19:00 → 1条
+总计: 1
+
+
+Exit code: 0 (47字)
+• exec() → OpenRouter 总请求: 1235
+状态分布: ok=1224, error=11
+成功率: 99.1%
+
+模型分布:
+  openrouter/deepseek/deepseek-v4-pro: 719 (58%)
+  openrouter/deepseek/deepseek-v4-flash: 361 (29%)
+  openrouter/openai/gpt-4.1-nano: 145 (12%)
+  openrouter/z-ai/… (474字)
+  (还有 2 个工具调用，已省略)
+---

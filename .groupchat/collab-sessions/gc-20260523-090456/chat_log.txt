@@ -1,0 +1,162 @@
+[用户]: 需要隔离，不然会太占用上下文空间，等级低的可以看到等级高的，但是高不能看到低的工具调用
+---
+[用户]: 隔离意味着只能看到消息，不能看到工具调用
+---
+[Kirk]: 
+
+[工具调用记录]
+• memory_palace(multi-agent context isolation relevant_agents tool call visibility hierarchy) → 🔍 5 result(s) for 'multi-agent context isolation relevant_agents tool call visibility hierarchy':
+
+[1] wing_code/multi-agent-context-architecture (sim=-0.138)
+  ## 多agent上下文架构分析（2026-05-23）
+
+### 当前架构
+- 所有agent共享一个 HistoryContext.messages 列表（engine._history）
+- broadcast模式下 relevant_agents=None，所有agent看到完全相同的历史
+- message_converter.py 有 relevant_agents 过滤机制，但 broadcast.py:533 硬编码为 None，从未使用
+- clear_context 从共享列表物理删除指定agent的消息
+- maybe_compress() 全局压缩，影响所有agent
+
+### 代码位置
+- HistoryContext: /root/nanob… (2,375字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 520|         agent_cfg = engine.registry[name]
+521|         model = agent_cfg["model"]  # initial; re-read each cycle below
+522|         model_short = model.split("/")[-1]
+523| 
+524|         # ── Compute teammates list (must be before _build_agent_prompt call) ──
+525|         teammates = [a for a in agents if a != name]
+526| 
+527|         # In broadcast mode, all agents share the full history (relevant_agents=None).
+528|         # Each agent sees user messages, system messages, and ALL teammates' final replies.
+529|         # Tool call logs are appended as text inside each agent's message, so teammates
+530|         # can read a concise summary of what was done without the full tool protocol overhead.
+531|         messages = engine._build_agent_prompt(
+532|             name,
+533|           … (1,585字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/message_converter.py) → 70|             return {
+71|                 "role": "user",
+72|                 "content": f"[{sender}]: {content}",
+73|                 "name": sender.replace(" ", "_"),
+74|             }
+75| 
+76|     if not history:
+77|         return []
+78| 
+79|     # ── 自動偵測格式 ──
+80|     first = history[0]
+81|     is_groupchat = "sender" in first
+82| 
+83|     allowed = {"用户", "系统"} | set(relevant_agents or [])
+84|     msgs_full = history if not is_groupchat else [
+85|         _to_msg(m) for m in history
+86|         if relevant_agents is None or m["sender"] in allowed
+87|     ]
+88| 
+89|     if not max_chars or not msgs_full:
+90|         return msgs_full
+91| 
+92|     # ── 強制保留核心消息 ──
+93|     critical: list[dict[str, Any]] = []
+94|     for i, m in enumerate(msgs_full):
+95|         if m["role"] in ("user"… (1,401字)
+---
+[Kirk]: 现在完全清楚了。让我看 engine.py 中 `_build_agent_prompt` 怎么调 `build_agent_prompt`，确认 registry 里有没有 rank。
+
+[工具调用记录]
+• exec(grep -n "rank\|等级\|pawn\|knight\|bishop\|queen" /root/nanobot-src/nanobot/gro...) → 283:        # queued here so broadcast_round can pick them up and spawn tasks for them.
+430:        # can be spawned immediately rather than waiting for the next round.
+
+
+Exit code: 0 (183字)
+• exec(grep -rn "rank\|等级" /root/nanobot-src/nanobot/groupchat/history/ --include="*...) → /root/nanobot-src/nanobot/groupchat/history/agent_loader.py:37:            # Supplement with per-agent config.json from agents_dir (hyperparams, tools, rank, etc.)
+/root/nanobot-src/nanobot/groupchat/history/agent_loader.py:51:                        if _cfg.get("rank"):
+/root/nanobot-src/nanobot/groupchat/history/agent_loader.py:52:                            agent_data["rank"] = _cfg["rank"]
+/root/nanobot-src/nanobot/groupchat/history/agent_loader.py:170:                    rank = _cfg.get("ra… (951字)
+• exec(grep -n "history_content\|add_message\|_history" /root/nanobot-src/nanobot/gr...) → 196:    _history: list[dict[str, str]]
+203:    def _add_message(self, sender: str, content: str) -> None: ...
+465:    for msg in reversed(engine._history):
+897:                                    engine._add_message(name, content)
+923:                            engine._add_message(name, _placeholder)
+978:                        engine._add_message(name, _placeholder)
+1005:                    history_content = (content or "") + build_tool_log(result.tool_calls_detail)
+1006:                    en… (777字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/agent_loader.py) → 160| 
+161|         # Check for system agent (role: system in config.json)
+162|         config_file = d / "config.json"
+163|         if config_file.exists():
+164|             try:
+165|                 _cfg = json.loads(config_file.read_text())
+166|                 if _cfg.get("role") == "system":
+167|                     model = _cfg.get("model", "?")
+168|                     desc = _cfg.get("description", "系统 agent")
+169|                     tools_enabled = _cfg.get("tools_enabled", False)
+170|                     rank = _cfg.get("rank", "pawn")
+171|                     agent_data = {
+172|                         "model": model, "prompt": "", "role": "system",
+173|                         "description": desc, "tools_enabled": tools_enabled,
+174|                         "workspace_scope": "… (1,712字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 190|         # ── 3. Compressible Middle ──
+191|         # Use set exclusion instead of contiguous range — head indices may be
+192|         # non-contiguous when keep_user_messages=True (user messages scattered).
+193|         all_protected = protected_head_indices | protected_tail_indices
+194| 
+195|         head = [self.messages[i] for i in sorted(protected_head_indices)]
+196|         tail = [
+197|             self.messages[i]
+198|             for i in sorted(protected_tail_indices)
+199|             if i not in protected_head_indices
+200|         ]
+201|         to_compress = [
+202|             self.messages[i] for i in range(total_len) if i not in all_protected
+203|         ]
+204| 
+205|         if not to_compress:
+206|             return
+207| 
+208|         # ── 3.5 Age tool logs in middle … (1,887字)
+• exec(grep -n "def _add_message\|def add_message" /root/nanobot-src/nanobot/groupch...) → 94:    def add_message(self, sender: str, content: str) -> None:
+
+
+Exit code: 0 (79字)
+• read_file(/root/nanobot-src/nanobot/groupchat/history/context.py) → 94|     def add_message(self, sender: str, content: str) -> None:
+95|         """Append a message and enforce message-count / char-budget limits.
+96| 
+97|         Head-protection guarantees that the very first message and the first
+98|         user message are never evicted during trimming.
+99|         """
+100|         self.messages.append({"sender": sender, "content": content})
+101| 
+102|         try:
+103|             from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
+104|                 max_messages,
+105|                 max_context_chars,
+106|    … (1,437字)
+  (还有 12 个工具调用，已省略)
+---
+[Kirk]: ## 结论
+
+**当前所有 agent 共享完全相同的上下文，包括彼此的工具调用细节。** 不需要独立上下文——在已有的 `history_to_messages` 过滤链路上加 rank-based 工具调用剥离即可，改 3 个文件。
+
+## 关键发现
+
+1. **工具调用记录格式**：`[工具调用记录]\n• 工具名(参数) → 预览 (字数)`，由 `build_tool_log()` 拼接到消息 content 里（`broadcast.py:1005`）
+2. **过滤入口已存在**：`message_converter.py:83` 有 `relevant_agents` 白名单，但只过滤整条消息，不能做到"保留文字、剥离工具调用"
+3. **最小改动方案**：在 `history_to_messages` 中加正则剥离 `[工具调用记录]` 段落，按 rank 规则决定是否剥离
+
+## 实现方案
+
+**rank 越小权限越高**（0=Leader, 1=Senior, 2=Worker）。Agent 只能看到 rank ≤ 自己的 agent 的工具调用。文字消息（chatroom_send）不受影响。
+
+| 改动文件 | 内容 |
+|---|---|
+| Agent config | 加 `rank` 字段 |
+| `message_converter.py` | 加 `strip_tool_log()` 正则函数 + rank 比较逻辑 |
+| `engine.py` / `broadcast.py` | 传递 `agent_ranks` 字典到 `history_to_messages` |
+
+**效果**：Leader 上下文最干净（只有自己的工具调用 + 所有人的文字结论），Worker 上下文最完整（能看到所有上级的工具调用细节）。
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/multi-agent-context-isolation (hidden)
+  Drawer ID: drawer_wing_code_multi-agent-context-isolation_3743fe398bd603e18c668bcf (145字)
+• end_discussion() → ✅ 讨论已结束（原因: 分析完成，已输出具体实现方案：rank-based工具调用剥离，改3个文件即可实现层级隔离。），即将进入总结阶段 (68字)
+---

@@ -1,0 +1,148 @@
+[用户]: 请完成这个任务（必须可交付、必须验证）：
+
+1. 在 /root/nanobot-pragmata-benchmark 交付 PRAGMATA 壁纸画廊
+2. 能浏览、预览、单张下载；提供 ZIP 和「下载全部」按钮
+3. 起 python http.server + cloudflared，给出可 curl 验证的公网 URL
+
+约束：
+- 不要修改 /root/pragmata-wallpapers 里的任何文件
+- 若发现该目录已有完整画廊，可复制到 benchmark 目录再独立起服务（允许只读复制）
+- 禁止只搜索不下载；每步 exec 验证
+- 完成后中文总结：文件列表、本地 URL、公网 URL、ZIP 路径
+---
+[Harper]: ## 交付物
+
+**目录**：`/root/nanobot-pragmata-benchmark/gallery/`
+
+| 文件 | 说明 |
+|---|---|
+| `index.html` | 画廊主页面（网格+预览+下载） |
+| `app.js` | 交互逻辑（过滤、灯箱、单张下载） |
+| `styles.css` | 样式 |
+| `bundle.zip` | 全集 ZIP（152 MB，20张壁纸） |
+| `thumbs/` | 缩略图目录 |
+| 20 张壁纸 | 4K~8K 原图（.jpg/.png/.webp） |
+
+## 访问
+
+- **本地**：`http://localhost:8091/`
+- **公网**：`https://mem-inflation-clay-jenny.trycloudflare.com/`
+
+## 验证结果
+
+- `curl localhost:8091/` → **200**
+- `curl .../bundle.zip` → **200**
+- `curl 公网URL` → **200**
+- cloudflared 进程运行中
+
+「Download All」按钮直接下载 `bundle.zip`（152 MB），灯箱点击单张可预览并单独下载。
+
+<previous_tool_calls>
+• read_file(skills/web-deliverable/SKILL.md) → 1| ---
+2| name: web-deliverable
+3| description: "Build and deploy a browsable web deliverable with downloads: static gallery/site, ZIP bundle, local server, and public tunnel. Use when the user wants a website, gallery, wallpaper collection, download page, or public URL."
+4| always: false
+5| ---
+6| 
+7| # Web Deliverable — 网页交付流水线
+8| 
+9| 当用户要「做网站 / 画廊 / 可下载 / 公网链接」时使用。目标是**可验证的成品**，不是搜索报告。
+10| 
+11| ## 铁律
+12| 
+13| 1. **先查现有资源** — `list_dir` / `exec ls` 看工作目录和相邻目录是否已有成品；有则 `cp -r` 复制后改路径，禁止从零重复搜图。
+14| 2. **先执行后汇报** — 每个阶段必须 `exec` 并检查 exit code / 文件大小。
+15| 3. **搜索预算 ≤2 轮** — 两轮搜不到直链就换 Capcom 官方 / Alpha Coders / 复制本地已有目录。
+16| 4. **必须验证** — 结束前 `curl -I` 本地页面、ZIP、公网 tunnel URL。
+17| 
+18| ## 标准流程（按顺序）
+19| 
+20| ### 0. 侦察
+21| ```bash
+22| exec command="mkdir -p WORKDIR && ls -la WORKDIR && ls -la /r… (2,965字)
+• list_dir(/root) → 📁 .agents
+📁 .ai_completion
+📁 .antigravity-server
+📁 .bash_completion.d
+📄 .bash_history
+📄 .bashrc
+📄 .bashrc.bak.1780211134
+📁 .bun
+📁 .cache
+📁 .cellcog
+📁 .claude
+📄 .claude.json
+📄 .claude.json.bak
+📄 .claude.json.broken.1781414217
+📄 .claude.json.keyonly.1781414246
+📁 .config
+📁 .copilot
+📁 .cursor
+📁 .deepsee… (1,479字)
+• exec() → total 1116
+drwxr-xr-x  4 root root   4096 Jun 17 20:20 .
+drwx------ 75 root root   4096 Jun 17 19:42 ..
+-rw-r--r--  1 root root 272657 Jun 17 20:02 benchmark-harper.log
+-rw-r--r--  1 root root 592567 Jun 17 20:16 benchmark-v3.log
+-rw-r--r--  1 root root  39930 Jun 17 20:19 benchmark-v4.log
+-rw-r--r--  1 root root  53055 Jun 17 20:20 benchmark-v5.log
+-rw-r--r--  1 root root 153258 Jun 17 19:45 benchmark.log
+drwxr-xr-x  2 root root   4096 Jun 17 20:20 gallery
+drwxr-xr-x  3 root root   4096 Jun 17 … (3,704字)
+• exec(ls -la /root/nanobot-pragmata-benchmark/gallery/ && echo "===" && ls -la /roo...) → total 8
+drwxr-xr-x 2 root root 4096 Jun 17 20:20 .
+drwxr-xr-x 4 root root 4096 Jun 17 20:20 ..
+===
+total 310452
+drwxr-xr-x  3 root root      4096 Jun 17 20:17 .
+drwx------ 75 root root      4096 Jun 17 19:42 ..
+-rw-r--r--  1 root root      7342 Jun 17 19:13 app.js
+-rw-r--r--  1 root root   5325494 Jun 17 18:54 astronaut-floating-neon-city-4k.jpg
+-rw-r--r--  1 root root  40108736 Jun 17 18:54 cosmic-burst-space-dive-5k.png
+-rw-r--r--  1 root root  10353900 Jun 17 18:54 diana-futuristic-city-4k.pn… (4,769字)
+• exec() → 255 /root/pragmata-wallpapers/app.js
+   60 /root/pragmata-wallpapers/index.html
+  315 total
+
+
+Exit code: 2 (108字)
+• exec(cp -a /root/pragmata-wallpapers/. /root/nanobot-pragmata-benchmark/gallery/ &...) → copy ok
+26
+
+
+Exit code: 0 (25字)
+• exec() → added: astronaut-floating-neon-city-4k.jpg
+added: cosmic-burst-space-dive-5k.png
+added: diana-futuristic-city-4k.png
+added: diana-holographic-interface-4k.jpg
+added: hugh-diana-dramatic-sky-5k.png
+added: hugh-diana-green-backdrop-4k.jpg
+added: lunar-surface-child-robot-8k.jpg
+added: lunar-vigil-earth-rise-4k.jpg
+added: neon-city-combat-5k.png
+added: official_add02_14.webp
+added: official_add03_art01.webp
+added: official_add03_art02.webp
+added: official_add03_art03.webp
+added: official_exploratio… (790字)
+• exec(cd /root/nanobot-pragmata-benchmark/gallery && nohup python3 -m http.server 8...) → Error: Command timed out after 120 seconds
+
+[Analyze the error above and try a different approach.] (99字)
+• exec(cd /root/nanobot-pragmata-benchmark/gallery && nohup python3 -m http.server 8...) → Command running in background (session: dxpiof, pid: 965209).
+Use the process tool to manage:
+  process(action='poll', session_id='dxpiof') — check output
+  process(action='kill', session_id='dxpiof') — terminate
+  process(action='list') — list all background sessions (268字)
+• exec(sleep 2 && curl -s -o /dev/null -w 'http=%{http_code}' http://localhost:8091/...) → http=200
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", lin127.0.0.1 - - [17/Jun/2026 20:22:56] "GET / HTTP/1.1" 200 -
+y", line 1314, in <module>
+    test(
+  File "/usr/lib/python3.12/http/server.py", line 1261, in test
+    with ServerClass(addr, HandlerClass) as httpd:
+         ^^^^^^^^^^^^^… (896字)
+  (还有 14 个工具调用，已省略)
+</previous_tool_calls>
+
+---

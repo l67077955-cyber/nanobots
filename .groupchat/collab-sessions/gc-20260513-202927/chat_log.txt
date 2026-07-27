@@ -1,0 +1,261 @@
+[用户]: 就是如果leader试图结束，但是有agent正在忙碌，则leader进入autowait，
+---
+[Harper]: Kirk，我分析了一下这个逻辑。
+
+**当前死循环的根因**：你调用 `end_discussion` 时，系统把你标记为"执行中"，然后检查到"Kirk 在执行中"就拒绝——你永远无法结束自己。
+
+**用户说的 autowait 方案**：如果 leader 试图结束但有 agent 忙碌 → leader 自动进入 wait 状态，等忙碌的 agent 完成后自动重试结束。
+
+但这里有个**逻辑漏洞**——当前场景下忙碌的 agent 就是 leader 自己（Kirk）。autowait 解决不了"自己等自己"的问题。
+
+**我建议的方案**：
+
+```
+end_discussion 检查时排除调用者自身。
+即：只检查 其他 agent 的状态，不检查 leader 自己的状态。
+```
+
+这样你调用 end_discussion 时，系统只看 Harper 是否忙碌（Harper 在 waiting → 通过），不看 Kirk 是否忙碌。
+
+你觉得这个方向对？还是用户说的 autowait 是指另一种机制——比如 end_discussion 内部自动 wait 然后重试，而不是返回错误？
+---
+[Kirk]: 已记录。这个行为变更需要在 leader prompt 或系统层面实现 autowait 逻辑——leader 调 `end_discussion` 时如果检测到 agent 忙碌，自动 `wait()` 而非报错拒绝。
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/leader-autowait-on-end (hidden)
+  Drawer ID: drawer_wing_code_leader-autowait-on-end_bdaacd5df5096892a3a26840 (131字)
+---
+[Harper]: Kirk，同意 autowait 方向。但注意一个关键点：
+
+**当前死循环的根因不是其他 agent 忙碌，而是你调用 `end_discussion` 时系统把你标记为"执行中"，然后检查自己→拒绝。**
+
+所以 autowait 逻辑需要加一个**排除条件**：
+- 如果忙碌的 agent 是 leader 自己 → 直接跳过检查（或排除调用者）
+- 如果忙碌的 agent 是其他 agent → 自动 wait 等待
+
+否则 autowait 会变成 leader 自己等自己，永远 timeout。
+---
+[Kirk]: 讽刺——正好演示了这个 bug。我调 `end_discussion` → 系统标记我"执行中" → 检查发现"Kirk 执行中" → 拒绝。死循环实锤。
+
+这个修复必须在系统代码层面做，leader prompt 层面无解。方案已记录，等你改代码。
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/leader-autowait-on-end (hidden)
+  Drawer ID: drawer_wing_code_leader-autowait-on-end_8957353248e4ed8487f89497 (131字)
+• end_discussion() → ❌ 拒绝 end_discussion：以下 agent 仍在执行中：Kirk。请等待所有 agent 进入 waiting 状态后再试。 (69字)
+---
+[Kirk]: ## 结论
+
+两个层面修复 `end_discussion` 死循环：
+
+1. **Bugfix**：`end_discussion` 检查 agent 状态时**排除调用者自身**（leader）。当前 bug：leader 调用 → 被标记"执行中" → 检查发现 leader 执行中 → 拒绝 → 死循环。
+2. **Feature**：如果有**其他 agent** 正在忙碌 → leader 进入 autowait（自动 `wait()`）→ 忙碌 agent 完成后自动重试结束，而非返回错误。
+
+## 备注
+
+- 两个改动都需要在**系统代码层面**实现，leader prompt 层面无法绕过
+- 当前这个对话本身就是 bug 的活演示——我无法 end_discussion，因为系统认为"Kirk 正在执行"
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(grep -r "end_discussion" /root/nanobot-src/nanobot/ --include="*.py" -l 2>/de...) → /root/nanobot-src/nanobot/groupchat/history/component_manager.py
+/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py
+/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py
+/root/nanobot-src/nanobot/groupchat/display/display.py
+
+
+Exit code: 0 (443字)
+---
+[Kirk]: 已覆盖。我上一条说的就是这两层：排除自身 + autowait 其他 agent。没有分歧。
+---
+[Harper]: `asyncio` 已导入。现在改代码。
+
+[工具调用记录]
+• exec(grep -n "end_discussion\|执行中\|waiting\|agent.*状态\|忙碌\|busy" /root/nanobot-src...) → 782:        # Release unread slots before waiting ("not replying" to pending messages)
+904:            "set_tools(改工具权限), set_status(修改agent状态消息)。仅当前轮有效。"
+1005:                return f"{agent} 没有被 disable（当前已是激活状态）"
+1042:            await self._engine._send(f"📋 Leader 已更新 {agent} 状态: {status[:80]}")
+1043:            return f"✅ {agent} 状态已更新，消息已注入其收件箱"
+1073:        return "end_discussion"
+1098:        # ── Hard guard: reject if any active agent is not waiting ──
+1101:            waiting = getattr… (819字)
+• exec(grep -n "end_discussion\|执行中\|waiting\|agent.*状态\|忙碌\|busy" /root/nanobot-src...) → 308:                    # Clean up tasks if the main loop is cancelled (e.g. Leader end_discussion)
+
+
+Exit code: 0 (114字)
+• exec(grep -n "end_discussion\|执行中\|waiting\|agent.*状态\|忙碌\|busy" /root/nanobot-src...) → 3:Leader's final text reply (before end_discussion) serves as the
+
+
+Exit code: 0 (80字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 1065| 
+1066|     def __init__(self, *, end_event: Any, engine: Any, mailbox: Any = None) -> None:
+1067|         self._end_event = end_event  # asyncio.Event
+1068|         self._engine = engine
+1069|         self._mailbox = mailbox
+1070| 
+1071|     @property
+1072|     def name(self) -> str:
+1073|         return "end_discussion"
+1074| 
+1075|     @property
+1076|     def description(self) -> str:
+1077|         return (
+1078|             "结束当前讨论，立即进入总结阶段。"
+1079|             "当你判断信息已经足够、讨论陷入循环、或 agent 表现不佳时使用。"
+1080|             "调用后所有 agent 会被停止，你将进入最终总结。"
+1081|             "参数: reason (可选，结束原因)"
+1082|         )
+1083| 
+1084|     @property
+1085|     def parameters(self) -> dict[str, Any]:
+1086|         return {
+1087|             "type": "object",
+1088|             "properties": {
+1089|          … (2,228字)
+• exec(grep -rn "_current_agent\|caller_name\|caller_id\|whoami\|agent_name" /root/n...) → 133:    def __init__(self, original: Tool, agent_name: str, cache: dict,
+136:        self._agent_name = agent_name
+198:                    if not self._pool.spend(self._agent_name):
+201:                            f"({self._pool.agent_status(self._agent_name)})。\n"
+212:        self._cache[norm_q] = (result, self._agent_name)
+230:                if not self._pool.spend(self._agent_name):
+233:                        f"({self._pool.agent_status(self._agent_name)})。\n"
+573:        # {agent_name: sen… (1,302字)
+• exec(grep -rn "class EndDiscussion\|EndDiscussionTool" /root/nanobot-src/nanobot/g...) → 1059:class EndDiscussionTool(Tool):
+
+
+Exit code: 0 (50字)
+• exec(grep -n "EndDiscussionTool\|end_discussion" /root/nanobot-src/nanobot/groupch...) → 293:            ManageAgentTool, EndDiscussionTool, TransferCreditsTool, ClearContextTool,
+362:            end_tool = EndDiscussionTool(end_event=self.leader_end_event, engine=self.engine, mailbox=self.mailbox)
+542:                f"- end_discussion(reason): 结束讨论，进入最终总结\n"
+564:                f"6. 信息充分后，先完成以下两步，再调用 end_discussion()：\n"
+574:                f"7. 完成记忆存入后，调用 end_discussion() 结束任务\n\n"
+576:                f"- 发现队友空转或无法完成任务时：果断 end_discussion\n"
+578:                f"- ⚠️ 如果你打算自己做搜索/验… (1,422字)
+• exec(grep -rn "EndDiscussionTool" /root/nanobot-src/nanobot/groupchat/ --include="...) → /root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py:1059:class EndDiscussionTool(Tool):
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py:293:            ManageAgentTool, EndDiscussionTool, TransferCreditsTool, ClearContextTool,
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py:362:            end_tool = EndDiscussionTool(end_event=self.leader_end_event, engine=self.engine, mailbox=self.mailbox)
+
+
+Exit code: 0 (449字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 355|             manage_tool = ManageAgentTool(
+356|                 exec_agents=self.non_leader_agents,
+357|                 agent_tasks=self._leader_agent_tasks,
+358|                 engine=self.engine,
+359|            … (1,199字)
+  (还有 4 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• chatroom_send() → (48字)
+---
+[Harper]: 
+
+[工具调用记录]
+• edit_file() → (89字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 1045|         elif action == "set_listener":
+1046|             allowed_sender = kwargs.get("allowed_sender", "")
+1047|             if not allowed_sender:
+1048|                 self._mailbox.set_listener_restriction(agent, "")
+1049|                 return f"✅ {agent} 的消息监听限制已解除（可接收所有人消息）"
+1050|             self._mailbox.set_listener_restriction(agent, allowed_sender)
+1051|             note = ""
+1052|             if allowed_sender == self._mailbox._leader_name:
+1053|                 note = f"，相当于{agent}只会听Leader({allowed_sender})的"
+1054|             return f"✅ {agent} 现只允许接收来自 {allowed_sender} 的消息{note}"
+1055| 
+1056|         return f"Error: 未知 action '{action}'"
+1057| 
+1058| 
+1059| class EndDiscussionTool(Tool):
+1060|     """Leader-only tool: end the discussion phase immediately.
+1061| 
+1062… (3,681字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 1120|         reason_str = f"（原因: {reason}）" if reason else ""
+1121|         # Store reason so broadcast_round sentinel can include it in the
+1122|         # single unified termination message (avoids duplicate notifications).
+1123|         self._engine._leader_end_reason = reason
+1124|         self._end_event.set()
+1125|         self._engine._running = False
+1126|         return f"✅ 讨论已结束{reason_str}，即将进入总结阶段"
+1127| 
+1128| 
+1129| class ClearContextTool(Tool):
+1130|     """Leader-only tool: clear an agent's context from the shared history.
+1131| 
+1132|     Removes all messages sent by the target agent from the engine's history,
+1133|     then injects a system notification into the agent's mailbox so it knows
+1134|     its context has been reset and it should start fresh.
+
+(Showing lines 11… (846字)
+• chatroom_send() → (48字)
+• memory_palace() → ✅ Stored in wing_code/enddiscussion-autowait-fix (hidden)
+  Drawer ID: drawer_wing_code_enddiscussion-autowait-fix_1837b0b8cd65c81b07e627bb (139字)
+• wait() → (70字)
+---
+[Kirk]: 补丁已写好并 review 通过，但**当前进程仍运行旧代码**，所以 `end_discussion` 还在死循环。需要重启服务生效。
+
+[工具调用记录]
+• wait() → (637字)
+• chatroom_send(写补丁，直接改 chatroom_tools.py。改完验证。) → (50字)
+• wait() → (295字)
+• exec(cd /root/nanobot-src && grep -n "non_waiting\|autowait\|all_waiting_event\|le...) → STDERR:
+grep: nanobot/chatroom_tools.py: No such file or directory
+
+
+Exit code: 0 (81字)
+• exec(find /root/nanobot-src -name "chatroom_tools.py" 2>/dev/null) → /root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py
+
+
+Exit code: 0 (84字)
+• exec(cd /root/nanobot-src && grep -n "non_waiting\|autowait\|all_waiting_event\|le...) → 565:    """Enforces leader-gated speaking order.
+567:    Each non-leader agent may send at most 1 message between consecutive
+568:    leader messages.  When the leader sends a message, all counters reset.
+571:    def __init__(self, leader_name: str) -> None:
+572:        self._leader = leader_name
+573:        # {agent_name: sends_since_leader_spoke}
+578:        if agent_name == self._leader:
+584:        if agent_name == self._leader:
+592:    def leader(self) -> str:
+593:        return self._leade… (1,981字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 1095|         }
+1096| 
+1097|     async def execute(self, reason: str = "", **kwargs: Any) -> str:
+1098|         # ── Autowait guard: if any non-leader agent is busy, wait for them ──
+1099|         if self._mailbox is not None:
+1100|             active = getattr(self._mailbox, "_active_agents", set())
+1101|             waiting = getattr(self._mailbox, "_waiting", set())
+1102|             leader = getattr(self._mailbox, "_leader_name", "")
+1103|             # Exclude leader (the caller) — leader is always "executing" when calling this
+1104|             non_waiting = (active - waiting) - {leader}
+1105|             if non_waiting:
+1106|                 names = ", ".join(sorted(non_waiting))
+1107|                 # Autowait: poll until all non-leader agents enter waiting (max 60s)
+1108|        … (1,858字)
+• exec(head -30 /root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.p...) → 10:import asyncio
+
+
+Exit code: 0 (32字)
+• memory_palace() → ✅ Stored in wing_code/end-discussion-autowait-patch (hidden)
+  Drawer ID: drawer_wing_code_end-discussion-autowait-patch_70966cbb6befad885f767c02 (145字)
+• end_discussion() → ❌ 拒绝 end_discussion：以下 agent 仍在执行中：Kirk。请等待所有 agent 进入 waiting 状态后再试。 (69字)
+• chatroom_send(补丁 review 通过，代码正确。需要重启服务让新逻辑生效。当前 end_discussion 仍走旧代码所以还在死循环。) → (50字)
+---
+[Kirk]: ## 结论
+
+补丁已落地并 review 通过。改动文件：`chatroom_tools.py:1097-1118`
+
+1. **排除 leader 自身**：`non_waiting = (active - waiting) - {leader}` — 解决"自己等自己"死循环
+2. **Autowait 60s**：其他 agent 忙碌时自动 poll 等待，超时才报错
+
+**当前进程仍运行旧代码**，`end_discussion` 还在死循环。需要重启服务让新逻辑生效。
+---
+[Harper]: 
+
+[工具调用记录]
+• exec(systemctl status nanobot 2>/dev/null | head -5 || supervisorctl status nanobo...) → Exit code: 0 (13字)
+---

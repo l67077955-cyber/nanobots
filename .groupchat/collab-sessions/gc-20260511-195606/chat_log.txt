@@ -1,0 +1,24 @@
+[用户]: 测试无报错
+---
+[Lucas]: 已完成修复。针对 `summarize_enabled=false` 后仍触发 AI 总结的问题，我与团队协作定位并修复了以下四个关键触发点：
+
+1.  **`run_loop.py` (全局总结)**：在 `generate_summary` 函数入口增加了 `summarize_enabled()` 检查，确保关闭时不再调用 LLM 生成讨论摘要。
+2.  **`context.py` (上下文压缩)**：修正了 `maybe_compress` 逻辑。当 AI 总结关闭时，不再主动切除中间消息（避免了用户误以为消息被 AI 删减的错觉），改为依赖 `max_messages` 的自然滚动清理。
+3.  **`result_processor.py` (工具输出处理)**：将工具结果的 AI 摘要逻辑完全包裹在 `summarize_enabled` 判断中，杜绝了超长工具输出（如 `exec`）在关闭设置后仍尝试压缩的行为。
+4.  **`settings.py` (UI 联动)**：补全了 Telegram `/groupchat` 设置界面中的 AI 总结切换按钮及状态显示，确保 UI 操作能正确同步至配置文件。
+
+**验证结果**：
+- 配置文件 `~/.nanobot/history_settings.json` 中的 `summarize_enabled: false` 现已能被上述所有模块正确识别。
+- 经代码审计，所有涉及 AI 总结的异步调用路径均已添加前置开关检查。
+
+修复已在工作区生效，重启服务后即可彻底解决该问题。
+---
+[Kirk]: ✅ 修复已验证通过，`summarize_enabled=false` 关闭后不再触发 AI 总结。
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/summarize-enabled-fix
+  Drawer ID: drawer_wing_code_summarize-enabled-fix_eea4337db47daa44268993a9
+  Chars: 327
+  Hall: hall_events (153字)
+• end_discussion() → ✅ 讨论已结束（原因: 用户确认修复测试通过，无报错。任务完成。），即将进入总结阶段 (42字)
+---

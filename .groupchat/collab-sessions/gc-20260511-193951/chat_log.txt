@@ -1,0 +1,83 @@
+[用户]: 超时最好不要超过90s
+---
+[Kirk]: 已改完。3个文件，超时上限统一为 **90s**：
+
+| 文件 | 改动 |
+|---|---|
+| `tool_loop.py:276` | 公式加 `min(90.0, ...)` 封顶 |
+| `httpx_provider.py` | 5处 `120.0` → `90.0`（httpx client、post、AsyncOpenAI 默认值、fallback） |
+
+动态公式：`min(90, max(60, 60 + 上下文字符数/1000))` 秒。小上下文60s起步，大上下文封顶90s。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && grep -n "_current_timeout\|call_timeout\|timeout" nan...) → 150:    call_timeout: float | None = None,
+275:        # Base timeout 60s + 1s per 1000 chars of context
+276:        _current_timeout = max(call_timeout or 0, 60.0 + (_ctx_total / 1000.0))
+277:        logger.debug("tool_loop iter {}: using timeout {:.1f}s for {:,} chars", iteration, _current_timeout, _ctx_total)
+287:                    timeout=_current_timeout,
+297:                    timeout=_current_timeout,
+312:                        timeout=_current_timeout
+344:                if _current_t… (733字)
+• exec(cd /root/nanobot-src && grep -n "timeout" nanobot/providers/httpx_provider.py...) → 89:            self._client = httpx.AsyncClient(timeout=120.0)
+583:        timeout: float | None = None,
+611:            r = await client.post(url, json=body, headers=headers, timeout=timeout or 120.0)
+675:    def _get_openai_client(self, base_url: str, api_key: str, timeout: float = 120.0):
+680:        if client is None or getattr(client, "_timeout", 120.0) != timeout:
+681:            client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
+682:            client._timeout = tim… (697字)
+• exec(cd /root/nanobot-src && grep -n "timeout" nanobot/providers/base.py | head -20) → 91:        "timeout",
+360:        timeout: float | None = None,
+390:                    timeout=timeout,
+
+
+Exit code: 0 (119字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 273| 
+274|         # ── Dynamic Timeout ──
+275|         # Base timeout 60s + 1s per 1000 chars of context
+276|         _current_timeout = max(call_timeout or 0, 60.0 + (_ctx_total / 1000.0))
+277|         logger.debug("tool_loop iter {}: using timeout {:.1f}s for {:,} chars", iteration, _current_timeout, _ctx_total)
+278| 
+279|         # Use streaming when available for real-time text display.
+280|         # _stream_call handles fallback to non-streaming if tool_calls
+281|         # have empty names (Claude streaming bug).
+282|         try:
+
+(Showing lines 273-282 of 764. Use offset=283 to continue.) (605字)
+• read_file(/root/nanobot-src/nanobot/providers/httpx_provider.py) → 86|     def _get_client(self) -> httpx.AsyncClient:
+87|         """Get or create the shared httpx client."""
+88|         if self._client is None or self._client.is_closed:
+89|             self._client = httpx.AsyncClient(timeout=120.0)
+90|         return self._client
+91| 
+
+(Showing lines 86-91 of 853. Use offset=92 to continue.) (330字)
+• read_file(/root/nanobot-src/nanobot/providers/httpx_provider.py) → 608|         t0 = _time.time()
+609|         try:
+610|             client = self._get_client()
+611|             r = await client.post(url, json=body, headers=headers, timeout=timeout or 120.0)
+612|             latency = _time.time() - t0
+613| 
+
+(Showing lines 608-613 of 853. Use offset=614 to continue.) (303字)
+• read_file(/root/nanobot-src/nanobot/providers/httpx_provider.py) → 672| 
+673|     _openai_clients: dict[str, Any] = {}  # keyed by base_url:key_prefix
+674| 
+675|     def _get_openai_client(self, base_url: str, api_key: str, timeout: float = 120.0):
+676|         """Get or create an AsyncOpenAI client for streaming."""
+677|         from openai import AsyncOpenAI
+678|         cache_key = f"{base_url}:{api_key[:8]}"
+679|         client = self._openai_clients.get(cache_key)
+680|         if client is None or getattr(client, "_timeout", 120.0) != timeout:
+681|             client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
+682|             client._timeout = timeout  # Store for cache invalidation
+683|             self._openai_clients[cache_key] = client
+
+(Showing lines 672-683 of 853. Use offset=684 to continue.) (772字)
+• read_file(/root/nanobot-src/nanobot/providers/httpx_provider.py) → 726| 
+727|         t0 = _time.time()
+728|         try:
+729|             oai_client = self._get_openai_client(target_base, target_key, timeout=timeout or 120.0)
+730|             stream = await oai_client.chat.completions.create(
+731|                 **sdk_body, s… (374字)
+  (还有 10 个工具调用，已省略)
+---

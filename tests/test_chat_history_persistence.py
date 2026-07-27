@@ -14,16 +14,16 @@ from nanobot.groupchat.orchestra.engine import GroupChatEngine
 
 
 @pytest.fixture()
-def history_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    import nanobot.groupchat.history.persistence as persistence_mod
+def workspace(tmp_path: Path) -> Path:
+    """Create a temp workspace with .groupchat state dir."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / ".groupchat").mkdir()
+    return workspace
 
-    target = tmp_path / "chat_history.json"
-    monkeypatch.setattr(persistence_mod, "_NANOBOT_DIR", tmp_path)
-    return target
 
-
-def test_save_and_load_history_snapshot(history_file: Path) -> None:
-    state = GroupChatState(registry={})
+def test_save_and_load_history_snapshot(workspace: Path) -> None:
+    state = GroupChatState(registry={}, workspace=workspace)
     state.save_history_snapshot(
         history=[{"sender": "用户", "content": "做 HTML 页面"}],
         topic="自由讨论",
@@ -38,8 +38,8 @@ def test_save_and_load_history_snapshot(history_file: Path) -> None:
     assert loaded["session_dir"] == "/tmp/gc-test"
 
 
-def test_clear_history_snapshot(history_file: Path) -> None:
-    state = GroupChatState(registry={})
+def test_clear_history_snapshot(workspace: Path) -> None:
+    state = GroupChatState(registry={}, workspace=workspace)
     state.save_history_snapshot(
         history=[{"sender": "用户", "content": "test"}],
     )
@@ -47,10 +47,8 @@ def test_clear_history_snapshot(history_file: Path) -> None:
     assert state.load_history_snapshot() is None
 
 
-def test_engine_restores_history_on_init(history_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import nanobot.groupchat.history.persistence as persistence_mod
-
-    monkeypatch.setattr(persistence_mod, "_NANOBOT_DIR", history_file.parent)
+def test_engine_restores_history_on_init(workspace: Path) -> None:
+    history_file = workspace / ".groupchat" / "chat_history.json"
     history_file.write_text(
         json.dumps(
             {
@@ -68,7 +66,7 @@ def test_engine_restores_history_on_init(history_file: Path, monkeypatch: pytest
     )
 
     provider = MagicMock()
-    engine = GroupChatEngine(GroupChatConfig(), provider, Path("/tmp"))
+    engine = GroupChatEngine(GroupChatConfig(), provider, workspace)
     engine.registry = {"Harper": {"model": "test/model"}, "Kirk": {"model": "test/model"}}
 
     assert len(engine._history) == 2
@@ -77,12 +75,11 @@ def test_engine_restores_history_on_init(history_file: Path, monkeypatch: pytest
     assert engine._round == 2
 
 
-def test_clear_history_removes_snapshot(history_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import nanobot.groupchat.history.persistence as persistence_mod
-
-    monkeypatch.setattr(persistence_mod, "_NANOBOT_DIR", history_file.parent)
+def test_clear_history_removes_snapshot(workspace: Path) -> None:
+    history_file = workspace / ".groupchat" / "chat_history.json"
     provider = MagicMock()
-    engine = GroupChatEngine(GroupChatConfig(), provider, Path("/tmp"))
+    engine = GroupChatEngine(GroupChatConfig(), provider, workspace)
+    engine.registry = {"Harper": {"model": "test/model"}}
     engine._add_message("用户", "round 1 task")
     assert history_file.exists()
 

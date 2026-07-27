@@ -1,0 +1,142 @@
+[用户]: 是否有浏览器的skill
+---
+[Harper]: 有的。两个：
+
+**1. `browser` (Playwright 版)** — `/root/.nanobot.bak/workspace/skills/browser/`
+- 路径：`python3 tools/browser-cli.py`
+- 支持 chain 模式（open → click → type → read 一步完成）
+- 智能元素查找，不需要精确 CSS 选择器
+
+**2. `agent-browser` (Rust/CDP 版)** — npm 全局已安装
+- 命令：`agent-browser`
+- Chrome CDP，比 Playwright 更轻量
+- `agent-browser skills get core` 查看用法
+
+刚才没用是因为 hsbg-ldb.vercel.app 是纯客户端渲染的 Next.js，直接 curl HTML + regex 就能提取数据，比启动浏览器快得多。wallii.gg 也是同理——我们直接调了它的 Supabase API。
+
+需要我用浏览器做什么？
+
+[工具调用记录]
+• exec(ls skills/browser*/SKILL.md 2>/dev/null; ls scripts/browser* 2>/dev/null; fin...) → /tmp/opencli/skills/opencli-browser/SKILL.md
+/tmp/CLI-Anything/skills/cli-anything-browser/SKILL.md
+/root/.nvm/versions/node/v22.22.1/lib/node_modules/agent-browser/skills/agent-browser/SKILL.md
+/root/.npm/_npx/6de2aa2fded2970c/node_modules/agent-browser/skills/agent-browser/SKILL.md
+/root/.nanobot.bak/workspace/skills/browser/SKILL.md
+/root/.nanobot.bak/workspace/skills/agent-browser-clawdbot/SKILL.md
+
+
+Exit code: 0 (420字)
+• read_file(/root/.nanobot.bak/workspace/skills/browser/SKILL.md) → 1| ---
+2| name: browser
+3| description: "基于 Playwright 的浏览器控制。支持打开网页、搜索提交、点击、输入、截图、提取信息。当用户要求'打开网页'、'搜索'、'截图'、'点击按钮'、'填写表单'等浏览器操作时使用。"
+4| keywords: [browser, 浏览器, 网页, 打开, 截图, 点击, 表单, 登录, 搜索, playwright, 访问, 浏览, screenshot, click, form]
+5| metadata: {"nanobot":{"emoji":"🌐","requires":{"bins":["python3","playwright"]},"install":[{"id":"playwright","kind":"pip","package":"playwright","bins":["playwright"],"label":"Install Playwright (pip)"},{"id":"browsers","kind":"shell","command":"playwright install chromium","label":"Install Chromium browser"}]}}
+6| always: false
+7| ---
+8| 
+9| # Browser 浏览器控制
+10| 
+11| 基于 Playwright 的 AI 可控浏览器 CLI。支持智能元素查找（不需要精确 CSS 选择器）。
+12| 
+13| ## 工具路径
+14| 
+15| ```bash
+16| python3 tools/browser-cli.py <command> [args...]
+17| ```
+18| 
+19| ## 最常用：搜索提交（一步完成）
+20| 
+21| ```bas… (4,352字)
+• read_file(/root/.nvm/versions/node/v22.22.1/lib/node_modules/agent-browser/skills/agent...) → 1| ---
+2| name: agent-browser
+3| description: Browser automation CLI for AI agents. Use when the user needs to interact with websites, including navigating pages, filling forms, clicking buttons, taking screenshots, extracting data, testing web apps, or automating any browser task. Triggers include requests to "open a website", "fill out a form", "click a button", "take a screenshot", "scrape data from a page", "test this web app", "login to a site", "automate browser actions", or any task requiring programmatic web interaction. Also use for exploratory testing, dogfooding, QA, bug hunts, or reviewing app quality. Also use for automating Electron desktop apps (VS Code, Slack, Discord, Figma, Notion, Spotify), checking Slack unreads, sending Slack messages, searching Slack conversations, ru… (3,128字)
+---
+[Kirk]: ## 结论
+
+有浏览器 skill，但**当前不可用**。
+
+## 关键发现
+
+1. **opencli-browser skill** — 存在于 `/tmp/opencli/skills/opencli-browser/SKILL.md`，功能完整（驱动真实 Chrome、点击/输入/表单填写、网络捕获等），但**未注册到 nanobot 的 skills 目录**
+2. **opencli 工具** — 已安装 v1.6.7，但 `opencli doctor` 报错：**Chrome Browser Bridge 扩展未连接**，无法使用
+3. **cli-anything-browser** — 另一个基于 DOMShell 的浏览器 CLI，存在于 `/tmp/CLI-Anything/browser/`，但**未安装**
+
+## 要启用需要两步
+
+1. **装 Chrome 扩展**：从 https://github.com/jackwener/opencli/releases 下载 Browser Bridge 扩展 → `chrome://extensions/` → 开发者模式 → 加载已解压扩展
+2. **注册 skill**：将 `/tmp/opencli/skills/opencli-browser/` 复制或链接到 `/root/nanobot-src/nanobot/skills/opencli-browser/`
+
+装完扩展后跑 `opencli doctor` 确认全绿即可使用。
+
+[工具调用记录]
+• memory_palace(browser skill 浏览器 skill browser-cli opencli) → 🔍 5 result(s) for 'browser skill 浏览器 skill browser-cli opencli':
+
+[1] wing_code/nanobot-skills-inventory (sim=-0.284)
+  nanobot 当前 skill 清单（2026-05-24确认）：共12个skill，位于 /root/nanobot-src/nanobot/skills/，全部完好。列表：clawhub, cron, debug, github, memory, settings, skill-creator, steve-jobs-perspective, summarize, testing, tmux, weather。另有 /root/.nanobot/skills/ 下 memory-palace 和 rag 两个旧 skill 未加载。workspace 下 skills/nuwa-skill/ 工作区已清空（5月9日），与上述12个无关。
+
+[2] wing_code/send-photo-capability (sim=-0.388)
+  发图… (1,992字)
+• exec() → README.md
+__init__.py
+__main__.py
+browser_cli.py
+core
+skills
+tests
+utils
+===
+nuwa-skill
+===
+/tmp/CLI-Anything/dify-workflow/agent-harness/cli_anything/dify_workflow/skills/SKILL.md
+/tmp/CLI-Anything/unimol_tools/agent-harness/cli_anything/unimol_tools/SKILL.md
+/tmp/CLI-Anything/renderdoc/agent-harness/cli_anything/renderdoc/skills/SKILL.md
+/tmp/CLI-Anything/cli-hub-meta-skill/SKILL.md
+/tmp/CLI-Anything/openclaw-skill/SKILL.md
+/tmp/CLI-Anything/openclaw-skill/agent-harness/cli_anything/openclaw/s… (1,081字)
+• read_file(/tmp/opencli/skills/opencli-browser/SKILL.md) → 1| ---
+2| name: opencli-browser
+3| description: Use when an agent needs to drive a real Chrome window via opencli — inspect a page, fill forms, click through logged-in flows, or extract data ad-hoc. Covers the selector-first target contract, compound form fields, stale-ref handling, network capture, and the agent-native envelopes the CLI returns. Not for writing adapters — see opencli-adapter-author for that.
+4| allowed-tools: Bash(opencli:*), Read, Edit, Write
+5| ---
+6| 
+7| # opencli-browser
+8| 
+9| The first reader of this CLI is an agent, not a human. Every subcommand returns a structured envelope that tells you exactly what matched, how confident the match is, and what to do if it didn't. Lean on those envelopes — do not guess.
+10| 
+11| This skill is for **driving a live browser** to ac… (5,250字)
+• read_file(/tmp/CLI-Anything/browser/agent-harness/cli_anything/browser/README.md) → 1| # cli-anything-browser — Browser Automation CLI
+2| 
+3| A command-line interface for browser automation using [DOMShell](https://github.com/apireno/DOMShell)'s MCP server. Maps Chrome's Accessibility Tree to a virtual filesystem for agent-native browser automation.
+4| 
+5| ## Features
+6| 
+7| - **Filesystem-first navigation**: Use `ls`, `cd`, `cat` to explore web pages
+8| - **Search**: `grep` for text patterns in the accessibility tree
+9| - **Actions**: `click`, `type` to interact with elements
+10| - **JSON output**: `--json` flag for machine-readable output
+11| - **Interactive REPL**: Stateful session with command history
+12| - **Daemon mode**: Optional persistent connection for faster interactive use
+13| 
+14| ## Installation
+15| 
+16| ### Prerequisites
+17| 
+18| 1. **Node.js and npx** (req… (1,863字)
+• exec() → /root/.nvm/versions/node/v22.22.1/bin/opencli
+1.6.7
+=== opencli ===
+=== cli-anything-browser ===
+opencli v1.6.7 doctor (node v22.22.1)
+
+[OK] Daemon: running on port 19825
+[MISSING] Extension: not connected
+[FAIL] Connectivity: failed (Daemon is running but the Browser Extension is not connected.
+Please install and enable the opencli Browser Bridge extension in Chrome or Chromium.)
+
+Issues:
+  • Daemon is running but the Chrome/Chromium extension is not connected.
+Please install the opencli Browse… (1,156字)
+• memory_palace() → ✅ Stored in wing_code/browser-skill-status (hidden)
+  Drawer ID: drawer_wing_code_browser-skill-status_3757ae25771e783b9425b5f5 (127字)
+• end_discussion() → ✅ 讨论已结束（原因: 问题已回答，浏览器 skill 存在但当前不可用，原因和修复路径已明确。），即将进入总结阶段 (58字)
+---

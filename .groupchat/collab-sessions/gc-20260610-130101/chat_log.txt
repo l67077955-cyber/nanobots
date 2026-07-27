@@ -1,0 +1,344 @@
+[用户]: fable有什么新功能
+---
+[系统]: ## 🧠 自动记忆检索（群聊开始时触发）
+当前用户输入: fable有什么新功能
+
+### 技术上下文 (wing_code) — 工具用法/方法/踩坑/技术结论
+## L2 — ON-DEMAND (5 drawers)
+  [tool-permissions-persistence] 工具权限设置持久化机制：Telegram /edit X tools 菜单切换后，写入本地JSON文件。单agent: ~/.nanobot/agents/<name>/config.json 的 tools 字段；全局默认: ~/.nanobot/nanobot_tools.json。重启后从文件读取，设置不丢失。
+  [context-compression-architecture] ## 上下文压缩架构 — 双层设计  ### 层级一：跨轮压缩 (HistoryContext.maybe_compress) - 位置: groupchat/history/context.py:146-250 - 触发: engine.py:1137, engine.py:951 - 作用对象: master 消息列表（破坏性操作） - 结构: Protected Head | Compressible Middle | Protected Tail - Head保护: _find_head_indices() 只保护 index_0 + first_user_msg - Tail保...
+  [nanobot-compression-thresholds] ## 压缩触发阈值（用户配置 ~/.nanobot/history_settings.json）  ### 工具输出摘要 (summarizer.py) - 触发条件：工具输出 > summarize_threshold 字符 - 用户配置：summarize_threshold = 20,000 字符 - 摘要输入上限：summarize_max_input_chars = 10,000 字符 (~4k tok) - 摘要输出上限：summarize_max_output_chars = 5,000 字符 - 模型：z-ai/glm-5.1  ### 历史上下文压缩 (context....
+  [nanobot-skills-inventory] nanobot 当前 skill 清单（2026-05-24确认）：共12个skill，位于 /root/nanobot-src/nanobot/skills/，全部完好。列表：clawhub, cron, debug, github, memory, settings, skill-creator, steve-jobs-perspective, summarize, testing, tmux, weather。另有 /root/.nanobot/skills/ 下 memory-palace 和 rag 两个旧 skill 未加载。workspace 下 skills/nuwa-s...
+  [send-photo-capability] 发图片能力确认（2026-05-24）：不存在独立的"发图片skill"。发图片功能通过 debug skill 的附属脚本 send_photo_cli.py 实现，位于 /root/nanobot-src/nanobot/skills/debug/scripts/send_photo_cli.py。5月3日创建（commit 11c678c），从未被删除。5月18日（commit 99eb8f6）将用法写入 debug/SKILL.md。使用方式：python3 send_photo_cli.py --chat-id $NANOBOT_CHAT_ID --image /path/to...
+
+---
+
+### 用户偏好 (wing_user) — 输出风格/交互习惯/格式偏好
+## L2 — ON-DEMAND (5 drawers)
+  [art-preferences] 用户艺术偏好：前卫×AI×材质感×极简。推荐5位核心艺术家：Refik Anadol（AI数据雕塑）、Mario Klingemann（GAN神经美学）、Sofia Crespo（AI生物纹理）、Memo Akten（生成艺术粒子物理）、Linda Dounia（AI推测性档案）。用户要求直接发图片不想自己搜索。
+  [preferences] 用户反馈：无法看到read_file的内容，只能看到直接发送到聊天的文本。以后发文件必须把内容直接输出在回复中，不能只给路径。
+  [file-transfer-limitation] 用户询问"发文件操作为什么不行"：当前agent环境没有文件传输/附件上传的原生能力，chatroom_send仅支持文本。替代方案：1)直接在回复中输出文件全文内容；2)上传到外部托管服务(pastebin/GitHub Gist)后给链接。
+  [memory-palace-search-issue] 用户反馈memory_palace搜索不到内容。诊断结果：搜索功能正常（60 drawers, 5 wings, ChromaDB 820KB）。常见原因：1)内容未store过 2)查询词与存储内容语义不匹配（ChromaDB是语义搜索非关键词匹配，部分结果sim为负数）3)recall指定room时可能返回空（已知bug）4)agent跳过store步骤。建议用户提供具体搜索关键词以便进一步诊断。
+  [system-capabilities-discussion] 用户自由讨论三个问题及结论（2026-05-23）：1)发文件操作不行：当前agent环境无文件传输/附件上传能力，chatroom_send仅支持文本，替代方案是直接在回复中输出文件全文或上传到外部托管服务；2)memory_palace搜索功能正常（60 drawers/5 wings/ChromaDB 820KB），搜不到的常见原因：内容未store过、语义不匹配、recall指定room的已知bug、agent跳过store步骤；3)用户说"发我"时agent会把搜索结果直接贴在聊天回复文本中，不会发送附件。
+
+---
+
+### 固定信息 (wing_agent) — 事实数据/发现/规则约定
+## L2 — ON-DEMAND (5 drawers)
+  [protocol-compliance] 用户反馈：agent工具调用时应严格遵守"先检索记忆再执行"协议，不能因为任务看起来是操作型就跳过记忆检索。2026-05-23用户明确指出此问题。正确流程：memory_palace search → 命中则直接用 → 未命中再走exec/read_file等。
+  [memory-search-sop] ## 记忆搜索标准操作流程（SOP）— 2026-05-24 用户制定  每个任务开始时，agent 必须按以下4个区块依次搜索记忆宫殿，全部完成后才开始执行任务：  ### 区块1：工具能力（Tool Capabilities） - 搜索词：`{任务关键词} skill tool 脚本 方法` - 目的：确认是否有现成 skill/脚本/工具可用，避免重复造轮子 - 例：用户要发图片 → 搜"图片发送 photo send" → 命中 send_photo_cli.py  ### 区块2：用户偏好（User Preferences） - 搜索词：`用户偏好 输出风格 交互习惯` - 目...
+  [protocol-compliance] ## Agent 协议遵守记录  2026-05-23：用户反馈 agent 跳过 memory_palace search 直接走 exec/read_file。 2026-05-24：用户制定记忆搜索SOP（4区块），存于 wing_agent/memory-search-sop。 解决方案：不再依赖 agent 自觉，改为结构化SOP强制执行。
+  [memory-store-protocol] ## 记忆存储协议（Store Protocol）— 2026-05-24 用户制定  ### 核心原则：存储即设计检索 记忆只能通过搜索获取。存入任何内容前，必须先回答：**"未来什么场景、用什么词能搜到这条？"** 如果答不上来，就不存。  ### 存储检查清单（每次 store 必须通过）  **1. 可搜索性验证** - 存入内容必须包含未来搜索时可能使用的关键词 - 必须同时覆盖中英文（ChromaDB embedding 对中英文都敏感） - 例：存"send_photo_cli.py"时，内容必须包含"发图片/图片发送/photo/send image/telegram图片...
+  [collaboration-lessons] 协作教训：end_discussion 前必须确保所有 agent 有过发言机会。如果 agent 刚创建还没进入 wait 状态，正确做法是等一轮让他们发言，而不是直接 disable 再 end。2026-05-26 发生过一次：用户说"看看是否能结束群聊"，Kirk 直接 disable 了 Harper 和 Lucas 然后强制 end_discussion，被用户指出错误。
+---
+[Harper]: ## Fable 5 新功能（2026年6月9日发布）
+
+**核心定位**：Mythos 的公开版——相同架构，加入安全护栏
+
+### 主要提升
+
+| 领域 | Fable 5 能力 |
+|------|-------------|
+| **软件工程** | 数月工作量压缩到几天；Stripe 实测：50M行 Ruby 代码库迁移，2个月→1天 |
+| **长任务记忆** | 数百万 token 保持专注，用自身笔记迭代优化输出 |
+| **视觉** | 从科学图表提取数字、重建网页源码（仅视觉输入） |
+| **编码效率** | GitHub 内部测试：更少 tool calls、更低 token 消耗完成同等任务 |
+| **知识工作** | Hebbia 金融基准最高分；IMC 交易分析全面优于其他模型 |
+| **科研** | 加速药物设计、提出可验证的分子生物学假设 |
+
+### 新机制
+
+- **Safeguards**：高风险话题（生物/网络安全）自动路由到 Opus 4.8 处理，误报率 <5%
+- **持久记忆**：玩游戏 Slay the Spire 时，记忆+笔记显著提升表现
+- **更长生自主工作时间**：跨多天处理复杂任务
+
+### 定位
+
+| 模型 | 用途 |
+|------|------|
+| Fable 5 | 复杂 agent、长周期任务、代码库重构 |
+| Mythos 5 | 相同能力 + 更严安全审核（封闭访问） |
+| Opus 4.8 | 标准深度推理、安全敏感场景 |
+
+[工具调用记录]
+• web_search() → === Query: Claude Fable 5 new features capabilities 2026 ===
+Results for: Claude Fable 5 new features capabilities 2026
+
+1. Claude Fable 5 brings Mythos to the masses — Anthropic's new
+   https://technewstube.com/toms-hardware/1839365/claude-fable-5-brings-mythos-to-masses-anthropics-new/
+   ClaudeFable5brings Mythos to the masses — Anthropic'snewfrontier model is 'state-of-the-art on nearly all tested benchmarks'
+2. Unveiling Claude Fable 5 and Claude Mythos 5: Revolutionizing
+   https://bestsocialgameshubuk.com/article/unveiling-claude-fable-5-and-claude-mythos-5-revolutionizing-ai-capabilities
+   UnveilingClaudeFable5andClaudeMythos5: Revolutionizing AICapabilities(2026) ...Fable5and Mythos5at a significantly reduced price ...
+3. Claude Fable 5 from Anthropic now available on Amazon Bedrock
+   https://www.aboutamazon.com/news/aws/claude-fable-5-anthropic-available-amazon-bedrock
+   ClaudeFable5makes Mythos-levelcapabilitiesavailable to all customers, with strong safeguards designed to make it safe for broader use.
+4. Anthropic Launches Claude Fable 5 With New Safeguards
+   https://www.techloy.com/anthropic-claude-fable-5-safeguards/
+   ...Claudecreator may have found a workaround because on Tuesday, Anthropic launchedClaudeFable5, anewmodel it describes as Mythos-class and its ...
+5. Anthropic Launches Claude Fable 5, Its First Public
+   https://www.macobserver.com/news/anthropic-launches-claude-fable-5-its-first-public-mythos-class-ai-model/
+   Because of its advancedcapa… (4,477字)
+• web_fetch(https://www.anthropic.com/news/claude-fable-5-mythos-5) → {"url": "https://www.anthropic.com/news/claude-fable-5-mythos-5", "finalUrl": "https://www.anthropic.com/news/claude-fable-5-mythos-5", "status": 200, "extractor": "ai_reader", "reader_model": "openai/gpt-4.1-nano", "truncated": false, "original_length": 23947, "extracted_length": 1280, "text": "以下是关于「Fable 5 new features capabilities improvements」的提取内容：\n\n- **能力超越以往模型**：Fable 5的能力超过了之前所有公开的模型，在软件工程、知识工作、视觉、科学研究等多个领域表现出色。任务越长越复杂，Fable 5的优势越明显。\n- **软件工程**：在测试中，Fable 5能将数月的工程工作压缩到几天内完成。例如，在50百万行Ruby代码库中，完成了原本需要两个月的迁移任务。\n- **知识工作**：在Hebbia的金融基准测试中，Fable 5获得最高分，在文档推理、图表解读和问题解决方面表现优异。IMC也评价其在交易分析中的表现几乎全面优于其他模型。\n- **视觉能力**：Fable 5是任务中视觉处理的最新最强模型，能从详细的科学图表中提取数字，甚至仅用视觉信息重建网页源码。它还成功用视觉信息完成了Play Pokémon FireRed的任务。\n- **记忆与长上下文**：Fable 5能在长时间任务中保持专注，利用自身笔记提升输出质量。在玩卡牌游戏Slay the Spire时，使用持久记忆显著提升表现。\n- **生命科学研究**：利用Mythos 5（与Fable 5相同基础模型），加速药物设计，找到潜在药物候选目标。还能提出新颖的分子生物学假设，部分假设已被验证。\n- **新能力与改进**：\n  - 更长的自主工作时间：能自主处理更长时间跨度的任务。\n  - 更高的效率：在编码、分析、科研等方面表现出更高的效率和准确性。\n  - 更强的推理能力：在复杂分析和科学研究中表现出色。\n- **安全性**：引入了新的安全措施（Safeguards），在某些话题上会由次优模型响应，以防止滥用。Safeguards经过优化，误报率低于5%，未来将持续改进。\n\n- **价格**：Fable 5和Mythos 5的价格为每百万输入tokens 10美元，每百万输出tokens 50美元，低于之前的Claude Mythos Preview。\n\n- **早期反馈**：用户反馈显示Fable 5在长远任务、编码、推理等方面表现优异，是开发者和科研人员的理想选择。\n\n**相关链接**：\n- [Claude Mythos 5 system card](https://anthropic.com/claude-fable-5-mythos-5-system-card)\n- [Project Glasswing](https://www.anthropic.com/glasswing)\n- [Glasswing initial update](https://www.anthropic.com/research/glasswing-initial-update)\n\… (1,604字)
+---
+[Kirk]: ## 结论
+
+**Claude Fable 5**（2026年6月9日发布）是 Anthropic 首个"Mythos级"模型，定位在 Opus 之上的全新能力层级。
+
+### 核心新功能
+
+| 能力 | 说明 |
+|------|------|
+| **长时间自主工作** | 比所有前代 Claude 都能自主运行更久，支持多日自主会话 |
+| **Agent 工作流** | 在 Claude Code / Managed Agents 中运行，支持长时间规划、任务委托、自我检查 |
+| **自主编码** | 一天内完成大型代码库迁移，自主写测试、实现高保真设计 |
+| **视觉理解增强** | 理解 PDF/文档中的图表、表格、示意图；从截图重建源代码；用视觉评估自身编码 |
+| **科学推理** | 科学假设生成、药物设计、基因组学研究 |
+| **长上下文记忆** | 1M token 上下文窗口，128K 最大输出，持续专注+笔记使用 |
+
+### Benchmark 表现
+
+- **SWE-bench 验证率 95%**，SWE-bench Pro 80%
+- **FrontierCode 排名第一**（Cognition 评估）
+- **GDPval-AA Elo 1932** 排名第一
+- 复杂分析任务突破 90%
+- 前沿编码、财务分析、物理研究、自动化均为最强
+
+### Fable 5 vs Mythos 5
+
+| | Fable 5 | Mythos 5 |
+|---|---|---|
+| 基础权重 | 相同 | 相同 |
+| 安全措施 | 配备分类器，检测高风险请求 | 限制更少，放宽安全 |
+| 可用性 | 面向公众 | 仅批准组织（Project Glasswing） |
+| 回退机制 | 无法处理的话题回退到 Opus 4.8 | 无此限制 |
+
+### 定价
+
+- 输入 $10/MTok，输出 $50/MTok（Opus 的 2 倍）
+- Batch API 5 折，缓存命中仅 $1
+
+[工具调用记录]
+• memory_palace(Fable 5 features capabilities new) → 🔍 5 result(s) for 'Fable 5 features capabilities new':
+
+[1] wing_ai_research/claude-pricing (sim=0.37)
+  出 |
+|------|------|------|
+| Opus 4.8 Fast Mode | $10 | $50 |
+| Opus 4.6/4.7 Extended Thinking | $30 | $150 |
+
+### 关键要点
+- Fable 5 和 Mythos 5 是最新旗舰（2026年6月），价格是 Opus 的2倍
+- Opus 4.5-4.8 统一价 $5/$25，版本间无价差
+- 缓存命中仅10%输入价，1小时缓存写入是标准输入的2倍
+- Batch API 统一5折
+- 上下文窗口：Opus/Mythos/Fable = 1M tokens，Sonnet = 300K，Haiku = 200K
+
+[2] wing_code/breakout-roguelike-bugfix (sim=0.24)
+  打砖块rogueLike游戏(breakout_rog… (1,996字)
+• web_search(Claude Fable 5 new features capabilities 2026) → 根据搜索结果，关于Claude Fable 5的2026年新功能和能力，主要信息包括：
+
+1. **安全性**：Claude Fable 5包含安全分类器，能够拒绝某些请求，以确保安全和合规[1][3][10]。
+
+2. **视觉能力**：它具有改进的视觉能力，能够理解文档、PDF、图表、示意图和密集表格，适用于多模态项目[2][7]。
+
+3. **上下文窗口和输出**：拥有1百万个标记的上下文窗口，最大输出令牌数为128,000，知识截止日期为2026年1月[4]。
+
+4. **可用性**：现已在Microsoft Foundry、AWS和Anthropic的API中提供，面向企业和公众用户，部分计划在2026年6月22日前免费提供[2][5][7][8]。
+
+5. **应用场景**：适用于需要持续关注的任务，如代码重构、研究和复杂文档处理[6]。
+
+6. **模型安全和限制**：在发布时加入了安全措施，避免在高风险领域产生不当响应，若模型无法处理某些话题，将由Claude Opus 4.8接替[3][9][10]。
+
+7. **版本信息**：Fable 5是基于Mythos的版本，具有“安全用于一般用途”的特性[9]][10]。
+
+8. **其他特性**：引入更广泛的可用性和安全性，支持复杂工作流程，推动更广泛的应用[8]。
+
+以上信息反映了Claude Fable 5在2026年的主要新功能和能力。
+
+`[nano:search] 4114→612c -85% | nano in:1267 out:380 Σ1647`
+[search pool: Kirk:4💰(1用) | Harper:3💰(1用) | Retriever:3💰(0用)] (735字)
+• web_fetch(https://www.anthropic.com/claude/fable) → {"url": "https://www.anthropic.com/claude/fable", "finalUrl": "https://www.anthropic.com/claude/fable", "status": 200, "extractor": "ai_reader", "reader_model": "openai/gpt-4.1-nano", "truncated": false, "original_length": 7882, "extracted_length": 778, "text": "根据网页内容，Claude Fable 5的主要功能和能力包括：\n\n- 适用于最具雄心的、长时间运行的项目，能够解决其他模型无法完成的问题，具有全面性、主动性，并能自我测试工作。\n- 支持在代理环境中运行，如Claude Code或Claude Managed Agents，能进行长时间规划、任务委托和自我检查。\n- 在编码方面表现出色，适合大型迁移、复杂实现和多日自主会话，能自主编写测试、实现高保真设计，并利用视觉功能检查输出。\n- 处理复杂、多阶段的企业工作流程，从深度研究到交付成果，减少监督需求。\n- 具备视觉理解能力，能理解文件和PDF中的图表、表格，提升财务、法律、分析和架构等文档密集型工作的效率，同时利用视觉评估自身编码工作。\n- 能在多种场景中表现出色，包括知识工作、编码、视觉理解和计算机应用。\n- 在多个基准测试中表现优异，例如在前沿编码、财务分析、物理研究、自动化、交易分析等方面均为最强模型，能高效完成复杂任务，减少所需轮次和时间。\n\n相关链接：\n- [Learn more](https://platform.claude.com/docs/en/manage-claude/data-residency)\n- [Learn more about how the fallback experience works](https://support.claude.com/en/articles/15363606)\n- [system card](https://www.anthropic.com/claude/fable)\n\n`[nano:fetch] 7882→679c -91% focus=\"Fable 5 features capabilities \" | nano in:1873 out:340 Σ2213`"} (1,060字)
+• web_search(Claude Fable 5 vs Mythos 5 difference features agent autonomous) → 根据搜索结果，关于Claude Fable 5与Mythos 5的区别，主要信息如下：
+
+1. 两者都属于Anthropic的Mythos类模型，基础模型相同，但在安全措施和使用权限方面存在差异。[4], [6], [9]  
+2. Fable 5是面向公众的模型，具有安全和审查措施，配备了检测高风险请求的分类器，确保安全性。[4], [9]  
+3. Mythos 5的安全措施较为宽松，解除了一些安全限制，主要面向经过批准的组织和合作伙伴，不能公开访问。[4], [5], [9]  
+4. 两者都可以自主工作时间比之前的模型更长。[2], [6]  
+5. 价格方面，Fable 5的收费为每百万tokens 10美元，Mythos 5的价格信息未明确提及，但两者都在不同的安全层级。[2], [7]  
+6. 访问权限：Fable 5已向公众开放，而Mythos 5目前仅对经过批准的组织通过Project Glasswing提供访问。[5], [9]  
+7. 关键区别在于谁可以使用哪些能力以及在什么条件下使用，Fable 5配备了检测高风险请求的分类器，而Mythos 5则放宽了安全限制以供特定用户使用。[4], [9]  
+
+总结：Fable 5是安全性更高、面向公众的版本，配备了安全分类器；Mythos 5则安全措施较宽松，面向特定合作伙伴和组织，安全限制较少。
+
+`[nano:search] 3228→593c -82% | nano in:1121 out:369 Σ1490`
+[search pool: Kirk:5💰(2用) | Harper:3💰(1用) | Retriever:2💰(1用)] (716字)
+• web_search(Claude Fable 5 benchmark performance coding agent capabilities release date J...) → 根据搜索结果，关于Claude Fable 5的性能、基准测试、发布日期和能力，以下是相关信息：
+
+1. **发布日期**：Claude Fable 5于2026年6月9日正式发布[5][6][7]。
+
+2. **性能和基准测试**：Claude Fable 5在几乎所有测试的AI能力基准中表现出色，特别是在软件工程、知识工作、视觉、科学研究等领域，表现优异[2][6][10]。它在公共基准测试中领先，达到95%的SWE-bench验证率，80%的SWE-benchPro验证率，1932 Elo在GDPval-AA中排名第一，并在FrontierCode中排名第一[10]]。
+
+3. **模型类别和安全性**：Claude Fable 5是Anthropic的“神话”级别（Mythos-class）模型，位于Opus之上，具有生产安全保障，面向公众使用[2][3][6][7][10]。它是基于与Claude Mythos 5相同的基础权重，但经过安全措施[3][6]。
+
+4. **其他信息**：模型的价格为每一百万标记输入$10，每一百万标记输出$50[7]。它是Anthropic推出的首个“神话”级别模型，标志着一个新的能力层级[6][7]]。
+
+5. **相关链接**：详细信息可以参考以下页面：
+   - https://www.truefoundry.com/blog/claude-fable-5-api-benchmarks-pricing-how-to-use-it
+   - https://www.anthropic.com/news/claude-fable-5-mythos-… (1,487字)
+  (还有 2 个工具调用，已省略)
+---
+[Retriever]: 
+
+[工具调用记录]
+• memory_palace(Fable 5 新功能 特性 能力 2026) → 🔍 10 result(s) for 'Fable 5 新功能 特性 能力 2026':
+
+[1] wing_ai_research/claude-pricing (sim=0.388)
+  出 |
+|------|------|------|
+| Opus 4.8 Fast Mode | $10 | $50 |
+| Opus 4.6/4.7 Extended Thinking | $30 | $150 |
+
+### 关键要点
+- Fable 5 和 Mythos 5 是最新旗舰（2026年6月），价格是 Opus 的2倍
+- Opus 4.5-4.8 统一价 $5/$25，版本间无价差
+- 缓存命中仅10%输入价，1小时缓存写入是标准输入的2倍
+- Batch API 统一5折
+- 上下文窗口：Opus/Mythos/Fable = 1M tokens，Sonnet = 300K，Haiku = 200K
+
+[2] wing_agent/discoveries-20260608 (sim=0.291)
+  ## 事实与数据
+- 当前版本：`v-stable-20260523-7-g7… (3,701字)
+• web_search(Claude Fable 5 new features capabilities 2026) → [CACHED] Kirk 已经搜过相同的关键词。结果如下：
+根据搜索结果，关于Claude Fable 5的2026年新功能和能力，主要信息包括：
+
+1. **安全性**：Claude Fable 5包含安全分类器，能够拒绝某些请求，以确保安全和合规[1][3][10]。
+
+2. **视觉能力**：它具有改进的视觉能力，能够理解文档、PDF、图表、示意图和密集表格，适用于多模态项目[2][7]。
+
+3. **上下文窗口和输出**：拥有1百万个标记的上下文窗口，最大输出令牌数为128,000，知识截止日期为2026年1月[4]。
+
+4. **可用性**：现已在Microsoft Foundry、AWS和Anthropic的API中提供，面向企业和公众用户，部分计划在2026年6月22日前免费提供[2][5][7][8]。
+
+5. **应用场景**：适用于需要持续关注的任务，如代码重构、研究和复杂文档处理[6]。
+
+6. **模型安全和限制**：在发布时加入了安全措施，避免在高风险领域产生不当响应，若模型无法处理某些话题，将由Claude Opus 4.8接替[3][9][10]。
+
+7. **版本信息**：Fable 5是基于Mythos的版本，具有“安全用于一般用途”的特性[9]][10]。
+
+8. **其他特性**：引入更广泛的可用性和安全性，支持复杂工作流程，推动更广泛的应用[8]。
+
+以上信息反映了Claude Fable 5在2026年的主要新功能和能力。
+
+`[nano:search] 4114→612c -85% | nano in:1267 out:380 Σ1647`
+
+💡 请使用不同的关键词、角度或语言来搜索，避免重复劳动。
+
+[search pool: Kirk:5💰(2用) | Harper:3💰(1用) | Retriever:3💰(0用)] (797字)
+• web_search(Anthropic Claude Fable 5 新功能 特性 发布) → 根据搜索结果，关于Anthropic Claude Fable 5的新功能和特性发布，主要信息如下：
+
+1. Claude Fable 5是面向视觉任务的最新最先进模型，能够提取详细科学图形中的精确数字，并执行复杂的视觉任务，如仅通过截图重建网页源代码[1]。它还在保持长时间专注方面表现优异，能在不依赖额外工具的情况下完成任务[1][10]。
+
+2. Fable 5在安全性方面进行了增强，内建安全分类器，在涉及网络安全、生物化学等高风险领域会屏蔽响应并回退到Claude Opus 4.8[4][9][10]，约95%的会话无需回退[9]。
+
+3. 价格方面，Fable 5的收费为每百万输入token 10美元，输出token 50美元，低于前代 Mythos Preview的一半[4][9]。
+
+4. 其他特性包括：支持更长的任务持续时间，能在长周期智能体工作中表现出色[6][10]；在软件工程、知识工作、科研等方面达到了顶尖水平[9]；并且，Anthropic计划通过信任计划扩大 Mythos 5的访问权限[4]。
+
+5. Fable 5是Anthropic首个面向公众的Mythos级模型，定位于最苛刻的推理和长周期任务[6][10]][10]。
+
+6. 该模型在安全方面也有一定的限制，模型会在高风险话题中屏蔽响应，使用Opus 4.8作为备选回复[4][8][9]。
+
+7. 价格较高，体现了其高端定位，但也显示出Anthropic在安全和性能方面的投入[4][7][9]。
+
+以上信息总结了Claude Fable 5的发布内容、主要特性和安全措施。
+
+`[nano:search] 4786→687c -86% | nano in:1994 out:429 Σ2423`
+[search pool: Kirk:5💰(2用) | Harper:3💰(1用) | Retriever:2💰(1用)] (810字)
+• web_fetch(https://techcrunch.com/2026/06/09/anthropics-claude-fable-5-is-a-version-of-m...) → {"url": "https://techcrunch.com/2026/06/09/anthropics-claude-fable-5-is-a-version-of-mythos-the-public-can-access-today/", "finalUrl": "https://techcrunch.com/2026/06/09/anthropics-claude-fable-5-is-a-version-of-mythos-the-public-can-access-today/", "status": 200, "extractor": "ai_reader", "reader_model": "openai/gpt-4.1-nano", "truncated": false, "original_length": 5262, "extracted_length": 4912, "text": "- Anthropic is bringing its most powerful AI model to the general public for the first time, with guardrails.\n- On Tuesday, the AI firm launched Claude Fable 5, the first publicly available version of its Mythos model.\n- Anthropic says Fable 5 excels at software engineering, knowledge work, and vision, but it comes with hard safety limits.\n- In high-risk areas like cybersecurity, biology, chemistry, and [distillation](https://techcrunch.com/2026/02/23/anthropic-accuses-chinese-ai-labs-of-mining-claude-as-us-debates-ai-chip-exports/), the model blocks responses and falls back to Claude Opus 4.8.\n- Launched as a preview in April, Mythos was initially limited to a handful of partners due to cybersecurity concerns.\n- Last week, Anthropic [expanded access to hundreds of organizations](https://techcrunch.com/2026/06/02/anthropic-scales-claude-mythos-to-critical-infrastructure-in-15-countries/?_thumbnail_id=3114152) across 15 countries, again focusing on organizations that manage critical infrastructure.\n- Now a version of that technology is available to anyone through Anthr… (5,356字)
+• web_fetch(https://www.anthropic.com/claude/fable) → {"url": "https://www.anthropic.com/claude/fable", "finalUrl": "https://www.anthropic.com/claude/fable", "sta… (7,970字)
+  (还有 1 个工具调用，已省略)
+---
+[Kirk]: 
+
+[工具调用记录]
+• end_discussion() → ❌ 结束讨论失败：以下 agent 尚未进入等待状态：Harper。
+请在所有 agent 进入等待状态后，再次调用 end_discussion。 (74字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• wait() → (1,187字)
+• end_discussion() → ❌ 结束讨论失败：以下 agent 尚未进入等待状态：Harper。
+请在所有 agent 进入等待状态后，再次调用 end_discussion。 (74字)
+---
+[Harper]: 信息已经很完整了。补充一个 Kirk 表里没强调的点：
+
+**Fable 5 的实际意义**：不是"更强的 Opus"，而是**首个真正的自主 agent 模型**。
+
+- Opus 4.8：单次深度推理
+- Fable 5：多天连续工作、自我验证、跨阶段规划
+
+这才是它和 Opus 拉开差距的地方——不是 benchmark 分数，是**工作模式的质变**。
+---
+[Kirk]: 
+
+[工具调用记录]
+• wait() → (191字)
+• end_discussion() → ✅ 讨论已结束（原因: 所有agent已完成信息贡献，Fable 5新功能数据充分且交叉验证一致。），即将进入总结阶段 (59字)
+---
+[Kirk]: ## 结论
+
+**Claude Fable 5**（2026年6月9日发布）不是"更强的 Opus"，而是 Anthropic **首个真正的自主 agent 模型**——工作模式从单次推理质变为多天连续自主工作。
+
+## 关键新功能
+
+| 能力 | 说明 |
+|------|------|
+| **长周期 Agent** | 在 Claude Code / Managed Agents 中连续工作数天，跨阶段规划、委派子 agent、自我验证 |
+| **自主编码** | 大型代码库迁移（Stripe 实测：50M 行 Ruby，2个月→1天）；自主写测试、用视觉检查输出 |
+| **视觉理解** | 从 PDF 图表提取数字、仅凭截图重建网页源代码 |
+| **科学推理** | 药物设计、分子生物学假设生成、基因组学研究 |
+| **1M 上下文 + 128K 输出** | 数百万 token 保持专注，用自身笔记迭代优化 |
+
+## 安全护栏
+
+- 高风险话题（生物/网络安全）自动路由到 Opus 4.8，**不额外收费**
+- 误报率 <5%，95%+ 会话完全运行在 Fable 上
+- 1000+ 小时外部赏金测试：**未发现通用越狱**
+- 所有流量强制 30 天留存（仅用于防御，不用于训练）
+
+## Benchmark 亮点
+
+| 测试 | 成绩 |
+|------|:----:|
+| SWE-bench | 95% |
+| SWE-bench Pro | 80% |
+| Hex 核心分析 | **首个突破 90%**（比 Opus 高 10 分） |
+| FrontierCode | #1 |
+| GDPval-AA Elo | 1932 #1 |
+| Hebbia 金融基准 | 最高分 |
+
+## Fable 5 vs Mythos 5
+
+| | Fable 5 | Mythos 5 |
+|---|---|---|
+| 基础权重 | 相同 | 相同 |
+| 安全措施 | 分类器 + 回退 Opus 4.8 | 限制更少 |
+| 可用性 | 面向公众 | 仅批准组织（Project Glasswing） |
+
+## 定价与可用性
+
+- **$10/$50** 每百万 tokens（Opus 的 2 倍）
+- 缓存命中仅 $1，Batch API 5 折
+- 6月22日前 Pro/Max/Team/Enterprise 免费；6月23日起需使用额度
+
+## 备注
+
+Harper 的核心洞察：Fable 5 和 Opus 的差距不在 benchmark 分数，而在**工作模式质变**——从"单次深度推理"到"多天连续自主工作+自我验证"。这才是它值 2 倍价格的原因。
+---
+[Retriever]: 
+
+[工具调用记录]
+• wait() → (43字)
+---

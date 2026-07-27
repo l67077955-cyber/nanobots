@@ -1,0 +1,425 @@
+[用户]: llm总结可以改成直接由leader生成总结吗
+---
+[系统]: ## 🗄️ 自动记忆检索（群聊开始时触发）
+当前用户输入: llm总结可以改成直接由leader生成总结吗
+
+### 技术上下文 (wing_code) — 工具用法/方法/踩坑/技术结论
+## L3 — SEARCH RESULTS for "llm总结可以改成直接由leader生成总结吗"
+  [1] wing_code/round-20260528-自由讨论 (sim=0.392)
+      )`用LLM生成关键词→用关键词进行语义搜索→结果注入agent系统提示。 - 关键词生成：通过`summarize_model()`模型，将用户输入（包括图片路径）转为关键词，偏向“记忆检索机制”相关内容。 - 图片内容：当前架构下不可见，模型只处理路径字符串，无法理解图片内容。 - 若需图片内容参与检索：必须在图片处理流程中加入视觉描述模型，将图片内容转为文本描述，拼入`user_input`，再进行关键词生成和搜索。 - 关键词生成的核心思想：先用LLM理解用户意图，提炼关键词，避免直接用原始路径或模糊描述。  总结：目前的技术流程是基于用户文本（含图片路径）进行语义关键词生成和搜...
+      src: auto_memory_poll_1
+  [2] wing_code/round-20260527-自由讨论 (sim=0.378)
+      ## 工具与方法 - 使用 `L3.search()` 进行语义搜索，替代原有基于元数据的简单过滤。 - 通过调用LLM（如OpenAI的模型）生成检索关键词，具体命令为 `_generate_wing_queries(user_input, engine)`，该函数一次调用生成3个不同wing的关键词（JSON格式）。 - 在 `_auto_recall.py` 中，改写 `_recall_wing()`，使其支持传入由LLM生成的关键词进行语义搜索。 - 在 `run_loop.py` 中，增加一行调用参数 `engine=engine`，确保LLM调用环境一致。 - 召回流程中，先...
+      src: auto_memory_poll_1
+  [3] wing_code/auto-recall-semantic-search (sim=0.364)
+      ## _auto_recall.py 改为语义搜索（2026-05-27）  ### 改动 - `_recall_wing(wing)` → `_recall_wing(wing, query=user_input)` - 有 query 时用 `L3.search(query, wing, n_results)` 语义搜索 - 无 query 时 fallback 到 `L2.recall(wing, n_results)` 保持兼容 - `run_loop.py` 调用无需改动，`user_input` 参数已传入  ### 效果 - 之前：每轮群聊注入固定记忆（L2 按插入顺序返回...
+  [4] wing_code/auto-recall-mechanism (sim=0.361)
+      ## 群聊记忆轮询机制（_auto_recall.py）  **流程**：先问AI生成关键词，再用关键词做语义搜索。  1. run_loop.py:133 调用 auto_recall_memories(user_input, engine) 2. _generate_wing_queries(user_input, engine) 用 summarize_model (LLM) 根据用户输入生成3组关键词（JSON），分别对应 wing_code / wing_user / wing_agent 3. 每个wing用自己的关键词调用 L3.search(query=关键词, wing...
+  [5] wing_code/auto-recall-keyword-generation (sim=0.357)
+      ## 记忆轮询关键词生成用的是哪个模型  _generate_wing_queries() 调用 summarize_model()，即 openai/gpt-4.1-nano（定义在 history_settings.py:43）。  - 不是 Leader agent，不是任何 Worker agent - 是独立的 API 调用（provider.chat_with_retry），max_tokens=300, temperature=0.3 - 发生在 run_loop.py:133，在所有 agent 创建和广播之前 - 失败时降级为直接用 user_input 搜索
+      src: _auto_recall.py
+
+---
+
+### 用户偏好 (wing_user) — 输出风格/交互习惯/格式偏好
+## L3 — SEARCH RESULTS for "llm总结可以改成直接由leader生成总结吗"
+  [1] wing_user/preferences-20260527 (sim=0.244)
+      ## 指令风格 用户偏好简洁明了，倾向于直接提出问题和方案，喜欢用“是否可以”、“建议”、“改成”这类明确的指令，强调方案的可行性和具体实现细节。  ## 输出偏好 偏好结构化、逻辑清晰的回答，喜欢用“结论”、“方案”、“具体步骤”等标题，内容偏向技术细节和方案可行性，语言正式专业，避免冗余。  ## 技术倾向 偏好使用Python，关注异步/同步调用、LLM模型（如glm-5.1）、语义搜索（L3.search）和ChromaDB，倾向于通过LLM生成检索关键词，强调代码的简洁和效率。  ## 交互风格 偏向结果导向、实用性强，喜欢逐步分析问题、提出方案、验证方案的可行性，善于接受技术...
+      src: auto_memory_poll_2
+  [2] wing_user/preferences-20260527 (sim=0.183)
+      ## 指令风格 用户偏好简洁明了的指令，倾向于直接提出问题或需求，强调“直接回答”、“技术上可行”等，偏向结果导向，少废话。  ## 输出偏好 偏好结构化、清晰的回答，包含总结、关键点、方案或结论，喜欢用表格或明确的段落表达，强调逻辑性和重点突出。  ## 技术倾向 偏好使用Python、LLM（如glm-5.1）、ChromaDB等工具，关注技术实现细节和优化方案，倾向于用语义搜索（embedding）替代关键词匹配，重视代码合并、模块拆分和性能优化。  ## 交互风格 沟通风格偏向专业、理性，喜欢详细分析、方案比较，善于提出改进建议，强调架构合理性和职责分离，避免盲目合并，重视设计原...
+      src: auto_memory_poll_2
+  [3] wing_user/preferences-20260527 (sim=0.175)
+      ## 指令风格 用户偏好使用简洁、指令式的表达，倾向于明确提出需求或问题，喜欢用“别”、“快一点”、“发我”等指令风格，强调效率和明确性。  ## 输出偏好 偏好结构化、清晰的回答，倾向于简洁明了，强调重点。对格式没有特别要求，但偏好逻辑清楚、层次分明的表达。  ## 技术倾向 偏好使用LLM（大模型）进行语义搜索和关键词生成，倾向于利用已有的工具和平台（如ChromaDB、L3.search），对技术方案和工具链有一定熟悉度，喜欢用代码和模型调用实现自动化。  ## 交互风格 沟通风格偏向专业、结果导向，喜欢系统性总结和明确结论，善于提取核心信息，重视方案的实用性和效率。对复杂内容有一...
+      src: auto_memory_poll_2
+  [4] wing_user/preferences-20260527 (sim=0.156)
+      ## 指令风格 用户偏好简洁、指令明确，倾向于用短句或命令式表达，强调“快”、“别废话”、“发我”之类的指令风格。  ## 输出偏好 偏好结构化、清晰的输出格式，倾向于简洁明了，内容重点突出，避免冗余。对语言没有特殊要求，但偏向于技术性、专业性表达。  ## 技术倾向 偏好使用Python、LLM（如OpenAI模型）进行自动化处理，倾向于语义搜索（embedding +向量检索）技术，喜欢用ChromaDB、L3等工具，注重工具的可扩展性和自动化。  ## 交互风格 交互偏向结果导向、逻辑清晰，喜欢系统性分析和方案总结。沟通风格偏向专业、理性，喜欢逐步拆解问题、提供详细方案，但也接受简...
+      src: auto_memory_poll_2
+  [5] wing_user/preferences-20260528 (sim=0.15)
+      ## 指令风格 用户偏好简洁明了的指令，倾向于直接用关键词或短句索取信息（如“酒馆11赛季排行榜”、“9赛季”），指令风格偏向命令式，强调快速获取结果。  ## 输出偏好 偏好结构化、清晰的输出格式，喜欢以表格或列表形式呈现排行榜信息。对输出内容的长度没有明确限制，但希望信息完整、重点突出。使用中文，表达简洁，避免冗余。  ## 技术倾向 倾向使用官方API或可靠第三方工具获取数据，偏好自动化、程序化的解决方案。对JS渲染网页信息持谨慎态度，偏好API接口，避免手动搜索或复杂网页操作。  ## 交互风格 沟通风格结果导向，喜欢快速、准确的回答，偏好简洁明了的总结。对信息的完整性和准确性有...
+      src: auto_memory_poll_2
+
+---
+
+### 固定信息 (wing_agent) — 事实数据/发现/规则约定
+## L3 — SEARCH RESULTS for "llm总结可以改成直接由leader生成总结吗"
+  [1] wing_agent/discoveries-20260528 (sim=0.352)
+      ## 事实与数据 - 记忆轮询采用语义搜索，流程为：用户输入 → 生成关键词（可选） → 语义搜索（L3.search） → 结果注入系统提示 - 关键词生成由LLM调用`summarize_model`生成3组中英文+同义词合并的检索关键词 - 语义搜索优先级高于插入顺序检索（L2） - 降级策略：若关键词生成或解析失败，则直接用用户原始输入作为搜索query - 召回流程涉及`_auto_recall.py`中的`_recall_wing()`和`_generate_wing_queries()`函数 - 记忆存储由LLM提取信息后写入ChromaDB  ## 发现与洞察 - 采用语...
+      src: auto_memory_poll_3
+  [2] wing_agent/discoveries-20260528 (sim=0.347)
+      ## 事实与数据 - 群聊记忆检索采用语义搜索，流程为：用户输入 → 生成关键词（由LLM完成） → 关键词语义搜索 → 结果注入系统提示 - 关键词生成使用模型 `openai/gpt-4.1-nano`，调用 `provider.chat_with_retry()`，最大tokens为300 - 记忆轮询机制中，若关键词生成或JSON解析失败，则会降级为直接用用户原始输入作为搜索query - 目前的搜索流程：先由LLM生成3组关键词（中英文+同义词合并），再用这些关键词进行语义搜索 - 相关代码位置：`run_loop.py`第133行调用`auto_recall_memories...
+      src: auto_memory_poll_3
+  [3] wing_agent/discoveries-20260528 (sim=0.344)
+      ## 事实与数据 - 记忆检索采用语义搜索，优先使用用户输入生成的关键词（由 `summarize_model` 调用LLM生成3组关键词，JSON格式输出） - 关键词生成模型：`openai/gpt-4.1-nano`，调用 `provider.chat_with_retry()`，最大tokens 300 - 记忆轮询流程：用户输入 → 生成关键词 → 语义搜索（`L3.search()`）→ 结果注入系统提示 - 降级机制：关键词生成或JSON解析失败时，直接用原始用户输入（含图片路径）作为搜索query - 图片处理：图片下载后拼接为 `[image: {路径}]`，未进行内容...
+      src: auto_memory_poll_3
+  [4] wing_agent/discoveries-20260527 (sim=0.343)
+      .py` 增加 LLM 生成关键词的步骤，可以实现 agent 自行生成检索关键词的目标  ## 规则与约定 - 召回机制应优先考虑语义相关性，避免单纯按存储顺序或元数据过滤 - 存储机制已通过内容哈希保证唯一性，不会因多次讨论覆盖 - 召回和存储职责明确，保持两个文件分离，避免职责混淆 - 召回前可以用 LLM 生成关键词，提升召回相关性 - 召回调用应为异步，存储调用为异步或同步皆可，确保流程不阻塞 - 现有的轮询逻辑整体正确，唯一改进点是召回使用语义搜索  总结：当前MemPalace的轮询逻辑基本正确，生产环境可用。未来可通过在 `_auto_recall.py` 增加 LLM ...
+      src: auto_memory_poll_3
+  [5] wing_agent/discoveries-20260527 (sim=0.307)
+      ## 事实与数据 - 存储机制：`_auto_memory.py`，采用3个独立的LLM轮询，分别提取技术上下文、用户偏好、固定信息。 - 召回机制：`_auto_recall.py`，已改为使用`L3.search()`进行语义搜索，基于用户输入动态生成针对性关键词。 - 关键词生成：通过`_generate_wing_queries(user_input, engine)`一次LLM调用，生成3个wing的检索关键词。 - 召回时机：在讨论开始前进行，调用`auto_recall_memories(user_input, engine)`。  ## 发现与洞察 - 存储已实现轮询架构...
+      src: auto_memory_poll_3
+---
+[Kirk]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/_auto_recall.py) → 86|         return ""
+87| 
+88| 
+89| async def _generate_wing_queries(user_input: str, engine) -> dict[str, str]:
+90|     """Use LLM to generate wing-specific search keywords from user_input.
+91| 
+92|     Returns dict like {"wing_code": "...", "wing_user": "...", "wing_agent": "..."}.
+93|     Falls back to raw user_input for all wings on failure.
+94|     """
+95|     try:
+96|         from nanobot.groupchat.history.history_settings import (
+97|             summarize_model as _get_summarize_model,
+98|         )
+99| 
+100|         model = _get_summarize_model()
+101|         provider = getattr(engine, "provider", None)
+102|         if not provider:
+103|             return {w: user_input for w, _, _ in _RECALL_WINGS}
+104| 
+105|         prompt = _KEYWORD_PROMPT.format(user_input=user_input[:500])
+1… (2,525字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 125| 
+126|             # Record user message (no echo)
+127|             engine._add_message("用户", user_input)
+128|             engine._round = rounds
+129| 
+130|             # ── Auto memory recall: inject relevant memories before broadcast ──
+131|             try:
+132|                 from nanobot.groupchat.orchestra._auto_recall import auto_recall_memories
+133|                 recalled = await auto_recall_memories(user_input=user_input, engine=engine)
+134|                 if recalled:
+135|                     engine._add_message("系统", recalled)
+136|                     logger.info("run_loop: auto recall injected ({} chars)", len(recalled))
+137|             except Exception as e:
+138|                 logger.warning("run_loop: auto memory recall failed: {}", e)
+139| 
+140|             # Dete… (2,571字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/_auto_memory.py) → 23| # ── 3 extraction prompts ──────────────────────────────────────
+24| 
+25| _POLL_1_CONTEXT_TOOLS = """你是一个记忆提取助手。从以下群聊记录中提取**技术上下文和工具方法**。
+26| 
+27| 提取规则：
+28| - 这次讨论用了什么工具/方法跑通的？（具体命令、API、代码片段）
+29| - 遇到了什么坑/错误，怎么解决的？
+30| - 关键的技术结论是什么？
+31| 
+32| 输出格式（纯文本，不要 JSON/markdown 标题）：
+33| ## 工具与方法
+34| （具体工具名、命令、参数）
+35| 
+36| ## 踩坑与解决
+37| （错误描述 + 解决方案）
+38| 
+39| ## 技术结论
+40| （确认的事实、路径、配置）
+41| 
+42| 如果某项无内容则写"无"。控制在 800 字以内。
+43| 
+44| ---
+45| 
+46| 群聊记录：
+47| {conversation}
+48| """
+49| 
+50| _POLL_2_USER_PREFS = """你是一个用户偏好提取助手。从以下群聊记录中提取**用户偏好和习惯**。
+51| 
+52| 提取规则：
+53| - 用户说了什么暗示了他的偏好？（如"别"/"快一点"/"发我"等指令风格）
+54| - 用户对输出格式有什么要求？
+55| - 用户对工具/技术栈有什么倾向？
+56| - 用户的交互风格是什么？（极简/详细/结果导向等）
+57| 
+58| 输出格式（纯文本）：
+59| ## 指令风格
+60| （用户常用的简短指令及其含义）
+61| 
+62| ## 输出偏好
+63| （格式、长度、语言等偏好）
+64| 
+65| ## 技术倾向
+66| （偏好的工具/技术/平台）
+67| 
+68| … (1,342字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/_auto_memory.py) → 103| 
+104| # ── Room naming helpers ───────────────────────────────────────
+105| 
+106| import re
+107| 
+108| def _slugify(text: str, max_len: int = 40) -> str:
+109|     """Create a URL-safe slug from text."""
+110|     text = text.lower().strip()
+111|     text = re.sub(r'[^\w\s-]', '', text)
+112|     text = re.sub(r'[\s_]+', '-', text)
+113|     text = re.sub(r'-+', '-', text)
+114|     return text[:max_len].strip('-') or "untitled"
+115| 
+116| 
+117| def _build_conversation_text(history: list[dict], max_chars: int = 12000) -> str:
+118|     """Format conversation history into text for LLM extraction."""
+119|     lines = []
+120|     total = 0
+121|     for m in history:
+122|         sender = m.get("sender", "?")
+123|         content = m.get("content", "")
+124|         if not content:
+125|         … (2,844字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/_auto_memory.py) → 183|         result1 = await provider.chat_with_retry(
+184|             messages=[{"role": "user", "content": _POLL_1_CONTEXT_TOOLS.format(conversation=conversation)}],
+185|             model=model,
+186|             max_tokens=1200,
+187|             temperature=0.3,
+188|         )
+189|         content1 = (result1.content or "").strip()
+190|         if content1 and len(content1) > 50 and "无" not in content1[:20]:
+191|             _store_drawer(
+192|    … (4,370字)
+  (还有 2 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• memory_palace(llm总结 记忆存储 summarize _auto_memory.py 总结生成) → 🔍 5 result(s) for 'llm总结 记忆存储 summarize _auto_memory.py 总结生成':
+
+[1] wing_agent/discoveries-20260527 (sim=0.524)
+  ## 事实与数据
+- 记忆轮询机制已基本成熟，生产环境可用
+- 存储文件：`_auto_memory.py`，采用3路独立LLM轮询提取信息，内容哈希去重
+- 召回文件：`_auto_recall.py`，已由原非语义过滤升级为`L3.search()`语义搜索
+- 召回结果固定为5条，字符截断2000，网络重试无限（`max_retries=-1`）
+- 关键路径：用户输入→LLM生成关键词→语义检索→注入系统消息
+- 代码源码位置：`/root/.nanobot/skills/memory/`目录下，核心文件为`_auto_recall.py`和`_auto_memory.py`
+
+## 发现与洞察
+- 召回机制由非语义`L2.retrieve()`升级为语义`L3.search()`，显著提升召回相关性
+- 记忆存储采用内容哈希（`sha256(wing+… (2,264字)
+• memory_palace(Leader agent 总结 生成 总结机制) → 🔍 5 result(s) for 'Leader agent 总结 生成 总结机制':
+
+[1] wing_code/auto-recall-keyword-generation (sim=0.269)
+  ## 记忆轮询关键词生成用的是哪个模型
+
+_generate_wing_queries() 调用 summarize_model()，即 openai/gpt-4.1-nano（定义在 history_settings.py:43）。
+
+- 不是 Leader agent，不是任何 Worker agent
+- 是独立的 API 调用（provider.chat_with_retry），max_tokens=300, temperature=0.3
+- 发生在 run_loop.py:133，在所有 agent 创建和广播之前
+- 失败时降级为直接用 user_input 搜索
+
+[2] wing_code/round-20260528-自由讨论 (sim=0.282)
+  )`用LLM生成关键词→用关键词进行语义搜索→结果注入agent系统提示。
+- 关键词生成：通过`summ… (1,973字)
+• exec(find /root -name "run_loop.py" -path "*/orchestra/*" 2>/dev/null | head -1) → /root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py
+
+
+Exit code: 0 (72字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 120|                 break
+121| 
+122|             if user_input == "__SUMMARY__":
+123|                 await generate_summary(engine)
+124|                 continue
+125| 
+126|             # Record user message (no echo)
+127|             engine._add_message("用户", user_input)
+128|             engine._round = rounds
+129| 
+130|             # ── Auto memory recall: inject relevant memories before broadcast ──
+131|             try:
+132|                 from nanobot.groupchat.orchestra._auto_recall import auto_recall_memories
+133|                 recalled = await auto_recall_memories(user_input=user_input, engine=engine)
+134|                 if recalled:
+135|                     engine._add_message("系统", recalled)
+136|                     logger.info("run_loop: auto recall injected ({} chars)", le… (2,486字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/_auto_recall.py) → 85|         logger.warning("auto_recall: failed to recall wing={}: {}", wing, e)
+86|         return ""
+87| 
+88| 
+89| async def _generate_wing_queries(user_input: str, engine) -> dict[str, str]:
+90|     """Use LLM to generate wing-specific search keywords from user_input.
+91| 
+92|     Returns dict like {"wing_code": "...", "wing_user": "...", "wing_agent": "..."}.
+93|     Falls back to raw user_input for all wings on failure.
+94|     """
+95|     try:
+96|         from nanobot.groupchat.history.history_settings import (
+97|             summarize_model as _get_summarize_model,
+98|         )
+99| 
+100|         model = _get_summarize_model()
+101|         provider = getattr(engine, "provider", None)
+102|         if not provider:
+103|             return {w: user_input for w, _, _ in _RECALL_WINGS}
+… (2,128字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 1| """Main group chat event loop — dispatches to broadcast mode.
+2| 
+3| Leader's final text reply (before end_discussion) serves as the
+4| synthesis; no separate summary generation stage exists.
+5| """
+6| 
+7| from __future__ import annotations
+8| 
+9| import asyncio
+10| 
+11| from loguru import logger
+12| 
+13| from nanobot.groupchat.orchestra.broadcast import broadcast_round
+14| 
+15| 
+16| async def generate_summary(engine: Any) -> None:
+17|     """Generate and send an AI summary of the entire discussion.
+18| 
+19|     Called when user sends ``__SUMMARY__`` or when Leader triggers
+20|     ``end_discussion``.  Uses the same provider + model as history
+21|     compression (``tool_results.summarize_model``).
+22|     """
+23|     from nanobot.groupchat.history.history_settings import (
+24|         … (1,706字)
+• exec(find /root -name "_auto_memory.py" -path "*/orchestra/*" 2>/dev/null | head -1) → /root/nanobot-src/nanobot/groupchat/orchestra/_auto_memory.p… (76字)
+  (还有 2 个工具调用，已省略)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 1| """Chatroom communication tools for inter-agent messaging.
+2| 
+3| Provides ``chatroom_send`` and ``wait`` tools that agents use
+4| to communicate with each other during broadcast group chat rounds.
+5| Also contains ``CachedSearchTool`` with search-tree resource management.
+6| """
+7| 
+8| from __future__ import annotations
+9| 
+10| import asyncio
+11| import re
+12| import threading
+13| from pathlib import Path
+14| from typing import Any
+15| 
+16| from nanobot.tools.base import Tool
+17| from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool, SpeakQueue
+18| 
+19| 
+20| class SearchPool:
+21|     """Per-agent tool-call credit pool for broadcast mode.
+22| 
+23|     - Each agent gets individual credits (initial_per_agent)
+24|     - Each tool call costs 1 credit from the agent's … (2,332字)
+• exec(find /root -name "*.py" -path "*/orchestra/*" | xargs grep -l "Leader" | grep...) → /root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py
+/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py
+/root/nanobot-src/nanobot/groupchat/orchestra/engine.py
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py
+/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py
+
+
+Exit code: 0 (320字)
+• exec(grep -n "Leader" /root/nanobot-src/nanobot/groupchat/orchestra/engine.py | he...) → 477:                leader_note = f"\n👑 Leader 已转移给 {new_leader}"
+561:    # ── Leader Mode ─────────────────────────────────────────
+573:            return f"✅ 已取消 Leader 模式" + (f" ({old})" if old else "")
+581:        return f"👑 {matched} 已设为 Leader\n其他 agent 会先发言，{matched} 最后汇总"
+
+
+Exit code: 0 (295字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/engine.py) → 560| 
+561|     # ── Leader Mode ─────────────────────────────────────────
+562| 
+563|     @property
+564|     def leader(self) -> str | None:
+565|         return self._leader
+566| 
+567|     def set_leader(self, name: str | None) -> str:
+568|         """Set or clear the leader agent."""
+569|         if name is None:
+570|             old = self._leader
+571|             self._leader = None
+572|             self._state.save_leader(None)
+573|             return f"✅ 已取消 Leader 模式" + (f" ({old})" if old else "")
+574| 
+575|         matched = self._resolve_agent_name(name)
+576|         if not matched:
+577|             return f"❌ Agent '{name}' 不存在。可用: {', '.join(self.registry.keys())}"
+578| 
+579|         self._leader = matched
+580|         self._state.save_leader(matched)
+581|         return f"👑 {mat… (2,116字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py) → 15| 
+16| async def generate_summary(engine: Any) -> None:
+17|     """Generate and send an AI summary of the entire discussion.
+18| 
+19|     Called when user sends ``__SUMMARY__`` or when Leader triggers
+20|     ``end_discussion``.  Uses the same provider + model as history
+21|     compression (``tool_results.summarize_model``).
+22|     """
+23|     from nanobot.groupchat.history.history_settings import (
+24|         summarize_model as _get_summarize_model,
+25|         history_summarize_enabled,
+26|     )
+27| 
+28|     if not engine._history or not history_summarize_enabled():
+29|         return
+30| 
+31|     messages = list(engine._history)
+32|     if not messages:
+33|         return
+34| 
+35|     # Format conversation for summarisation
+36|     lines = []
+37|     for m in messages:
+38|        … (1,746字)
+• exec(find /root -name "AGENTS.md" | head -1) → /root/nanobot-src/.git/config-versions.git/agents/harper/workspace/AGENTS.md
+
+
+Exit code: 0 (91字)
+• exec(find /root/nanobot-src -name "AGENTS.md" | grep -v ".git" | head -1) → /root/nanobot-src/nanobot/templates/AGENTS.md
+
+
+Exit code: 0 (60字)
+• read_file(/root/nanobot-src/nanobot/templates/AGENTS.md) → 1| # Agent Instructions
+2| 
+3| You are a helpful AI assistant. Be concise, accurate, and friendly.
+4| 
+5| ## Scheduled Reminders
+6| 
+7| Before scheduling reminders, check available skills and follow skill guidance first.
+8| Use the built-in… (995字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• wait() → (18字)
+• end_discussion() → ❌ 结束讨论失败：以下 agent 尚未进入等待状态：Harper。
+请在所有 agent 进入等待状态后，再次调用 end_discussion。 (74字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• manage_agent() → ✅ Harper 已被 disable，其 task 已取消 (30字)
+• end_discussion() → ✅ 讨论已结束（原因: 分析完成，Harper已disable），即将进入总结阶段 (41字)
+---
+[Kirk]: ## 结论
+
+**可以改，但只对讨论后存储（`_auto_memory.py`）有意义，讨论前召回（`_auto_recall.py`）改了没收益。**
+
+## 关键发现
+
+当前有 **2处** 独立LLM调用（都用 gpt-4.1-nano）：
+
+| 位置 | 用途 | tokens | Leader能替代？ |
+|---|---|---|---|
+| `_auto_recall.py:89` | 讨论前生成搜索关键词 | 300 | ❌ 没意义 |
+| `_auto_memory.py:148` | 讨论后提取记忆存3个wing | 2800 | ✅ 有意义 |
+
+**讨论前召回不建议改：** `run_loop.py:130-138` 中 auto_recall 在 agent 创建之前执行，Leader 此时不存在。即使重构让 Leader 先跑一轮，它只看到 user_input，和 nano 看到的信息完全一样，质量零提升，延迟多一轮。
+
+**讨论后存储可以改：** Leader 有完整对话上下文，能生成更精准的总结。省掉3次 nano 调用（共2800tok），延迟降低。实现方式：`end_discussion` 后取 Leader 最终回复解析为3个wing内容直接存储，fallback 到现有3次poll。
+
+## 备注
+
+- 如果要做，建议只改 `_auto_memory.py`，保留 `_auto_recall.py` 的独立LLM调用
+- 风险：Leader 忘记输出结构化总结 → 需 fallback 机制
+- 代码位置：`run_loop.py:152-173`（讨论后存储入口）、`_auto_memory.py:148-263`（3次poll逻辑）
+---
+[系统]: 🗄️ 自动记忆存储完成：3 条 → wing_code, wing_user, wing_agent
+---

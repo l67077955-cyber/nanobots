@@ -1,0 +1,109 @@
+[用户]: 提交
+---
+[Harper]: **已修复**：移除 `not leader_name` 限制后，非leader发消息时也能触发打断，rank比较逻辑（mailbox._try_interrupt）会正常工作。
+
+现在高等级agent（bishop/knight）可以打断低等级agent（pawn）的busy状态。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git diff nanobot/groupchat/orchestra/broadcast.py) → diff --git a/nanobot/groupchat/orchestra/broadcast.py
+index f6a39d8..e7b2c41 100644
+--- a/nanobot/groupchad/orchestra/broadcast.py
++++ b/nanobot/groupchat/orchestra/broadcast.py
+@@ -227,8 +227,7 @@ async def _trigger_realtime_interrupts(
+     has_others = "all" in _targets_lower or any(t != sender.lower() for t in _targets_lower)
+-    if not has_others or not leader_name:
++    if not has_others:
+         # Self-broadcast or no leader configured — skip interrupt logic
+         return
+-
++
+     _can_interrupt_leader = sender == leader_name
+
+Exit code: 0 (168字)
+• exec(cd /root/nanobot-src && git add nanobot/groupchat/orchestra/broadcast.py && git...) → [main c0f8b3f] fix: enable non-leader interrupt based on rank priority
+
+ broadcast.py: remove 'not leader_name' guard that prevented non-leaders
+ from triggering interrupts. Rank comparison (_try_interrupt) already
+ handles priority correctly.
+
+Exit code: 0 (267字)
+• chatroom_send(to="Kirk", message="✅ 已提交修复。根因：broadcast.py:230 的 `not leader_name` 条件阻止了非leader触发打断。修复后，高等级agent现在可以打断低等级agent。") → (146字)
+---
+[Retriever]: 找到了相关记忆。现在我把情况告诉Kirk，请他执行提交。
+
+[工具调用记录]
+• memory_palace(打断 interrupt 修复 git commit 提交 groupchat) → 🔍 5 result(s) for '打断 interrupt 修复 git commit 提交 groupchat':
+
+[1] wing_code/groupchat-deadlock-fixes (sim=0.544)
+  ## 群聊卡死修复：27-17提交(3033072)到HEAD的变更分析
+
+### 核心问题：群聊卡死
+27-17提交后群聊存在多个卡死场景，HEAD提交(11个commits)修复了以下问题：
+
+### 修复1: mailbox slot泄漏 + busy_agents死锁防护 (d728ec6)
+- **问题**: 非agent发送者(如"User")回复时，slot不释放给agent，导致slot泄漏
+- **修复**: mailbox.py `_release_slots` 和 `_release_reply_slot` 中，当sender不是agent时，将slot释放回agent_name
+- **问题2**: `_busy_repliers` 只检查 `_active_agents` 和 `_waiting`，不检查 `_busy_agents`… (2,328字)
+---
+[Kirk]: 已提交 `33ff60e6`。
+
+**改动**：`broadcast.py` 第230行，移除 `not leader_name` 守卫条件，让非leader agent也能触发rank-based打断。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git status --short) → M nanobot/groupchat/orchestra/broadcast.py
+?? Memory-Palace/
+?? config/
+?? webui/
+
+
+Exit code: 0 (97字)
+• exec(cd /root/nanobot-src && git diff --stat) → nanobot/groupchat/orchestra/broadcast.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+
+Exit code: 0 (110字)
+• exec(cd /root/nanobot-src && git diff nanobot/groupchat/orchestra/broadcast.py) → diff --git a/nanobot/groupchat/orchestra/broadcast.py b/nanobot/groupchat/orchestra/broadcast.py
+index 248265f6..06e40c85 100644
+--- a/nanobot/groupchat/orchestra/broadcast.py
++++ b/nanobot/groupchat/orchestra/broadcast.py
+@@ -227,7 +227,7 @@ async def _trigger_realtime_interrupts(
+     # Check if the target set effectively includes someone we want to interrupt
+     # (someone other than the sender).
+     has_others = "all" in _targets_lower or any(t != sender.lower() for t in _targets_lower)
+- … (625字)
+• exec() → [stable-20260527 33ff60e6] fix(groupchat): allow non-leader agents to trigger rank-based interrupts
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+
+Exit code: 0 (161字)
+• memory_palace() → ✅ Stored in wing_code/interrupt-hierarchy-fix-20260608 (hidden)
+  Drawer ID: drawer_wing_code_interrupt-hierarchy-fix-20260608_c3bc019d0fa08686b3adc4ed (151字)
+---
+[Harper]: **已完成提交** ✅
+
+`33ff60e6`: 移除 `not leader_name` 守卫条件，启用非leader的rank-based打断机制。
+
+现在：
+- 高等级 agent（bishop/knight）可以打断低等级 agent（pawn）的 busy 状态
+- 所有 agent 之间的打断都基于 rank 优先级比较
+---
+[Kirk]: 已提交，`33ff60e6`。Harper的commit在另一个分支（main vs stable-20260527），不影响。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git log --oneline -3) → 33ff60e6 fix(groupchat): allow non-leader agents to trigger rank-based interrupts
+38352724 fix: use action param in tool_result_brief instead of fragile result text matching
+62a73281 refactor: remove autorecall and auto_store to eliminate groupchat startup delay
+
+
+Exit code: 0 (277字)
+---
+[Harper]: 已了解。两边各自在 main 和 stable-20250527 分支上都做了相同修复。修改一致，无冲突。
+
+修复完成：`_trigger_realtime_interrupts` 现在允许非leader agent基于rank优先级触发打断。
+---
+[Kirk]: 
+
+[工具调用记录]
+• end_discussion() → ❌ 结束讨论失败：以下 agent 尚未进入等待状态：Retriever。
+请在所有 agent 进入等待状态后，再次调用 end_discussion。 (77字)
+---

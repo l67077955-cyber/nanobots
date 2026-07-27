@@ -1,0 +1,49 @@
+[用户]: 但是要明白记忆只能通过搜索来获取，你存入相关备忘录搜索不了也获取不了
+---
+[Harper]: 
+
+[工具调用记录]
+• memory_palace(Memory Search SOP standardized pre-task memory retrieval procedure four searc...) → 🔍 5 result(s) for 'Memory Search SOP standardized pre-task memory retrieval procedure four search blocks tool capability user preference historical context environment config':
+
+[1] wing_agent/protocol-compliance (sim=-0.195)
+  ## Agent 协议遵守记录
+
+2026-05-23：用户反馈 agent 跳过 memory_palace search 直接走 exec/read_file。
+2026-05-24：用户制定记忆搜索SOP（4区块），存于 wing_agent/memory-search-sop。
+解决方案：不再依赖 agent 自觉，改为结构化SOP强制执行。
+
+[2] wing_user/memory-palace-search-issue (sim=-0.324)
+  用户反馈memory_palace搜索不到内容。诊断结果：搜索功能正常（60… (1,635字)
+---
+[Harper]: **实锤。** 两次搜索，SOP自身从未出现在top-5结果中。sim值全部为负。
+
+这意味着：**你精心设计的SOP，在实际搜索中几乎不可能被命中。**
+
+这不是"偶尔搜不到"的问题——这是ChromaDB语义匹配的固有特性：短文本（SOP正文约500字）在语义空间中容易被长文本（protocol-compliance约800字、memory-palace-optimization约1500字）淹没。
+
+## 我的结论
+
+1. **Store Protocol的方向是对的** — 存的时候加关键词覆盖、多副本冗余、hall分类，这些都能提高召回率
+2. **但SOP本身不可靠** — 如果连自己的SOP都搜不到，这个系统对新手agent来说就是黑洞
+3. **真正的解法是KG+Tunnel** — 不是靠语义搜索碰运气，而是显式建立实体关系链
+
+Kirk，我建议：
+- **放弃纯语义搜索依赖** — SOP可以作为参考但不作为唯一入口
+- **把关键知识写入KG** — `memory_palace → has_protocol → memory_store_protocol`，这样不管用什么查询词都能通过实体关系链到达
+- **Tunnel连接wing_agent和wing_code的核心room** — 让跨域查询不走语义搜索而走图遍历
+
+你同意先把SOP和Store Protocol的关键条目写入KG吗？这比优化store格式ROI高得多。
+
+[工具调用记录]
+• memory_palace(memory search sop four blocks tool capability user preference) → 🔍 5 result(s) for 'memory search sop four blocks tool capability user preference':
+
+[1] wing_agent/protocol-compliance (sim=-0.284)
+  ## Agent 协议遵守记录
+
+2026-05-23：用户反馈 agent 跳过 memory_palace search 直接走 exec/read_file。
+2026-05-24：用户制定记忆搜索SOP（4区块），存于 wing_agent/memory-search-sop。
+解决方案：不再依赖 agent 自觉，改为结构化SOP强制执行。
+
+[2] wing_user/memory-palace-search-issue (sim=-0.444)
+  用户反馈memory_palace搜索不到内容。诊断结果：搜索功能正常（60 drawers, 5 wings, ChromaDB 820KB）。常见原因：1)内容未store过 2)查询词与存储内容语义不匹配（ChromaDB是语义搜索非关键词匹配，部分结果si… (1,411字)
+---

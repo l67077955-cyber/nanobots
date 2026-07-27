@@ -1,0 +1,430 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 看看现在的技能提示词是否合理
+---
+[用户]: 你们上下文就有
+---
+[Harper]: 
+
+[工具调用记录]
+• memory_palace() → Kirk - DeepSeek V4 Research Agent
+
+## L1 — ESSENTIAL STORY
+
+[config-version-audit-20260511]
+  - 配置版本记录对比结果 (2026-05-11): - config.json: VCS迁移后结构变更，模板→解析值，与.backup_pre_vcs一致 - prompt_order.json: 04-17→04-25修改，新增persona/memory/examples，删除hard_rules/user_context/output_efficiency - prompt_overri...
+
+[context-compression-architecture]
+  - ## 上下文压缩架构 — 双层设计  ### 层级一：跨轮压缩 (HistoryContext.maybe_compress) - 位置: groupchat/history/context.py:146-250 - 触发: engine.py:1137, engine.py:951 - 作用对象: master 消息列表（… (3,110字)
+• list_dir(/root/nanobot-src/nanobot/skills) → 📄 README.md
+📁 clawhub
+📁 cron
+📁 debug
+📁 github
+📄 loader.py
+📁 memory
+📁 settings
+📁 skill-creator
+📁 steve-jobs-perspective
+📁 summarize
+📁 testing
+📁 tmux
+📁 weather (157字)
+• read_file(/root/nanobot-src/nanobot/skills/README.md) → 1| # nanobot Skills
+2| 
+3| This directory contains built-in skills that extend nanobot's capabilities.
+4| 
+5| ## Skill Format
+6| 
+7| Each skill is a directory containing a `SKILL.md` file with:
+8| - YAML frontmatter (name, description, metadata)
+9| - Markdown instructions for the agent
+10| 
+11| ## Attribution
+12| 
+13| These skills are adapted from [OpenClaw](https://github.com/openclaw/openclaw)'s skill system.
+14| The skill format and metadata structure follow OpenClaw's conventions to maintain compatibility.
+15| 
+16| ## Available Skills
+17| 
+18| | Skill | Description |
+19| |-------|-------------|
+20| | `github` | Interact with GitHub using the `gh` CLI |
+21| | `weather` | Get weather info using wttr.in and Open-Meteo |
+22| | `summarize` | Summarize URLs, files, and YouTube videos |
+23| |… (984字)
+• read_file(/root/nanobot-src/nanobot/skills/cron/SKILL.md) → 1| ---
+2| name: cron
+3| description: Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.
+4| always: true
+5| ---
+6| 
+7| # Cron — Scheduled Tasks
+8| 
+9| Use the CLI script to manage scheduled tasks. The background service picks up changes automatically.
+10| 
+11| ## CLI
+12| 
+13| ```bash
+14| python3 {baseDir}/scripts/cron_cli.py <command> [options]
+15| ```
+16| 
+17| ## Add a Job
+18| 
+19| Recurring (every N seconds):
+20| ```bash
+21| python3 {baseDir}/scripts/cron_cli.py add --message "Time to take a break!" --every 1200
+22| ```
+23| 
+24| Cron expression:
+25| ```bash
+26| python3 {baseDir}/scripts/cron_cli.py add --message "Morning standup" --cron "0 9 * * 1-5" --tz "America/Vancouver"
+27| ```
+28| 
+29| One-t… (2,075字)
+• read_file(/root/nanobot-src/nanobot/skills/debug/SKILL.md) → 1| ---
+2| name: debug
+3| description: "Diagnose system issues: check logs, process status, cron jobs, connectivity. Use when something isn't working or user asks to debug."
+4| always: true
+5| ---
+6| 
+7| # Debug — 系统诊断 & 实时推送
+8| 
+9| 当出现问题或用户要求排查时使用。通过 exec 运行诊断命令。
+10| 
+11| ## 发送消息到 Telegram
+12| 
+13| 用 `send_cli.py` 从脚本内部直接推送消息到 Telegram：
+14| 
+15| ```bash
+16| python3 {baseDir}/scripts/send_cli.py --chat-id <CHAT_ID> --text "消息内容"
+17| ```
+18| 
+19| > **CHAT_ID**: 从当前对话的 context 获取。环境变量 `NANOBOT_CHAT_ID` 在 exec 中可用。
+20| 
+21| ### 实时输出脚本模式
+22| 
+23| 当用户要求脚本结果实时投递到 Telegram 时，写脚本调用 send_cli：
+24| 
+25| ```python
+26| #!/usr/bin/env python3
+27| import subprocess, time, os
+28| 
+29| SEND = "{baseDir}/scripts/send_cli.py"
+30| CHAT_ID = os.environ.get("NANOBOT_CHAT_ID", "<填入chat_id>")
+31| 
+32| def send(tex… (3,860字)
+• read_file(/root/nanobot-src/nanobot/skills/settings/SKILL.md) → 1| ---
+2| name: settings
+3| description: "Manage providers, models, and system settings. Use when adding API providers, registering models, or checking configuration."
+4| always: true
+5| ---
+6| 
+7| # Settings — 提供商与模型管理
+8| 
+9| 管理 API 提供商和模型注册。
+10| 
+11| ## CLI
+12| 
+13| ```bash
+14| python3 {baseDir}/scripts/settings_cli.py <resource> <action> [options]
+15| ```
+16| 
+17| ## Providers
+18| 
+19| ```bash
+20| # 列出
+21| python3 {baseDir}/scripts/settings_cli.py providers list
+22| 
+23| # 添加 (需要 name, url, key)
+24| python3 {baseDir}/scripts/settings_cli.py providers add --name openrouter --url https://openrouter.ai/api/v1 --key sk-xxx
+25| 
+26| # 编辑 (改 u… (1,651字)
+  (还有 10 个工具调用，已省略)
+---
+[Kirk]: 
+
+[工具调用记录]
+• memory_palace(技能提示词 skill prompt review) → 🔍 5 result(s) for '技能提示词 skill prompt review':
+
+[1] wing_code/prompt-phases (sim=0.084)
+  用户反馈 System Prompt 组装管线展示不够简洁。当前19个组件逐行列出+多图例符号认知负担大。建议三段式压缩：静态区/聊天记录/动态区，空组件底部一行汇总。skills static/dynamic 拆分机制已解释清楚：static指模板变量类型(stable only)，不是内容不变频率。
+
+[2] wing_code/prompt-phases (sim=-0.069)
+  Prompt编辑面板优化 (2026-05-18): 删除按钮从 ❌ 改为 🗑。用户反馈 👁 眼睛图标有点诡异但传达意思清楚，暂不改动。文件: settings.py 第406行。
+
+[3] wing_code/debug-skill-photo (sim=-0.091)
+  debug skill 的 SKILL.md 曾缺少 send_photo_cli.py 的文档说明。该脚本(5月3日创建)支持通过 Telegra… (1,301字)
+• list_dir(skills) → 📁 nuwa-skill (12字)
+• list_dir(skills) → nuwa-skill/ (11字)
+• list_dir(/root/nanobot-src/nanobot/skills) → 📄 README.md
+📁 clawhub
+📁 cron
+📁 debug
+📁 github
+📄 loader.py
+📁 memory
+📁 settings
+📁 skill-creator
+📁 steve-jobs-perspective
+📁 summarize
+📁 testing
+📁 tmux
+📁 weather (157字)
+• exec() → === cron ===
+---
+name: cron
+description: Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.
+always: true
+---
+
+=== debug ===
+---
+name: debug
+description: "Diagnose system issues: check logs, process status, cron jobs, connectivity. Use when something isn't working or user asks to debug."
+always: true
+---
+
+=== github ===
+---
+name: github
+description: "Interact with GitHub using the `gh` CLI. Use `gh issue`… (2,614字)
+• exec() → === cron === (61 lines)
+
+=== debug === (149 lines)
+
+=== github === (48 lines)
+
+=== memory === (37 lines)
+
+=== settings === (53 lines)
+
+=== skill-creator === (374 lines)
+
+=== steve-jobs-perspective === (380 lines)
+
+=== summarize === (67 lines)
+
+=== testing === (237 lines)
+
+=== tmux === (121 lines)
+
+=== weather === (49 lines)
+
+
+
+Exit code: 0 (341字)
+• exec() → ========== cron ==========
+---
+name: cron
+description: Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.
+always: true
+---
+
+# Cron — Scheduled Tasks
+
+Use the CLI script to manage scheduled tasks. The background service picks up changes automatically.
+
+## CLI
+
+```bash
+python3 {baseDir}/scripts/cron_cli.py <command> [options]
+```
+
+## Add a Job
+
+Recurring (every N seconds):
+```bash
+python3 {baseDir}/scripts… (54,271字)
+• read_file(/tmp/nanobot/tool_storage/lyTm8CRpD.txt) → 1| ========== cron ==========
+2| ---
+3| name: cron
+4| description: Schedule reminders and recurring tasks. Use when the user asks for timers, periodic checks, scheduled notifications, or one-time delayed tasks.
+5| always: true
+6| ---
+7| 
+8| # Cron — Scheduled Tasks
+9| 
+10| Use the CLI script to manage scheduled tasks. The background service picks up changes automatically.
+11| 
+12| ## CLI
+13| 
+14| ```bash
+15| python3 {baseDir}/scripts/cron_cli.py <command> [options]
+16| ```
+17| 
+18| ## Add a Job
+19| 
+20| Recurring (every N seconds):
+21| ```bash
+22| python3 {baseDir}/scripts/cron_cli.py add --message "Time to take a break!" --every 1200
+23| ```
+24| 
+25| Cron expression:
+26| ```bash
+27| python3 {baseDir}/scripts/cron_cli.py add --message "Morning standup" --cron "0 9 * * 1-5" --tz "America/Va… (19,275字)
+• read_file(/tmp/nanobot/tool_storage/lyTm8CRpD.txt) → 501| ## Advanced features
+502| 
+503| - **Form filling**: See [FORMS.md](FORMS.md) for complete guide
+504| - **API reference**: See [REFERENCE.md](REFERENCE.md) for all methods
+505| - **Examples**: See [EXAMPLES.md](EXAMPLES.md) for common patterns
+506| ```
+507| 
+508| the agent loads FORMS.md, REFERENCE.md, or EXAMPLES.md only when needed.
+509| 
+510| **Pattern 2: Domain-specific organization**
+511| 
+512| For Skills with multiple domains, organize content by domain to avoid loading irrelevant context:
+513| 
+514| ```
+515| bigquery-skill/
+516| ├── SKILL.md (overview and navigation)
+517| └── reference/
+518|     ├── finance.md (revenue, billing metrics)
+519|     ├── sales.md (opportunities, pipeline)
+520|     ├── product.md (API usage, features)
+521|     └── marketing.md (campaigns, attribution)… (14,458字)
+• read_file(/tmp/nanobot/tool_storage/lyTm8CRpD.txt) → (11,807字)
+  (还有 2 个工具调用，已省略)
+---
+[用户]: 现在是动态生成的
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/skills/memory/SKILL.md) → 1| ---
+2| name: memory
+3| description: Two-layer memory system with grep-based recall.
+4| always: true
+5| ---
+6| 
+7| # Memory
+8| 
+9| ## Structure
+10| 
+11| - `memory/MEMORY.md` — Long-term facts (preferences, project context, relationships). Always loaded into your context.
+12| - `memory/HISTORY.md` — Append-only event log. NOT loaded into context. Search it with grep-style tools or in-memory filters. Each entry starts with [YYYY-MM-DD HH:MM].
+13| 
+14| ## Search Past Events
+15| 
+16| Choose the search method based on file size:
+17| 
+18| - Small `memory/HISTORY.md`: use `read_file`, then search in-memory
+19| - Large or long-lived `memory/HISTORY.md`: use the `exec` tool for targeted search
+20| 
+21| Examples:
+22| - **Linux/macOS:** `grep -i "keyword" memory/HISTORY.md`
+23| - **Windows:** `find… (1,629字)
+• read_file(/root/nanobot-src/nanobot/skills/skill-creator/SKILL.md) → 301| 
+302| Consult these helpful guides based on your skill's needs:
+303| 
+304| - **Multi-step processes**: See references/workflows.md for sequential workflows and conditional logic
+305| - **Specific output formats or quality standards**: See references/output-patterns.md for template and example patterns
+306| 
+307| These files contain established best practices for effective skill design.
+308| 
+309| #### Start with Reusable Skill Contents
+310| 
+311| To begin implementation, start with the reusable resources identified above: `scripts/`, `references/`, and `assets/` files. Note that this step may require user input. For example, when implementing a `brand-guidelines` skill, the user may need to provide brand assets or templates to store in `assets/`, or documentation to store in `referenc… (4,427字)
+• read_file(/root/nanobot-src/nanobot/skills/summarize/SKILL.md) → 1| ---
+2| name: summarize
+3| description: Summarize or extract text/transcripts from URLs, podcasts, and local files (great fallback for “transcribe this YouTube/video”).
+4| homepage: https://summarize.sh
+5| metadata: {"nanobot":{"emoji":"🧾","requires":{"bins":["summarize"]},"install":[{"id":"brew","kind":"brew","formula":"steipete/tap/summarize","bins":["summarize"],"label":"Install summarize (brew)"}]}}
+6| ---
+7| 
+8| # Summarize
+9| 
+10| Fast CLI to summarize URLs, local files, and YouTube links.
+11| 
+12| ## When to use (trigger phrases)
+13| 
+14| Use this skill immediately when the user asks any of:
+15| - “use summarize.sh”
+16| - “what’s this link/video about?”
+17| - “summarize this URL/article”
+18| - “transcribe this YouTube/video” (best-effort transcript extraction; no `yt-dlp` needed)
+… (2,303字)
+---
+[Harper]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/skills/loader.py) → 1| """Skills loader for agent capabilities."""
+2| 
+3| import json
+4| import os
+5| import re
+6| import shutil
+7| from pathlib import Path
+8| 
+9| # Default builtin skills directory (relative to this file)
+10| BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
+11| 
+12| # Budget caps — keep skills section from bloating the prompt.
+13| # Single SKILL.md files larger than this are skipped and only noted in the footer.
+14| MAX_SINGLE_SKILL_CHARS: int = 20_000
+15| # Total character budget for the non-always-on summary block.
+16| MAX_SKILLS_SUMMARY_CHARS: int = 8_000
+17| # Total budget for always-on skills (cumulative, enforced inside load_skills_for_context).
+18| MAX_ALWAYS_SKILLS_CHARS: int = 5600
+19| # Per-skill inline truncation limit for always-on skills.
+20| MAX_ALWAYS_SKILL_INLINE:… (12,775字)
+• exec(ls /root/.nanobot/workspace/skills/ 2>/dev/null || ls ~/.nanobot/skills/ 2>/d...) → nuwa-skill
+
+
+Exit code: 0 (25字)
+• exec() → total 12
+drwxr-xr-x 3 root root 4096 May  9 15:10 .
+drwxr-xr-x 3 root root 4096 May  9 15:10 ..
+drwxr-xr-x 8 root root 4096 May 19 09:07 .git
+no nuwa SKILL.md
+====
+/root/nanobot-src/nanobot/skills/cron/SKILL.md:always: true
+/root/nanobot-src/nanobot/skills/debug/SKILL.md:always: true
+/root/nanobot-src/nanobot/skills/memory/SKILL.md:always: true
+/root/nanobot-src/nanobot/skills/settings/SKILL.md:always: true
+/root/nanobot-src/nanobot/skills/testing/SKILL.md:always: false
+
+
+Exit code: 0 (489字)
+• exec() → === Always-on skill sizes ===
+  cron: 1819 bytes
+  debug: 3849 bytes
+  memory: 1463 bytes
+  settings: 1537 bytes
+
+=== Other skill sizes ===
+  steve-jobs-perspective: 23271 bytes
+  summarize: 2040 bytes
+  weather: 1168 bytes
+  testing: 6510 bytes
+  github: 1374 bytes
+  tmux: 4063 bytes
+  clawhub: 1384 bytes
+  skill-creator: 18874 bytes
+
+=== MAX_ALWAYS_SKILL_INLINE = 700 chars per skill ===
+=== MAX_ALWAYS_SKILLS_CHARS = 5600 total ===
+=== MAX_SINGLE_SKILL_CHARS = 20000 (skip from summary if bigger… (635字)
+---
+[Kirk]: ## 结论
+
+11 个 skill 提示词整体设计合理，截断模式和 progressive disclosure 机制正确。有 3 个问题需修正。
+
+## 关键发现
+
+1. **debug always-on 截断过多** — 149 行几乎全量注入每次对话，应截断到 ~30 行核心（诊断流程 + send_cli 基本用法），或降级为按需触发
+2. **steve-jobs-perspective description 过长** — 6 行 description 与其他 skill 的 1 行不一致，应压缩到 2 行以内，详细触发词移到 body
+3. **always-on 过多** — cron/debug/settings 可降级为按需触发，仅保留 memory 为 always-on，每次对话可省 ~100+ tokens
+
+## 备注
+
+- 其余 8 个 skill（cron/settings/memory/weather/github/summarize/tmux/testing/skill-creator）截断点和内容量均合理
+- `{baseDir}` 占位符替换、`quick_validate.py` 自动发现等机制工作正常
+
+[工具调用记录]
+• memory_palace() → ❌ Error: 'room' is required for store (e.g. 'api-design'). (58字)
+• memory_palace() → ✅ Stored in wing_code/skill-prompt-review (hidden)
+  Drawer ID: drawer_wing_code_skill-prompt-review_331d4ab6ee1a64418c8e906c (125字)
+• end_discussion() → ✅ 讨论已结束（原因: 审查完成，3个问题已识别，记忆已存储），即将进入总结阶段 (40字)
+---

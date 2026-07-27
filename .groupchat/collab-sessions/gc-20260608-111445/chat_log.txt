@@ -1,0 +1,62 @@
+[用户]: 我觉得还是不太好
+---
+[Harper]: 那你想怎么处理？选项：
+
+1. **去掉** —— 完全不要这个提示
+2. **极简化** —— `Harper ← 新消息`
+3. **你说** —— 告诉我你想要的文字，我直接改
+---
+[Retriever]: 记忆里有刚才Kirk做的修改记录（commit `eb571837`）。用户说"还是不太好"，我需要把这个反馈传达给Kirk，让他知道用户不满意新的文案。
+
+[工具调用记录]
+• memory_palace(打断提示词 broadcast.py 1100 正在立即响应 切换处理中) → 🔍 10 result(s) for '打断提示词 broadcast.py 1100 正在立即响应 切换处理中':
+
+[1] wing_code/interrupt-notification-wording (sim=0.413)
+  ## 打断通知文案修改（2026-06-08）
+
+**文件**: `/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py:1100-1111`
+**commit**: eb571837
+
+**问题**: "被打断/中断"在中文中有"故障/卡住"的歧义
+**修改**: 统一改为 `⚡️ Agent → Sender 消息，切换处理中` 格式
+- 用户触发: `⚡️ Harper → 用户消息，切换处理中`
+- Leader被队友: `⚡️ Kirk（Leader）→ Harper 消息，切换处理中`
+- 普通agent间: `⚡️ Harper → Kirk 消息，切换处理中`
+
+**生效**: 需重启nanobot
+
+[2] wing_code/nano-output-display (s… (4,076字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && sed -n '1095,1115p' nanobot/groupchat/orchestra/broad...) → # Attach rank badge for debugging interrupt hierarchy violations
+                    def _badge(a: str) -> str:
+                        r = ranks_map.get(a, "?")
+                        return f"{a}[{r}]"
+                    await tracker.set_state(name, "interrupted", detail=f"from {_sender_name}")
+                    if _sender_name == "用户":
+                        await engine._send(
+                            f"⚡ {_badge(name)} → 用户消息，切换处理中"
+                        )
+                    eli… (1,096字)
+• edit_file() → (78字)
+• exec() → [stable-20260527 adff8dc2] fix(display): simplify interrupt notification to pure arrow format
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+
+Exit code: 0 (157字)
+• memory_palace() → ✅ Stored in wing_code/interrupt-notification-wording (hidden)
+  Drawer ID: drawer_wing_code_interrupt-notification-wording_ba8ea003cb42d8e60e796a94 (147字)
+• end_discussion() → ✅ 讨论已结束（原因: 文案已改为纯箭头格式，用户问题已解决），即将进入总结阶段 (40字)
+---
+[Kirk]: ## 结论
+
+打断通知改为纯箭头格式 `⚡ Sender → Target`，去掉了所有多余措辞。重启后生效。
+
+## 关键发现
+
+- 用户否决了"被打断/中断"（误导为故障）和"切换处理中"（啰嗦机械）
+- 最终方案：纯箭头，三种场景统一为 `⚡ X → Y` 格式
+- 代码：`broadcast.py:1100-1111`，commit `adff8dc2`
+---

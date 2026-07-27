@@ -1,0 +1,385 @@
+[用户]: 尝试修复
+---
+[系统]: ## 🧠 自动记忆检索（群聊开始时触发）
+当前用户输入: 尝试修复
+
+### 技术上下文 (wing_code) — 工具用法/方法/踩坑/技术结论
+## L2 — ON-DEMAND (5 drawers)
+  [tool-permissions-persistence] 工具权限设置持久化机制：Telegram /edit X tools 菜单切换后，写入本地JSON文件。单agent: ~/.nanobot/agents/<name>/config.json 的 tools 字段；全局默认: ~/.nanobot/nanobot_tools.json。重启后从文件读取，设置不丢失。
+  [context-compression-architecture] ## 上下文压缩架构 — 双层设计  ### 层级一：跨轮压缩 (HistoryContext.maybe_compress) - 位置: groupchat/history/context.py:146-250 - 触发: engine.py:1137, engine.py:951 - 作用对象: master 消息列表（破坏性操作） - 结构: Protected Head | Compressible Middle | Protected Tail - Head保护: _find_head_indices() 只保护 index_0 + first_user_msg - Tail保...
+  [nanobot-compression-thresholds] ## 压缩触发阈值（用户配置 ~/.nanobot/history_settings.json）  ### 工具输出摘要 (summarizer.py) - 触发条件：工具输出 > summarize_threshold 字符 - 用户配置：summarize_threshold = 20,000 字符 - 摘要输入上限：summarize_max_input_chars = 10,000 字符 (~4k tok) - 摘要输出上限：summarize_max_output_chars = 5,000 字符 - 模型：z-ai/glm-5.1  ### 历史上下文压缩 (context....
+  [nanobot-skills-inventory] nanobot 当前 skill 清单（2026-05-24确认）：共12个skill，位于 /root/nanobot-src/nanobot/skills/，全部完好。列表：clawhub, cron, debug, github, memory, settings, skill-creator, steve-jobs-perspective, summarize, testing, tmux, weather。另有 /root/.nanobot/skills/ 下 memory-palace 和 rag 两个旧 skill 未加载。workspace 下 skills/nuwa-s...
+  [send-photo-capability] 发图片能力确认（2026-05-24）：不存在独立的"发图片skill"。发图片功能通过 debug skill 的附属脚本 send_photo_cli.py 实现，位于 /root/nanobot-src/nanobot/skills/debug/scripts/send_photo_cli.py。5月3日创建（commit 11c678c），从未被删除。5月18日（commit 99eb8f6）将用法写入 debug/SKILL.md。使用方式：python3 send_photo_cli.py --chat-id $NANOBOT_CHAT_ID --image /path/to...
+
+---
+
+### 用户偏好 (wing_user) — 输出风格/交互习惯/格式偏好
+## L2 — ON-DEMAND (5 drawers)
+  [art-preferences] 用户艺术偏好：前卫×AI×材质感×极简。推荐5位核心艺术家：Refik Anadol（AI数据雕塑）、Mario Klingemann（GAN神经美学）、Sofia Crespo（AI生物纹理）、Memo Akten（生成艺术粒子物理）、Linda Dounia（AI推测性档案）。用户要求直接发图片不想自己搜索。
+  [preferences] 用户反馈：无法看到read_file的内容，只能看到直接发送到聊天的文本。以后发文件必须把内容直接输出在回复中，不能只给路径。
+  [file-transfer-limitation] 用户询问"发文件操作为什么不行"：当前agent环境没有文件传输/附件上传的原生能力，chatroom_send仅支持文本。替代方案：1)直接在回复中输出文件全文内容；2)上传到外部托管服务(pastebin/GitHub Gist)后给链接。
+  [memory-palace-search-issue] 用户反馈memory_palace搜索不到内容。诊断结果：搜索功能正常（60 drawers, 5 wings, ChromaDB 820KB）。常见原因：1)内容未store过 2)查询词与存储内容语义不匹配（ChromaDB是语义搜索非关键词匹配，部分结果sim为负数）3)recall指定room时可能返回空（已知bug）4)agent跳过store步骤。建议用户提供具体搜索关键词以便进一步诊断。
+  [system-capabilities-discussion] 用户自由讨论三个问题及结论（2026-05-23）：1)发文件操作不行：当前agent环境无文件传输/附件上传能力，chatroom_send仅支持文本，替代方案是直接在回复中输出文件全文或上传到外部托管服务；2)memory_palace搜索功能正常（60 drawers/5 wings/ChromaDB 820KB），搜不到的常见原因：内容未store过、语义不匹配、recall指定room的已知bug、agent跳过store步骤；3)用户说"发我"时agent会把搜索结果直接贴在聊天回复文本中，不会发送附件。
+
+---
+
+### 固定信息 (wing_agent) — 事实数据/发现/规则约定
+## L2 — ON-DEMAND (5 drawers)
+  [protocol-compliance] 用户反馈：agent工具调用时应严格遵守"先检索记忆再执行"协议，不能因为任务看起来是操作型就跳过记忆检索。2026-05-23用户明确指出此问题。正确流程：memory_palace search → 命中则直接用 → 未命中再走exec/read_file等。
+  [memory-search-sop] ## 记忆搜索标准操作流程（SOP）— 2026-05-24 用户制定  每个任务开始时，agent 必须按以下4个区块依次搜索记忆宫殿，全部完成后才开始执行任务：  ### 区块1：工具能力（Tool Capabilities） - 搜索词：`{任务关键词} skill tool 脚本 方法` - 目的：确认是否有现成 skill/脚本/工具可用，避免重复造轮子 - 例：用户要发图片 → 搜"图片发送 photo send" → 命中 send_photo_cli.py  ### 区块2：用户偏好（User Preferences） - 搜索词：`用户偏好 输出风格 交互习惯` - 目...
+  [protocol-compliance] ## Agent 协议遵守记录  2026-05-23：用户反馈 agent 跳过 memory_palace search 直接走 exec/read_file。 2026-05-24：用户制定记忆搜索SOP（4区块），存于 wing_agent/memory-search-sop。 解决方案：不再依赖 agent 自觉，改为结构化SOP强制执行。
+  [memory-store-protocol] ## 记忆存储协议（Store Protocol）— 2026-05-24 用户制定  ### 核心原则：存储即设计检索 记忆只能通过搜索获取。存入任何内容前，必须先回答：**"未来什么场景、用什么词能搜到这条？"** 如果答不上来，就不存。  ### 存储检查清单（每次 store 必须通过）  **1. 可搜索性验证** - 存入内容必须包含未来搜索时可能使用的关键词 - 必须同时覆盖中英文（ChromaDB embedding 对中英文都敏感） - 例：存"send_photo_cli.py"时，内容必须包含"发图片/图片发送/photo/send image/telegram图片...
+  [collaboration-lessons] 协作教训：end_discussion 前必须确保所有 agent 有过发言机会。如果 agent 刚创建还没进入 wait 状态，正确做法是等一轮让他们发言，而不是直接 disable 再 end。2026-05-26 发生过一次：用户说"看看是否能结束群聊"，Kirk 直接 disable 了 Harper 和 Lucas 然后强制 end_discussion，被用户指出错误。
+---
+[Kirk]: 现在需要添加 `_is_high_priority` 方法。让我看 `set_ranks` 附近来放这个方法：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 430| 
+431|     def _try_interrupt(self, target: str, sender: str) -> bool:
+432|         """Attempt to interrupt a busy agent.
+433| 
+434|         Returns True if the interrupt was triggered, False if skipped
+435|         (agent not busy, already interrupted once this round, or
+436|         target == sender).
+437|         """
+438|         if target == sender:
+439|             return False
+440|         if target not in self._busy_agents:
+441|             return False
+442|         # Record who attempted the interrupt (before rank check, so blocked
+443|         # attempts are also visible in the UI for debugging hierarchy bugs)
+444|         self._last_interrupt_sender[target] = sender
+445|         # Rank check: low-rank agents cannot interrupt higher-or-equal rank
+446|         if not self._can_… (3,922字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 610|         if q is None:
+611|             logger.warning("MailboxHub.wait: no mailbox for {}", agent_name)
+612|             return None
+613| 
+614|         # ── Proactive nudge: if waiting for a specific busy agent, set their
+615|         # interrupt event so they know someone is waiting for a reply.  This
+616|         # avoids the "oblivious busy agent" problem where an agent in tool_loop
+617|         # continues working without realising a teammate's wait() is blocked
+618|         # on them.  The interrupt causes the busy agent's tool_loop to break
+619|         # out at the next asyncio checkpoint, giving it a chance to reply.
+620|         if from_agent and from_agent in self._busy_agents:
+621|             # Rank check: only nudge if caller has higher rank than target
+622|             i… (2,344字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → [重复调用,已跳过]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 530|         delivered = 0
+531|         if "All" in targets or "all" in targets:
+532|             # Broadcast to everyone except sender
+533|             for name, q in self._queues.items():
+534|                 if name != sender:
+535|                     # Check listener restriction before delivery
+536|                     restriction = self._listener_restrictions.get(name)
+537|                     if restriction and sender != restriction and sender != "系统":
+538|                         continue
+539|                     q.put_nowait(msg)
+540|                     delivered += 1
+541|                     # Trigger interrupt if recipient is busy (max 1/round)
+542|                     self._try_interrupt(name, sender)
+543|         else:
+544|             for name in targets:
+545|                … (1,655字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 470| 
+471|     def interrupt_busy_agents(self, sender: str) -> int:
+472|         """Set the interrupt event for every currently-busy agent.
+473| 
+474|         Used for high-priority signals (e.g. user messages) that should
+475|         wake up all active tool_loops immediately.  Unlike ``_try_interrupt``,
+476|         this does **not** increment ``_interrupt_counts`` so it doesn't
+477|         consume the per-round agent—agent interrupt quota.
+478| 
+479|         Also resets each interrupted agent's interrupt count so that
+480|         subsequent messages can still trigger fresh interrupts — this
+481|         ensures the agent always responds to the *latest* high-priority
+482|         message, not a stale one.
+483| 
+484|         Returns:
+485|             Number of agents whose interrupt eve… (2,400字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 431|     def _try_interrupt(self, target: str, sender: str) -> bool:
+432|         """Attempt to interrupt a busy agent.
+433| 
+434|         Returns True if the interrupt was triggered, False if skipped
+435|         (agent not busy, already interrupted once this round, or
+436|         target == sender).
+437|         """
+438|         if target == sender:
+439|             return False
+440|  … (1,613字)
+  (还有 5 个工具调用，已省略)
+---
+[Kirk]: 测试文件有 import 问题（与本次修改无关）。让我直接用 Python 验证修改后的逻辑：
+
+[工具调用记录]
+• edit_file() → (76字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 418|     def _is_high_priority(self, sender: str) -> bool:
+419|         """Check if sender is a high-priority source (user or leader).
+420| 
+421|         High-priority senders bypass rank checks in interrupt_busy_agents,
+422|         ensuring user/leader messages always wake up busy agents.
+423|         """
+424|         return sender == "用户" or sender == self._leader
+425| 
+426|     def _can_interrupt(self, sender: str, target: str) -> bool:
+427|         """Check if sender has sufficient rank to interrupt target.
+428|         
+429|         Rules:
+430|         - Leader CAN interrupt anyone (highest implicit priority)
+431|         - Higher rank CAN interrupt lower rank
+432|         - Equal rank CANNOT interrupt each other (they queue)
+433|         - Unknown rank defaults to 0 (lowest)
+434|   … (3,855字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 497|                 continue
+498|             self._last_interrupt_sender[agent] = sender
+499|             evt = self.get_interrupt_event(agent)
+500|             if not evt.is_set():
+501|                 evt.set()
+502|                 count += 1
+503|                 logger.info(
+504|                     "MailboxHub: ⚡ high-priority interrupt set for busy agent {} (sender={})",
+505|                     agent, sender,
+506|                 )
+507|         if count:
+508|             logger.info(
+509|                 "MailboxHub: user message interrupted {} busy agent(s)", count
+510|             )
+511|         return count
+512| 
+513|     # ── Message sending ──────────────────────────────────────────────────────
+514| 
+515|     def send(self, sender: str, targets: list[str], content: str) -> int… (937字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 418|     def _is_high_priority(self, sender: str) -> bool:
+419|         """Check if sender is a high-priority source (user or leader).
+420| 
+421|         High-priority senders bypass rank checks in interrupt_busy_agents,
+422|         ensuring user/leader messages always wake up busy agents.
+423|         """
+424|         return sender == "用户" or sender == self._leader
+425| 
+426|     def _can_interrupt(self, sender: str, target: str) -> bool:
+427|         """Check if sender has sufficient rank to interrupt target.
+428|         
+429|         Rules:
+430|         - Leader CAN interrupt anyone (highest implicit priority)
+431|         - Higher rank CAN interrupt lower rank
+432|         - Equal rank CANNOT interrupt each other (they queue)
+433|         - Unknown rank defaults to 0 (lowest)
+434|   … (1,394字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 448|         if target not in self._busy_agents:
+449|             return False
+450|         # Rank check: low-rank agents cannot interrupt higher-or-equal rank
+451|         if not self._can_interrupt(sender, target):
+452|             logger.debug(
+453|                 "MailboxHub: interrupt blocked — {} (rank {}) vs {} (rank {})",
+454|                 sender, self._ranks.get(sender, 0),
+455|                 target, self._ranks.get(target, 0),
+456|             )
+457|             return False
+458|         if self._interrupt_counts.get(target, 0) >= 3:
+459|             logger.debug(
+460|                 "MailboxHub: interrupt skipped for {} (already interrupted {} times this round)",
+461|                 target, self._interrupt_counts.get(target, 0),
+462|             )
+463|             return… (1,562字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 478| 
+479|         Used for high-priority signals (e.g. user messages) that should
+480|         wake up all active tool_loops immediately.  Unlike ``_try_interrupt``,
+481|         this does **not** increment ``_interrupt_counts`` so it doesn't
+482|         consume the per-round agent—agent interrupt quota.
+483| 
+484|         Also resets each interrupted agent's interrupt count so that
+485|         subsequent messages can still trigger fresh interrup… (1,456字)
+  (还有 5 个工具调用，已省略)
+---
+[Kirk]: 好的，`_interrupt_counts.clear()` 只在 `start_round()` 中调用 — 这是正确的（在新一轮开始时重置）。我之前关于 Bug 4 的分析是基于旧代码的。当前代码在 `interrupt_busy_agents` 中没有重置。
+
+让我重新评估。当前代码状态：
+
+1.  **Bug 2**：`_is_high_priority()` 已经检查了 `sender == "用户" or sender == self._leader` — ✅ 已修复
+2.  **Bug 3**：日志显示 `/3` — ✅ 已修复  
+3.  **Bug 4**：`interrupt_busy_agents` 中没有计数器重置 — ✅ 已修复
+4.  **Bug 5**：`_last_interrupt_sender` 在 L465 的等级检查**之后**写入 — ✅ 已修复
+
+等等... 让我仔细重新阅读 `_try_interrupt`：
+
+L450-457: 等级检查 → 如果失败则返回 False
+L465: `self._last_interrupt_sender[target] = sender` — 这是在等级检查**之后**
+
+所以 Bug 5 也已经修复了！
+
+让我检查一下是否还有剩余问题。用户说“打断逻辑不太对”，具体是“3能打断2和1，2不能打断3，但是能打断1”。让我验证 `_can_interrupt` 是否正确实现了这一点：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 418|     def _is_high_priority(self, sender: str) -> bool:
+419|         """Check if sender is a high-priority source (user or leader).
+420| 
+421|         High-priority senders bypass rank checks in interrupt_busy_agents,
+422|         ensuring user/leader messages always wake up busy agents.
+423|         """
+424|         return sender == "用户" or sender == self._leader
+425| 
+426|     def _can_interrupt(self, sender: str, target: str) -> bool:
+427|         """Check if sender has sufficient rank to interrupt target.
+428|         
+429|         Rules:
+430|         - Leader CAN interrupt anyone (highest implicit priority)
+431|         - Higher rank CAN interrupt lower rank
+432|         - Equal rank CANNOT interrupt each other (they queue)
+433|         - Unknown rank defaults to 0 (lowest)
+434|   … (4,676字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 518|             targets: List of agent names, or ``["All"]`` for broadcast.
+519|             content: Message content.
+520| 
+521|         Returns:
+522|             Number of mailboxes the message was delivered to.
+523|         """
+524|         msg = AgentMessage(
+525|             id=self._next_msg_id, sender=sender, content=content, targets=targets,
+526|         )
+527|         self._next_msg_id += 1
+528|         self._history.append(msg)
+529| 
+530|         delivered = 0
+531|         if "All" in targets or "all" in targets:
+532|             # Broadcast to everyone except sender
+533|             for name, q in self._queues.items():
+534|                 if name != sender:
+535|                     # Check listener restriction before delivery
+536|                     restriction = self._listen… (3,814字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 598|     ) -> AgentMessage | None:
+599|         """Wait for a message in the agent's mailbox.
+600| 
+601|         Args:
+602|             agent_name: The waiting agent's name.
+603|             timeout: Max seconds to wait (hard cap: 120s per call).
+604|             from_agent: If set, only return messages from this sender.
+605| 
+606|         Returns:
+607|             The message, or ``None`` on timeout.
+608|         """
+609|         q = self._queues.get(agent_name)
+610|         if q is None:
+611|             logger.warning("MailboxHub.wait: no mailbox for {}", agent_name)
+612|             return None
+613| 
+614|         # ── Proactive nudge: if waiting for a specific busy agent, set their
+615|         # interrupt event so they know someone is waiting for a reply.  This
+616|         # avoids t… (2,714字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 418|     def _is_high_priority(self, sender: str) -> bool:
+419|         """Check if sender is a high-priority source (user or leader).
+420| 
+421|         High-priority senders bypass rank checks in interrupt_busy_agents,
+422|         ensuring user/leader messages always wake up busy agents.
+423|         """
+424|         return sender == "用户" or sender == self._leader
+425| 
+426|     def _can_interrupt(self, sender: str, target: str) -> bool:
+427|         """Check if sender has sufficient rank to interrupt target.
+428|         
+429|         Rules:
+430|         - Leader CAN interrupt anyone (highest implicit priority)
+431|         - Higher rank CAN interrupt lower rank
+432|         - Equal rank CANNOT interrupt each other (they queue)
+433|         - Unknown rank defaults to 0 (lowest)
+434|   … (2,896字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 476|     def interrupt_busy_agents(self, sender: str) -> int:
+477|         """Set the interrupt event for every currently-busy agent.
+478| 
+479|         Used for high-priority signals (e.g. user/leader messages) that should
+480|         wake up all active tool_loops immediately.  Unlike ``_try_interrupt``,
+481|         this does **not** increment ``_interrupt_counts`` so it doesn't
+482|         consume the per-round agent—agent interrupt quota.
+483| 
+484|         Only… (1,903字)
+  (还有 6 个工具调用，已省略)
+---
+[Kirk]: 现在让我检查一下 `set_ranks` 在哪里被调用，以及传递了什么等级：
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 418|     def _is_high_priority(self, sender: str) -> bool:
+419|         """Check if sender is a high-priority source (user or leader).
+420| 
+421|         High-priority senders bypass rank checks in interrupt_busy_agents,
+422|         ensuring user/leader messages always wake up busy agents.
+423|         """
+424|         return sender == "用户" or sender == self._leader
+425| 
+426|     def _can_interrupt(self, sender: str, target: str) -> bool:
+427|         """Check if sender has sufficient rank to interrupt target.
+428|         
+429|         Rules:
+430|         - Leader CAN interrupt anyone (highest implicit priority)
+431|         - Higher rank CAN interrupt lower rank
+432|         - Equal rank CANNOT interrupt each other (they queue)
+433|         - Unknown rank defaults to 0 (lowest)
+434|   … (4,676字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 518|             targets: List of agent names, or ``["All"]`` for broadcast.
+519|             content: Message content.
+520| 
+521|         Returns:
+522|             Number of mailboxes the message was delivered to.
+523|         """
+524|         msg = AgentMessage(
+525|             id=self._next_msg_id, sender=sender, content=content, targets=targets,
+526|         )
+527|         self._next_msg_id += 1
+528|         self._history.append(msg)
+529| 
+530|         delivered = 0
+531|         if "All" in targets or "all" in targets:
+532|             # Broadcast to everyone except sender
+533|             for name, q in self._queues.items():
+534|                 if name != sender:
+535|                     # Check listener restriction before delivery
+536|                     restriction = self._listen… (3,814字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 598|     ) -> AgentMessage | None:
+599|         """Wait for a message in the agent's mailbox.
+600| 
+601|         Args:
+602|             agent_name: The waiting agent's name.
+603|             timeout: Max seconds to wait (hard cap: 120s per call).
+604|             from_agent: If set, only return messages from this sender.
+605| 
+606|         Returns:
+607|             The message, or ``None`` on timeout.
+608|         """
+609|         q = self._queues.get(agent_name)
+610|         if q is None:
+611|             logger.warning("MailboxHub.wait: no mailbox for {}", agent_name)
+612|             return None
+613| 
+614|         # ── Proactive nudge: if waiting for a specific busy agent, set their
+615|         # interrupt event so they know someone is waiting for a reply.  This
+616|         # avoids t… (4,142字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 418|     def _is_high_priority(self, sender: str) -> bool:
+419|         """Check if sender is a high-priority source (user or leader).
+420| 
+421|         High-priority senders bypass rank checks in interrupt_busy_agents,
+422|         ensuring user/leader messages always wake up busy agents.
+423|         """
+424|         return sender == "用户" or sender == self._leader
+425| 
+426|     def _can_interrupt(self, sender: str, target: str) -> bool:
+427|         """Check if sender has sufficient rank to interrupt target.
+428|         
+429|         Rules:
+430|         - Leader CAN interrupt anyone (highest implicit priority)
+431|         - Higher rank CAN interrupt lower rank
+432|         - Equal rank CANNOT interrupt each other (they queue)
+433|         - Unknown rank defaults to 0 (lowest)
+434|   … (2,434字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/mailbox.py) → 468|         evt.set()
+469|         self._interrupt_counts[target] = self._interrupt_counts.get(target, 0) + 1
+470|         logger.info(
+471|             "MailboxHub: ⚡ interrupt triggered for {} by {} (count={}/3)",
+472|             target, sender, self._interrupt_counts[target],
+473|         )
+474|         return True
+475| 
+476|     def interrupt_busy_agents(self, sender: str) -> int:
+477|         """Set the interrupt event for every currently-busy agent.
+478| 
+479|… (2,706字)
+  (还有 6 个工具调用，已省略)
+---

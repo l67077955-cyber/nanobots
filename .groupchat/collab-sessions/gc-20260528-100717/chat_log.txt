@@ -1,0 +1,233 @@
+[用户]: search我也需要看到搜了什么
+---
+[系统]: ## 🧠 自动记忆检索（群聊开始时触发）
+当前用户输入: search我也需要看到搜了什么
+
+### 技术上下文 (wing_code) — 工具用法/方法/踩坑/技术结论
+## L3 — SEARCH RESULTS for "search我也需要看到搜了什么"
+  [1] wing_code/round-20260527-自由讨论 (sim=0.198)
+      为查询已足够，额外生成关键词可在用户输入模糊或需要更精准匹配时考虑。 - 保持存储和召回两个文件职责分明，使用语义搜索替代关键词匹配，提升记忆检索的智能化水平。
+      src: auto_memory_poll_1
+  [2] wing_code/auto-recall-semantic-search (sim=0.148)
+      ## _auto_recall.py 改为语义搜索（2026-05-27）  ### 改动 - `_recall_wing(wing)` → `_recall_wing(wing, query=user_input)` - 有 query 时用 `L3.search(query, wing, n_results)` 语义搜索 - 无 query 时 fallback 到 `L2.recall(wing, n_results)` 保持兼容 - `run_loop.py` 调用无需改动，`user_input` 参数已传入  ### 效果 - 之前：每轮群聊注入固定记忆（L2 按插入顺序返回...
+  [3] wing_code/round-20260528-自由讨论 (sim=0.142)
+      ## 工具与方法 - `_auto_recall.py`中的`_recall_wing(wing, query=user_input)`函数，改为支持传入`query`参数，使用`L3.search(query, wing, n_results)`进行语义搜索。 - `run_loop.py`调用`auto_recall_memories(user_input, engine)`，在此流程中先调用`_generate_wing_queries(user_input, engine)`，由LLM生成3组关键词（中英文+同义词合并），作为搜索的query。 - `L3.search()`：基...
+      src: auto_memory_poll_1
+  [4] wing_code/round-20260528-自由讨论 (sim=0.139)
+      检索相关性。 - 使用`L3.search()`实现基于语义的内容匹配，替代传统的关键词匹配或插入顺序。 - 存储端：讨论结束后由LLM提取信息写入ChromaDB，支持后续检索。 - 降级策略：当关键词生成或解析失败时，回退到用用户原始输入进行搜索，确保系统鲁棒性。 - 关键词生成的prompt设计为输出中英文+同义词合并的结构化内容，增强检索效果。 - 通过这些改进，记忆检索变得更智能、更准确，避免盲目依赖固定顺序或模糊匹配。
+      src: auto_memory_poll_1
+  [5] wing_code/round-20260528-自由讨论 (sim=0.13)
+      索结果显示的问题（如显示预览内容、修正大小写等）。 - 其他脚本（如 `engine.py`、`history_settings.py`）中的参数配置（如 `result_max_chars`）被确认不影响实际显示长度。  ## 踩坑与解决 - **坑：** 图片内容未参与关键词生成，`message_handler.py` 仅拼接图片路径为文本 `[image: {path}]`，模型无法理解图片内容。   **解决：** 增加视觉模型描述步骤，将图片内容转化为描述文本，拼入用户输入中，提升检索相关性（当前架构未实现）。 - **坑：** 自动轮询（`auto_recall_memor...
+      src: auto_memory_poll_1
+
+---
+
+### 用户偏好 (wing_user) — 输出风格/交互习惯/格式偏好
+## L3 — SEARCH RESULTS for "search我也需要看到搜了什么"
+  [1] wing_user/preferences-20260527 (sim=0.0)
+      ## 指令风格 用户偏好简洁、明确的指令，倾向于快速确认和验证信息，喜欢用“看看”、“是否正确”、“显示机制是否全面”等直接提问，指令多为短句，强调效率。  ## 输出偏好 偏好结构化、清晰的格式，内容详实但不过度冗长，注重重点信息的呈现。倾向于使用标题和分点，确保信息层次分明，便于快速理解和检索。  ## 技术倾向 偏好使用语义搜索（如 `L3.search()`）替代关键词匹配，强调自动化、智能化的记忆检索。对平台和工具的依赖较高，偏好平台内置的自动化机制，关注系统的稳定性和可靠性。  ## 交互风格 沟通风格偏向结果导向、理性分析，喜欢用事实和数据支撑结论，重视验证和证据。表达较为...
+      src: auto_memory_poll_2
+  [2] wing_user/preferences-20260527 (sim=0.0)
+      ## 指令风格 用户偏好简洁明了的指令，倾向于用“看看”、“分析”、“提取”等动词，表达直接，少废话，强调效率。  ## 输出偏好 偏好结构化、清晰的格式，内容简洁，重点突出。倾向于用列表或表格总结信息，避免冗长叙述。对语言没有特殊要求，中文为主。  ## 技术倾向 偏好代码结构分析、架构梳理、模块职责划分，关注文件组织、职责边界、潜在冗余。倾向于通过搜索、调用工具获取代码信息，重视代码的可维护性和清晰度。  ## 交互风格 沟通风格偏向理性、结果导向，喜欢系统性总结和明确结论。对细节有一定关注，但希望信息简洁、重点突出，不喜欢无关繁琐。  ---  如需更详细或特定方向的偏好提取，可继...
+      src: auto_memory_poll_2
+  [3] wing_user/preferences-20260527 (sim=0.0)
+      ## 指令风格 用户偏好简洁、明确的指令，倾向于快速确认和验证信息，喜欢用“看看”、“是否正确”、“显示”等直接指令。  ## 输出偏好 偏好结构化、清晰的格式，内容详略得当，信息密度高，注重结果验证。倾向于用简洁的语言表达，强调重点。  ## 技术倾向 偏好使用语义搜索（如 `L3.search()`）替代关键词匹配（`L2.retrieve()`），注重系统的智能化和准确性。对平台和工具的技术细节有一定了解，偏好自动化和高效的技术方案。  ## 交互风格 沟通风格偏向结果导向、理性分析，喜欢通过验证和证据支撑结论，重视系统的成熟度和可靠性。对系统的整体表现和细节有较高关注，善于提出改...
+      src: auto_memory_poll_2
+  [4] wing_user/preferences-20260527 (sim=0.0)
+      ## 用户偏好和习惯提取  ### 指令风格 - 常用简洁、明确的指令，偏向“看看/验证/总结/发结论”。 - 喜欢用“暗示”或“暗示了什么”来引导提取偏好。 - 习惯用“提取规则”、“输出格式”、“控制在 500 字以内”等明确要求。  ### 输出偏好 - 偏好结构化、清晰的文本输出。 - 关注“偏好和习惯”的全面覆盖，内容简洁但信息完整。 - 期望用纯文本，强调“纯文本”格式。 - 喜欢用“无”来表示没有偏好或内容。  ### 技术倾向 - 对工具/技术栈没有明显偏好，但偏向于：   - 关注“工具调用”、“代码片段”、“技术细节”。   - 对“自动化”、“异步”、“语义搜索”、...
+      src: auto_memory_poll_2
+  [5] wing_user/preferences-20260528 (sim=0.0)
+      ## 指令风格 用户偏好简洁、指令明确，倾向于用短句或问题形式提出需求，强调快速获取结果或信息。  ## 输出偏好 偏好结构化、清晰的回答，倾向于简洁明了，避免冗长描述。喜欢用段落或列表整理信息，强调重点。  ## 技术倾向 偏好使用语义搜索、LLM（如GPT系列）进行信息检索和处理，倾向于自动化、智能化的工具和方法，关注技术的准确性和效率。  ## 交互风格 沟通风格偏向专业、结果导向，喜欢直接获取核心信息，较少冗余。对技术细节和流程有一定了解，期待高效、精准的交互体验。
+      src: auto_memory_poll_2
+
+---
+
+### 固定信息 (wing_agent) — 事实数据/发现/规则约定
+## L3 — SEARCH RESULTS for "search我也需要看到搜了什么"
+  [1] wing_agent/discoveries-20260527 (sim=0.166)
+      果。
+      src: auto_memory_poll_3
+  [2] wing_agent/discoveries-20260528 (sim=0.127)
+      调用 - 记忆检索的核心目标：提升相关性和鲁棒性，确保每次都能获得有用的记忆内容  以上信息可用于后续的记忆检索流程优化、模型调用策略调整及规则确认。
+      src: auto_memory_poll_3
+  [3] wing_agent/discoveries-20260528 (sim=0.115)
+      环节加入视觉模型描述，生成文本描述后拼入用户输入中作为检索依据。
+      src: auto_memory_poll_3
+  [4] wing_agent/discoveries-20260528 (sim=0.113)
+      ## 事实与数据 - 群聊记忆检索采用语义搜索，流程为：用户输入 → 生成关键词（由LLM完成） → 关键词语义搜索 → 结果注入系统提示 - 关键词生成使用模型 `openai/gpt-4.1-nano`，调用 `provider.chat_with_retry()`，最大tokens为300 - 记忆轮询机制中，若关键词生成或JSON解析失败，则会降级为直接用用户原始输入作为搜索query - 目前的搜索流程：先由LLM生成3组关键词（中英文+同义词合并），再用这些关键词进行语义搜索 - 相关代码位置：`run_loop.py`第133行调用`auto_recall_memories...
+      src: auto_memory_poll_3
+  [5] wing_agent/discoveries-20260528 (sim=0.104)
+      ## 事实与数据 - 记忆轮询采用语义搜索，流程为：用户输入 → 生成关键词（可选） → 语义搜索（L3.search） → 结果注入系统提示 - 关键词生成由LLM调用`summarize_model`生成3组中英文+同义词合并的检索关键词 - 语义搜索优先级高于插入顺序检索（L2） - 降级策略：若关键词生成或解析失败，则直接用用户原始输入作为搜索query - 召回流程涉及`_auto_recall.py`中的`_recall_wing()`和`_generate_wing_queries()`函数 - 记忆存储由LLM提取信息后写入ChromaDB  ## 发现与洞察 - 采用语...
+      src: auto_memory_poll_3
+---
+[Harper]: Kirk 已经修完了。`46331ca` commit，改动在 `display.py`。
+
+现在 Telegram 里能看到：
+- **store**：content 前50字预览
+- **search**：第一条结果的 wing/room + 相似度
+
+还顺手修了两个 bug（大小写匹配、结果计数）。完工。
+---
+[用户]: 不是搜的结果
+---
+[Kirk]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 354|     elif tool_name == "memory_palace":
+355|         action = args.get("action", "?")
+356|         if action == "store":
+357|             wing = args.get("wing", "")
+358|             room = args.get("room", "")
+359|             content_preview = (args.get("content", "") or "")[:50].replace("\n", " ")
+360|             detail = f"{wing}/{room}" if wing and room else content_preview
+361|             suffix = f"\n    └ {content_preview}" if content_preview else ""
+362|             line = f"{prefix} {agent_name} · {label} store → {detail}{suffix}"
+363|         elif action == "search":
+364|             query = (args.get("query", "") or "")[:50]
+365|             wing = args.get("wing", "")
+366|             detail = f"\"{query}\"" if query else wing
+367|             line = f"{prefix} {agent_na… (2,224字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 404|     elif tool_name == "web_fetch":
+405|         return f"    └ fetched ({rlen:,}字)"
+406|     elif tool_name == "exec":
+407|         preview = (result or "").strip().replace("\n", " ")[:55]
+408|         return f"    └ {preview}{'…' if rlen > 55 else ''}"
+409|     elif tool_name == "read_file":
+410|         lines_count = result.count("\n") + 1 if result else 0
+411|         return f"    └ {lines_count} lines"
+412|     elif tool_name in ("write_file", "edit_file"):
+413|         if (result or "").startswith("Error:"):
+414|             return f"    └ ❌ {result.split(chr(10))[0][:60]}"
+415|         return f"    └ ✅ saved"
+416|     elif tool_name == "list_dir":
+417|         count = result.count("\n") if result else 0
+418|         return f"    └ {count} entries"
+419|     elif tool_name == "mem… (1,997字)
+---
+[Harper]: 明白了。`tool_result_brief` 返回的只是一行摘要（`└ 🔍 N results · 第一条预览`），它替换掉了原来的 `🟡` 等待图标那一行——也就是说**搜索结果本身从来没在 Telegram 里显示过**。
+
+用户说的是"不是搜的结果"——意思是 Kirk 改的只显示了第一条预览，但他要看的是**完整的搜索结果列表**（所有 `[1] wing_code/xxx (sim=0.xxx)` + 内容摘要）。
+
+问题是：这跟之前那个60字符截断是同一个问题。`tool_result_brief` 的设计就是一行摘要，不是完整结果展示。要让完整搜索结果可见，得改 `broadcast_view.py` 的逻辑——在 brief 下面追加实际结果内容。
+
+不过 Kirk 已经说了不改（60字符是 Telegram 预览行限制）。用户现在明确表示不满意这个方案。
+
+Kirk，用户说"不是搜的结果"——他要看的是完整搜索结果列表，不只是第一条预览。要不要在 brief 下面追加结果全文？或者换个思路：让 agent store/search 后主动 chatroom_send 发给你？
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/display/display.py) → 415|         return f"    └ ✅ saved"
+416|     elif tool_name == "list_dir":
+417|         count = result.count("\n") if result else 0
+418|         return f"    └ {count} entries"
+419|     elif tool_name == "memory_palace":
+420|         if result and "stored" in result.lower():
+421|             import re
+422|             m = re.search(r'Stored in (\S+)', result)
+423|             loc = m.group(1) if m else ""
+424|             return f"    └ ✅ {loc}"
+425|         elif result and "search" in result.lower():
+426|             count = result.count("[") if result else 0
+427|             # Show first result title as preview
+428|             first_line = ""
+429|             for line in result.split("\n"):
+430|                 if line.strip().startswith("["):
+431|                     first_line = line… (1,667字)
+• read_file(/root/nanobot-src/nanobot/groupchat/display/broadcast_view.py) → 125|                     mailbox=self.mailbox,
+126|                     engine=self.engine,
+127|                     leader_name=self.leader_name,
+128|                 )
+129|             else:
+130|                 await _trigger_realtime_interrupts(
+131|                     sender=name,
+132|                     targets=self.last_chatroom_send_to.get(name, []),
+133|                     mailbox=self.mailbox,
+134|                     engine=self.engine,
+135|                     leader_name=self.leader_name,
+136|                 )
+137|                 
+138|         elif tool_name == "wait" and result and not result.startswith("⏰"):
+139|             await self.engine._send(_d.chatroom_wait_msg(name, result, leader=self.leader_name))
+140|             
+141|         elif tool_name not in ("chatroo… (2,018字)
+---
+[Kirk]: 
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/memory/_auto_recall.py) → Error: File not found: /root/nanobot-src/nanobot/groupchat/memory/_auto_recall.py
+
+[Analyze the error above and try a different approach.] (138字)
+• exec(grep -n "auto_recall\|wing_queries\|_generate_wing\|recall_output\|注入\|inject...) → STDERR:
+grep: /root/nanobot-src/nanobot/groupchat/run_loop.py: No such file or directory
+
+
+Exit code: 2 (103字)
+• exec(find /root/nanobot-src -name "_auto_recall*" -o -name "run_loop*" 2>/dev/null) → /root/nanobot-src/nanobot/groupchat/orchestra/run_loop.py
+/root/nanobot-src/nanobot/groupchat/orchestra/_auto_recall.py
+/root/nanobot-src/nanobot/groupchat/orchestra/__pycache__/_auto_recall.cpython-312.pyc
+/root/nanobot-src/nanobot/groupchat/orchestra/__pycache__/run_loop.cpython-312.pyc
+
+
+Exit code: 0 (304字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/_auto_recall.py) → 1| """Pre-discussion automatic memory recall.
+2| 
+3| Called before broadcast_round starts. Generates wing-specific search keywords
+4| from user_input via LLM, then runs 3 parallel wing-filtered semantic searches:
+5|   1. wing_code  — technical context, tools, methods, pitfalls
+6|   2. wing_user  — user preferences, output style, interaction habits
+7|   3. wing_agent — facts, discoveries, rules, cross-task knowledge
+8| 
+9| Uses L3.search (semantic) so results are relevant to the current user input.
+10| Each wing gets its own tailored query instead of reusing the raw user_input.
+11| 
+12| Results are concatenated and injected as a system message into history
+13| so all agents see them in the upcoming broadcast round.
+14| """
+15| 
+16| from __future__ import annotations
+17| 
+18| import json
+19|… (5,834字)
+• exec(grep -n "auto_recall\|wing_queries\|_generate_wing\|recall_output\|记忆检索\|L3\....) → 132:                from nanobot.groupchat.orchestra._auto_recall import auto_recall_memories
+133:                recalled = await auto_recall_memories(user_input=user_input, engine=engine)
+
+
+Exit code: 0 (204字)
+• edit_file() → (81字)
+• exec() → ## 🧠 自动记忆检索（群聊开始时触发）
+当前用户输入: search我也需要看到搜了什么
+### 检索关键词
+- 技术上下文: memory_palace search 检索关键词 Telegram显示
+- 用户偏好: 用户偏好 搜索可见性 工具调用显示
+- 固定信息: 记忆检索 自动轮询 关键词生成
+
+STDERR:
+2026-05-28 10:08:33.474 | INFO     | nanobot.groupchat.history.prompt_builder:_sync_from_manifest:215 - Synced from manifest: 18 components, 13 editable
+
+
+Exit code: 0 (329字)
+• exec(cd /root/nanobot-src && git add -A && git diff --cached --stat && git commit ...) → nanobot/groupchat/orchestra/_auto_recall.py | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+[dev 68e702d] auto_recall: show generated keywords in injected system message
+ 1 file changed, 10 insertions(+)
+
+
+Exit code: 0 (221字)
+• memory_palace() → ✅ Stored in wing_code/auto-recall-keywords-visible (hidden)
+  Drawer ID: drawer_wing_code_auto-recall-keywords-visible_9760a1ff98b502c1741c1914 (143字)
+• end_discussion() → ✅ 讨论已结束（原因: 改动完成并提交(68e702d)），即将进入总结阶段 (38字)
+---
+[Kirk]: ## 结论
+
+改了 `_auto_recall.py`（commit `68e702d`），auto-recall 注入的系统提示现在会显示 LLM 为每个 wing 生成的检索关键词。
+
+之前只显示 `当前用户输入: xxx`，看不到实际搜索用了什么词。现在会追加：
+
+```
+### 检索关键词
+- 技术上下文: memory_palace search 检索关键词 Telegram显示
+- 用户偏好: 用户偏好 搜索可见性 工具调用显示
+- 固定信息: 记忆检索 自动轮询 关键词生成
+```
+
+仅当生成的关键词与原始用户输入不同时才显示，避免冗余。
+---

@@ -1,0 +1,89 @@
+[用户]: 最近最后一次的稳定版和最新的代码对比
+---
+[Harper]: 
+
+[工具调用记录]
+• memory_palace(stable version tag latest code diff comparison) → 🔍 5 result(s) for 'stable version tag latest code diff comparison':
+
+[1] wing_project/git-tag-mislabel-20260511 (sim=-0.217)
+  v-stable-20260511 标签错误：标签打在了 main HEAD (bb23ae3) 而非 v0.1.5-stable (30d7454) 上，导致包含了 3 个开发中提交（29957ff 打断通知、9ea0e76 权限漏洞修复、bb23ae3 shell脚本）。根因是打标签时未先 checkout 到稳定版 commit。修复：git tag -f v-stable-20260511 v0.1.5-stable
+
+[2] wing_project/git-commits-after-511 (sim=-0.543)
+  2026-05-11: v-stable-20260511 (bb23ae3) 之后有1个游离提交 312760b "fix(groupchat): 用户消息即时中断 busy agent"，用户确认该提交… (1,908字)
+• exec(cd /root/nanobot-src && git tag --sort=-creatordate | grep "stable" | head -5) → v-stable-20260523
+v-stable-20260518
+v-stable-20260517
+stable-2026-05-17
+stable-2026-05-16
+
+
+Exit code: 0 (104字)
+• exec(cd /root/nanobot-src && git log --oneline v-stable-20260523..HEAD) → 552e2ab fix(context): self sees full tool logs, other agents see aged (no previews)
+
+
+Exit code: 0 (98字)
+• exec(cd /root/nanobot-src && git diff --stat v-stable-20260523..HEAD) → nanobot/groupchat/history/message_converter.py | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+
+Exit code: 0 (120字)
+• exec(cd /root/nanobot-src && git diff v-stable-20260523..HEAD) → diff --git a/nanobot/groupchat/history/message_converter.py b/nanobot/groupchat/history/message_converter.py
+index 76d859c..1b8a6cf 100644
+--- a/nanobot/groupchat/history/message_converter.py
++++ b/nanobot/groupchat/history/message_converter.py
+@@ -79,7 +79,10 @@ def history_to_messages(
+ 
+     def _to_msg(m: dict[str, str]) -> dict[str, Any]:
+         sender, content = m["sender"], m["content"]
+-        # Rank-based tool call isolation: strip tool logs from lower-rank agents
++        # Self see… (967字)
+---
+[Kirk]: ## 结论
+
+稳定版 `v-stable-20260523` → 当前 `552e2ab`，仅 **1个commit、1个文件、+4/-1行**。
+
+## 关键发现
+
+**变更文件**: `nanobot/groupchat/history/message_converter.py`
+
+```diff
+-        # Rank-based tool call isolation: strip tool logs from lower-rank agents
++        # Self sees full tool details; other agents see aged (no previews)
++        if sender not in ("用户", "系统", current_agent) and "[工具调用记录]" in content:
++            content = age_tool_log(content)
++        # Rank-based: additionally strip tool logs from much lower-rank agents
+```
+
+**逻辑变化**：在原有 rank-based 过滤之前，新增一层 `age_tool_log()` 处理——其他 agent 的工具日志先去掉预览细节（老化），再由 rank 机制决定是否完全剥离。效果：每个 agent 看到自己的工具日志是完整的，看到其他 agent 的是精简版。
+
+**工作区状态**: 干净，无未提交修改。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git log --oneline v-stable-20260523..HEAD) → 552e2ab fix(context): self sees full tool logs, other agents see aged (no previews)
+
+
+Exit code: 0 (98字)
+• exec(cd /root/nanobot-src && git diff --stat v-stable-20260523..HEAD) → nanobot/groupchat/history/message_converter.py | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+
+Exit code: 0 (120字)
+• exec(cd /root/nanobot-src && git diff v-stable-20260523..HEAD) → diff --git a/nanobot/groupchat/history/message_converter.py b/nanobot/groupchat/history/message_converter.py
+index 76d859c..1b8a6cf 100644
+--- a/nanobot/groupchat/history/message_converter.py
++++ b/nanobot/groupchat/history/message_converter.py
+@@ -79,7 +79,10 @@ def history_to_messages(
+ 
+     def _to_msg(m: dict[str, str]) -> dict[str, Any]:
+         sender, content = m["sender"], m["content"]
+-        # Rank-based tool call isolation: strip tool logs from lower-rank agents
++        # Self see… (967字)
+• exec(cd /root/nanobot-src && git status --short) → Exit code: 0 (13字)
+• memory_palace() → ✅ Stored in wing_code/stable-diff-20260525 (hidden)
+  Drawer ID: drawer_wing_code_stable-diff-20260525_a634e70ac8ddb8da1d60e84b (127字)
+• end_discussion() → ❌ 结束讨论失败：以下 agent 尚未进入等待状态：Harper。
+请在所有 agent 进入等待状态后，再次调用 end_discussion。 (74字)
+• chatroom_send(任务已完成，无需继续工作。稳定版对比结果已输出。请进入等待状态。) → (50字)
+• wait() → (683字)
+• end_discussion() → ✅ 讨论已结束（原因: 对比完成，Harper已确认结果一致。差异仅1个commit/1个文件/4行。），即将进入总结阶段 (61字)
+---

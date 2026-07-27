@@ -1,0 +1,167 @@
+[用户]: 确保从根源修复，代码量和fallback尽量不要妥协
+---
+[Harper]: <｜DSML｜tool_calls>
+<｜DSML｜invoke name="edit_file">
+<｜DSML｜parameter name="path" string="true">/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py</｜DSML｜parameter>
+<｜DSML｜parameter name="old_text" string="true">_leader_ended_discussion = False
+                        _synthesis_retries += 1
+                        if _synthesis_retries >= 3:
+                            logger.warning("Broadcast: leader {} synthesis quality retry exhausted ({} attempts), forcing exit", name, _synthesis_retries)
+                            break
+                        engine._running = True
+                        continue</｜DSML｜parameter>
+<｜DSML｜parameter name="new_text" string="true">_synthesis_retries += 1
+                        if _synthesis_retries >= 3:
+                            logger.warning("Broadcast: leader {} synthesis quality retry exhausted ({} attempts), forcing exit", name, _synthesis_retries)
+                            break
+                        engine._running = True
+                        continue</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1125|                         "content": get_system_warning("leader_no_text_after_tools", name=name)
+1126|                     })
+1127|                     continue  # re-enter tool_loop to produce synthesis text
+1128| 
+1129|                 # ── Auto-wait: enter idle state ──
+1130|                 # Display the agent's final text for this cycle.
+1131|                 # If chatroom_send was used, the content was already shown at tool-call
+1132|                 # time (line 612) — skip the duplicate "Self/Final" display.
+1133|                 # Defer display when leader is in synthesis validation — only show
+1134|                 # output that passes the quality gate (prevents spamming failed retries).
+1135|                 if content and not (is_leader and _leader_ended_discussion):
+1136| … (8,795字)
+• exec(grep -n "leader_end_without_text\|delivery_gate" /root/nanobot-src/nanobot/gr...) → 1171:                        "content": get_system_warning("leader_end_without_text", name=name),
+1192:                            _warn = get_system_warning("delivery_gate_memory", name=name)
+1194:                            _warn = get_system_warning("delivery_gate_tools", name=name)
+1196:                            _warn = get_system_warning("leader_end_without_text", name=name)
+
+
+Exit code: 0 (399字)
+• exec(grep -rn "leader_end_without_text" /root/nanobot-src/nanobot/groupchat/ | hea...) → /root/nanobot-src/nanobot/groupchat/history/component_manager.py:25:    "leader_end_without_text": (
+/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py.bak4:189:            "leader_end_without_text": (
+/root/nanobot-src/nanobot/groupchat/history/prompt_builder.py.bak3:186:            "leader_end_without_text": (
+/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py:1171:                        "content": get_system_warning("leader_end_without_text", name=name),
+/root/nanobot-src/… (1,064字)
+• exec(grep -A 15 "leader_end_without_text" /root/nanobot-src/nanobot/groupchat/hist...) → "leader_end_without_text": (
+        "[⚠️ 你调用了 end_discussion，但还没有给出最终答案！]\n"
+        "请立即整合所有队友的发现，给出完整、结构化的最终回复给用户。\n"
+        "这是用户唯一能看到的内容，禁止再调用任何工具，直接输出文字。"
+    ),
+    "leader_wait_timeout": (
+        "[最终综合] 等待超时，队友已全部完成。\n"
+        "请立即综合所有发现，给出完整、结构化的最终答案给用户。\n"
+        "禁止再调用工具，直接输出文字。"
+    ),
+    "delivery_gate_memory": (
+        "[⚠️ 交付门控拦截] 你将数据存入了 memory_palace 但未在文本回复中呈现。\n"
+        "用户看不到 memory 的内容——唯一交付通道是你的文本回复。\n"
+        "请将存储的关键数据完整写入文本，不要只写'已存储'或'已完成'。"
+    ),
+    "delivery… (534字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1155| 
+1156|                         target_label = f"进展 [{cycle}]" if is_leader else "Self/Final"
+1157|                         await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
+1158|                         logger.info("Broadcast: displayed {} cycle {} output ({} chars) [Local Only]", name, cycle, len(content))
+1159|                     # else: chatroom_send already displayed the message — no duplicate needed
+1160|                 
+1161|                 # If leader called end_discussion this cycle, validate synthesis length & quality.
+1162|                 if is_leader and _leader_ended_discussion:
+1163|                     stripped = content.strip() if content else ""
+1164|                     if len(stripped) < _MIN_SYN… (4,140字)
+• edit_file() → (193字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1169|                         messages.append({
+1170|                         "role": "system",
+1171|                         "content": get_system_warning("leader_end_without_text", name=name),
+1172|                         })
+1173|                         _leader_ended_discussion = False
+1174|                         _synthesis_retries += 1
+1175|                         if _synthesis_retries >= 3:
+1176|                             logger.warning("Broadcast: leader {} synthesis retry exhausted ({} attempts)… (3,296字)
+  (还有 1 个工具调用，已省略)
+---
+[Kirk]: ⏳ [Kirk] 当前模型响应超时，我仍在线。等待队友消息后将继续工作。
+---
+[Harper]: <｜DSML｜tool_calls>
+<｜DSML｜invoke name="exec">
+<｜DSML｜parameter name="command" string="true">grep -n "_leader_ended_discussion" /root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>
+
+[工具调用记录]
+• exec(grep -n "_leader_ended_discussion" /root/nanobot-src/nanobot/groupchat/orches...) → 517:        _leader_ended_discussion = False
+823:                    _leader_ended_discussion = True
+1135:                if content and not (is_leader and _leader_ended_discussion):
+1162:                if is_leader and _leader_ended_discussion:
+1204:                        _leader_ended_discussion = False
+
+
+Exit code: 0 (323字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 515| 
+516|         is_leader = (name == leader_name)
+517|         _leader_ended_discussion = False
+518|         _synthesis_retries = 0  # guard against infinite synthesis retry loops
+519|         # Load from override system (editable via /prompt), fallback to default
+520|         # Removed stale prompt_overrides.json lookup; .md files are the source of truth.
+521| 
+522|         if is_leader:
+523|             # ── Leader prompt: active orchestrator ──
+524|             agent_caps = []
+525|             for a in non_leader_agents:
+526|                 on = engine.get_agent_enabled_tool_names(a)
+527|                 agent_caps.append(f"  {a}: {', '.join(on) if on else '(无工具)'}")
+528| 
+529|             # Determine Leader's own base tools
+530|             leader_on = engine.get_agent_enabled_tool… (4,127字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1180|                         engine._running = True
+1181|                         continue
+1182|                     # Step 2 — content quality guard (catches fluff like "问题已解答，无需补充")
+1183|                     quality_ok, quality_reason = synthesis_quality_check(stripped, tools_used=result.tools_used)
+1184|                     if not quality_ok:
+1185|                         logger.warning(
+1186|                         "Broadcast: leader {} synthesis quality check failed ({})",
+1187|                         name, quality_reason,
+1188|                         )
+1189|                         # Pick the most specific warning template
+1190|                         if "记忆" in quality_reason or "memory" in quality_reason:
+1191|                             _warn = get_system_warning("delivery_g… (4,377字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 810| 
+811|                 # Flush any remaining buffered search lines
+812| 
+813|                 content = result.content or ""
+814|                 is_error = result.finish_reason == "error"
+815|                 is_timeout = result.finish_reason == "timeout"
+816|                 is_interrupted = result.finish_reason == "interrupted"
+817|                 latency = result.latency
+818|                 total_latency += latency
+819|                 total_iterations += result.iterations
+820|                 all_tools_used.extend(result.tools_used or [])
+821| 
+822|                 if is_leader and "end_discussion" in (result.tools_used or []):
+823|                     _leader_ended_discussion = True
+824| 
+825|                 if is_error or is_timeout:
+826|                     if is_timeout:
+82… (2,719字)
+• exec(grep -n "_leader_ended_discussion = False" /root/nanobot-src/nanobot/groupcha...) → 517:        _leader_ended_discussion = False
+1204:                        _leader_ended_discussion = False
+
+
+Exit code: 0 (121字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1200|                         + f"\n\n[质量检查失败] {quality_reason}"
+1201|                         "\n请输出包含 ## 结论、## 关键发现 的结构化总结，附带具体数据和来源。"
+1202|                         ),
+1203|                         })
+1204|                         _leader_ended_discussion = False
+1205|                         _synthesis_retries += 1
+1206|                         if _synthesis_retries >= 3:
+1207|                             logger.warning("Broadcast: leader {} synthesis quality retry exhausted ({} attempts), forcing exit", name, _synthesis_retries)
+1208|                             break
+1209|                         engine._running = True
+
+(Showing lines 1200-1209 of 1634. Use offset=1210 to continue.) (696字)
+  (还有 1 个工具调用，已省略)
+---
+[Kirk]: ⏳ [Kirk] 当前模型响应超时，我仍在线。等待队友消息后将继续工作。
+---

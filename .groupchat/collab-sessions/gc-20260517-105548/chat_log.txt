@@ -1,0 +1,91 @@
+[用户]: 嗯，看起来是一个竟态问题
+---
+[Kirk]: ## 结论
+
+竞态根因在 `broadcast.py` L1204/L1232：**synthesis 重试时 `engine._running = True` 恢复了运行标志**，导致 Worker 的退出守卫（L1292 `if not engine._running: break`）被绕过。
+
+## 关键发现
+
+**时序**：
+1. Kirk `end_discussion` → `engine._running = False`
+2. Kirk synthesis 验证失败（<400字或质量不通过）
+3. **`engine._running = True`**（L1204/L1232）← 恢复
+4. Kirk 重试 cycle 通过 `chatroom_send` 发消息
+5. Harper `mailbox.wait()` 收到消息，检查 `engine._running` → `True` → 不 break，重新激活
+6. Harper 执行 git tag
+7. Kirk synthesis 最终通过，外层 cancel Harper，但已在执行中
+
+**autowait guard 没防住的原因**：guard 在 `end_discussion` 执行前检查 Worker 状态，Harper 在 `wait()` 中 → 通过。但通过后 synthesis 重试恢复了 `engine._running`，Worker 退出守卫失效。
+
+## 备注
+
+**修复方向**（二选一）：
+1. Worker 退出守卫（L1292）改为检查 `leader_end_event.is_set()` 而非仅 `engine._running`
+2. synthesis 重试时不恢复 `engine._running`，改用其他机制让 Kirk 的重试 cycle 正常执行
+
+方案 1 更小变更，但 Worker 需要访问 `leader_end_event`（可通过 `engine` 传递）。方案 2 更干净但改动面更大。
+
+[工具调用记录]
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/chatroom_tools.py) → 1104|     async def execute(self, reason: str = "", **kwargs: Any) -> str:
+1105|         # ── Autowait guard: if any non-leader agent is busy, wait for them ──
+1106|         if self._mailbox is not None:
+1107|             active = getattr(self._mailbox, "_active_agents", set())
+1108|             waiting = getattr(self._mailbox, "_waiting", set())
+1109|             leader = getattr(self._mailbox, "_leader_name", "")
+1110|             # Exclude leader (the caller) — leader is always "executing" when calling this
+1111|             non_waiting = (active - waiting) - {leader}
+1112|             if non_waiting:
+1113|                 names = ", ".join(sorted(non_waiting))
+1114|                 # Autowait: poll until all non-leader agents enter waiting (max 60s)
+1115|                 for _ in range… (3,710字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 830|                 finally:
+831|                     # Always mark idle when tool_loop exits (interrupt, stop, normal, error)
+832|                     mailbox.mark_idle(name)
+833| 
+834| 
+835|                 # Flush any remaining buffered search lines
+836| 
+837|                 content = result.content or ""
+838|                 is_error = result.finish_reason == "error"
+839|                 is_timeout = result.finish_reason == "timeout"
+840|                 is_interrupted = result.finish_reason == "interrupted"
+841|                 latency = result.latency
+842|                 total_latency += latency
+843|                 total_iterations += result.iterations
+844|                 all_tools_used.extend(result.tools_used or [])
+845| 
+846|                 if is_leader and "end_discussion" … (2,941字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1180|                         target_label = f"进展 [{cycle}]" if is_leader else "Self/Final"
+1181|                         await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
+1182|                         logger.info("Broadcast: displayed {} cycle {} output ({} chars) [Local Only]", name, cycle, len(content))
+1183|                     # else: chatroom_send already displayed the message — no duplicate needed
+1184|                 
+1185|                 # If leader called end_discussion this cycle, validate synthesis length & quality.
+1186|                 if is_leader and _leader_ended_discussion:
+1187|                     stripped = content.strip() if content else ""
+1188|                     if len(stripped) < _MIN_SYNTHESIS_… (5,555字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1540|             engine._broadcast_tasks['__user_listener'] = user_task
+1541|             engine._broadcast_tasks['__join_listener'] = join_task
+1542| 
+1543|         # Watch for leader end_discussion signal
+1544|         async def _watch_leader_end() -> None:
+1545|             await leader_end_event.wait()
+1546| 
+1547|         leader_end_sentinel = asyncio.create_task(_watch_leader_end())
+1548|         all_tasks.add(leader_end_sentinel)
+1549| 
+1550|         if hasattr(engine, '_broadcast_tasks'):
+1551|             engine._broadcast_tasks['__leader_sentinel'] = leader_end_sentinel
+1552| 
+1553|         while not all(t.done() for t in all_tasks):
+1554|             done_set, _ = await asyncio.wait(
+1555|                 [t for t in all_tasks if not t.done()],
+1556|                 timeout=glo… (4,298字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py) → 1259|                 # Now wait for teammate messages
+1260|                 await tracker.set_state(name, "waiting")
+1261|                 logger.info("Broadcast: {} entering auto-wait (cycle {})", name, cycle)
+1262|                 # Release unread pool slots before waiting (mirrors WaitTool behavior)
+1263|                 # Without this, slots consumed by messages sent TO this agent are never
+1264|                 # freed, causing pool exhaustion… (3,484字)
+  (还有 6 个工具调用，已省略)
+---

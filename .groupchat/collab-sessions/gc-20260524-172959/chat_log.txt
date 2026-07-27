@@ -1,0 +1,121 @@
+[系统]: 话题：自由讨论
+---
+[用户]: agent—-
+现在让我阅读 tool_loop.py 的关键部分——特别是工具结果是如何注入到消息历史中的。我需要理解完整的流程。我之前只看到了部分内容。让我再仔细读一遍。我需要理解工具结果是如何注入到消息历史中的。我之前只看到了部分内容。让我再仔细读一遍。我需要理解工具结果是如何注入到消息历史中的。我之前只看到了部分内容。让我再仔细读一遍。我需要理解工具结果是如何注入到消息历史中的。我之前只看到了部分内容。让我再仔细读一遍。
+
+重复消息的检测还是有问题
+---
+[Kirk]: ## 结论
+
+tool_loop.py 的重复检测有**两层机制**，但都存在盲区。用户看到的重复消息（同一段话重复5次）暴露了核心缺陷：**退化重复检测完全依赖标点分割，无标点的大段重复文本无法被捕获**。
+
+## 关键发现
+
+### 层1：工具调用去重（L519-561）— 正常
+- `_DEDUP_TOOLS` 集合 + `_seen_calls` 缓存 + `_batch_dedup_keys` 批量内去重
+- **只防工具重复调用，不防文本输出重复**
+
+### 层2：退化重复检测（L458-477）— 有缺陷
+- `_has_contiguous_repeat()` 用 `[\n。！？.!?\u3002]` 分割后检测连续≥3次相同 segment
+- **缺陷1**：只检测连续重复，A-B-A-B 间隔模式漏检
+- **缺陷2**：`min_repeat=3`，2次重复不触发
+- **缺陷3（关键）**：无标点分隔的大段重复文本被当作单个 segment，检测完全失效
+- **缺陷4**：微小差异（空格/标点变化）导致匹配失败
+
+### 工具结果注入流程（完整）
+1. LLM 返回 tool_calls → L512-517 构建 assistant message（含 tool_calls）append 到 messages
+2. Phase 1（L519-580）：逐个检查去重/权限，重复的直接 append tool role message 带 `[DUPLICATE]` 标记
+3. Phase 2（L594-609）：`asyncio.gather` 并行执行非重复工具
+4. Phase 3（L611-674）：逐个处理结果，`process_tool_result()` 格式化后 append tool role message
+
+## 备注
+
+建议改进：增加**滑动窗口字符级 n-gram 重复检测**作为补充，不依赖标点分割。例如检测连续 50+ 字符的子串在全文中出现≥3次即判定重复。
+
+[工具调用记录]
+• memory_palace(tool_loop.py 工具结果注入 消息历史 重复消息检测) → 🔍 5 result(s) for 'tool_loop.py 工具结果注入 消息历史 重复消息检测':
+
+[1] wing_memory/tool-permissions-mempalace (sim=0.007)
+  2026-05-11: 在 nanobot 工具权限系统中添加 memory_palace 选项。改动3处：engine.py TOOL_NAMES 列表、callbacks.py 两处 Telegram UI labels 字典。commit eb18447。重启后 Telegram /edit X tools 菜单会出现「🖋️ 记忆大厦(MemPalace)」开关。
+
+[2] wing_prompt/prompt-order-optimization (sim=-0.1)
+  ## prompt_order 加载优先级（2026-05-23 验证）
+
+**关键发现**：`_load_prompt_order()` 代码（prompt_builder.py L314-332）的加载顺序是：
+1. **prompt_manifest.json 优先** — 按 com… (2,039字)
+• memory_palace(tool_loop duplicate message detection bug) → 🔍 5 result(s) for 'tool_loop duplicate message detection bug':
+
+[1] wing_code/context-compression-architecture (sim=-0.243)
+  ## 上下文压缩架构 — 双层设计
+
+### 层级一：跨轮压缩 (HistoryContext.maybe_compress)
+- 位置: groupchat/history/context.py:146-250
+- 触发: engine.py:1137, engine.py:951
+- 作用对象: master 消息列表（破坏性操作）
+- 结构: Protected Head | Compressible Middle | Protected Tail
+- Head保护: _find_head_indices() 只保护 index_0 + first_user_msg
+- Tail保护: keep_recent=6 (硬编码 context.py:171)
+- 触发阈值: msg_count >= max_messages × com… (1,922字)
+• exec(find /root/nanobot-src -name "tool_loop.py" -type f 2>/dev/null) → /root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py
+
+
+Exit code: 0 (79字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 1| """Shared LLM + tool-calling loop.
+2| 
+3| Provides a single ``tool_loop()`` coroutine that both ``AgentLoop`` (core)
+4| and ``GroupChatEngine`` (group chat) delegate to for the iterative
+5| call-LLM → execute-tools → append-messages cycle.
+6| 
+7| Callers customise behaviour through optional callbacks rather than
+8| subclassing, keeping the core loop logic in one place.
+9| """
+10| 
+11| from __future__ import annotations
+12| 
+13| import asyncio
+14| import json
+15| import re
+16| import time as _time
+17| from dataclasses import dataclass, field
+18| from typing import Any, Awaitable, Callable
+19| 
+20| from loguru import logger
+21| 
+22| from nanobot.tools.registry import ToolRegistry
+23| from nanobot.groupchat.history.result_processor import process_tool_result
+24| from nanobot.providers.base… (12,562字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 300|             _name = _cm.get("name", "")
+301|             _content = _cm.get("content") or ""
+302|             _tc = _cm.get("tool_calls")
+303|             _tcid = _cm.get("tool_call_id", "")
+304|             if isinstance(_content, str):
+305|                 _clen = len(_content)
+306|             elif isinstance(_content, list):
+307|                 _clen = sum(len(b.get("text", "")) for b in _content if isinstance(b, dict))
+308|             else:
+309|                 _clen = 0
+310|             _ctx_total += _clen
+311|             # Full content for complete logging
+312|             if isinstance(_content, str):
+313|                 _preview = _content.replace("\n", "\\n")
+314|             elif isinstance(_content, list):
+315|                 _preview = " ".join(b.get("text", "") for … (15,067字)
+• read_file(/root/nanobot-src/nanobot/groupchat/orchestra/tools/tool_loop.py) → 600|                 except Exception as exc:
+601|                     err = str(exc)
+602|                     logger.error("tool_loop: {}() failed: {}", tc_inner.name, err[:200])
+603|                     return f"Error: {exc}", err, round(_time.time() - t0, 2)
+604| 
+605|             if pending:
+606|                 exec_results = await asyncio.gather(
+607|                     *(_exec_one(tc) for tc, _, _ in pending),
+608|                     return_exceptions=True,
+609|                 )
+610| 
+611|                 # ── Phase 3: Sequential post-process ──
+612|                 for (tc, args_str, dedup_key), raw in zip(pending, exec_results):
+613|                     # Handle unexpected gather exceptions (e.g. BaseException)
+614|                     if isinstance(raw, BaseException):
+615|   … (12,509字)
+• memory_palace() → (125字)
+• end_discussion() → (39字)
+---

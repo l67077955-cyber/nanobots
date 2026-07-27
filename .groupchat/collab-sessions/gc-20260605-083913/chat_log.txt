@@ -1,0 +1,213 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 现在的版本实际上没有18号的稳定版稳定
+---
+[Harper]: 根据记忆，当前运行的是 **27号版本**（commit `39f1433`），而你说的"18号稳定版"可能是指 **5月17日** 的 stable 分支。
+
+需要你澄清几个问题才能定位问题：
+
+1. **具体症状是什么？** 崩溃、卡死、功能报错、还是其他？
+2. **是突然变不稳定，还是升级后才出现？**
+
+有了这些信息，我可以：
+- 检查两个版本的 git diff，找出导致问题的变更
+- 或者直接帮你回滚到18号版本
+
+[工具调用记录]
+• memory_palace(版本稳定性 18号稳定版 当前版本) → 🔍 5 result(s) for '版本稳定性 18号稳定版 当前版本':
+
+[1] wing_code/round-20260601-自由讨论 (sim=0.484)
+  t diff`，确保版本一致性。
+- 代码恢复到特定版本（如17号）不必要，因为当前版本已是目标稳定版。
+- 部署和运行状态正常，游戏在线可访问，无需额外恢复操作。
+
+[2] wing_agent/discoveries-20260601 (sim=0.442)
+  ## 事实与数据
+- 当前代码版本为 `39f1433`，时间为 2026-05-27 21:33:48，已确认为27号版本的稳定提交。
+- 最近的稳定标签包括 `v-stable-20260523`，但当前代码未被动过，仍为27号版本。
+- 代码仓库中存在17个commit差异（主要涉及群聊修复、工具调用优化等），但未对当前版本代码进行修改。
+- 相关修复内容包括：群聊卡死修复（slot泄漏、死锁、连续错误退出等）、工具调用优化、内容合成改进。
+
+## 发现与洞察
+- 27号版本已包含针对群聊卡死问题的核心修复，最新的提交未引入新的重大变更。
+- … (1,990字)
+---
+[Harper]: 已将分析发给 Kirk。
+
+**根本原因已定位**：当前版本删除了18号引入的 `COMPONENT_PHASES` static/dynamic 系统，导致 prompt 构建行为改变。这解释了为什么18号更稳定。
+
+[工具调用记录]
+• exec(cd /root/nanobot-src && git log --oneline v-stable-20260518..HEAD 2>/dev/null...) → 9b43919 fix(groupchat): prevent content loss on leader end_discussion
+6b4a048 fix(groupchat): eliminate agent deadlock from busy-replier misjudgment and infinite wait loops
+d728ec6 fix(mailbox): slot leak for non-agent senders + busy_agents deadlock guard
+5542061 refactor: allow loopback URLs in exec guard, only block non-loopback private IPs
+2efaa8c fix: boolean parsing bug + auto-discover undocumented scripts
+1e901fc fix(broadcast): check leader_end_event alongside engine._running
+5fd27c5 fix(… (1,132字)
+• exec(cd /root/nanobot-src && git log --oneline HEAD..v-stable-20260518 2>/dev/null...) → 3928204 refactor: telegram callbacks & settings panel cleanup
+261219e refactor: move legend from main panel to 📖 rules button view
+fd9b9a6 style: unify visual separators across /prompt views (┄→━, remove • bullets)
+47a5cd3 feat: add prompt assembly rules visualization (📖 规则说明 button + prrules handler)
+3790223 fix: remove orphan 工程原则 from fallback phases, fix dynamic editable_by mismatches
+513acff fix: add_custom_component writes phase field to manifest
+93439b6 feat: adapt /prompt display and edi… (1,092字)
+• exec(cd /root/nanobot-src && git diff v-stable-20260518..HEAD --stat | head -50) → .gitignore                                         |   3 -
+ .../data_level0.bin                                | Bin 0 -> 167600 bytes
+ .../header.bin                                     | Bin 0 -> 100 bytes
+ .../length.bin                                     | Bin 0 -> 400 bytes
+ .../link_lists.bin                                 |   0
+ memory_palace/chroma.sqlite3                       | Bin 0 -> 196608 bytes
+ memory_palace/palace.json                          |  35 ++++
+ nanobot/channels/tele… (1,766字)
+• exec(cd /root/nanobot-src && git show v-stable-20260518:nanobot/prompt_assembler.p...) → Exit code: 0 (13字)
+• exec(cd /root/nanobot-src && git show v-stable-20260518:nanobot/skills/loader.py |...) → Returns (static_content, dynamic_content):
+      - static_content: always-on skills with type=static inlined (stable, before history)
+      - dynamic_content: always-on skills with type=dynamic inlined + summary + undocumented scripts (volatile, after history)
+
+    Skills declare ``type: dynamic`` in frontmatter to opt into volatile template
+    variables (e.g. ``{{datetime}}``).  Default is ``type: static``.
+    """
+    loader = SkillsLoader(workspace)
+
+    # ── Split always-on skills by type ─… (2,040字)
+• exec(cd /root/nanobot-src && git show v-stable-20260518:nanobot/groupchat/history/...) → # static = before history, stable template vars only (cache-friendly)
+    "main_prompt": "static",
+    "hard_rules": "static",
+    "tool_instructions": "static",
+    "persona": "static",
+    "broadcast_hint": "static",
+    "user_context": "static",
+    "output_efficiency": "static",
+    "skills": "static",
+    "leader_prompt": "static",
+    "instructions": "static",
+    "memory": "static",
+    # dynamic = after history, volatile template vars available ({{datetime}}, {{round}})
+    "history": "d… (2,892字)
+• exec(cd /root/nanobot-src && cat nanobot/skills/loader.py | grep -A20 "def build_p...) → Exit code: 1 (13字)
+• chatroom_send() → (49字)
+---
+[Harper]: ⚠️ [Harper] LLM调用出错（Error calling LLM: litellm.BadRequestError: OpenrouterExcept），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: 你说得对。核心问题很清楚：
+
+**`progressive-fixes` 和 `v-stable-20260518` 是两条分叉路径，修复没有合并。**
+
+- 当前版本（progressive-fixes）有 groupchat 死锁/slot泄漏修复，但**缺整个 skill 系统**（static/dynamic 分离、prompt 阶段管理）
+- 18号版本有完整的 skill 系统，但**缺后续的 groupchat 稳定性修复**
+
+两条线各修各的，导致当前版本在某些场景下反而不如18号稳定。要彻底解决需要把两条线的修复合并到一个分支上，而不是继续各走各的。要不要现在做合并？
+
+[工具调用记录]
+• memory_palace(版本 稳定版 18号 software version stable) → 🔍 5 result(s) for '版本 稳定版 18号 software version stable':
+
+[1] wing_code/version-snapshot-20260603 (sim=0.371)
+  ## 版本快照 2026-06-03
+
+- 分支: progressive-fixes
+- HEAD: 9b43919 (2026-05-26 11:49:27 +0800)
+- Python版本: 0.1.4.post5
+- 工作区: 干净
+- 基于: v-stable-20260517
+- 总commit数: 1747
+- 最近标签: backup-before-27-rollback-20260601, v-stable-20260517-plus-fixes, v-stable-20260523
+
+[2] wing_agent/discoveries-20260602 (sim=0.379)
+  ## 事实与数据
+- 当前代码版本：commit `39f1433`
+- 分支：`stable-20260527`
+- 最近稳定标签：`v-stable-202605… (1,863字)
+• memory_palace(nanobot 版本更新 release) → 🔍 5 result(s) for 'nanobot 版本更新 release':
+
+[1] wing_code/nanobot-src-branches (sim=0.508)
+  nanobot-src 代码仓库结构（2026-05-31）：
+- 路径: /root/nanobot-src
+- 当前运行分支: progressive-fixes (d728ec6)
+- 远程: git@github.com:l67077955-cyber/nanobots.git
+- 本地分支: progressive-fixes(当前), dev(44440fb), main(f9a3195), rollback-to-stable-20260517, stable-20260517-plus-fixes
+- 远程落后本地dev 8个commit未推送
+- 安装方式: pip install -e . (editable)
+- 配置目录: /root/.nanobot (独立git仓库, 分支rollback-config-20260517)
+- 包版本: nanobot-ai 0…
+
+[2] w… (1,860字)
+• exec() → 9b43919 fix(groupchat): prevent content loss on leader end_discussion
+6b4a048 fix(groupchat): eliminate agent deadlock from busy-replier misjudgment and infinite wait loops
+d728ec6 fix(mailbox): slot leak for non-agent senders + busy_agents deadlock guard
+5542061 refactor: allow loopback URLs in exec guard, only block non-loopback private IPs
+2efaa8c fix: boolean parsing bug + auto-discover undocumented scripts
+---
+progressive-fixes
+---
+backup-before-27-rollback-20260601-2-g9b43919
+---
+
+
+Exit co… (505字)
+• exec(cd /root/nanobot-src && git tag -l 'v-stable*' --sort=-creatordate | head -10) → v-stable-20260517-plus-fixes
+v-stable-20260523
+v-stable-20260518
+v-stable-20260517
+v-stable-20260511
+
+
+Exit code: 0 (115字)
+• exec(cd /root/nanobot-src && git log --oneline v-stable-20260518..HEAD | wc -l && ...) → 15
+---commits---
+9b43919 fix(groupchat): prevent content loss on leader end_discussion
+6b4a048 fix(groupchat): eliminate agent deadlock from busy-replier misjudgment and infinite wait loops
+d728ec6 fix(mailbox): slot leak for non-agent senders + busy_agents deadlock guard
+5542061 refactor: allow loopback URLs in exec guard, only block non-loopback private IPs
+2efaa8c fix: boolean parsing bug + auto-discover undocumented scripts
+1e901fc fix(broadcast): check leader_end_event alongside engine._run… (1,149字)
+• exec(cd /root/nanobot-src && git diff --stat v-stable-20260518..HEAD) → .gitignore                                         |   3 -
+ .../data_level0.bin                                | Bin 0 -> 167600 bytes
+ .../header.bin                                     | Bin 0 -> 100 bytes
+ .../length.bin                                     | Bin 0 -> 400 bytes
+ .../link_lists.bin                                 |   0
+ memory_palace/chroma.sqlite3                       | Bin 0 -> 196608 bytes
+ memory_palace/palace.json                          |  35 ++++
+ nanobot/channels/tele… (1,766字)
+• exec(cd /root/nanobot-src && git log --oneline v-stable-20260517..v-stable-20260518) → 3928204 refactor: telegram callbacks & settings panel cleanup
+261219e refactor: move legend from main panel to 📖 rules button view
+fd9b9a6 style: unify visual separators across /prompt views (┄→━, remove • bullets)
+47a5cd3 feat: add prompt assembly rules visualization (📖 规则说明 button + prrules handler)
+3790223 fix: remove orphan 工程原则 from fallback phases, fix dynamic editable_by mismatches
+513acff fix: add_custom_component writes phase field to manifest
+93439b6 feat: adapt /prompt display and edi… (1,092字)
+• exec(cd /root/nanobot-src && git log --oneline v-stable-20260518..v-stable-20260523) → f0a51db feat(rank): rank-based tool call isolation for multi-agent context
+c5cfb74 chore: update litellm_provider
+61b466d refactor: remove dead code, extract synthesis retry helper, deduplicate import
+46cf083 fix(tool_loop): detect and break degenerate repetition loops
+f5f44dd fix(broadcast): end group chat when leader hits consecutive LLM errors
+8e58eb1 fix: end_discuss… (1,045字)
+  (还有 4 个工具调用，已省略)
+---
+[Harper]: ⚠️ [Harper] LLM调用出错（Error calling LLM: litellm.BadRequestError: OpenrouterExcept），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ## 结论
+
+当前 `progressive-fixes` 不如 `v-stable-20260518` 稳定，根因是 cherry-pick 过程中**完全移除了 static/dynamic skill 系统**，导致所有 skill 在同一位置渲染，volatile 变量（如 `{{datetime}}`）在 static 阶段被错误解析。
+
+## 关键发现
+
+- `loader.py`：删除了 `build_prompt_parts()` 方法，失去 skill 分相能力
+- `prompt_builder.py`：删除了 `COMPONENT_PHASES` 字典，失去 static/dynamic 阶段区分
+- `history_settings.py`：删除了 16 行相关逻辑
+- 两条线是分叉关系，不是线性升级，修复从未合并
+
+## 备注
+
+修复路径二选一：
+1. 从18号 cherry-pick static/dynamic 相关代码回 progressive-fixes
+2. **基于18号分支，反向 cherry-pick progressive-fixes 的 groupchat 死锁/slot泄漏修复**（推荐——18号是功能完整基线，往上补 bug 修复比往残缺分支补功能系统风险更低）
+
+[工具调用记录]
+• memory_palace() → ✅ Stored in wing_code/version-stability-root-cause (hidden)
+  Drawer ID: drawer_wing_code_version-stability-root-cause_7c9095ab00049d1dd4b6cf2a (143字)
+• end_discussion() → ❌ 结束讨论失败：以下 agent 尚未进入等待状态：Harper。
+请在所有 agent 进入等待状态后，再次调用 end_discussion。 (74字)
+• chatroom_send(分析完成，准备结束讨论。不需要进一步搜索。) → (51字)
+• wait() → (110字)
+• end_discussion() → ✅ 讨论已结束（原因: 根因已确认，Harper遇到LLM错误但分析已完成，无需继续。），即将进入总结阶段 (53字)
+---

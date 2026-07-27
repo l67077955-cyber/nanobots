@@ -1,0 +1,63 @@
+[用户]: 应该是动态组装的吧
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Harper]: 当前 prompt 组装是**纯动态的，三层管线**：
+
+**触发时机**：每次 LLM 调用前，`load_skills_for_context()` 运行
+
+**三层管线**：
+
+```
+第1层 — always-on 过滤
+get_always_skills() → 读 frontmatter always 字段
+→ stable-only: 4个skill全量注入（受 MAX_ALWAYS_SKILLS_CHARS=5600 截断）
+
+第2层 — summary 摘要块
+剩余 8 个 non-always skill → 提取 description+type → 拼成摘要列表
+（受 MAX_SKILLS_SUMMARY_CHARS=8000 截断，超出的 skill 只显示名称+提示按需加载）
+
+第3层 — 运行时按需
+agent 调用 read_file skills/<名称>/SKILL.md → loader 不介入
+纯标准文件读取，无缓存污染
+```
+
+**结论**：是动态组装的，每个请求重新构建。会检查了 `loader.py` 第215-314行 `_build_skills_section()`，没有缓存或预编译步骤。每次 LLM 调用走完整管线。
+
+你的直觉正确，不需要改。
+---
+[Harper]: 用户问题已在我上轮回复中完整解答。Kirk 因 API 错误离线。没有更多操作需要执行。
+
+[工具调用记录]
+• wait() → (92字)
+• chatroom_send() → (46字)
+• wait() → (92字)
+• wait() → (92字)
+• wait() → (92字)
+---
+[Harper]: 问题已经回答完毕，没有需要推进的任务。等待 Leader 恢复即可。
+---
+[Harper]: 任务已全部完成，无需更多操作。等待 Leader Kirk 回来结束即可。
+
+[工具调用记录]
+• wait() → (92字)
+---
+[Harper]: 当前对话已完成。回顾：
+
+**用户问题**："应该是动态组装的吧"（确认 skill 提示词是否动态组装）
+
+**分析结论**：
+- 是的，loader.py 从 SKILL.md frontmatter 读取 `always`/`name`/`description`，运行时动态组装
+- always-on skill 注入主 prompt（有 5600 chars 预算 + 700 chars/skill 内联 内联截断）
+- 非 always-on skill 只展示 description 摘要（8000 chars 预算），需按需加载
+- `{baseDir}` 运行时替换，不是编译时，所以是**真动态组装**
+
+**完整成果链**（Kirk 已记录）**：
+1. 12 个 skill 补齐 `always` 字段
+2. steve-jobs-perspective description 从 6 行→1 行
+3. loader.py `_parse_yaml_value` 死代码 bug 修復
+4. 配置架构决策：内嵌 frontmatter，不拆单独文件
+5. 将来如需可加 workspace/config/skills-override.yaml
+---

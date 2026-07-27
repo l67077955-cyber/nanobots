@@ -1,0 +1,127 @@
+[用户]: nano助手, [2026/5/15 15:20]
+┄ Harper → All ┄
+前缀缓存命中/未命中原因分析
+
+从用户数据看：0.0x价格=未命中缓存，0.00x价格=命中缓存（约50%折扣）。以下是典型缓存命中价差）。
+
+核心原因（一、缓存变化的核心原因（按影响程度排序）
+
+1. 空白字符敏感（最常见）
+缓存键对精确字节内容做哈希。一个尾随换行、变量插值后的多余空格、缩进变化 → 全部缓存未命中。这是最容易被忽视的坑。
+
+2. 动态内容污染前缀
+时间戳、随机ID、用户特定信息放在system prompt中 → 每次请求前缀都不同 → 永远无法命中缓存。
+
+3. TTL过期 + 缓存驱逐
+• OpenAI: 缓存保持5-10分钟，延长至24小时需转存SSD
+• Anthropic: 5分钟TTL，访问刷新
+• 高负载下KV缓存被驱逐（eviction），即使TTL未到也可能丢失
+
+4. 分布式路由问题
+大规模部署下请求可能路由到不同机器。OpenAI的prompt_cache_key参数用于路由到同一节点，未设置则随机路由。
+
+5. JSON序列化不一致
+{"a":1,"b":2} vs {"b":2,"a":1} → 不同字节 → 不同缓存键。必须用sort_keys=True 可解决。
+
+6. Token边界对齐变化
+即使内容相同，tokenizer在不同上下文下不同上下文中的token边界可能不同 → 缓存未命中。RAG chunking从512→500 tokens导致缓存命中率从85%→4%。
+
+7. 上下文截断策略不一致
+上下文截断位置不同 → 前缀变化 → 缓存失效。
+
+二、用户数据解读
+
+用户数据中价格波动（0.00991 vs 0.0441）说明同一套prompt在不同调用中缓存状态不同。典型场景：
+• 连续调用间隔>5分钟 → TTL过期
+• 某次调用中system prompt含动态变量（如时间） → 未命中
+• 某次调用路由到不同节点 → 未命中
+• 某次调用前有缓存预热 → 命中
+
+三、建议
+
+1. 固定system prompt：所有动态内容放user message末尾，不污染前缀
+2. 统一序列化：JSON用sort_keys=True
+3. 控制调用节奏：确保连续调用在5分钟内
+4. 使用prompt_cache_key（OpenAI）或cache_control（Anthropic）强制路由
+5. **监控**：检查usage字段**：检查cache_read_input_tokens/或cache_read_input_tokens确认命中状态
+提示:60,880 回复:2,347 · 93.2s
+
+nano助手, [2026/5/15 15:20]
+▰▱▱▱▱ 1/5
+
+nano助手, [2026/5/15 15:20]
+🟢 👑▸ Kirk · 📄 tool_pruning.py
+    └ 42 lines
+
+nano助手, [2026/5/15 15:20]
+🟢 👑▸ Kirk · ⚡️ cd /root/nanobot-src && grep -n "cache_control_mode\|au
+    └ 65:    #   "explicit"  — uses cache_control breakpoints…
+
+nano助手, [2026/5/15 15:21]
+🟢 👑▸ Kirk · ⚡️ cd /root/nanobot-src && grep -B5 "cache_control_mode" n
+    └ # How the provider implements prompt caching:     #   "…
+
+nano助手, [2026/5/15 15:22]
+🟢 👑▸ Kirk · 📄 broadcast.py
+    └ 62 lines
+
+成 驰, [2026/5/15 15:22]
+具体今天的openrouter调用日志
+
+nano助手, [2026/5/15 15:23]
+── User ──
+具体今天的openrouter调用日志
+[file: /root/.nanobot/media/telegram/BQACAgEAAxkBAAEC.csv]
+  ▰▰▰▱▱ 3/5
+
+nano助手, [2026/5/15 15:23]
+⚡️ Kirk[bishop] 被【用户消息】打断，正在立即响应...
+
+nano助手, [2026/5/15 15:23]
+← Harper received from 用户
+
+nano助手, [2026/5/15 15:23]
+🟢   ▸ Harper · 📄 BQACAgEAAxkBAAEC.csv
+    └ 302 lines
+
+nano助手, [2026/5/15 15:23]
+🟢 👑▸ Kirk · ⚡️ wc -l /root/.nanobot/media/telegram/BQACAgEAAxkBAAEC.cs
+    └ 892 /root/.nanobot/media/telegram/BQACAgEAAxkBAAEC.csv …
+
+nano助手, [2026/5/15 15:23]
+🟢 👑▸ Kirk · ⚡️ cd /root/.nanobot/media/telegram && python3 << 'PYEOF'
+
+    └ 总行数: 892  缓存命中: 500 次 缓存未命中: 392 次 命中率: 56.1%  === 按模型分…
+
+nano助手, [2026/5/15 15:24]
+🟢 👑▸ Kirk · ⚡️ cd /root/.nanobot/media/telegram && python3 << 'PYEOF'
+
+    └ === 时序分析：缓存命中/未命中交替 === deepseek-pro 连续未命中分布: [1, 1, 1,…
+
+nano助手, [2026/5/15 15:24]
+🟢   ▸ Harper · ⚡️ cd /root/.nanobot/workspace && python3 << 'PYEOF'
+impor
+    └ Total rows: 892  === By Provider/Model ===  SiliconFlow…
+
+nano助手, [2026/5/15 15:24]
+🟢 👑▸ Kirk · ⚡️ cd /root/.nanobot/media/telegram && python3 << 'PYEOF'
+
+    └ === 缓存未命中原因分析 ===  --- 原因1: Provider切换 ---   首次调用: 0   …
+
+nano助手, [2026/5/15 15:25]
+🟢 👑▸ Kirk · ⚡️ cd /root/.nanobot/media/telegram && python3 << 'PYEOF'
+
+    └ === 同provider+同model但未命中的81次 ===    OpenAI/openai/gpt-4…
+
+nano助手, [2026/5/15 15:37]
+🟢 👑▸ Kirk · ⚡️ cd /root/nanobot-src && python3 -c "
+import json, os
+
+#
+    └ Exit code: 0
+
+成 驰, [2026/5/15 15:44]
+好的，先提交代码，然后执行之前提到的问题
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---

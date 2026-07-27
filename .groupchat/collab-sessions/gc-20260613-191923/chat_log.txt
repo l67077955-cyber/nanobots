@@ -1,0 +1,39 @@
+[系统]: 话题：自由讨论
+---
+[用户]: 现在历史上下文压缩时，是否会忽略用户之后发的消息
+---
+[Harper]: 根据系统记忆中的审查记录：
+
+**当前配置下不会忽略用户消息**（`keep_user_messages: true`），所有用户消息都在 Protected Head，不会被裁剪/压缩/丢弃。
+
+**但设计上存在风险**：如果配置改为 `false`，则只有第一条用户消息受保护，其余用户消息可能被：
+- 裁剪掉（超出消息数限制）
+- 跳过（超出字符预算）
+- 摘要或丢弃（进入压缩区）
+
+结论：当前系统行为是安全的，不会忽略用户消息。
+
+[工具调用记录]
+• memory_palace(上下文压缩 历史忽略 用户消息) → 🔍 3 result(s) for '上下文压缩 历史忽略 用户消息':
+
+[1] wing_code/history-compression-fix (sim=0.52)
+  ## 历史压缩算法9个问题修复记录（2026-06-10）
+
+用户明确要求：**所有user消息都很重要**，不能只保护首个user消息。
+
+### 修复清单
+1. **add_message贪心break** → `break`改`continue`，跳过放不下的消息继续尝试更小的
+2. **add_message不尝试age_tool_log** → 添加age_tool_log尝试压缩
+3. **_TOOL_LOG_RE正则跨行** → `.*?`改`[^\n]*?`，防止跨行吞字数标记
+4. **maybe_compress就地修改** → 创建新dict而非修改原始消息
+5. **所有user/system标critical** → history_to_messages中所有user/system消息标记critical（用户确认这是正确行为）
+6. **head+tail破坏…
+
+[2] wing… (1,408字)
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Kirk]: ⚠️ [Kirk] LLM调用出错（Error calling LLM: litellm.APIError: APIError: OpenrouterExc），我仍在线。等待队友消息后将继续工作。
+---
+[Harper]: 收到。等待 Kirk 指令。
+---
