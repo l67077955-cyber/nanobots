@@ -7,7 +7,7 @@ the final message update. Eliminates duplication across direct_chat,"""
 from __future__ import annotations
 
 import time
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from loguru import logger
 
@@ -67,8 +67,8 @@ class StreamingDisplay:
             text = self.header + "".join(self._buffer) + " ▍"
             try:
                 await self._edit(self.msg_id, text)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Streaming edit failed: {}", e)
             self._last_edit = now
 
     async def on_reset(self) -> None:
@@ -103,8 +103,8 @@ class StreamingDisplay:
         if self._pre_tool_msg_id and self._edit:
             try:
                 await self._edit(self._pre_tool_msg_id, f"{self.header}↓")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Pre-tool message edit failed: {}", e)
             self._pre_tool_msg_id = None
 
         if content:
@@ -121,6 +121,6 @@ class StreamingDisplay:
             if self.msg_id and self._edit:
                 try:
                     await self._edit(self.msg_id, f"{self.header}(空回复)")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Empty reply edit failed: {}", e)
 

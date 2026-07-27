@@ -3,10 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from nanobot.bus.queue import MessageBus
 import nanobot.channels.dingtalk as dingtalk_module
-from nanobot.channels.dingtalk import DingTalkChannel, NanobotDingTalkHandler
-from nanobot.channels.dingtalk import DingTalkConfig
+from nanobot.bus.queue import MessageBus
+from nanobot.channels.dingtalk import DingTalkChannel, DingTalkConfig, NanobotDingTalkHandler
 
 
 class _FakeResponse:

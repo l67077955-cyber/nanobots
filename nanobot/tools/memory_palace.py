@@ -41,7 +41,6 @@ from loguru import logger
 
 from nanobot.tools.base import Tool
 
-
 # ── Palace path: use nanobot storage area by default ──────────────────────────
 _PALACE_PATH = os.environ.get(
     "MEMPALACE_PALACE_PATH",
@@ -55,26 +54,26 @@ os.makedirs(_PALACE_PATH, exist_ok=True)
 def _import_official():
     """Lazy import of official MemPalace functions."""
     try:
+        from mempalace.layers import MemoryStack  # noqa: PLC0415
         from mempalace.mcp_server import (  # noqa: PLC0415
             tool_add_drawer,
             tool_delete_drawer,
-            tool_status,
-            tool_list_wings,
-            tool_list_rooms,
-            tool_get_taxonomy,
-            tool_search,
-            tool_traverse_graph,
+            tool_diary_read,
+            tool_diary_write,
             tool_find_tunnels,
+            tool_get_taxonomy,
             tool_graph_stats,
-            tool_kg_query,
             tool_kg_add,
             tool_kg_invalidate,
-            tool_kg_timeline,
+            tool_kg_query,
             tool_kg_stats,
-            tool_diary_write,
-            tool_diary_read,
+            tool_kg_timeline,
+            tool_list_rooms,
+            tool_list_wings,
+            tool_search,
+            tool_status,
+            tool_traverse_graph,
         )
-        from mempalace.layers import MemoryStack  # noqa: PLC0415
         return {
             "add_drawer": tool_add_drawer,
             "delete_drawer": tool_delete_drawer,
@@ -431,7 +430,7 @@ class MemoryPalaceTool(Tool):
                     wings = result.get("wings", {})
                     path = result.get("palace_path", _PALACE_PATH)
                     lines = [
-                        f"🧠 Memory Palace Status",
+                        "🧠 Memory Palace Status",
                         f"  Path    : {path}",
                         f"  Drawers : {total}",
                         f"  Wings   : {len(wings)}",

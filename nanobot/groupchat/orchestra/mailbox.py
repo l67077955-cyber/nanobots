@@ -585,8 +585,8 @@ class MailboxHub:
         if self._on_message:
             try:
                 self._on_message(sender, targets, content)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Message callback failed: {}", e)
 
         return delivered
 

@@ -26,12 +26,11 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from nanobot.groupchat.middleware.config import GroupChatConfig
-from nanobot.groupchat.orchestra.engine import GroupChatEngine
+from nanobot.groupchat.config import GroupChatConfig
 from nanobot.groupchat.orchestra.broadcast import broadcast_round
+from nanobot.groupchat.orchestra.engine import GroupChatEngine
 from nanobot.groupchat.orchestra.mailbox import MailboxHub
 from nanobot.providers.litellm_provider import LiteLLMProvider
-
 
 # ── Prompt Robustness Test Cases ────────────────────────────────────────
 
@@ -455,7 +454,7 @@ async def main():
             return
 
     print(f"{'='*60}", flush=True)
-    print(f"🔬 提示词鲁棒性测试", flush=True)
+    print("🔬 提示词鲁棒性测试", flush=True)
     print(f"{'='*60}", flush=True)
     print(f"📋 可用 agents: {list(engine.registry.keys())}", flush=True)
     print(f"🧪 测试题数: {len(cases)}", flush=True)

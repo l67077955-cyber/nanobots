@@ -110,8 +110,8 @@ class LiteLLMProvider(LLMProvider):
                 saved = _json.loads(hp_path.read_text())
                 defaults.update(saved)
                 logger.info("Loaded saved hyperparams from {}", hp_path)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Could not load saved hyperparams: {}", e)
         self.sampling_params: dict[str, float] = defaults
 
         self._langsmith_enabled = bool(os.getenv("LANGSMITH_API_KEY"))
@@ -394,8 +394,8 @@ class LiteLLMProvider(LLMProvider):
                         val = _ah.get(hdr)
                         if val:
                             record[field_name] = val
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Could not extract response headers: {}", e)
             else:
                 record["status"] = "unknown"
 
@@ -564,7 +564,8 @@ class LiteLLMProvider(LLMProvider):
             return {"api_base": None, "api_key": None, "model": None, "provider_name": None}
         try:
             pm = _json.loads(pm_path.read_text())
-        except Exception:
+        except Exception as e:
+            logger.debug("Could not read provider_models.json: {}", e)
             return {"api_base": None, "api_key": None, "model": None, "provider_name": None}
 
         def _make(prov_name: str, info: dict, raw_model: str) -> dict:
@@ -679,7 +680,8 @@ class LiteLLMProvider(LLMProvider):
                 _pm_path = Path.home() / ".nanobot" / "providers_models.json"
                 try:
                     pm = _json.loads(_pm_path.read_text()) if _pm_path.exists() else {}
-                except Exception:
+                except Exception as e:
+                    logger.debug("Could not read providers_models.json: {}", e)
                     pm = {}
                 prov_cfg = pm.get("providers", {}).get(pm_provider_name, {})
                 _needs_flatten = prov_cfg.get("flattenTools", False)
@@ -798,7 +800,7 @@ class LiteLLMProvider(LLMProvider):
 
             sc = getattr(e, "status_code", None)
             has_tool_msgs = any(m.get("role") == "tool" for m in messages)
-            
+
             resolved = self._resolve_pm_overrides(model or self.default_model)
             prov = resolved.get("provider_name")
             if not prov:
@@ -865,7 +867,7 @@ class LiteLLMProvider(LLMProvider):
                               cache_headers=getattr(self, "_last_cache_headers", None))
             sc = getattr(e, "status_code", None)
             has_tool_msgs = any(m.get("role") == "tool" for m in messages)
-            
+
             resolved = self._resolve_pm_overrides(model or self.default_model)
             prov = resolved.get("provider_name")
             if not prov:
@@ -1113,8 +1115,8 @@ class LiteLLMProvider(LLMProvider):
             _hidden = getattr(response, "_hidden_params", None) or {}
             _cost = _hidden.get("response_cost")
             logger.info("litellm _hidden_params keys: {} cost: {}", list(_hidden.keys()), _cost)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Could not extract cost from hidden params: {}", e)
 
         # Extract cached tokens from prompt_tokens_details
         _cache_tokens = 0
@@ -1123,8 +1125,8 @@ class LiteLLMProvider(LLMProvider):
                 ptd = getattr(response.usage, "prompt_tokens_details", None)
                 if ptd:
                     _cache_tokens = getattr(ptd, "cached_tokens", 0) or 0
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Could not extract cached tokens: {}", e)
 
         # Extract provider metadata (OpenRouter, etc.)
         _provider_meta: dict[str, Any] = {}
@@ -1158,8 +1160,8 @@ class LiteLLMProvider(LLMProvider):
             # Cache discount
             if _cache_tokens and _cost is not None:
                 _provider_meta["cache_tokens"] = _cache_tokens
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Could not extract provider metadata: {}", e)
 
         reasoning_content = getattr(message, "reasoning_content", None) or None
         thinking_blocks = getattr(message, "thinking_blocks", None) or None

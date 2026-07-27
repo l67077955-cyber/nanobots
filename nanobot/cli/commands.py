@@ -281,6 +281,8 @@ def gateway(
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
 ):
     """Start the nanobot gateway."""
+    from loguru import logger
+
     from nanobot.bus.queue import MessageBus
     from nanobot.channels.manager import ChannelManager
     from nanobot.config.paths import get_cron_dir
@@ -288,7 +290,6 @@ def gateway(
     from nanobot.cron.types import CronJob
     from nanobot.heartbeat.service import HeartbeatService
     from nanobot.session.manager import SessionManager
-    from loguru import logger
 
     if verbose:
         import logging
@@ -340,7 +341,6 @@ def gateway(
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
-        from nanobot.tools.message import MessageTool
         from nanobot.utils.evaluator import evaluate_response
 
         reminder_note = (

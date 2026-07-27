@@ -1,24 +1,22 @@
 """Feishu/Lark channel implementation using lark-oapi SDK with WebSocket long connection."""
 
 import asyncio
+import importlib.util
 import json
 import os
 import re
 import threading
 from collections import OrderedDict
-from pathlib import Path
 from typing import Any, Literal
 
 from loguru import logger
+from pydantic import Field
 
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import Base
-from pydantic import Field
-
-import importlib.util
 
 FEISHU_AVAILABLE = importlib.util.find_spec("lark_oapi") is not None
 
@@ -279,6 +277,7 @@ class FeishuChannel(BaseChannel):
         self._ws_thread: threading.Thread | None = None
         self._processed_message_ids: OrderedDict[str, None] = OrderedDict()  # Ordered dedup cache
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._stop_event = threading.Event()  # Thread-safe stop signal
 
     @staticmethod
     def _register_optional_event(builder: Any, method_name: str, handler: Any) -> Any:
@@ -297,7 +296,7 @@ class FeishuChannel(BaseChannel):
             return
 
         import lark_oapi as lark
-        self._running = True
+        self._stop_event.clear()  # Reset stop signal
         self._loop = asyncio.get_running_loop()
 
         # Create Lark client for sending messages
@@ -339,20 +338,36 @@ class FeishuChannel(BaseChannel):
         # instead of the already-running main asyncio loop, which would cause
         # "This event loop is already running" errors.
         def run_ws():
-            import time
+            import random
+
             import lark_oapi.ws.client as _lark_ws_client
             ws_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(ws_loop)
             # Patch the module-level loop used by lark's ws Client.start()
             _lark_ws_client.loop = ws_loop
+            # Exponential backoff with jitter: 5s -> 10s -> 20s -> 40s -> max 60s
+            base_delay = 5.0
+            max_delay = 60.0
+            retry_count = 0
             try:
-                while self._running:
+                while not self._stop_event.is_set():
                     try:
                         self._ws_client.start()
+                        # Connection succeeded, reset retry counter
+                        retry_count = 0
                     except Exception as e:
-                        logger.warning("Feishu WebSocket error: {}", e)
-                    if self._running:
-                        time.sleep(5)
+                        retry_count += 1
+                        # Calculate delay with exponential backoff + jitter
+                        delay = min(base_delay * (2 ** (retry_count - 1)), max_delay)
+                        jitter = random.uniform(0, delay * 0.1)  # 0-10% jitter
+                        delay_with_jitter = delay + jitter
+                        logger.warning(
+                            "Feishu WebSocket error (attempt {}): {}. Reconnecting in {:.1f}s",
+                            retry_count, e, delay_with_jitter
+                        )
+                        # Wait with early exit on stop signal
+                        if self._stop_event.wait(timeout=delay_with_jitter):
+                            break  # Stop signal received
             finally:
                 ws_loop.close()
 
@@ -363,7 +378,7 @@ class FeishuChannel(BaseChannel):
         logger.info("No public IP required - using WebSocket to receive events")
 
         # Keep running until stopped
-        while self._running:
+        while not self._stop_event.is_set():
             await asyncio.sleep(1)
 
     async def stop(self) -> None:
@@ -374,7 +389,7 @@ class FeishuChannel(BaseChannel):
 
         Reference: https://github.com/larksuite/oapi-sdk-python/blob/v2_main/lark_oapi/ws/client.py#L86
         """
-        self._running = False
+        self._stop_event.set()  # Signal thread-safe stop
         logger.info("Feishu bot stopped")
 
     def _is_bot_mentioned(self, message: Any) -> bool:
@@ -400,7 +415,11 @@ class FeishuChannel(BaseChannel):
 
     def _add_reaction_sync(self, message_id: str, emoji_type: str) -> None:
         """Sync helper for adding reaction (runs in thread pool)."""
-        from lark_oapi.api.im.v1 import CreateMessageReactionRequest, CreateMessageReactionRequestBody, Emoji
+        from lark_oapi.api.im.v1 import (
+            CreateMessageReactionRequest,
+            CreateMessageReactionRequestBody,
+            Emoji,
+        )
         try:
             request = CreateMessageReactionRequest.builder() \
                 .message_id(message_id) \
@@ -1043,7 +1062,7 @@ class FeishuChannel(BaseChannel):
             event = data.event
             message = event.message
             sender = event.sender
-            
+
             # Deduplication check
             message_id = message.message_id
             if message_id in self._processed_message_ids:

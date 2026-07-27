@@ -10,19 +10,15 @@ Extracts all prompt-related logic from GroupChatEngine:
 from __future__ import annotations
 
 import json
+import platform
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
-import platform
-
-from nanobot.utils.helpers import cn_now as _cn_now
-
-from nanobot.groupchat.history.component_manager import get_system_warning
-from nanobot.groupchat.history.message_converter import history_to_messages
 from nanobot.groupchat.history.context_validator import validate_context
-
+from nanobot.groupchat.history.message_converter import history_to_messages
+from nanobot.utils.helpers import cn_now as _cn_now
 
 # ── Constants ─────────────────────────────────────────────────
 
@@ -97,8 +93,8 @@ def _load_manifest() -> dict | None:
     if MANIFEST_PATH.exists():
         try:
             return json.loads(MANIFEST_PATH.read_text())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Could not load manifest: {}", e)
     return None
 
 
@@ -154,8 +150,8 @@ def _load_custom_labels() -> dict[str, str]:
     if f.exists():
         try:
             return json.loads(f.read_text())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Could not load custom labels: {}", e)
     return {}
 
 
@@ -327,8 +323,8 @@ class PromptBuilder:
                 if isinstance(data, list):
                     return {"default": data}
                 return data
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Could not load prompt order: {}", e)
         return {}
 
     def _save_prompt_order(self) -> None:
@@ -371,8 +367,8 @@ class PromptBuilder:
                 data = json.loads(f.read_text())
                 if isinstance(data, dict):
                     return data
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Could not load visibility: {}", e)
         return {}
 
     def _save_visibility(self) -> None:
@@ -511,8 +507,8 @@ class PromptBuilder:
         if f.exists():
             try:
                 return f.read_text().strip()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Could not read override file: {}", e)
         return ""
 
     def _get_component_content(
@@ -662,8 +658,8 @@ class PromptBuilder:
                 content = f.read_text().strip()
                 if content:
                     return content
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Could not read template file: {}", e)
         # Fall back to in-code defaults.
         return TEMPLATES.get(key, "")
 
@@ -773,7 +769,7 @@ class PromptBuilder:
 
         Combines PromptBuilder's component system with runtime context
         and user message handling (including multimodal media).
-        Used by AgentLoop as a replacement for ContextBuilder.build_messages().
+        Replaces the legacy ContextBuilder.build_messages().
         """
         from nanobot.utils.helpers import build_runtime_context, build_user_content
 

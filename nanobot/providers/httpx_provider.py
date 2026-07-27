@@ -7,7 +7,6 @@ Talks to OpenAI-compatible ``/v1/chat/completions`` endpoints using
 
 import hashlib
 import json as _json
-import os
 import secrets
 import string
 import time as _time
@@ -18,9 +17,8 @@ import httpx
 import json_repair
 from loguru import logger
 
-from nanobot.providers.cache_probe import estimate_cache_ratio
-
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from nanobot.providers.cache_probe import estimate_cache_ratio
 from nanobot.providers.registry import find_by_model, find_gateway
 
 # Standard chat-completion message keys.
@@ -76,8 +74,8 @@ class HttpxProvider(LLMProvider):
                 if isinstance(saved, dict):
                     defaults.update(saved)
                     logger.info("Loaded saved hyperparams from {}", hp_path)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Could not load saved hyperparams: {}", e)
         self.sampling_params: dict[str, float] = defaults
 
         # Shared httpx client (created lazily)
@@ -102,7 +100,8 @@ class HttpxProvider(LLMProvider):
             return {}
         try:
             return _json.loads(pm_path.read_text())
-        except Exception:
+        except Exception as e:
+            logger.debug("Could not read provider_models.json: {}", e)
             return {}
 
     def _resolve_provider(self, model: str) -> dict[str, str | None]:
@@ -186,13 +185,13 @@ class HttpxProvider(LLMProvider):
         models (Anthropic, DeepSeek) but not others.
         """
         if self._gateway is not None:
-            # If the gateway supports it, we allow it unless the native spec 
+            # If the gateway supports it, we allow it unless the native spec
             # explicitly forbids it (False). If native_spec is None, we trust the gateway.
             native_spec = find_by_model(model)
             if native_spec is not None and native_spec.supports_prompt_caching is False:
                 return False
             return self._gateway.supports_prompt_caching
-        
+
         spec = find_by_model(model)
         return spec is not None and spec.supports_prompt_caching
 

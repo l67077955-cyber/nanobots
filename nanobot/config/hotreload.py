@@ -132,7 +132,7 @@ class HotReloadProviderProxy:
     Attribute access is delegated to the inner provider, so existing code
     (``provider.generation``, ``hasattr(provider, "chat_stream")``, …) behaves
     exactly as before.  The inner provider is mutated in place on reload, so
-    every holder of a reference (AgentLoop, GroupChatEngine, heartbeat, tools)
+    every holder of a reference (GroupChatEngine, heartbeat, tools)
     sees the update without rewiring.
     """
 

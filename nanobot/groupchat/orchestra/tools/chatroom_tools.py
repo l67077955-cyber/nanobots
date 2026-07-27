@@ -13,8 +13,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from nanobot.groupchat.orchestra.mailbox import ConversationPool, MailboxHub, SpeakQueue
 from nanobot.tools.base import Tool
-from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool, SpeakQueue
 
 
 class SearchPool:
@@ -312,8 +312,9 @@ class SmartSearchTool(Tool):
         model = reader_cfg.get("model", self._reader_model)
         provider_name = reader_cfg.get("provider", "openrouter")
 
-        from nanobot.providers.litellm_provider import LiteLLMProvider
         import json as _json
+
+        from nanobot.providers.litellm_provider import LiteLLMProvider
 
         api_key, api_base = "", ""
         try:
@@ -323,8 +324,8 @@ class SmartSearchTool(Tool):
                 pcfg = (cfg.get("providers") or {}).get(provider_name, {}) or {}
                 api_key = pcfg.get("apiKey", "")
                 api_base = pcfg.get("apiBase", "")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Could not load provider config: {}", e)
 
         llm = LiteLLMProvider(
             default_model=model,
@@ -509,8 +510,9 @@ class SmartFetchTool(Tool):
         model = reader_cfg.get("model", self._reader_model)
         provider_name = reader_cfg.get("provider", "openrouter")
 
-        from nanobot.providers.litellm_provider import LiteLLMProvider
         import json as _json
+
+        from nanobot.providers.litellm_provider import LiteLLMProvider
         # Read provider credentials from nanobot config
         api_key, api_base = "", ""
         try:
@@ -520,8 +522,8 @@ class SmartFetchTool(Tool):
                 pcfg = (cfg.get("providers") or {}).get(provider_name, {}) or {}
                 api_key = pcfg.get("apiKey", "")
                 api_base = pcfg.get("apiBase", "")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Could not load provider config: {}", e)
 
         llm = LiteLLMProvider(
             default_model=model,
@@ -561,8 +563,8 @@ class SmartFetchTool(Tool):
                 if provider:
                     result["provider"] = provider
                 return result
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Could not resolve model: {}", e)
         return {}
 
 
@@ -983,7 +985,15 @@ class ManageAgentTool(Tool):
         elif action == "restart":
             # Re-spawn the agent's task so it actively participates again
             if self._spawn_fn is None:
-                return f"Error: restart 不可用（spawn_fn 未注入）"
+                return "Error: restart 不可用（spawn_fn 未注入）"
+            # Guard: agent already active and running — no need to restart
+            if agent not in self._disabled:
+                running = any(
+                    tn == agent and not t.done()
+                    for t, tn in self._agent_tasks.items()
+                )
+                if running:
+                    return f"⚠️ {agent} 已在运行中，无需 restart（如需重置请先 disable）"
             # Mark as active first
             self._disabled.discard(agent)
             # Cancel any existing (zombie) task for this agent
@@ -1028,7 +1038,7 @@ class ManageAgentTool(Tool):
                 cfg = self._engine.registry.get(agent, {})
                 current = cfg.get("tools", {})
                 self._engine._session_tools_override[agent] = dict(current) if isinstance(current, dict) else {}
-            
+
             self._engine._session_tools_override[agent].update(tools)
             # Notify
             active = [a for a in self._exec_agents if a not in self._disabled]

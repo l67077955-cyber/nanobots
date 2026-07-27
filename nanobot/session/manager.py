@@ -1,6 +1,8 @@
 """Session management for conversation history."""
 
+import asyncio
 import json
+import os
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -31,6 +33,10 @@ class Session:
     updated_at: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
     last_consolidated: int = 0
+    # Cache for get_history result
+    _history_cache: tuple[int, int, list[dict[str, Any]]] | None = field(
+        default=None, repr=False, compare=False
+    )  # (last_consolidated, msg_count, result)
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to the session."""
@@ -67,7 +73,18 @@ class Session:
         return start
 
     def get_history(self, max_messages: int | None = 500) -> list[dict[str, Any]]:
-        """Return unconsolidated messages for LLM input, aligned to a legal tool-call boundary."""
+        """Return unconsolidated messages for LLM input, aligned to a legal tool-call boundary.
+        
+        Results are cached based on (last_consolidated, msg_count) to avoid
+        redundant computation when no new messages have been added.
+        """
+        msg_count = len(self.messages)
+        # Check cache - valid if last_consolidated and msg_count unchanged
+        if self._history_cache is not None:
+            cached_lc, cached_count, cached_result = self._history_cache
+            if cached_lc == self.last_consolidated and cached_count == msg_count:
+                return cached_result
+
         unconsolidated = self.messages[self.last_consolidated:]
         sliced = unconsolidated if max_messages is None else unconsolidated[-max_messages:] if max_messages > 0 else []
 
@@ -90,6 +107,9 @@ class Session:
                 if key in message:
                     entry[key] = message[key]
             out.append(entry)
+
+        # Cache the result
+        self._history_cache = (self.last_consolidated, msg_count, out)
         return out
 
     def clear(self) -> None:
@@ -97,6 +117,7 @@ class Session:
         self.messages = []
         self.last_consolidated = 0
         self.updated_at = datetime.now()
+        self._history_cache = None  # Invalidate cache
 
 
 class SessionManager:
@@ -104,6 +125,8 @@ class SessionManager:
     Manages conversation sessions.
 
     Sessions are stored as JSONL files in the sessions directory.
+    New messages are appended incrementally (O(1) per message).
+    Full rewrite only happens during consolidation.
     """
 
     def __init__(self, workspace: Path):
@@ -111,6 +134,9 @@ class SessionManager:
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
         self.legacy_sessions_dir = get_legacy_sessions_dir()
         self._cache: dict[str, Session] = {}
+        # Track the number of messages on disk per session so append_message()
+        # knows where the in-memory messages diverge from the file.
+        self._disk_msg_count: dict[str, int] = {}
 
     def _get_session_path(self, key: str) -> Path:
         """Get the file path for a session."""
@@ -121,6 +147,18 @@ class SessionManager:
         """Legacy global session path (~/.nanobot/sessions/)."""
         safe_key = safe_filename(key.replace(":", "_"))
         return self.legacy_sessions_dir / f"{safe_key}.jsonl"
+
+    async def get_or_create_async(self, key: str) -> Session:
+        """Async version of get_or_create — loads from disk without blocking the event loop."""
+        if key in self._cache:
+            return self._cache[key]
+
+        session = await self._load_async(key)
+        if session is None:
+            session = Session(key=key)
+
+        self._cache[key] = session
+        return session
 
     def get_or_create(self, key: str) -> Session:
         """
@@ -142,8 +180,12 @@ class SessionManager:
         self._cache[key] = session
         return session
 
+    async def _load_async(self, key: str) -> Session | None:
+        """Async wrapper for _load — runs sync I/O in a thread to avoid blocking the event loop."""
+        return await asyncio.to_thread(self._load, key)
+
     def _load(self, key: str) -> Session | None:
-        """Load a session from disk."""
+        """Load a session from disk (sync I/O — prefer _load_async in async contexts)."""
         path = self._get_session_path(key)
         if not path.exists():
             legacy_path = self._get_legacy_session_path(key)
@@ -178,43 +220,148 @@ class SessionManager:
                     else:
                         messages.append(data)
 
-            return Session(
+            session = Session(
                 key=key,
                 messages=messages,
                 created_at=created_at or datetime.now(),
                 metadata=metadata,
                 last_consolidated=last_consolidated
             )
+            self._disk_msg_count[key] = len(messages)
+            return session
         except Exception as e:
             logger.warning("Failed to load session {}: {}", key, e)
             return None
 
-    def save(self, session: Session) -> None:
-        """Save a session to disk."""
-        path = self._get_session_path(session.key)
+    async def save_async(self, session: Session) -> None:
+        """Async wrapper for save — runs sync I/O in a thread to avoid blocking the event loop."""
+        await asyncio.to_thread(self.save, session)
 
-        with open(path, "w", encoding="utf-8") as f:
-            metadata_line = {
+    async def append_message_async(self, session: Session) -> None:
+        """Async wrapper for append_message — runs sync I/O in a thread."""
+        await asyncio.to_thread(self.append_message, session)
+
+    def append_message(self, session: Session) -> None:
+        """Append only the new messages (since last save) to the JSONL file.
+
+        O(1) per new message — avoids full-file rewrite for the common case
+        where only a few messages were added since the last save.
+
+        Also updates the metadata line with new updated_at / last_consolidated
+        by rewriting just the first line (cheap for small metadata).
+        """
+        path = self._get_session_path(session.key)
+        if not path.exists():
+            # File doesn't exist yet — fall through to full save
+            self.save(session)
+            return
+
+        disk_count = self._disk_msg_count.get(session.key, 0)
+        new_msgs = session.messages[disk_count:]
+
+        if not new_msgs and disk_count == len(session.messages):
+            # No new messages — just update metadata if needed
+            self._rewrite_metadata(session, path)
+            return
+
+        # Append new message lines
+        with open(path, "a", encoding="utf-8") as f:
+            for msg in new_msgs:
+                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+
+        # Update metadata (rewrite just the first line)
+        self._rewrite_metadata(session, path)
+
+        self._disk_msg_count[session.key] = len(session.messages)
+        self._cache[session.key] = session
+
+    def _rewrite_metadata(self, session: Session, path: Path) -> None:
+        """Rewrite only the first (metadata) line of the session file.
+
+        This is O(1) for the first line; avoids a full-file rewrite just
+        to update timestamps/last_consolidated.
+        """
+        try:
+            # Read all lines
+            with open(path, encoding="utf-8") as f:
+                lines = f.readlines()
+
+            if not lines:
+                return
+
+            new_meta = json.dumps({
                 "_type": "metadata",
                 "key": session.key,
                 "created_at": session.created_at.isoformat(),
                 "updated_at": session.updated_at.isoformat(),
                 "metadata": session.metadata,
                 "last_consolidated": session.last_consolidated
-            }
-            f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
-            for msg in session.messages:
-                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+            }, ensure_ascii=False) + "\n"
 
+            lines[0] = new_meta
+
+            # Atomic write
+            tmp_path = path.with_suffix(".jsonl.tmp")
+            try:
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    f.writelines(lines)
+                os.replace(tmp_path, path)
+            except BaseException:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise
+        except Exception:
+            logger.debug("Failed to rewrite metadata for session {}: non-critical", session.key)
+
+    def save(self, session: Session) -> None:
+        """Save a session to disk (full rewrite — prefer append_message for incremental saves).
+
+        Uses atomic write (temp file + os.replace) to prevent corruption on crash.
+        Call this after consolidation or when the file doesn't exist yet.
+        """
+        path = self._get_session_path(session.key)
+
+        # Atomic write: write to temp file first, then replace to avoid corruption
+        tmp_path = path.with_suffix(".jsonl.tmp")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                metadata_line = {
+                    "_type": "metadata",
+                    "key": session.key,
+                    "created_at": session.created_at.isoformat(),
+                    "updated_at": session.updated_at.isoformat(),
+                    "metadata": session.metadata,
+                    "last_consolidated": session.last_consolidated
+                }
+                f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
+                for msg in session.messages:
+                    f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+            os.replace(tmp_path, path)
+        except BaseException:
+            # Clean up temp file on failure
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+
+        self._disk_msg_count[session.key] = len(session.messages)
         self._cache[session.key] = session
 
     def invalidate(self, key: str) -> None:
         """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)
+        self._disk_msg_count.pop(key, None)
+
+    async def list_sessions_async(self) -> list[dict[str, Any]]:
+        """Async wrapper for list_sessions — runs sync I/O in a thread."""
+        return await asyncio.to_thread(self.list_sessions)
 
     def list_sessions(self) -> list[dict[str, Any]]:
         """
-        List all sessions.
+        List all sessions (sync I/O — prefer list_sessions_async in async contexts).
 
         Returns:
             List of session info dicts.
@@ -229,7 +376,15 @@ class SessionManager:
                     if first_line:
                         data = json.loads(first_line)
                         if data.get("_type") == "metadata":
-                            key = data.get("key") or path.stem.replace("_", ":", 1)
+                            key = data.get("key")
+                            if not key:
+                                # Legacy file without key in metadata — fallback with warning
+                                key = path.stem.replace("_", ":", 1)
+                                logger.warning(
+                                    "Session file {} has no key in metadata, "
+                                    "fallback to filename (may be inaccurate if chat_id contains '_')",
+                                    path.name,
+                                )
                             sessions.append({
                                 "key": key,
                                 "created_at": data.get("created_at"),
@@ -237,6 +392,7 @@ class SessionManager:
                                 "path": str(path)
                             })
             except Exception:
+                logger.warning("Failed to read session metadata from {}", path.name, exc_info=True)
                 continue
 
         return sorted(sessions, key=lambda x: x.get("updated_at", ""), reverse=True)

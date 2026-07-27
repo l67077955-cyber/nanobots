@@ -2,58 +2,89 @@
 
 from __future__ import annotations
 
+from loguru import logger
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from loguru import logger
-
 from nanobot.groupchat import display as _d
+from nanobot.groupchat.display.ui import ChatUI
 from nanobot.utils.helpers import split_message
+
 from ..formatting import TELEGRAM_MAX_MESSAGE_LEN
+
+
+class TelegramChatUI(ChatUI):
+    """ChatUI adapter for Telegram channel.
+    
+    Wraps telegram Bot's send_message and edit_message_text into the
+    ChatUI protocol, handling message splitting and rate limiting.
+    """
+    
+    def __init__(self, app, chat_id: int, gc_send_fn=None) -> None:
+        self._app = app
+        self._chat_id = chat_id
+        # Optional: use the channel's split-aware send function for long messages
+        self._gc_send_fn = gc_send_fn
+    
+    @property
+    def supports_edit(self) -> bool:
+        return self._app is not None
+    
+    async def send(self, text: str) -> int | None:
+        """Send a message and return its message_id for later editing."""
+        if self._gc_send_fn:
+            # Use the channel's split-aware send (handles >4096 char messages)
+            await self._gc_send_fn(str(self._chat_id), text)
+            # Split send doesn't return msg_id, so we do a separate
+            # direct send just for the first chunk to get an editable ID
+            if not self._app:
+                return None
+            try:
+                from nanobot.utils.helpers import split_message
+                first_chunk = split_message(text, TELEGRAM_MAX_MESSAGE_LEN)[0]
+                msg = await self._app.bot.send_message(
+                    chat_id=self._chat_id, text=first_chunk,
+                )
+                return msg.message_id
+            except Exception as e:
+                logger.warning("TelegramChatUI.send failed: {}", e)
+                return None
+        if not self._app:
+            return None
+        try:
+            msg = await self._app.bot.send_message(
+                chat_id=self._chat_id, text=text,
+            )
+            return msg.message_id
+        except Exception as e:
+            logger.warning("TelegramChatUI.send failed: {}", e)
+            return None
+    
+    async def edit(self, msg_id: int | None, text: str) -> None:
+        """Edit a previously sent message by ID."""
+        if not self._app or msg_id is None:
+            return
+        try:
+            await self._app.bot.edit_message_text(
+                chat_id=self._chat_id,
+                message_id=msg_id,
+                text=text,
+            )
+        except Exception as e:
+            logger.debug("TelegramChatUI.edit failed (likely text unchanged): {}", e)
 
 
 class AgentCommandsMixin:
     """Mixin providing agent management commands."""
 
     def _ensure_gc_send(self, chat_id: str) -> None:
-        """Ensure the group chat engine has send/edit callbacks for this chat."""
+        """Ensure the group chat engine has a ChatUI adapter for this chat."""
         if self._groupchat_engine and not self._groupchat_engine.has_send_fn:
-            async def send_fn(text: str) -> None:
-                await self._gc_send(chat_id, text)
-            self._groupchat_engine.set_send_fn(send_fn)
+            int_chat_id = int(chat_id)
+            ui = TelegramChatUI(self._app, int_chat_id)
+            self._groupchat_engine.set_ui(ui)
             # Set tool routing context so cron/message tools know the target
             self._groupchat_engine.set_tool_context("telegram", chat_id)
-
-        if self._groupchat_engine and not self._groupchat_engine.has_edit_fn:
-            int_chat_id = int(chat_id)
-
-            async def send_and_get_id_fn(text: str) -> int | None:
-                """Send a message and return its message_id for later editing."""
-                if not self._app:
-                    return None
-                try:
-                    msg = await self._app.bot.send_message(
-                        chat_id=int_chat_id, text=text,
-                    )
-                    return msg.message_id
-                except Exception as e:
-                    logger.warning("gc_send_and_get_id failed: {}", e)
-                    return None
-
-            async def edit_fn(message_id: int, text: str) -> None:
-                """Edit a previously sent message by ID."""
-                if not self._app:
-                    return
-                try:
-                    await self._app.bot.edit_message_text(
-                        chat_id=int_chat_id,
-                        message_id=message_id,
-                        text=text,
-                    )
-                except Exception as e:
-                    logger.debug("gc_edit failed (likely text unchanged): {}", e)
-
-            self._groupchat_engine.set_edit_fn(edit_fn, send_and_get_id_fn)
 
         if self._groupchat_engine and not self._groupchat_engine.has_on_round_done:
             async def on_round_done() -> None:

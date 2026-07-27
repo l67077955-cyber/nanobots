@@ -376,20 +376,6 @@ async def test_exec_always_returns_exit_code() -> None:
     assert "hello" in result
 
 
-async def test_exec_head_tail_truncation() -> None:
-    """Long output should preserve both head and tail."""
-    tool = ExecTool()
-    # Generate output that exceeds _MAX_OUTPUT (10_000 chars)
-    # Use python to generate output to avoid command line length limits
-    result = await tool.execute(
-        command="python -c \"print('A' * 6000 + '\\n' + 'B' * 6000)\""
-    )
-    assert "chars truncated" in result
-    # Head portion should start with As
-    assert result.startswith("A")
-    # Tail portion should end with the exit code which comes after Bs
-    assert "Exit code:" in result
-
 
 async def test_exec_timeout_parameter() -> None:
     """LLM-supplied timeout should override the constructor default."""

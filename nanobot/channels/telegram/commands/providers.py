@@ -8,8 +8,6 @@ from pathlib import Path
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from loguru import logger
-
 
 class ProviderCommandsMixin:
     """Mixin providing provider/model management commands."""
@@ -136,9 +134,10 @@ class ProviderCommandsMixin:
 
     async def _speedtest_providers(self, msg) -> None:
         """Test all providers with a simple request."""
-        import aiohttp
-        import time as _time
         import json as _json
+        import time as _time
+
+        import aiohttp
 
         pm = self._load_pm()
         provs = pm.get("providers", {})
@@ -231,9 +230,10 @@ class ProviderCommandsMixin:
 
     async def _speedtest_agents(self, msg) -> None:
         """Test each active agent's model for connectivity."""
-        import aiohttp
-        import time as _time
         import json as _json
+        import time as _time
+
+        import aiohttp
 
         engine = self._groupchat_engine
         if not engine or not engine.active_agents:

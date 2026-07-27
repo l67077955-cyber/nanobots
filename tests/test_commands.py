@@ -2,7 +2,7 @@ import json
 import re
 import shutil
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
@@ -63,7 +63,7 @@ def test_onboard_fresh_install(mock_paths):
     """No existing config — should create from scratch."""
     config_file, workspace_dir, mock_ws = mock_paths
 
-    result = runner.invoke(app, ["onboard"])
+    result = runner.invoke(app, ["onboard", "--no-interactive"])
 
     assert result.exit_code == 0
     assert "Created config" in result.stdout
@@ -81,7 +81,7 @@ def test_onboard_existing_config_refresh(mock_paths):
     config_file, workspace_dir, _ = mock_paths
     config_file.write_text('{"existing": true}')
 
-    result = runner.invoke(app, ["onboard"], input="n\n")
+    result = runner.invoke(app, ["onboard", "--no-interactive"], input="n\n")
 
     assert result.exit_code == 0
     assert "Config already exists" in result.stdout
@@ -95,7 +95,7 @@ def test_onboard_existing_config_overwrite(mock_paths):
     config_file, workspace_dir, _ = mock_paths
     config_file.write_text('{"existing": true}')
 
-    result = runner.invoke(app, ["onboard"], input="y\n")
+    result = runner.invoke(app, ["onboard", "--no-interactive"], input="y\n")
 
     assert result.exit_code == 0
     assert "Config already exists" in result.stdout
@@ -109,7 +109,7 @@ def test_onboard_existing_workspace_safe_create(mock_paths):
     workspace_dir.mkdir(parents=True)
     config_file.write_text("{}")
 
-    result = runner.invoke(app, ["onboard"], input="n\n")
+    result = runner.invoke(app, ["onboard", "--no-interactive"], input="n\n")
 
     assert result.exit_code == 0
     assert "Created workspace" not in result.stdout
@@ -137,7 +137,7 @@ def test_onboard_uses_explicit_config_and_workspace_paths(tmp_path, monkeypatch)
 
     result = runner.invoke(
         app,
-        ["onboard", "--config", str(config_path), "--workspace", str(workspace_path)],
+        ["onboard", "--no-interactive", "--config", str(config_path), "--workspace", str(workspace_path)],
     )
 
     assert result.exit_code == 0
@@ -155,22 +155,22 @@ def test_config_matches_github_copilot_codex_with_hyphen_prefix():
     config = Config()
     config.agents.defaults.model = "github-copilot/gpt-5.3-codex"
 
-    assert config.get_provider_name() == "github_copilot"
+    assert config.get_provider_name(config.agents.defaults.model) == "github_copilot"
 
 
 def test_config_matches_openai_codex_with_hyphen_prefix():
     config = Config()
     config.agents.defaults.model = "openai-codex/gpt-5.1-codex"
 
-    assert config.get_provider_name() == "openai_codex"
+    assert config.get_provider_name(config.agents.defaults.model) == "openai_codex"
 
 
 def test_config_matches_explicit_ollama_prefix_without_api_key():
     config = Config()
     config.agents.defaults.model = "ollama/llama3.2"
 
-    assert config.get_provider_name() == "ollama"
-    assert config.get_api_base() == "http://localhost:11434"
+    assert config.get_provider_name(config.agents.defaults.model) == "ollama"
+    assert config.get_api_base(config.agents.defaults.model) == "http://localhost:11434"
 
 
 def test_config_explicit_ollama_provider_uses_default_localhost_api_base():
@@ -178,8 +178,8 @@ def test_config_explicit_ollama_provider_uses_default_localhost_api_base():
     config.agents.defaults.provider = "ollama"
     config.agents.defaults.model = "llama3.2"
 
-    assert config.get_provider_name() == "ollama"
-    assert config.get_api_base() == "http://localhost:11434"
+    assert config.get_provider_name(config.agents.defaults.model) == "ollama"
+    assert config.get_api_base(config.agents.defaults.model) == "http://localhost:11434"
 
 
 def test_config_auto_detects_ollama_from_local_api_base():
@@ -190,8 +190,8 @@ def test_config_auto_detects_ollama_from_local_api_base():
         }
     )
 
-    assert config.get_provider_name() == "ollama"
-    assert config.get_api_base() == "http://localhost:11434"
+    assert config.get_provider_name(config.agents.defaults.model) == "ollama"
+    assert config.get_api_base(config.agents.defaults.model) == "http://localhost:11434"
 
 
 def test_config_prefers_ollama_over_vllm_when_both_local_providers_configured():
@@ -205,8 +205,8 @@ def test_config_prefers_ollama_over_vllm_when_both_local_providers_configured():
         }
     )
 
-    assert config.get_provider_name() == "ollama"
-    assert config.get_api_base() == "http://localhost:11434"
+    assert config.get_provider_name(config.agents.defaults.model) == "ollama"
+    assert config.get_api_base(config.agents.defaults.model) == "http://localhost:11434"
 
 
 def test_config_falls_back_to_vllm_when_ollama_not_configured():
@@ -219,8 +219,8 @@ def test_config_falls_back_to_vllm_when_ollama_not_configured():
         }
     )
 
-    assert config.get_provider_name() == "vllm"
-    assert config.get_api_base() == "http://localhost:8000"
+    assert config.get_provider_name(config.agents.defaults.model) == "vllm"
+    assert config.get_api_base(config.agents.defaults.model) == "http://localhost:8000"
 
 
 def test_find_by_model_prefers_explicit_prefix_over_generic_codex_keyword():

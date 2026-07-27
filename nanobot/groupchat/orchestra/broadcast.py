@@ -7,180 +7,30 @@ Agents can communicate with each other via chatroom_send/wait tools.
 from __future__ import annotations
 
 import asyncio
-import copy
 import json as _json
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
 from loguru import logger
 
-from nanobot.groupchat.display import display as _d
-from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool
-from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
+from nanobot.groupchat import display as _d
 from nanobot.groupchat.history.component_manager import (
     get_system_warning,
     synthesis_quality_check,
-    _MIN_SYNTHESIS_LEN,
 )
-
-
-# ── Tool-name → status state mapping ─────────────────────────
-_TOOL_STATE_MAP: dict[str, str] = {
-    "web_search": "searching",
-    "web_fetch": "fetching",
-    "exec": "executing",
-    "read_file": "reading",
-    "write_file": "writing",
-    "edit_file": "writing",
-    "list_dir": "reading",
-    "chatroom_send": "sending",
-    "wait": "waiting",
-    "interrupted": "interrupted",
-}
-
-
-class AgentStatusTracker:
-    """Live status dashboard — one Telegram message edited in-place.
-
-    Thread-safe for concurrent agent coroutines on the same event loop.
-    Gracefully degrades to no-op when edit_fn is unavailable (e.g. CLI).
-    """
-
-    EDIT_INTERVAL = 0.8  # seconds — matches StreamingDisplay throttle
-
-    def __init__(
-        self,
-        agents: list[str],
-        leader: str | None,
-        edit_fn: Callable[[int, str], Awaitable[None]] | None,
-        send_and_get_id_fn: Callable[[str], Awaitable[int | None]] | None,
-    ):
-        self._agents = list(agents)
-        self._leader = leader
-        self._edit_fn = edit_fn
-        self._send_and_get_id = send_and_get_id_fn
-        self._msg_id: int | None = None
-        self._states: dict[str, str] = {a: "thinking" for a in agents}
-        self._details: dict[str, str] = {a: "" for a in agents}
-        self._reasons: dict[str, str] = {}
-        self._lock = asyncio.Lock()
-        self._last_edit: float = 0.0
-        self._dirty = False
-
-    async def create_panel(self) -> None:
-        """Send the initial status panel message and store its ID."""
-        if not self._send_and_get_id:
-            return
-        try:
-            text = self._render()
-            self._msg_id = await self._send_and_get_id(text)
-        except Exception as e:
-            logger.warning("StatusTracker: create_panel failed: {}", e)
-
-    async def set_state(
-        self,
-        agent: str,
-        state: str,
-        detail: str = "",
-        reason: str = "",
-    ) -> None:
-        """Update an agent's state and trigger a throttled panel refresh."""
-        async with self._lock:
-            if agent not in self._states:
-                return
-            self._states[agent] = state
-            self._details[agent] = detail
-            if reason:
-                self._reasons[agent] = reason
-            elif state not in ("blocked", "error", "done", "cancelled"):
-                self._reasons.pop(agent, None)
-            self._dirty = True
-        await self._maybe_refresh()
-
-    async def _maybe_refresh(self) -> None:
-        """Edit the panel message if dirty and throttle interval has passed."""
-        if not self._msg_id or not self._edit_fn or not self._dirty:
-            return
-        import time
-        now = time.time()
-        if now - self._last_edit < self.EDIT_INTERVAL:
-            return
-        async with self._lock:
-            if not self._dirty:
-                return
-            text = self._render()
-            self._dirty = False
-        self._last_edit = now
-        try:
-            await self._edit_fn(self._msg_id, text)
-        except Exception as e:
-            logger.debug("StatusTracker: edit failed: {}", e)
-
-    def _render(self) -> str:
-        """Build the panel text using the display module."""
-        return _d.status_panel(
-            self._agents, self._states, self._details,
-            self._reasons, leader=self._leader,
-        )
-
-    async def finalize(self) -> None:
-        """Force a final panel edit regardless of throttle."""
-        if not self._msg_id or not self._edit_fn:
-            return
-        async with self._lock:
-            text = self._render()
-            self._dirty = False
-        try:
-            await self._edit_fn(self._msg_id, text)
-        except Exception:
-            pass
-
-    def add_agent(self, name: str) -> None:
-        """Register a new agent that joined mid-round."""
-        if name not in self._states:
-            self._agents.append(name)
-            self._states[name] = "thinking"
-            self._details[name] = ""
-            self._dirty = True
-    async def update_from_tool_start(self, agent: str, tool_name: str, args: dict) -> None:
-        """Update tracker state based on tool arguments."""
-        _st = _TOOL_STATE_MAP.get(tool_name, "thinking")
-        _dt = ""
-        if tool_name == "web_search":
-            _dt = (args.get("query") or args.get("queries", ""))
-            if isinstance(_dt, list):
-                _dt = ", ".join(_dt)
-        elif tool_name == "web_fetch":
-            _dt = (args.get("url", "") or "")[:35]
-        elif tool_name == "exec":
-            _dt = (args.get("command", "") or "")[:25]
-        elif tool_name in ("read_file", "write_file", "edit_file"):
-            _dt = (args.get("path", "") or "").split("/")[-1]
-        elif tool_name == "chatroom_send":
-            _to = args.get("to", "?")
-            _dt = ", ".join(_to) if isinstance(_to, list) else str(_to)
-        await self.set_state(agent, _st, detail=str(_dt)[:30])
-
-    async def update_from_tool_result(self, agent: str, tool_name: str, result: str) -> None:
-        """Update tracker state based on tool results."""
-        _r = result or ""
-        if tool_name == "chatroom_send" and "BLOCKED:" in _r:
-            await self.set_state(agent, "blocked", reason="pool full")
-        elif tool_name == "chatroom_send" and "你已发过 1 条消息" in _r:
-            await self.set_state(agent, "blocked", reason="leader gate")
-        elif tool_name == "web_search" and "BLOCKED:" in _r and "额度" in _r:
-            await self.set_state(agent, "blocked", reason="no credits")
-        elif tool_name == "web_search" and "BLOCKED:" in _r and "本轮已搜索" in _r:
-            await self.set_state(agent, "blocked", reason="cycle limit")
-        else:
-            await self.set_state(agent, "thinking")
+from nanobot.groupchat.history.history_settings import min_synthesis_len
+from nanobot.groupchat.orchestra.request_log import build_tool_log, log_request
+from nanobot.groupchat.orchestra.mailbox import ConversationPool, MailboxHub
+from nanobot.groupchat.orchestra.status_tracker import AgentStatusTracker
+from nanobot.groupchat.orchestra.interrupts import trigger_realtime_interrupts
 
 
 @runtime_checkable
 class BroadcastContext(Protocol):
     """Protocol documenting what broadcast_round needs from the engine.
 
-    Replaces the opaque ``Any`` type, making the implicit dependency explicit.
+    All members use public names — no underscore access required.
+    GroupChatEngine implements this protocol via its public API.
     """
 
     # ── Public attributes ──
@@ -189,97 +39,77 @@ class BroadcastContext(Protocol):
     provider: Any  # LLMProvider
     config: Any  # GroupChatConfig
 
-    # ── Private but accessed by broadcast ──
-    _round: int
-    _leader: str | None
-    _debug_context: bool
-    _history: list[dict[str, str]]
-    _request_log: list[dict[str, Any]]
-    _session_dir: Any
+    # ── Read-only properties ──
+    @property
+    def leader(self) -> str | None: ...
+    @property
+    def is_running(self) -> bool: ...
+    @property
+    def debug_context(self) -> bool: ...
+    @property
+    def round_number(self) -> int: ...
+    @property
+    def history_messages(self) -> list[dict]: ...
+    @property
+    def input_queue(self) -> asyncio.Queue[str]: ...
+    @property
+    def pending_join_queue(self) -> asyncio.Queue[str]: ...
+    @property
+    def broadcast_tasks(self) -> dict[str, asyncio.Task]: ...
+    @property
+    def session_tools_override(self) -> dict[str, dict]: ...
+    @property
+    def active_agents(self) -> list[str]: ...
+    @property
+    def request_log(self) -> list[dict[str, Any]]: ...
 
     # ── Methods ──
-    def _send(self, text: str) -> Awaitable[None]: ...
-    def _save_event(self, event_type: str, *, agent: str = "", content: str = "", extra: dict | None = None) -> None: ...
-    def _add_message(self, sender: str, content: str) -> None: ...
-    def _save_round_summary(self, round_num: int, agents_responded: int, comm_count: int = 0, duration: float = 0.0) -> None: ...
-    def _clean_response(self, content: str, agent_name: str) -> str: ...
-    def _build_agent_prompt(self, agent_name: str) -> list[dict[str, Any]]: ...
-    def _get_agent_tools(self, agent_cfg: dict, registry: Any) -> list: ...
+    async def send(self, text: str) -> None: ...
+    def save_event(self, event_type: str, *, agent: str = "", content: str = "", extra: dict | None = None) -> None: ...
+    def add_message(self, sender: str, content: str) -> None: ...
+    def save_round_summary(self, round_num: int, agents_responded: int, comm_count: int = 0, duration: float = 0.0) -> None: ...
+    def clean_response(self, content: str, agent_name: str) -> str: ...
+    def build_agent_prompt(self, agent_name: str) -> list[dict[str, Any]]: ...
+    def get_agent_tools(self, agent_cfg: dict, registry: Any, agent_name: str | None = None) -> list: ...
+    def get_agent_registry(self, agent_name: str) -> Any: ...
+    async def connect_mcp(self) -> None: ...
 
     @property
     def prompt_builder(self) -> Any: ...
 
 
-async def _trigger_realtime_interrupts(
-    sender: str,
-    targets: list[str],
-    mailbox: MailboxHub,
-    engine: BroadcastContext,
-    leader_name: str | None,
-) -> None:
-    """Handle bi-directional real-time interrupts after a successful chatroom_send.
-    
-    Teammate -> Leader: Make leader aware of the report immediately.
-    Leader -> Teammate: Make teammate respond to instructions without waiting for poll.
-    """
-    _targets_lower = [t.lower() for t in targets]
-    
-    # Check if the target set effectively includes someone we want to interrupt
-    # (someone other than the sender).
-    has_others = "all" in _targets_lower or any(t != sender.lower() for t in _targets_lower)
-    if not leader_name or not has_others:
-        return
-
-    _interrupted_count = 0
-    for _tgt in targets:
-        if _tgt.lower() == "all":
-            _interrupted_count += mailbox.interrupt_busy_agents(sender)
-            break
-        else:
-            if mailbox._try_interrupt(_tgt, sender):
-                _interrupted_count += 1
-
-    if _interrupted_count > 0:
-        _dir = "队友" if sender != leader_name else "Leader"
-        _recv_str = ", ".join(targets)
-        logger.info(
-            "Broadcast: {} {} → {} 实时打断 {} 个 busy agent",
-            _dir, sender, _recv_str, _interrupted_count,
-        )
-
-
 
 class BroadcastOrchestrator:
     """State manager for a single broadcast round."""
-    
+
     def __init__(self, agents: list[str], engine: BroadcastContext, mailbox: MailboxHub):
         self.engine = engine
         self.mailbox = mailbox
-        
-        self.leader_name = engine._leader if hasattr(engine, '_leader') else None
+
+        self.leader_name = engine.leader
         if self.leader_name and self.leader_name not in agents:
             self.leader_name = None
-            
+
         self.exec_agents = list(agents)
         self.non_leader_agents = [a for a in agents if a != self.leader_name] if self.leader_name else list(agents)
         self.total = len(self.exec_agents)
-        
+
         _gc_settings_path = Path.home() / ".nanobot" / "groupchat_settings.json"
         _gc_defaults = {"search_initial": 2, "search_earn_interval": 4, "allocate_timeout": 15, "call_timeout": 90, "conv_keep_turns": 3}
         self.gc_settings = dict(_gc_defaults)
         if _gc_settings_path.exists():
             try:
                 self.gc_settings.update(_json.loads(_gc_settings_path.read_text()))
-            except Exception:
-                pass
-                
+            except Exception as e:
+                logger.debug("Could not load groupchat settings: {}", e)
+
         self.pool: Any = None
         self.tracker: AgentStatusTracker = None # type: ignore
         self.search_pool: Any = None
         self.leader_gate: Any = None
         self.agent_tool_registries: dict[str, Any] = {}
         self._search_cache: dict[str, tuple[str, str]] = {}
-        
+
         self.leader_end_event = asyncio.Event()
         self._leader_agent_tasks: dict = {}
         self.tasks: dict[asyncio.Task, str] = {}
@@ -287,14 +117,23 @@ class BroadcastOrchestrator:
 
     async def setup_tools_and_pools(self, spawn_fn: Callable[[str, int], asyncio.Task]) -> None:
         """Initialize all shared resources for the round."""
-        from nanobot.tools.registry import ToolRegistry
+        import os
+
         from nanobot.groupchat.orchestra.tools.chatroom_tools import (
-            ChatroomSendTool, WaitTool, CachedSearchTool, SearchPool, LeaderGate,
-            ManageAgentTool, EndDiscussionTool, TransferCreditsTool, ClearContextTool,
-            QuoteMessageTool, ListMessagesTool,
+            CachedSearchTool,
+            ChatroomSendTool,
+            ClearContextTool,
+            EndDiscussionTool,
+            LeaderGate,
+            ListMessagesTool,
+            ManageAgentTool,
+            QuoteMessageTool,
+            SearchPool,
+            TransferCreditsTool,
+            WaitTool,
         )
         from nanobot.tools.memory_palace import MemoryPalaceTool
-        import os
+        from nanobot.tools.registry import ToolRegistry
 
         n = len(self.exec_agents)
         # Build per-agent capacity from ranks
@@ -317,8 +156,8 @@ class BroadcastOrchestrator:
             # Rank-based per-agent capacity
             self.pool = ConversationPool(agents=list(self.exec_agents), per_agent_capacity=per_agent_cap)
         self.pool.ALLOCATE_TIMEOUT = float(self.gc_settings["allocate_timeout"])
-        
-        await self.engine._send(f"threads {self.pool.status()}")
+
+        await self.engine.send(f"threads {self.pool.status()}")
 
         self.tracker = AgentStatusTracker(
             agents=self.exec_agents,
@@ -350,7 +189,7 @@ class BroadcastOrchestrator:
         memory_palace = MemoryPalaceTool()
 
         for name in self.exec_agents:
-            base_reg = self.engine._get_agent_registry(name)
+            base_reg = self.engine.get_agent_registry(name)
             registry = ToolRegistry()
             for tool_name in base_reg.tool_names:
                 tool = base_reg.get(tool_name)
@@ -419,14 +258,14 @@ async def broadcast_round(
         return []
 
     # Lazy-connect MCP servers before building tool registries
-    if hasattr(engine, '_connect_mcp'):
-        await engine._connect_mcp()
+    if True:
+        await engine.connect_mcp()
 
     import time as _time
     _round_t0 = _time.time()
 
     # ── Detect leader ──
-    leader_name = engine._leader if hasattr(engine, '_leader') else None
+    leader_name = engine.leader
     if leader_name and leader_name not in agents:
         leader_name = None
 
@@ -441,8 +280,8 @@ async def broadcast_round(
     mailbox.set_ranks(ranks_map, leader=leader_name or "")
 
     # ── Clear any leftover session tool overrides ──
-    if hasattr(engine, "_session_tools_override"):
-        engine._session_tools_override.clear()
+    if True:
+        engine.session_tools_override.clear()
 
     # All agents participate — leader included as active agent
     exec_agents = list(agents)
@@ -450,19 +289,19 @@ async def broadcast_round(
     total = len(exec_agents)
 
     # Announce broadcast start
-    engine._save_event("round_start", extra={
-        "round": engine._round + 1,
+    engine.save_event("round_start", extra={
+        "round": engine.round_number + 1,
         "agents": list(agents),
         "mode": "broadcast",
         "leader": leader_name,
     })
-    await engine._send(_d.broadcast_start_msg(list(agents), int(global_timeout), leader=leader_name, ranks=ranks_map))
+    await engine.send(_d.broadcast_start_msg(list(agents), int(global_timeout), leader=leader_name, ranks=ranks_map))
 
     orch = BroadcastOrchestrator(agents, engine, mailbox)
 
     # ── Extract user question (for hint injection) ──
     user_question = ""
-    for msg in reversed(engine._history):
+    for msg in reversed(engine.history_messages):
         if msg.get("sender") in ("User", "user", "用户"):
             content = msg.get("content", "")
             if content.startswith("["):
@@ -479,8 +318,8 @@ async def broadcast_round(
         task = asyncio.create_task(_run_one(name, idx))
         orch.tasks[task] = name
         orch.all_tasks.add(task)
-        if hasattr(engine, '_broadcast_tasks'):
-            engine._broadcast_tasks[name] = task
+        if True:
+            engine.broadcast_tasks[name] = task
         return task
 
     await orch.setup_tools_and_pools(_spawn_agent_task)
@@ -528,7 +367,7 @@ async def broadcast_round(
         # Each agent sees user messages, system messages, and ALL teammates' final replies.
         # Tool call logs are appended as text inside each agent's message, so teammates
         # can read a concise summary of what was done without the full tool protocol overhead.
-        messages = engine._build_agent_prompt(
+        messages = engine.build_agent_prompt(
             name,
             relevant_agents=None,
             agent_idx=agent_idx,
@@ -659,7 +498,7 @@ async def broadcast_round(
         _header = f"◍ {name}{badge}: "
 
         # Send initial status
-        await engine._send(_d.thinking_msg(name, model_short, leader=leader_name, idx=agent_idx + 1, total=total))
+        await engine.send(_d.thinking_msg(name, model_short, leader=leader_name, idx=agent_idx + 1, total=total))
         async def _on_tool_start(tool_name: str, args: dict, **_kw) -> None:
             tool_call_id = _kw.get("tool_call_id", "")
             if not isinstance(args, dict):
@@ -737,7 +576,9 @@ async def broadcast_round(
                             "content": "[已达到最大轮次限制，请立即输出最终总结，禁止再调用工具。]",
                         })
                         try:
-                            from nanobot.groupchat.orchestra.tools.tool_loop import tool_loop as _final_loop
+                            from nanobot.groupchat.orchestra.tools.tool_loop import (
+                                tool_loop as _final_loop,
+                            )
                             _r = await _final_loop(
                                 provider=engine.provider,
                                 messages=messages,
@@ -748,14 +589,14 @@ async def broadcast_round(
                                 tool_defs=None,
                             )
                             content = _r.content or ""
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug("Could not get search result content: {}", e)
                     break
                 # Respect /stop — exit immediately if engine is no longer running.
                 # Exception: leader called end_discussion but hasn't produced valid
                 # synthesis yet — allow the cycle loop to continue so the leader
                 # can retry (guards at line ~1125/1140 force a text-producing cycle).
-                if not engine._running and not (is_leader and _leader_ended_discussion):
+                if not engine.is_running and not (is_leader and _leader_ended_discussion):
                     logger.info("Broadcast: {} exiting — engine stopped", name)
                     break
                 cycle += 1
@@ -765,7 +606,7 @@ async def broadcast_round(
 
                 # ── Determine tool definitions for this cycle ──
                 # Rebuild each cycle so mid-round set_tools changes take effect
-                tool_defs = engine._get_agent_tools(_live_cfg, reg, agent_name=name)
+                tool_defs = engine.get_agent_tools(_live_cfg, reg, agent_name=name)
                 if tool_defs:
                     existing_names = {d["function"]["name"] for d in tool_defs}
                     for bd in broadcast_defs:
@@ -780,7 +621,7 @@ async def broadcast_round(
                     on = engine.get_agent_enabled_tool_names(a)
                     extra = " ← 你" if a == name else (" 👑Leader" if a == leader_name else "")
                     perm_lines.append(f"  {a}: {', '.join(on) if on else '(无工具)'}{extra}")
-                
+
                 status_summary = (
                     f"\n\n### [本轮状态汇总]\n"
                     f"**搜索额度**: {search_pool.status()}\n"
@@ -788,14 +629,14 @@ async def broadcast_round(
                     "注意：没有 web_search/web_fetch 权限时，也禁止用 exec 执行 curl/wget 等网络命令。\n"
                     "如需搜索，请通过 chatroom_send 请求有搜索权限的队友帮忙。"
                 )
-                
+
                 # Append to the volatile user message (the last message)
                 # This ensures the system messages remain stable and cacheable.
                 orig_volatile = messages[volatile_msg_idx]["content"]
                 if "### [本轮状态汇总]" in orig_volatile:
                     # Strip previous summary if retrying/looping
                     orig_volatile = orig_volatile.split("### [本轮状态汇总]")[0].strip()
-                
+
                 messages[volatile_msg_idx]["content"] = orig_volatile + status_summary
 
                 _cycle_t0 = _t.time()
@@ -822,7 +663,7 @@ async def broadcast_round(
                             "trace_user_id": "groupchat",
                             "tags": [name, "broadcast"],
                             "generation_name": f"{name}_broadcast",
-                            "debug_context": engine._debug_context,
+                            "debug_context": engine.debug_context,
                             "log_agent": name,
                             "log_mode": "broadcast",
                         },
@@ -831,7 +672,7 @@ async def broadcast_round(
                         on_iteration_usage=_on_iter_usage,
                         on_content_delta=None,
                         on_content_reset=None,
-                        clean_response=lambda c: engine._clean_response(c, name),
+                        clean_response=lambda c: engine.clean_response(c, name),
                         result_max_chars=_broadcast_result_max,
                         call_timeout=float(gc_settings.get("leader_call_timeout" if is_leader else "call_timeout", 90)) or None,
                         interrupt_event=_interrupt_event,
@@ -852,7 +693,7 @@ async def broadcast_round(
                 total_iterations += result.iterations
                 all_tools_used.extend(result.tools_used or [])
 
-                if is_leader and "end_discussion" in (result.tools_used or []) and not engine._running:
+                if is_leader and "end_discussion" in (result.tools_used or []) and not engine.is_running:
                     _leader_ended_discussion = True
 
                 if is_error or is_timeout:
@@ -870,7 +711,7 @@ async def broadcast_round(
                         if _timeout_recovery_count == 0:
                             _timeout_recovery_count += 1
                             await tracker.set_state(name, "thinking", detail="retry...")
-                            await engine._send(f"⏰ {name} 超时，重试中...")
+                            await engine.send(f"⏰ {name} 超时，重试中...")
                             logger.warning(
                                 "Broadcast: {} LLM timeout ({:.1f}s), retrying once (no tools)",
                                 name, latency,
@@ -889,10 +730,10 @@ async def broadcast_round(
                                 if _r.content:
                                     content = _r.content
                                     total_latency += _r.latency
-                                    engine._add_message(name, content)
+                                    engine.add_message(name, content)
                                     search_pool.on_output(name)
                                     mailbox.send(name, ["All"], content[:300])
-                                    await engine._send(
+                                    await engine.send(
                                         _d.chatroom_send_msg(
                                             name, "重试输出", content, max_len=1000, leader=leader_name
                                         )
@@ -915,9 +756,9 @@ async def broadcast_round(
                                 f"等待队友消息后将继续工作。"
                             )
                             content = _placeholder
-                            engine._add_message(name, _placeholder)
+                            engine.add_message(name, _placeholder)
                             mailbox.send(name, ["All"], _placeholder)
-                            await engine._send(
+                            await engine.send(
                                 _d.chatroom_send_msg(
                                     name, "超时占位", _placeholder, max_len=1000, leader=leader_name
                                 )
@@ -935,12 +776,12 @@ async def broadcast_round(
                             # Repeated timeout (shouldn't normally reach here due to counter reset above)
                             err_short_disp = f"LLM 超时 ({_base_timeout}s)"
                             await tracker.set_state(name, "error", reason=err_short_disp[:40])
-                            await engine._send(f"  ✗ {name} timeout ({latency:.1f}s): {err_short_disp}")
+                            await engine.send(f"  ✗ {name} timeout ({latency:.1f}s): {err_short_disp}")
 
                     else:  # is_error
                         err_short = content[:150] if content else "Unknown error"
                         await tracker.set_state(name, "error", reason=err_short[:40])
-                        await engine._send(f"  ✗ {name} failed ({latency:.1f}s): {err_short}")
+                        await engine.send(f"  ✗ {name} failed ({latency:.1f}s): {err_short}")
 
                         _consecutive_error_count += 1
                         if _consecutive_error_count >= MAX_CONSECUTIVE_ERRORS:
@@ -948,7 +789,7 @@ async def broadcast_round(
                                 "Broadcast: {} hit {} consecutive LLM errors, forcing exit",
                                 name, _consecutive_error_count,
                             )
-                            await engine._send(
+                            await engine.send(
                                 f"  ✗ {name} 连续 {_consecutive_error_count} 次 LLM 错误，强制退出"
                             )
                             break
@@ -959,9 +800,9 @@ async def broadcast_round(
                             f"等待队友消息后将继续工作。"
                         )
                         content = _placeholder
-                        engine._add_message(name, _placeholder)
+                        engine.add_message(name, _placeholder)
                         mailbox.send(name, ["All"], _placeholder)
-                        await engine._send(
+                        await engine.send(
                             _d.chatroom_send_msg(
                                 name, "错误恢复", _placeholder, max_len=1000, leader=leader_name
                             )
@@ -989,7 +830,7 @@ async def broadcast_round(
                             name, cycle, len(content), content,
                         )
                     history_content = (content or "") + build_tool_log(result.tool_calls_detail)
-                    engine._add_message(name, history_content)
+                    engine.add_message(name, history_content)
 
                     # Track output for search pool credit recovery
                     if content:
@@ -999,18 +840,17 @@ async def broadcast_round(
                         # Implicitly broadcast text to wake up waiting teammates (like the Leader).
                         # Without this, if an agent forgets to use chatroom_send, its text is only
                         # added to history and teammates hang in wait() until a full timeout.
-                        
+
                         _implicit_targets = ["All"]
                         if leader_name and name != leader_name:
                             # 队友未用 chatroom_send 时，默认只汇报给 Leader，避免唤醒其他正在 wait 的队友导致死循环
                             _implicit_targets = [leader_name]
-                            
+
                         mailbox.send(name, _implicit_targets, content)
-                        await _trigger_realtime_interrupts(
+                        await trigger_realtime_interrupts(
                             sender=name,
                             targets=_implicit_targets,
                             mailbox=mailbox,
-                            engine=engine,
                             leader_name=leader_name,
                         )
 
@@ -1053,15 +893,15 @@ async def broadcast_round(
                         return f"{a}[{r}]"
                     await tracker.set_state(name, "interrupted", detail=f"from {_sender_name}")
                     if _sender_name == "用户":
-                        await engine._send(
+                        await engine.send(
                             f"⚡ {_badge(name)} 被【用户消息】打断，正在立即响应..."
                         )
                     elif is_leader and _sender_name != "用户":
-                        await engine._send(
+                        await engine.send(
                             f"⚡ {_badge(name)}（Leader）被队友 **{_badge(_sender_name)}** 汇报实时打断，正在响应..."
                         )
                     else:
-                        await engine._send(
+                        await engine.send(
                             f"⚡ {_badge(name)} 被 {_badge(_sender_name)} 的消息打断，正在立即响应..."
                         )
                     logger.info(
@@ -1072,7 +912,7 @@ async def broadcast_round(
                     # Save any partial content already produced this cycle
                     if content:
                         history_content = content + build_tool_log(result.tool_calls_detail)
-                        engine._add_message(name, history_content)
+                        engine.add_message(name, history_content)
                         search_pool.on_output(name)
                         # Don't re-display partial content — it may be incomplete/mid-thought
 
@@ -1110,7 +950,7 @@ async def broadcast_round(
                         # Fallback: no message in queue (already consumed by auto-wait?)
                         messages.append({
                             "role": "system",
-                            "content": f"[打断通知] 你的执行被中断，请立即总结当前进展并响应队友的最新需求。",
+                            "content": "[打断通知] 你的执行被中断，请立即总结当前进展并响应队友的最新需求。",
                         })
 
                     await tracker.set_state(name, "thinking")
@@ -1189,17 +1029,18 @@ async def broadcast_round(
                             )
 
                         target_label = f"进展 [{cycle}]" if is_leader else "Self/Final"
-                        await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
+                        await engine.send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
                         logger.info("Broadcast: displayed {} cycle {} output ({} chars) [Local Only]", name, cycle, len(content))
                     # else: chatroom_send already displayed the message — no duplicate needed
-                
+
                 # If leader called end_discussion this cycle, validate synthesis length & quality.
                 if is_leader and _leader_ended_discussion:
                     stripped = content.strip() if content else ""
-                    if len(stripped) < _MIN_SYNTHESIS_LEN:
+                    _min_len = min_synthesis_len()
+                    if len(stripped) < _min_len:
                         logger.warning(
                         "Broadcast: leader {} synthesis too short ({} chars < {}), forcing retry",
-                        name, len(stripped), _MIN_SYNTHESIS_LEN,
+                        name, len(stripped), _min_len,
                         )
                         messages.append({
                         "role": "system",
@@ -1212,7 +1053,7 @@ async def broadcast_round(
                         # Restore engine so the retry cycle can execute;
                         # end_discussion already set _running=False but synthesis
                         # hasn't produced valid output yet.
-                        engine._running = True
+                        engine.is_running = True
                         continue
                     # Step 2 — content quality guard (catches fluff like "问题已解答，无需补充")
                     quality_ok, quality_reason = synthesis_quality_check(stripped, tools_used=result.tools_used)
@@ -1240,7 +1081,7 @@ async def broadcast_round(
                         if _synthesis_retries >= 3:
                             logger.warning("Broadcast: leader {} synthesis quality retry exhausted ({} attempts), forcing exit", name, _synthesis_retries)
                             break
-                        engine._running = True
+                        engine.is_running = True
                         continue
                     # Synthesis passed validation — now display it
                     if content and not _used_chatroom_send:
@@ -1262,7 +1103,7 @@ async def broadcast_round(
                                 reasoning_tokens=reasoning_t,
                             )
                         target_label = f"进展 [{cycle}]"
-                        await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
+                        await engine.send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
                         logger.info("Broadcast: displayed {} synthesis output ({} chars) [post-validation]", name, len(content))
                     logger.info("Broadcast: leader {} called end_discussion, exiting cycle loop", name)
                     break
@@ -1279,7 +1120,7 @@ async def broadcast_round(
 
                 if msg is None:
                     # No message — check if engine stopped or leader ended discussion
-                    if not engine._running or leader_end_event.is_set():
+                    if not engine.is_running or leader_end_event.is_set():
                         await tracker.set_state(name, "done", reason="engine stopped")
                         logger.info("Broadcast: {} wait returned None, engine stopped, exiting", name)
                         break
@@ -1311,21 +1152,25 @@ async def broadcast_round(
 
                 # Got a message! Inject it and re-run tool_loop
                 # But first check if /stop was issued or leader ended discussion
-                if not engine._running or leader_end_event.is_set():
+                if not engine.is_running or leader_end_event.is_set():
                     logger.info("Broadcast: {} exiting after wait — engine stopped", name)
                     break
                 _consecutive_waits = 0  # reset — we got a real message
                 logger.info("Broadcast: {} reactivated by {}: {}", name, msg.sender, msg.content[:60])
                 await tracker.set_state(name, "thinking")
-                await engine._send(_d.chatroom_wait_msg(name, str(msg), leader=leader_name))
+                await engine.send(_d.chatroom_wait_msg(name, str(msg), leader=leader_name))
 
                 # ── Prune conversation tail to prevent unbounded growth ──
                 # Keep system-prompt prefix intact; only retain the last
                 # _CONV_KEEP_TURNS conversation turns (3 msgs per turn).
                 # Dropped messages are AI-summarised before removal so the
                 # agent retains context of earlier discussion.
-                from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
-                from nanobot.groupchat.history.history_settings import summarize_model as _summarize_model
+                from nanobot.groupchat.history.history_settings import (
+                    summarize_model as _summarize_model,
+                )
+                from nanobot.groupchat.history.tool_pruning import (
+                    prune_conversation_tail_with_summary,
+                )
                 _conv_keep_turns = gc_settings.get("conv_keep_turns", 3)  # configurable via groupchat_settings.json
                 dropped = await prune_conversation_tail_with_summary(
                     messages, _sys_msg_count, _conv_keep_turns,
@@ -1372,7 +1217,7 @@ async def broadcast_round(
             await tracker.set_state(name, "done")
             comp = _d.completion_msg(name, round(total_latency, 1), total_iterations, all_tools_used, leader=leader_name)
             if comp:
-                await engine._send(comp)
+                await engine.send(comp)
 
             log_request(engine, name, model, "broadcast",
                         reply_len=len(content) if content else 0,
@@ -1385,13 +1230,13 @@ async def broadcast_round(
             await tracker.set_state(name, "cancelled")
             comp = _d.completion_msg(name, round(total_latency, 1), total_iterations, all_tools_used, leader=leader_name)
             if comp:
-                await engine._send(comp)
+                await engine.send(comp)
             return (name, content, all_tools_used, {})
 
         except Exception as e:
             await tracker.set_state(name, "error", reason=str(e)[:40])
             logger.error("Broadcast: {} failed: {}", name, e)
-            await engine._send(f"  ✗ {name} error: {e}")
+            await engine.send(f"  ✗ {name} error: {e}")
             log_request(engine, name, model, "broadcast",
                         error=str(e))
             return (name, None, [], {})
@@ -1414,10 +1259,10 @@ async def broadcast_round(
         all_tasks.add(task)
 
     # Register tasks on the engine so remove_agent() can cancel them mid-round
-    if hasattr(engine, '_broadcast_tasks'):
-        engine._broadcast_tasks.clear()
+    if True:
+        engine.broadcast_tasks.clear()
         for task_obj, task_name in tasks.items():
-            engine._broadcast_tasks[task_name] = task_obj
+            engine.broadcast_tasks[task_name] = task_obj
 
     # Populate _leader_agent_tasks so ManageAgentTool can cancel non-leader tasks
     for task_obj, task_name in tasks.items():
@@ -1441,7 +1286,7 @@ async def broadcast_round(
         async def _user_listener() -> None:
             while _user_listener_running:
                 try:
-                    msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
+                    msg = await asyncio.wait_for(engine.input_queue.get(), timeout=1.0)
                 except asyncio.TimeoutError:
                     continue
                 if msg == "__SUMMARY__":
@@ -1456,8 +1301,8 @@ async def broadcast_round(
                 # up the user message at the next safe checkpoint rather than
                 # waiting for their current tool batch to finish.
                 _interrupted = mailbox.interrupt_busy_agents("用户")
-                engine._add_message("用户", msg)
-                await engine._send(
+                engine.add_message("用户", msg)
+                await engine.send(
                     f"── User ──\n{msg}\n"
                     f"  {pool.status()}"
                 )
@@ -1467,7 +1312,7 @@ async def broadcast_round(
         user_task = asyncio.create_task(_user_listener())
 
         # ── Mid-round agent join listener ──
-        # Drains engine._pending_join_queue so agents added via /add during
+        # Drains engine.pending_join_queue so agents added via /add during
         # an active round are spawned immediately rather than waiting for next round.
 
         async def _join_listener() -> None:
@@ -1475,20 +1320,23 @@ async def broadcast_round(
             while _join_listener_running:
                 try:
                     new_name = await asyncio.wait_for(
-                        engine._pending_join_queue.get(), timeout=1.0
+                        engine.pending_join_queue.get(), timeout=1.0
                     )
                 except asyncio.TimeoutError:
                     continue
                 # Skip if already running (duplicate notification) or engine stopped
-                if new_name in {tasks[t] for t in tasks} or not engine._running:
+                if new_name in {tasks[t] for t in tasks} or not engine.is_running:
                     continue
                 # Build tool registry for the new agent
-                base_reg = engine._get_agent_registry(new_name)
-                from nanobot.tools.registry import ToolRegistry
+                base_reg = engine.get_agent_registry(new_name)
                 from nanobot.groupchat.orchestra.tools.chatroom_tools import (
-                    ChatroomSendTool, WaitTool, CachedSearchTool,
-                    QuoteMessageTool, ListMessagesTool,
+                    CachedSearchTool,
+                    ChatroomSendTool,
+                    ListMessagesTool,
+                    QuoteMessageTool,
+                    WaitTool,
                 )
+                from nanobot.tools.registry import ToolRegistry
                 new_reg = ToolRegistry()
                 for tool_name in base_reg.tool_names:
                     tool = base_reg.get(tool_name)
@@ -1526,8 +1374,8 @@ async def broadcast_round(
                 new_task = asyncio.create_task(_run_one(new_name, idx))
                 tasks[new_task] = new_name
                 all_tasks.add(new_task)
-                engine._broadcast_tasks[new_name] = new_task
-                await engine._send(
+                engine.broadcast_tasks[new_name] = new_task
+                await engine.send(
                     f"✅ {new_name} 加入当前讨论\n"
                     f"👥 当前成员: {', '.join(mailbox._active_agents)}"
                 )
@@ -1559,9 +1407,9 @@ async def broadcast_round(
 
         # Register auxiliary tasks on the engine so _stop_group_loop can cancel
         # them even when CancelledError short-circuits this function.
-        if hasattr(engine, '_broadcast_tasks'):
-            engine._broadcast_tasks['__user_listener'] = user_task
-            engine._broadcast_tasks['__join_listener'] = join_task
+        if True:
+            engine.broadcast_tasks['__user_listener'] = user_task
+            engine.broadcast_tasks['__join_listener'] = join_task
 
         # Watch for leader end_discussion signal
         async def _watch_leader_end() -> None:
@@ -1570,8 +1418,8 @@ async def broadcast_round(
         leader_end_sentinel = asyncio.create_task(_watch_leader_end())
         all_tasks.add(leader_end_sentinel)
 
-        if hasattr(engine, '_broadcast_tasks'):
-            engine._broadcast_tasks['__leader_sentinel'] = leader_end_sentinel
+        if True:
+            engine.broadcast_tasks['__leader_sentinel'] = leader_end_sentinel
 
         while not all(t.done() for t in all_tasks):
             done_set, _ = await asyncio.wait(
@@ -1588,7 +1436,7 @@ async def broadcast_round(
                     logger.info("Broadcast: leader ended discussion")
                     _end_reason = getattr(engine, '_leader_end_reason', '')
                     _reason_suffix = f"（{_end_reason}）" if _end_reason else ""
-                    await engine._send(f"━━ Leader 结束讨论{_reason_suffix} — entering synthesis ━━")
+                    await engine.send(f"━━ Leader 结束讨论{_reason_suffix} — entering synthesis ━━")
                     for task_obj, task_name in tasks.items():
                         if not task_obj.done() and task_name != leader_name:
                             await tracker.set_state(task_name, "cancelled", reason="leader ended")
@@ -1606,7 +1454,7 @@ async def broadcast_round(
                     except Exception as e:
                         completed += 1
                         logger.error("Broadcast: agent task error: {}", e)
-                        await engine._send(f"\u2717 Agent error: {e}")
+                        await engine.send(f"\u2717 Agent error: {e}")
 
         # Cancel any remaining agent tasks
         for task_obj in tasks:
@@ -1627,14 +1475,14 @@ async def broadcast_round(
                         if c:
                             completed += 1
                             results.append((n, c, tools_l or []))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Broadcast task failed: {}", e)
     except asyncio.TimeoutError:
         for task, name in tasks.items():
             if not task.done():
                 task.cancel()
                 logger.warning("Broadcast: {} cancelled (global timeout)", name)
-                await engine._send(f"\u23f0 {name} timeout")
+                await engine.send(f"\u23f0 {name} timeout")
     finally:
         # ── Guarantee cleanup of ALL sub-tasks, even on CancelledError ──
         # Without this, /stop causes CancelledError which bypasses the normal
@@ -1656,9 +1504,9 @@ async def broadcast_round(
             await asyncio.gather(*_aux_to_cancel, return_exceptions=True)
             logger.debug("Broadcast: all auxiliary tasks finished")
         # Remove auxiliary task entries from engine registry
-        if hasattr(engine, '_broadcast_tasks'):
+        if True:
             for key in ('__user_listener', '__join_listener', '__leader_sentinel'):
-                engine._broadcast_tasks.pop(key, None)
+                engine.broadcast_tasks.pop(key, None)
 
     # (auto-share logic is now inside _run_one's auto-wait cycle)
 
@@ -1668,29 +1516,29 @@ async def broadcast_round(
     # ── Round summary ──
     comm_count = len(mailbox.history)
     round_duration = _time.time() - _round_t0
-    engine._save_round_summary(
-        round_num=engine._round + 1,
+    engine.save_round_summary(
+        round_num=engine.round_number + 1,
         agents_responded=completed,
         comm_count=comm_count,
         duration=round_duration,
     )
-    await engine._send(_d.broadcast_complete_msg(completed, total, comm_count))
+    await engine.send(_d.broadcast_complete_msg(completed, total, comm_count))
 
     # Output chat chain summary
     # chain = _d.chat_chain_summary(mailbox.history, leader=leader_name)
     # if chain:
-    #     await engine._send(chain)
+    #     await engine.send(chain)
 
     # Clean up queues (history preserved for synthesis & test harness)
     mailbox.clear()
 
     # Clear broadcast task registry on the engine
-    if hasattr(engine, '_broadcast_tasks'):
-        engine._broadcast_tasks.clear()
+    if True:
+        engine.broadcast_tasks.clear()
 
     # ── Clear session tool overrides (set by ManageAgentTool) ──
-    if hasattr(engine, "_session_tools_override"):
-        engine._session_tools_override.clear()
+    if True:
+        engine.session_tools_override.clear()
         logger.info("Broadcast: cleared session tool overrides")
 
     return [(name, content) for name, content, _ in results]

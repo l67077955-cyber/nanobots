@@ -144,8 +144,8 @@ def _scan_agents_dir(
     if defaults_file.exists():
         try:
             global_hyperparams = json.loads(defaults_file.read_text()).get("hyperparams", {})
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Could not load global hyperparams: {}", e)
 
     for d in sorted(agents_dir.iterdir()):
         if not d.is_dir():
@@ -176,7 +176,7 @@ def _scan_agents_dir(
                     }
                     if isinstance(_cfg.get("tools"), dict):
                         agent_data["tools"] = _cfg["tools"]
-                    
+
                     hyperparams = _cfg.get("hyperparams")
                     if _cfg.get("reasoning_effort"):
                         hyperparams = hyperparams or {}
@@ -187,8 +187,8 @@ def _scan_agents_dir(
                     agents[name] = agent_data
                     logger.info("Groupchat: discovered system agent {} (model={}, {})", name, model, desc)
                     continue
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Could not read system agent config: {}", e)
 
         ws = d / "workspace"
         soul_file = ws / "SOUL.md" if ws.exists() else d / "SOUL.md"
@@ -221,8 +221,8 @@ def _scan_agents_dir(
                 if acfg.get("reasoning_effort"):
                     hyperparams = hyperparams or {}
                     hyperparams.setdefault("reasoning_effort", acfg["reasoning_effort"])
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Could not read agent config: {}", e)
 
         # Special name handling
         if d.name == "grok":
@@ -230,7 +230,7 @@ def _scan_agents_dir(
 
         # Rank: pawn < knight < bishop (controls who-can-interrupt-whom)
         rank = acfg.get("rank", "pawn") if config_file.exists() else "pawn"
-        
+
         agent_data: dict[str, Any] = {"model": model, "prompt": prompt, "tools_enabled": tools_enabled, "rank": rank}
         if tools_cfg is not None:
             agent_data["tools"] = tools_cfg

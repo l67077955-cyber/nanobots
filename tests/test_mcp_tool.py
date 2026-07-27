@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import AsyncExitStack, asynccontextmanager
 import sys
+from contextlib import AsyncExitStack, asynccontextmanager
 from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from nanobot.config.schema import MCPServerConfig
 from nanobot.tools.mcp import MCPToolWrapper, connect_mcp_servers
 from nanobot.tools.registry import ToolRegistry
-from nanobot.config.schema import MCPServerConfig
 
 
 class _FakeTextContent:

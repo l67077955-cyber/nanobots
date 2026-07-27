@@ -382,23 +382,23 @@ def tool_result_brief(
     elif tool_name in ("write_file", "edit_file"):
         if (result or "").startswith("Error:"):
             return f"    └ ❌ {result.split(chr(10))[0][:60]}"
-        return f"    └ ✅ saved"
+        return "    └ ✅ saved"
     elif tool_name == "list_dir":
         count = result.count("\n") if result else 0
         return f"    └ {count} entries"
     elif tool_name == "memory_palace":
         if result and "stored" in result:
-            return f"    └ ✅ stored"
+            return "    └ ✅ stored"
         elif result and "search" in result.lower():
-            return f"    └ 🔍 found"
+            return "    └ 🔍 found"
         else:
             return f"    └ ({rlen:,}字)"
     elif tool_name == "manage_agent":
-        return f"    └ ✅ done"
+        return "    └ ✅ done"
     elif tool_name == "transfer_credits":
-        return f"    └ ✅ transferred"
+        return "    └ ✅ transferred"
     elif tool_name == "end_discussion":
-        return f"    └ 🏁 ended"
+        return "    └ 🏁 ended"
     else:
         return f"    └ ({rlen:,}字)"
 

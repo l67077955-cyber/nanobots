@@ -15,11 +15,9 @@ from typing import Any
 from nanobot.tools.base import Tool
 from nanobot.tools.process_registry import (
     get_any,
-    get_session,
     kill_session,
     list_all,
     prune_expired,
-    remove_session,
 )
 
 

@@ -1,7 +1,5 @@
 """Async group chat engine for multi-agent discussions.
 
-# Verified: Harper has write access to source.
-
 Supports fluid agent management:
 - Agent registry: all available agents (loaded from config/directory)
 - Active participants: agents currently in the conversation
@@ -18,16 +16,17 @@ from typing import Any, Awaitable, Callable
 
 from loguru import logger
 
-
-from nanobot.groupchat.history.agent_loader import load_agents
 from nanobot.groupchat.config import GroupChatConfig
-from nanobot.groupchat.orchestra.mailbox import MailboxHub
-from nanobot.groupchat.history.persistence import GroupChatState
+from nanobot.groupchat.history.agent_loader import load_agents
 from nanobot.groupchat.history.context import HistoryContext
+from nanobot.groupchat.history.persistence import GroupChatState
 from nanobot.groupchat.history.prompt_builder import PromptBuilder
 from nanobot.groupchat.history.response_cleanup import clean_response as _clean_response_fn
-from nanobot.utils.helpers import cn_now as _cn_now
+from nanobot.groupchat.orchestra.mailbox import MailboxHub
+from nanobot.groupchat.orchestra.request_log import build_tool_log, log_request
+from nanobot.groupchat.display.ui import ChatUI
 from nanobot.providers.base import LLMProvider
+from nanobot.utils.helpers import cn_now as _cn_now
 
 
 class GroupChatEngine:
@@ -144,13 +143,16 @@ class GroupChatEngine:
 
     def _build_tool_registry(self, ws: Path) -> "ToolRegistry":
         """Build a ToolRegistry scoped to the given workspace path."""
-        from nanobot.tools.registry import ToolRegistry
-        from nanobot.tools.web import WebFetchTool, WebSearchTool
-        from nanobot.tools.shell import ExecTool
-        from nanobot.tools.filesystem import (
-            ReadFileTool, WriteFileTool, EditFileTool, ListDirTool,
-        )
         from nanobot.groupchat.orchestra.tools.chatroom_tools import SmartFetchTool, SmartSearchTool
+        from nanobot.tools.filesystem import (
+            EditFileTool,
+            ListDirTool,
+            ReadFileTool,
+            WriteFileTool,
+        )
+        from nanobot.tools.registry import ToolRegistry
+        from nanobot.tools.shell import ExecTool
+        from nanobot.tools.web import WebFetchTool, WebSearchTool
 
         registry = ToolRegistry()
         raw_search = WebSearchTool(config=self.web_search_config, proxy=self.web_proxy)
@@ -185,8 +187,8 @@ class GroupChatEngine:
                 model = cfg.get("model")
                 if model:
                     return model
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Could not resolve model from config: {}", e)
         return default_model
 
     def _get_agent_registry(self, agent_name: str) -> "ToolRegistry":
@@ -231,8 +233,8 @@ class GroupChatEngine:
             if self._mcp_stack:
                 try:
                     await self._mcp_stack.aclose()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("MCP stack close failed: {}", e)
                 self._mcp_stack = None
         finally:
             self._mcp_connecting = False
@@ -286,6 +288,7 @@ class GroupChatEngine:
         self._edit_fn: Callable[[int, str], Awaitable[None]] | None = None
         self._on_round_done: Callable[[], Awaitable[None]] | None = None
         self._send_and_get_id_fn: Callable[[str], Awaitable[int | None]] | None = None
+        self._ui: ChatUI | None = None
         self._topic: str = ""
         self._request_log: list[dict[str, Any]] = []
         self._debug_context: bool = False
@@ -320,8 +323,8 @@ class GroupChatEngine:
     def set_tool_context(self, channel: str, chat_id: str) -> None:
         """Set channel/chat context for cron CLI script via env vars.
 
-        Mirrors AgentLoop._set_tool_context() — called once when the
-        Telegram channel wires its send callback.
+        Sets tool context — called once when the Telegram channel wires its
+        send callback.
         """
         import os
         os.environ["NANOBOT_CHANNEL"] = channel
@@ -350,6 +353,23 @@ class GroupChatEngine:
         """Set callbacks for streaming message edits."""
         self._edit_fn = edit_fn
         self._send_and_get_id_fn = send_and_get_id_fn
+
+    def set_ui(self, ui: ChatUI) -> None:
+        """Set a ChatUI adapter, replacing individual send/edit callbacks.
+
+        This is the preferred API — it wires send, edit, and send_and_get_id
+        from a single adapter object. The old set_send_fn/set_edit_fn remain
+        for backward compatibility.
+        """
+        self._ui = ui
+        # Wire backward-compatible callbacks from the ChatUI
+        self._send_fn = ui.send
+        if ui.supports_edit:
+            self._edit_fn = ui.edit
+            self._send_and_get_id_fn = ui.send
+        else:
+            self._edit_fn = None
+            self._send_and_get_id_fn = None
 
     def set_on_round_done(self, cb: Callable[[], Awaitable[None]]) -> None:
         """Set callback invoked when all agents finish speaking in a round."""
@@ -381,6 +401,41 @@ class GroupChatEngine:
         """Case-insensitive agent name lookup. Returns canonical name or None."""
         return self._resolve_agent_name(name)
 
+    def rename_agent(self, old_name: str, new_name: str) -> bool:
+        """Rename an agent across all state (active, leader, groups, persistence).
+
+        Returns True if the rename succeeded, False if old_name not found.
+        Handles consistency of active list, leader designation, groups, and
+        disk persistence in one atomic step — replacing the 6-step manual
+        sync that callbacks.py used to do (bug-prone).
+        """
+        matched = self._resolve_agent_name(old_name)
+        if not matched:
+            return False
+        # Rename in registry
+        if matched in self.registry:
+            self.registry[new_name] = self.registry.pop(matched)
+        # Rename in active agents (preserve position)
+        if matched in self._active_agents:
+            idx = self._active_agents.index(matched)
+            self._active_agents[idx] = new_name
+        # Rename leader if applicable
+        if self._leader == matched:
+            self._leader = new_name
+            self._state.save_leader(new_name)
+        # Rename in groups
+        groups = self._state.load_groups()
+        changed = False
+        for gname, members in groups.items():
+            if matched in members:
+                members[members.index(matched)] = new_name
+                changed = True
+        if changed:
+            self._state.save_groups(groups)
+        # Persist active list
+        self._state.save_active(self._active_agents)
+        return True
+
     def load_groups(self) -> dict[str, list[str]]:
         """Load saved agent groups from disk."""
         return self._state.load_groups()
@@ -398,6 +453,116 @@ class GroupChatEngine:
         self.history.clear()
         self._history = self.history.messages  # keep shim in sync
         self._request_log.clear()
+
+    # ── Public read-only properties ──────────────────────────
+
+    @property
+    def leader(self) -> str | None:
+        """Current leader agent name, or None."""
+        return self._leader
+
+    @property
+    def topic(self) -> str:
+        """Current discussion topic."""
+        return self._topic
+
+    @property
+    def debug_context(self) -> bool:
+        """Whether context-debug logging is enabled."""
+        return self._debug_context
+
+    @debug_context.setter
+    def debug_context(self, value: bool) -> None:
+        """Enable or disable context-debug logging."""
+        self._debug_context = value
+
+    @property
+    def has_task_active(self) -> bool:
+        """True if the engine's async task exists and is not done."""
+        return self._task is not None and not self._task.done()
+
+    @property
+    def input_queue_size(self) -> int:
+        """Number of pending messages in the input queue."""
+        return self._input_queue.qsize()
+
+    @property
+    def request_log_size(self) -> int:
+        """Number of logged LLM requests in the current session."""
+        return len(self._request_log)
+
+    def history_stats(self) -> tuple[int, int]:
+        """Return (message_count, total_char_count) for the current history."""
+        msgs = self._history
+        return len(msgs), sum(len(m.get("content", "")) for m in msgs)
+
+    # ── Public proxies (broadcast-safe, no _ access needed) ───
+
+    @property
+    def round_number(self) -> int:
+        """Current round number (0-based)."""
+        return self._round
+
+    @property
+    def history_messages(self) -> list[dict]:
+        """Live view of the history message list."""
+        return self._history
+
+    @property
+    def input_queue(self) -> asyncio.Queue[str]:
+        """The async input queue (for user message injection)."""
+        return self._input_queue
+
+    @property
+    def pending_join_queue(self) -> asyncio.Queue[str]:
+        """Queue for agents joining mid-round."""
+        return self._pending_join_queue
+
+    @property
+    def broadcast_tasks(self) -> dict[str, asyncio.Task]:
+        """Dict of per-agent broadcast tasks (for cancellation)."""
+        return self._broadcast_tasks
+
+    @property
+    def session_tools_override(self) -> dict[str, dict]:
+        """Per-agent tool override configs."""
+        return self._session_tools_override
+
+    async def send(self, text: str) -> None:
+        """Send a text message to the channel."""
+        return await self._send(text)
+
+    def add_message(self, sender: str, content: str) -> None:
+        """Append a message to the conversation history."""
+        return self._add_message(sender, content)
+
+    def save_event(self, event_type: str, *, agent: str = "", content: str = "", extra: dict | None = None) -> None:
+        """Save a structured event to the session log."""
+        return self._save_event(event_type, agent=agent, content=content, extra=extra)
+
+    def save_round_summary(self, round_num: int, agents_responded: int, comm_count: int = 0, duration: float = 0.0) -> None:
+        """Persist a round summary."""
+        return self._save_round_summary(round_num, agents_responded, comm_count, duration)
+
+    def clean_response(self, content: str, agent_name: str) -> str:
+        """Strip internal markers from an agent's response."""
+        return self._clean_response(content, agent_name)
+
+    def build_agent_prompt(self, agent_name: str) -> list[dict[str, Any]]:
+        """Build the full LLM prompt for a given agent."""
+        return self._build_agent_prompt(agent_name)
+
+    def get_agent_tools(self, agent_cfg: dict, registry, agent_name: str | None = None) -> list:
+        """Get tool definitions for an agent."""
+        return self._get_agent_tools(agent_cfg, registry, agent_name=agent_name)
+
+    def get_agent_registry(self, agent_name: str) -> "ToolRegistry":
+        """Get (or build and cache) the tool registry for an agent."""
+        return self._get_agent_registry(agent_name)
+
+    async def connect_mcp(self) -> None:
+        """Connect to configured MCP servers (lazy, one-time)."""
+        return await self._connect_mcp()
 
     def reset(self) -> None:
         """Clear history, request log, active agents, and stop the loop."""
@@ -496,15 +661,15 @@ class GroupChatEngine:
         matched = self._resolve_agent_name(name)
         if not matched:
             return False
-            
+
         # 1. Remove from active agents
         if matched in self._active_agents:
             self.remove_agent(matched)
-            
+
         # 2. Clear leader if needed
         if self._leader == matched:
             self.set_leader(None)
-            
+
         # 3. Remove from saved groups
         groups = self._state.load_groups()
         changed = False
@@ -514,11 +679,11 @@ class GroupChatEngine:
                 changed = True
         if changed:
             self._state.save_groups(groups)
-            
+
         # 4. Remove from registry
         if matched in self.registry:
             del self.registry[matched]
-            
+
         # 5. Delete from disk
         import shutil
         agent_dir = Path.home() / ".nanobot" / "agents" / matched.lower()
@@ -570,7 +735,7 @@ class GroupChatEngine:
             old = self._leader
             self._leader = None
             self._state.save_leader(None)
-            return f"✅ 已取消 Leader 模式" + (f" ({old})" if old else "")
+            return "✅ 已取消 Leader 模式" + (f" ({old})" if old else "")
 
         matched = self._resolve_agent_name(name)
         if not matched:
@@ -657,7 +822,7 @@ class GroupChatEngine:
         """Clean up model response — delegates to response_cleanup module."""
         return _clean_response_fn(content, agent_name, list(self.registry.keys()))
 
-    # ── Tool-augmented chat (matching AgentLoop._run_agent_loop) ───
+    # ── Tool-augmented chat ───
 
     # Search intent keywords — only pass tools when user message matches
     _SEARCH_KEYWORDS = {
@@ -691,7 +856,7 @@ class GroupChatEngine:
             tools_cfg = self._session_tools_override[agent_name]
         else:
             tools_cfg = agent_cfg.get("tools")
-            
+
         if isinstance(tools_cfg, dict):
             return [k for k, v in tools_cfg.items() if v]
         elif agent_cfg.get("tools_enabled", False) or agent_cfg.get("_default"):
@@ -710,7 +875,7 @@ class GroupChatEngine:
             tools_cfg = self._session_tools_override[agent_name]
         else:
             tools_cfg = agent_cfg.get("tools")
-            
+
         # Granular tools dict
         if isinstance(tools_cfg, dict):
             enabled = {k for k, v in tools_cfg.items() if v}
@@ -742,7 +907,7 @@ class GroupChatEngine:
         on_tool_result_override: Callable | None = None,
         force_no_tools: bool = False,
     ) -> tuple[str, list[str], dict[str, Any]]:
-        """Chat with tool calling loop — delegates to tool_chat module.
+        """Chat with tool calling loop — delegates to chat_with_tools below.
 
         Returns (content, tools_used, stats).
         """
@@ -1029,16 +1194,10 @@ to how broadcast mode's _user_listener works.
 """
 
 
-import asyncio
-from pathlib import Path
-from typing import Any
 
-from loguru import logger
 
-from nanobot.groupchat.display import display as _d
+from nanobot.groupchat import display as _d
 from nanobot.groupchat.display.streaming import StreamingDisplay
-from nanobot.utils.helpers import cn_now as _cn_now
-
 
 # Maximum follow-up cycles (safety cap to prevent infinite loops)
 _MAX_CYCLES = 999  # effectively unlimited
@@ -1160,8 +1319,8 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
                 if stream.msg_id and engine._edit_fn:
                     try:
                         await engine._edit_fn(stream.msg_id, f"⚠️ {agent_name} 返回空回复")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Could not edit message for empty reply: {}", e)
                 else:
                     await engine._send(f"⚠️ {agent_name} 返回空回复 (模型可能暂时异常，请重试)")
                 break  # empty reply — stop cycling
@@ -1186,7 +1345,7 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
 
         # Got an interjection! Log and continue the cycle.
         logger.info("Direct chat: interjection received ({} chars), cycle {}", len(new_msg), cycle)
-        await engine._send(f"── 插话 ──")
+        await engine._send("── 插话 ──")
 
         current_user_msg = new_msg
 
@@ -1209,11 +1368,8 @@ Extracts the tool calling loop from ``engine.py``, including:
 """
 
 
-from typing import Any, Awaitable, Callable
 
-from loguru import logger
 
-from nanobot.groupchat.display import display as _d
 
 
 # ── Helpers ──────────────────────────────────────────────────
@@ -1444,7 +1600,8 @@ async def chat_with_tools(
     try:
         from nanobot.groupchat.history.history_settings import direct_result_max_chars
         _direct_result_max = direct_result_max_chars()
-    except Exception:
+    except Exception as e:
+        logger.debug("Could not load direct_result_max_chars, using default: {}", e)
         _direct_result_max = 8_000
 
     effective_defs = None if force_no_tools else tool_defs
@@ -1529,148 +1686,5 @@ async def chat_with_tools(
     )
 
     return content, result.tools_used, stats
-
-
-"""Shared utilities for the groupchat package."""
-
-
-from datetime import datetime, timezone, timedelta
-from typing import Any
-
-
-
-
-def build_tool_log(tool_calls_detail: list[dict[str, Any]]) -> str:
-    """Build a tool call summary for conversation history.
-
-    Appended to the assistant's content so the model can see what tools
-    it previously called on the next turn.  Preview lengths vary by tool
-    type — search/fetch results get longer previews (the model needs to
-    remember *what* it found), while exec/chatroom keep it shorter.
-
-    Total output is capped at ~4000 chars to prevent context bloat.
-
-    Returns empty string if no tool calls were made.
-    """
-    if not tool_calls_detail:
-        return ""
-
-    # Per-tool preview length limits
-    _PREVIEW_LIMITS = {
-        "web_search": 1500,
-        "web_fetch": 1500,
-        "read_file": 800,
-        "exec": 500,
-        "list_dir": 300,
-        "chatroom_send": 200,
-        "wait": 200,
-        "write_file": 100,
-        "edit_file": 100,
-    }
-    _DEFAULT_PREVIEW = 500
-    _TOTAL_CAP = 4000
-
-    lines: list[str] = []
-    total_chars = 0
-
-    for tc in tool_calls_detail:
-        name = tc.get("name", "?")
-        args_raw = tc.get("args", "")
-        result_len = tc.get("result_len", 0)
-        preview = tc.get("result_preview", "")
-        success = tc.get("success", True)
-        is_dup = tc.get("duplicate", False)
-
-        # memory_palace store with visible=false: suppress preview in chat log
-        _mp_hidden = False
-        if name == "memory_palace":
-            try:
-                _mp_args = __import__("json").loads(args_raw) if isinstance(args_raw, str) else args_raw
-            except Exception:
-                _mp_args = {}
-            if _mp_args.get("action") == "store" and _mp_args.get("visible") is False:
-                _mp_hidden = True
-
-        # Extract the key argument (query / url / command / path) for display
-        try:
-            args_dict = __import__("json").loads(args_raw) if isinstance(args_raw, str) else args_raw
-        except Exception:
-            args_dict = {}
-        key_arg = (
-            args_dict.get("query")
-            or args_dict.get("command")
-            or args_dict.get("url")
-            or args_dict.get("path")
-            or args_dict.get("message", "")[:80]
-            or ""
-        )
-        if isinstance(key_arg, str) and len(key_arg) > 80:
-            key_arg = key_arg[:77] + "..."
-
-        # Build result info with tool-appropriate preview length
-        max_preview = _PREVIEW_LIMITS.get(name, _DEFAULT_PREVIEW)
-
-        if is_dup:
-            result_info = "[重复调用,已跳过]"
-        elif _mp_hidden:
-            result_info = "✅ 已存储 (内容已隐藏)"
-        elif not success:
-            err = tc.get("error", "")
-            result_info = f"[失败: {err[:80]}]"
-        elif name in ("chatroom_send", "wait", "write_file", "edit_file"):
-            # For communication/write tools, just show status
-            result_info = f"({result_len:,}字)" if result_len else "OK"
-        elif isinstance(preview, str) and preview:
-            # Remaining budget check
-            remaining = _TOTAL_CAP - total_chars
-            effective_limit = min(max_preview, remaining)
-            if effective_limit < 50:
-                result_info = f"({result_len:,}字)"
-            else:
-                short = preview.strip()[:effective_limit]
-                truncated = len(preview) > effective_limit
-                result_info = f"{short}{'…' if truncated else ''} ({result_len:,}字)"
-        else:
-            result_info = f"({result_len:,}字)"
-
-        line = f"• {name}({key_arg}) → {result_info}"
-        lines.append(line)
-        total_chars += len(line)
-
-        # Hard cap: stop adding more details
-        if total_chars >= _TOTAL_CAP:
-            remaining_count = len(tool_calls_detail) - len(lines)
-            if remaining_count > 0:
-                lines.append(f"  (还有 {remaining_count} 个工具调用，已省略)")
-            break
-
-    if not lines:
-        return ""
-
-    return "\n\n[工具调用记录]\n" + "\n".join(lines)
-
-
-def log_request(
-    engine: Any,
-    agent: str,
-    model: str,
-    mode: str,
-    reply_len: int = 0,
-    **extra: Any,
-) -> None:
-    """Append a structured entry to engine._request_log.
-
-    Centralizes the common request logging pattern used by speaker,
-    direct_chat, broadcast, and orchestra modules.
-    """
-    entry: dict[str, Any] = {
-        "agent": agent,
-        "model": model,
-        "reply_len": reply_len,
-        "time": _cn_now().strftime("%H:%M:%S"),
-        "mode": mode,
-    }
-    entry.update(extra)
-    engine._request_log.append(entry)
 
 

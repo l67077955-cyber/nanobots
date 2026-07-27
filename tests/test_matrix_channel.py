@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytest.importorskip("nio")
+
 import nanobot.channels.matrix as matrix_module
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
@@ -11,8 +13,8 @@ from nanobot.channels.matrix import (
     MATRIX_HTML_FORMAT,
     TYPING_NOTICE_TIMEOUT_MS,
     MatrixChannel,
+    MatrixConfig,
 )
-from nanobot.channels.matrix import MatrixConfig
 
 _ROOM_SEND_UNSET = object()
 

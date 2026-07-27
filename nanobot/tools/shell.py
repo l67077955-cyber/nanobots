@@ -6,11 +6,29 @@ import re
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from nanobot.tools.base import Tool
+
+# Maximum concurrent shell processes in batch mode
+_MAX_CONCURRENT_PROCESSES = 8
+
+# Maximum number of commands allowed in a single batch request
+_MAX_BATCH_COMMANDS = 16
 
 
 class ExecTool(Tool):
-    """Tool to execute shell commands."""
+    """Tool to execute shell commands.
+
+    SECURITY NOTICE:
+        The deny_patterns blacklist is a best-effort HINT GUARDRAIL, NOT A SECURITY BOUNDARY.
+        It can be bypassed via shell escaping, encoding (base64), variable interpolation,
+        pipes (|), xargs, find -delete, etc. Do NOT rely on it for untrusted input.
+
+        For strong isolation, use containerization (Docker, podman), sandboxing (bwrap),
+        or a restricted user account. The `restrict_to_workspace` option provides basic
+        path confinement but does not protect against all attack vectors.
+    """
 
     def __init__(
         self,
@@ -18,7 +36,7 @@ class ExecTool(Tool):
         working_dir: str | None = None,
         deny_patterns: list[str] | None = None,
         allow_patterns: list[str] | None = None,
-        restrict_to_workspace: bool = False,
+        restrict_to_workspace: bool = True,  # Changed: default to True for safety
         path_append: str = "",
     ):
         self.timeout = timeout
@@ -33,6 +51,10 @@ class ExecTool(Tool):
             r">\s*/dev/sd",                  # write to disk
             r"\b(shutdown|reboot|poweroff)\b",  # system power
             r":\(\)\s*\{.*\};\s*:",          # fork bomb
+            r"\bxargs\s+rm\b",               # xargs rm bypass
+            r"\bfind\s+.*-delete\b",         # find -delete bypass
+            r"\bchmod\s+-R\s+000\b",         # chmod -R 000
+            r"\b(>|\|\s*)\s*/dev/(null|zero|random|urandom)", # redirect to device
         ]
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
@@ -61,7 +83,8 @@ class ExecTool(Tool):
                 "commands": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Multiple shell commands to execute in parallel (batch mode)",
+                    "maxItems": _MAX_BATCH_COMMANDS,
+                    "description": f"Multiple shell commands to execute in parallel (batch mode, max {_MAX_BATCH_COMMANDS})",
                 },
                 "working_dir": {
                     "type": "string",
@@ -99,12 +122,21 @@ class ExecTool(Tool):
         if background and command:
             return await self._run_background(command, working_dir)
 
-        # Batch mode: run all commands concurrently
+        # Batch mode: run all commands concurrently with semaphore
         if commands:
             all_cmds = list(commands)
             if command and command not in all_cmds:
                 all_cmds.insert(0, command)
-            tasks = [self._run_one(cmd, working_dir, timeout) for cmd in all_cmds]
+            # Enforce batch size limit
+            if len(all_cmds) > _MAX_BATCH_COMMANDS:
+                return f"Error: 最多同时执行 {_MAX_BATCH_COMMANDS} 条命令，收到 {len(all_cmds)} 条"
+            semaphore = asyncio.Semaphore(_MAX_CONCURRENT_PROCESSES)
+
+            async def _run_with_semaphore(cmd: str) -> str:
+                async with semaphore:
+                    return await self._run_one(cmd, working_dir, timeout)
+
+            tasks = [_run_with_semaphore(cmd) for cmd in all_cmds]
             results = await asyncio.gather(*tasks)
             parts = []
             for cmd, result in zip(all_cmds, results):
@@ -118,7 +150,10 @@ class ExecTool(Tool):
     async def _run_background(self, command: str, working_dir: str | None = None) -> str:
         """Run a command in background, returning immediately with session info."""
         from nanobot.tools.process_registry import (
-            ProcessSession, add_session, create_session_id, start_background_readers,
+            ProcessSession,
+            add_session,
+            create_session_id,
+            start_background_readers,
         )
 
         cwd = working_dir or self.working_dir or os.getcwd()
@@ -244,7 +279,8 @@ class ExecTool(Tool):
                 try:
                     expanded = os.path.expandvars(raw.strip())
                     p = Path(expanded).expanduser().resolve()
-                except Exception:
+                except Exception as e:
+                    logger.debug("Could not expand path: {}", e)
                     continue
                 if p.is_absolute() and cwd_path not in p.parents and p != cwd_path:
                     return "Error: Command blocked by safety guard (path outside working dir)"

@@ -241,7 +241,8 @@ async def _iter_sse(response: httpx.Response) -> AsyncGenerator[dict[str, Any], 
                     continue
                 try:
                     yield json.loads(data)
-                except Exception:
+                except Exception as e:
+                    logger.debug("Could not parse SSE line: {}", e)
                     continue
             continue
         buffer.append(line)

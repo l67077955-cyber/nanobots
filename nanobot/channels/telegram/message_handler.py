@@ -3,17 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import re
 
+from loguru import logger
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from loguru import logger
-
-from nanobot.bus.events import OutboundMessage
 from nanobot.config.paths import get_media_dir
-from .formatting import TELEGRAM_MAX_MESSAGE_LEN
 
 
 class MessageHandlerMixin:

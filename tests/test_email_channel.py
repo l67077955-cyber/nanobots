@@ -1,13 +1,12 @@
-from email.message import EmailMessage
-from datetime import date
 import imaplib
+from datetime import date
+from email.message import EmailMessage
 
 import pytest
 
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
-from nanobot.channels.email import EmailChannel
-from nanobot.channels.email import EmailConfig
+from nanobot.channels.email import EmailChannel, EmailConfig
 
 
 def _make_config() -> EmailConfig:

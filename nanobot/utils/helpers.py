@@ -3,12 +3,11 @@
 import json
 import re
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import tiktoken
-
 
 RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
 
@@ -242,8 +241,8 @@ def estimate_prompt_tokens_chain(
             tokens, source = provider_counter(messages, tools, model)
             if isinstance(tokens, (int, float)) and tokens > 0:
                 return int(tokens), str(source or "provider_counter")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Token counter failed: {}", e)
 
     estimated = estimate_prompt_tokens(messages, tools)
     if estimated > 0:

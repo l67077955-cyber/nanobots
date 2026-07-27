@@ -12,7 +12,6 @@ Engine and Broadcast delegate to this class instead of maintaining
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -101,9 +100,9 @@ class HistoryContext:
 
         try:
             from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
-                max_messages,
-                max_context_chars,
                 keep_user_messages,
+                max_context_chars,
+                max_messages,
             )
             limit = max_messages()
             char_budget = max_context_chars()
@@ -160,13 +159,13 @@ class HistoryContext:
         ``summarize_enabled``; if disabled, the middle region is simply dropped.
         """
         from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
-            max_messages,
-            history_summarize_enabled,
-            summarize_model,
-            compress_ratio,
             compress_max_summary_tokens,
+            compress_ratio,
             compression_keep_recent,
+            history_summarize_enabled,
             keep_user_messages,
+            max_messages,
+            summarize_model,
         )
 
         limit = max_messages()

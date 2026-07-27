@@ -3,8 +3,8 @@
 import httpx
 import pytest
 
-from nanobot.tools.web import WebSearchTool
 from nanobot.config.schema import WebSearchConfig
+from nanobot.tools.web import WebSearchTool
 
 
 def _tool(provider: str = "brave", api_key: str = "", base_url: str = "") -> WebSearchTool:
@@ -77,7 +77,6 @@ async def test_duckduckgo_search(monkeypatch):
     import nanobot.tools.web as web_mod
     monkeypatch.setattr(web_mod, "DDGS", MockDDGS, raising=False)
 
-    from ddgs import DDGS
     monkeypatch.setattr("ddgs.DDGS", MockDDGS)
 
     tool = _tool(provider="duckduckgo")

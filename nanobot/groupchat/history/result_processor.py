@@ -7,9 +7,11 @@ Pipeline: normalize → truncate → persist → inject_meta
 """
 
 from __future__ import annotations
+
 import json
 from pathlib import Path
 from typing import Any
+
 from loguru import logger
 
 STORAGE_DIR = Path("/tmp/nanobot/tool_storage")

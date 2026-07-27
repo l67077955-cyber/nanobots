@@ -87,6 +87,35 @@ ruff check nanobot/
 ruff format nanobot/
 ```
 
+## Phase Gate (PLAN Architecture Refactor)
+
+We are in the middle of a staged architecture refactor (see PLAN.md). Every Phase must pass the gate before merge.
+
+### Running the gate
+
+```bash
+scripts/check.sh
+```
+
+This script runs:
+
+1. **pytest -q** — full test suite, must pass (0 error, 0 fail)
+2. **ruff check --select F,E --ignore E501** — pyflakes (F) + pycodestyle errors (E), line length ignored
+
+### Why not I/N/W yet?
+
+The codebase has pre-existing style debt. We tighten the rules incrementally per Phase to avoid a giant pre-existing blocker:
+
+- **P0**: establish pytest + F/E gate; auto-fix safe issues (F401/F541/F811) — done
+- **P1–P6**: expand to I (import sort), N (naming), W (warnings) as we clean up
+
+### Current status (P0 complete)
+
+- pytest: ✅ 373 passed
+- ruff F/E: ⚠️ ~44 remaining (incl. 7 undefined-name in WIP files, tracked in todo.md)
+
+Contributors: before opening a PR, run `scripts/check.sh` and fix any new F/E violations. Pre-existing debts are tracked separately.
+
 ## Code Style
 
 We care about more than passing lint. We want nanobot to stay small, calm, and readable.

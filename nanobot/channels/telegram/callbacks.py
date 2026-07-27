@@ -2,25 +2,20 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-import os
-import sys
-import time
 import re
 from pathlib import Path
 
+from loguru import logger
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from loguru import logger
-
-from nanobot.groupchat import display as _d
 from nanobot.groupchat.history.prompt_builder import (
-    PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
-    GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
+    COMPONENT_LABELS as _COMPONENT_LABELS,
 )
-from .formatting import TELEGRAM_MAX_MESSAGE_LEN
+from nanobot.groupchat.history.prompt_builder import (
+    PromptBuilder,
+)
 
 
 class CallbacksMixin:
@@ -82,7 +77,7 @@ class CallbacksMixin:
         buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{agent_name}")])
         text = f"⚙️ {agent_name} 超参数设置:"
         if agent_hp:
-            text += f"\n\n" + "\n".join(f"  {k} = {v}" for k, v in agent_hp.items())
+            text += "\n\n" + "\n".join(f"  {k} = {v}" for k, v in agent_hp.items())
         await self._app.bot.send_message(
             chat_id=int(chat_id), text=text[:4096],
             reply_markup=InlineKeyboardMarkup(buttons),
@@ -398,8 +393,9 @@ class CallbacksMixin:
 
     async def _handle_history_callback(self, query, data: str) -> None:
         """Handle /history interactive settings callbacks."""
-        from nanobot.groupchat.history import history_settings as hs
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        from nanobot.groupchat.history import history_settings as hs
 
         if data == "hs_reload":
             hs.reload()
@@ -499,8 +495,7 @@ class CallbacksMixin:
             settings = hs.get_all()
             hist = settings["history"]
             engine = self._groupchat_engine
-            current_msgs = len(engine._history) if engine else 0
-            current_chars = sum(len(m.get("content", "")) for m in (engine._history if engine else []))
+            current_msgs, current_chars = engine.history_stats() if engine else (0, 0)
             d_msgs = self._PARAM_DOCS["history:max_messages"]
             d_chars = self._PARAM_DOCS["history:max_context_chars"]
             text = (
@@ -554,8 +549,7 @@ class CallbacksMixin:
             hist = settings["history"]
             cp = settings.get("context_pruning", {})
             engine = self._groupchat_engine
-            current_msgs = len(engine._history) if engine else 0
-            current_chars = sum(len(m.get("content", "")) for m in (engine._history if engine else []))
+            current_msgs, current_chars = engine.history_stats() if engine else (0, 0)
             compress_trigger = int(hist["max_messages"] * hist.get("compress_ratio", 0.8))
             ctx_chars_limit = settings["context_window_tokens"] * 4
             ai_on = tr["summarize_enabled"]
@@ -1056,7 +1050,7 @@ class CallbacksMixin:
                     del self._edit_state[chat_id]
                     await self._gc_send(chat_id, "❌ 已取消")
                     return
-                if engine._resolve_agent_name(name):
+                if engine.resolve_agent_name(name):
                     await self._gc_send(chat_id, f"⚠️ '{name}' 已存在，请换个名字:")
                     return
                 state["agent"] = name
@@ -1134,32 +1128,17 @@ class CallbacksMixin:
         if field == "name":
             new_name = content.strip()
             if new_name and new_name != agent_name:
-                data = engine.registry.pop(agent_name)
-                engine.registry[new_name] = data
-                if agent_name in engine._active_agents:
-                    idx = engine._active_agents.index(agent_name)
-                    engine._active_agents[idx] = new_name
-                # Update leader if needed
-                if engine._leader == agent_name:
-                    engine._leader = new_name
-                    engine._state.save_leader(new_name)
-                # Update saved groups
-                groups = engine._state.load_groups()
-                changed = False
-                for gname, members in groups.items():
-                    if agent_name in members:
-                        groups[gname] = [new_name if m == agent_name else m for m in members]
-                        changed = True
-                if changed:
-                    engine._state.save_groups(groups)
-                # Rename directory
+                # Atomic rename across all state (registry, active, leader, groups, persistence)
+                if not engine.rename_agent(agent_name, new_name):
+                    await self._gc_send(chat_id, f"⚠️ Agent '{agent_name}' 不存在")
+                    return
+                # Rename agent directory (not covered by engine.rename_agent)
                 from pathlib import Path as _P
                 agents_dir = _P.home() / ".nanobot" / "agents"
                 old_dir = agents_dir / agent_name.lower()
                 new_dir = agents_dir / new_name.lower()
                 if old_dir.exists() and not new_dir.exists():
                     old_dir.rename(new_dir)
-                engine._state.save_active(engine._active_agents)
                 await self._gc_send(chat_id, f"✅ {agent_name} → {new_name}")
             else:
                 await self._gc_send(chat_id, "⚠️ 名字未变")
@@ -1234,7 +1213,7 @@ class CallbacksMixin:
             if target == "__all__":
                 targets = list(engine.registry.keys())
             else:
-                matched = engine._resolve_agent_name(target)
+                matched = engine.resolve_agent_name(target)
                 if not matched:
                     await query.edit_message_text(f"❌ Agent '{target}' 不存在")
                     return
@@ -1343,12 +1322,12 @@ class CallbacksMixin:
             if not engine or name not in engine.registry:
                 await query.edit_message_text(f"❌ Agent '{name}' 不存在")
                 return
-        
+
             deleted_dir = engine.delete_agent(name)
-        
+
             msg = f"🗑️ Agent '{name}' 已删除"
             if deleted_dir:
-                msg += f"\n📁 配置目录已删除"
+                msg += "\n📁 配置目录已删除"
             await query.edit_message_text(msg)
         elif data.startswith("gc:"):
             key = data[3:]
@@ -1946,8 +1925,9 @@ class CallbacksMixin:
                     await query.edit_message_text(f"⚠️ {prov} 缺少 URL 或 API Key")
                     return
                 # Fetch /v1/models
-                import aiohttp
                 import json as _json
+
+                import aiohttp
                 if "openrouter" in url.lower():
                     models_url = "https://openrouter.ai/api/v1/models"
                 elif "/v1" in url:
@@ -2493,8 +2473,8 @@ class CallbacksMixin:
                 await query.answer("⚠️ 记录不存在")
                 return
             r = logs[idx]
-            import io as _io
             import datetime as _dt
+            import io as _io
 
             # ── Build live context snapshot for each active agent ──
             context_snapshot: dict = {}

@@ -281,7 +281,7 @@ class SkillsLoader:
             lines.append(
                 f"\n(还有 {len(skipped_budget)} 个技能因数量限制未展示: "
                 + ", ".join(skipped_budget[:8])
-                + (f" 等" if len(skipped_budget) > 8 else "")
+                + (" 等" if len(skipped_budget) > 8 else "")
                 + "。需要时请用 `read_file skills/<名称>/SKILL.md` 按需加载。)"
             )
 

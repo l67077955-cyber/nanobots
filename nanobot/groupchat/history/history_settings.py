@@ -67,6 +67,9 @@ _DEFAULTS: dict[str, Any] = {
         "keep_user_messages": True,
         # AI summarization toggle for history compression (separate from tool_results)
         "history_summarize_enabled": True,
+        # Broadcast mode: Leader synthesis (final summary) minimum char length.
+        # Leader's end_discussion text below this triggers a forced retry.
+        "min_synthesis_len": 400,
     },
 
     # ── Stage 4: iterative context pruning (tool_loop iteration 2+) ──
@@ -203,6 +206,11 @@ def keep_user_messages() -> bool:
 
 def history_summarize_enabled() -> bool:
     return bool(_load()["history"]["history_summarize_enabled"])
+
+
+def min_synthesis_len() -> int:
+    """Broadcast mode: Leader synthesis minimum char length."""
+    return int(_load()["history"]["min_synthesis_len"])
 
 
 # ── context_pruning getters ──────────────────────────────────────────────

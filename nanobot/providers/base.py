@@ -49,7 +49,7 @@ class LLMResponse:
     cost: float | None = None  # response cost from provider
     cache_tokens: int = 0  # cached prompt tokens (from prompt_tokens_details)
     provider_meta: dict[str, Any] = field(default_factory=dict)  # provider-specific metadata
-    
+
     @property
     def has_tool_calls(self) -> bool:
         """Check if response contains tool calls."""
@@ -103,7 +103,7 @@ class LLMProvider(ABC):
         self.api_base = api_base
         self.generation: GenerationSettings = GenerationSettings()
         self._retry_delays = retry_delays or self._DEFAULT_RETRY_DELAYS
-        
+
         # Provider compatibility state
         self._compat_flatten: set[str] = set()
         self._compat_drop_params: dict[str, set[str]] = {}
@@ -218,10 +218,10 @@ class LLMProvider(ABC):
         """
         if not provider_key:
             return False, False
-            
+
         flatten_retry = False
         param_retry = False
-        
+
         # 502: Provider proxy rejects tool_calls payload
         if status_code == 502 and has_tool_msgs:
             if provider_key not in self._compat_flatten:
@@ -244,19 +244,19 @@ class LLMProvider(ABC):
                 "top_a": "top_a", "topA": "top_a",
             }
             _PENALTY_GROUP = {"presence_penalty", "frequency_penalty", "repetition_penalty"}
-            
+
             detected = set()
             for err_name, kwarg_key in _PARAM_MAP.items():
                 if err_name in error_text:
                     if not kwargs or kwarg_key in kwargs:
                         detected.add(kwarg_key)
-            
+
             if detected & _PENALTY_GROUP:
                 if kwargs:
                     detected = detected | {p for p in _PENALTY_GROUP if p in kwargs}
                 else:
                     detected = detected | _PENALTY_GROUP
-                
+
             if detected:
                 drops = self._compat_drop_params.setdefault(provider_key, set())
                 new_drops = detected - drops
@@ -267,7 +267,7 @@ class LLMProvider(ABC):
                         provider_key, new_drops,
                     )
                     param_retry = True
-                    
+
         return flatten_retry, param_retry
 
     @staticmethod
@@ -415,8 +415,8 @@ class LLMProvider(ABC):
                         )
                         resp.retry_log = retry_log
                         return resp
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Retry attempt failed: {}", e)
                 response.retry_log = retry_log
                 return response
 

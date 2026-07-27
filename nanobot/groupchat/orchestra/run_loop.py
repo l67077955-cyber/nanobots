@@ -21,8 +21,10 @@ async def generate_summary(engine: Any) -> None:
     compression (``tool_results.summarize_model``).
     """
     from nanobot.groupchat.history.history_settings import (
-        summarize_model as _get_summarize_model,
         history_summarize_enabled,
+    )
+    from nanobot.groupchat.history.history_settings import (
+        summarize_model as _get_summarize_model,
     )
 
     if not engine._history or not history_summarize_enabled():
@@ -45,7 +47,7 @@ async def generate_summary(engine: Any) -> None:
     if len(input_text) > 15000:
         input_text = input_text[-15000:]
 
-    provider = engine._history._provider if engine._history else None
+    provider = engine.history._provider if engine.history else None
     if provider is None:
         await engine._send(
             f"📋 讨论总结\n"
@@ -146,8 +148,8 @@ async def run_loop(engine: Any) -> None:
             if engine._on_round_done:
                 try:
                     await engine._on_round_done()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("on_round_done callback failed: {}", e)
 
     except asyncio.CancelledError:
         pass
@@ -161,6 +163,6 @@ async def run_loop(engine: Any) -> None:
         if engine._on_round_done:
             try:
                 await engine._on_round_done()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("on_round_done callback failed: {}", e)
         logger.info("Group chat loop ended")

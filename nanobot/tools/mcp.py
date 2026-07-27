@@ -21,7 +21,7 @@ def _normalize_schema_for_openai(schema: dict[str, Any]) -> dict[str, Any]:
     """
     if not isinstance(schema, dict):
         return {"type": "object", "properties": {}}
-    
+
     # If schema has oneOf/anyOf/allOf at top level, try to extract the first option
     for key in ["oneOf", "anyOf", "allOf"]:
         if key in schema:
@@ -35,29 +35,29 @@ def _normalize_schema_for_openai(schema: dict[str, Any]) -> dict[str, Any]:
                     del normalized[key]
                     normalized.update(first_option)
                     return _normalize_schema_for_openai(normalized)
-    
+
     # Ensure top-level type is object
     if schema.get("type") != "object":
         # If no type specified or different type, default to object
         schema = {"type": "object", **{k: v for k, v in schema.items() if k != "type"}}
-    
+
     # Clean up unsupported properties at top level
     unsupported = ["enum", "not", "const"]
     for key in unsupported:
         schema.pop(key, None)
-    
+
     # Ensure properties and required exist
     if "properties" not in schema:
         schema["properties"] = {}
     if "required" not in schema:
         schema["required"] = []
-    
+
     # Recursively normalize nested property schemas
     if "properties" in schema and isinstance(schema["properties"], dict):
         for prop_name, prop_schema in schema["properties"].items():
             if isinstance(prop_schema, dict):
                 schema["properties"][prop_name] = _normalize_property_schema(prop_schema)
-    
+
     return schema
 
 
@@ -65,7 +65,7 @@ def _normalize_property_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """Normalize a property schema for OpenAI compatibility."""
     if not isinstance(schema, dict):
         return {"type": "string"}
-    
+
     # Handle oneOf/anyOf in properties
     for key in ["oneOf", "anyOf"]:
         if key in schema:
@@ -77,7 +77,7 @@ def _normalize_property_schema(schema: dict[str, Any]) -> dict[str, Any]:
                     result = {k: v for k, v in schema.items() if k not in [key, "allOf", "not"]}
                     result.update(first_option)
                     return _normalize_property_schema(result)
-    
+
     # Handle allOf by merging all subschemas
     if "allOf" in schema:
         subschemas = schema["allOf"]
@@ -90,7 +90,7 @@ def _normalize_property_schema(schema: dict[str, Any]) -> dict[str, Any]:
             result = {k: v for k, v in schema.items() if k != "allOf"}
             result.update(merged)
             return _normalize_property_schema(result)
-    
+
     # Ensure type is simple
     if "type" not in schema:
         # Try to infer type from other properties
@@ -102,11 +102,11 @@ def _normalize_property_schema(schema: dict[str, Any]) -> dict[str, Any]:
             schema["type"] = "array"
         else:
             schema["type"] = "string"
-    
+
     # Clean up not/const
     schema.pop("not", None)
     schema.pop("const", None)
-    
+
     return schema
 
 

@@ -10,7 +10,14 @@ from pathlib import Path
 
 from loguru import logger
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters, Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 from telegram.request import HTTPXRequest
 
 from nanobot.bus.events import OutboundMessage
@@ -18,27 +25,35 @@ from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import TelegramConfig
-from nanobot.groupchat.orchestra.engine import GroupChatEngine
-from nanobot.groupchat.display import display as _d
+from nanobot.groupchat import display as _d
 from nanobot.groupchat.history.prompt_builder import (
-    PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
-    GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
+    AGENT_EDITABLE as _AGENT_EDITABLE,
 )
+from nanobot.groupchat.history.prompt_builder import (
+    COMPONENT_LABELS as _COMPONENT_LABELS,
+)
+from nanobot.groupchat.history.prompt_builder import (
+    GLOBAL_EDITABLE as _GLOBAL_EDITABLE,
+)
+from nanobot.groupchat.history.prompt_builder import (
+    PromptBuilder,
+)
+from nanobot.groupchat.orchestra.engine import GroupChatEngine
 from nanobot.utils.helpers import split_message
 
-from .formatting import (
-    TELEGRAM_MAX_MESSAGE_LEN,
-    _strip_md,
-    _render_table_box,
-    _markdown_to_telegram_html,
-)
 from .callbacks import CallbacksMixin
-from .message_handler import MessageHandlerMixin
 from .commands.agents import AgentCommandsMixin
-from .commands.providers import ProviderCommandsMixin
-from .commands.settings import SettingsCommandsMixin
 from .commands.groups import GroupCommandsMixin
 from .commands.log import LogCommandsMixin
+from .commands.providers import ProviderCommandsMixin
+from .commands.settings import SettingsCommandsMixin
+from .formatting import (
+    TELEGRAM_MAX_MESSAGE_LEN,
+    _markdown_to_telegram_html,
+    _render_table_box,
+    _strip_md,
+)
+from .message_handler import MessageHandlerMixin
 
 # Re-export for backward compatibility
 __all__ = ["TelegramChannel", "TELEGRAM_MAX_MESSAGE_LEN"]
@@ -488,10 +503,10 @@ class TelegramChannel(
         # Extract bare command name (strip @botname suffix)
         cmd = command.strip().split()[0].lower().split("@")[0]
 
-        # All commands handled by GroupChatEngine — no forwarding to AgentLoop bus
+        # All commands handled by GroupChatEngine — no forwarding to the legacy bus
         if self._groupchat_engine:
             if cmd == "/stop":
-                was_running = self._groupchat_engine._running
+                was_running = self._groupchat_engine.is_running
                 self._groupchat_engine.stop()
                 msg = "✅ 群聊已停止。" if was_running else "ℹ️ 当前没有运行中的任务。"
                 from nanobot.bus.events import OutboundMessage

@@ -8,14 +8,21 @@ import os
 import sys
 from pathlib import Path
 
+from loguru import logger
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from loguru import logger
-
 from nanobot.groupchat.history.prompt_builder import (
-    PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
-    GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
+    AGENT_EDITABLE as _AGENT_EDITABLE,
+)
+from nanobot.groupchat.history.prompt_builder import (
+    COMPONENT_LABELS as _COMPONENT_LABELS,
+)
+from nanobot.groupchat.history.prompt_builder import (
+    GLOBAL_EDITABLE as _GLOBAL_EDITABLE,
+)
+from nanobot.groupchat.history.prompt_builder import (
+    PromptBuilder,
 )
 
 
@@ -225,16 +232,16 @@ class SettingsCommandsMixin:
             return
 
         # Toggle debug context logging
-        engine._debug_context = not engine._debug_context
-        lines.append(f"🔬 上下文日志: {'✅ 已开启' if engine._debug_context else '❌ 已关闭'}")
+        engine.debug_context = not engine.debug_context
+        lines.append(f"🔬 上下文日志: {'✅ 已开启' if engine.debug_context else '❌ 已关闭'}")
         lines.append("")
 
         # Engine state
         lines.append("⚙️ 引擎状态:")
-        lines.append(f"  running: {engine._running}")
-        lines.append(f"  task: {'✅ 活跃' if engine._task and not engine._task.done() else '❌ 无'}")
-        lines.append(f"  send_fn: {'✅' if engine._send_fn else '❌ None'}")
-        lines.append(f"  topic: {engine._topic[:50] or '(空)'}")
+        lines.append(f"  running: {engine.is_running}")
+        lines.append(f"  task: {'✅ 活跃' if engine.has_task_active else '❌ 无'}")
+        lines.append(f"  send_fn: {'✅' if engine.has_send_fn else '❌ None'}")
+        lines.append(f"  topic: {engine.topic[:50] or '(空)'}")
         lines.append("")
 
         # Current group
@@ -242,11 +249,11 @@ class SettingsCommandsMixin:
         lines.append(f"📂 当前分组: {group_name or '(无)'}")
 
         # Leader
-        lines.append(f"👑 领导者: {engine._leader or '(无)'}")
+        lines.append(f"👑 领导者: {engine.leader or '(无)'}")
 
         # Speaking order
-        if engine._active_agents:
-            lines.append(f"📢 发言顺序: {' → '.join(engine._active_agents)}")
+        if engine.active_agents:
+            lines.append(f"📢 发言顺序: {' → '.join(engine.active_agents)}")
         else:
             lines.append("📢 发言顺序: (无活跃agent)")
         lines.append("")
@@ -256,7 +263,7 @@ class SettingsCommandsMixin:
         from nanobot.groupchat.orchestra.engine import GroupChatEngine
         lines.append("👥 Agent 详情:")
         for name, info in engine.registry.items():
-            active = "🟢" if name in engine._active_agents else "⚪"
+            active = "🟢" if name in engine.active_agents else "⚪"
             model = info.get("model", "?")
             # Resolve provider
             prov = "默认"
@@ -273,7 +280,7 @@ class SettingsCommandsMixin:
                 tools_str = "全部"
             else:
                 tools_str = "无"
-            badge = " 👑" if engine._leader == name else ""
+            badge = " 👑" if engine.leader == name else ""
             lines.append(f"  {active} {name}{badge}")
             lines.append(f"    🤖 {model} | 🏢 {prov}")
             lines.append(f"    🔧 {tools_str}")
@@ -281,9 +288,9 @@ class SettingsCommandsMixin:
 
         # Stats
         lines.append("📊 统计:")
-        lines.append(f"  历史消息: {len(engine._history)} 条")
-        lines.append(f"  请求日志: {len(engine._request_log)} 条")
-        lines.append(f"  输入队列: {engine._input_queue.qsize()} 条待处理")
+        lines.append(f"  历史消息: {engine.history_stats()[0]} 条")
+        lines.append(f"  请求日志: {engine.request_log_size} 条")
+        lines.append(f"  输入队列: {engine.input_queue_size} 条待处理")
         lines.append("")
 
         # Edit state
@@ -440,8 +447,7 @@ class SettingsCommandsMixin:
         cp = settings.get("context_pruning", {})
 
         engine = self._groupchat_engine
-        current_msgs = len(engine._history) if engine else 0
-        current_chars = sum(len(m.get("content", "")) for m in (engine._history if engine else []))
+        current_msgs, current_chars = engine.history_stats() if engine else (0, 0)
         compress_trigger = int(hist["max_messages"] * hist.get("compress_ratio", 0.8))
         ctx_chars_limit = settings["context_window_tokens"] * 4  # rough chars estimate
 
@@ -455,13 +461,13 @@ class SettingsCommandsMixin:
         # Tool calls live inside agent messages as appended text logs, not separate entries.
         # Actual LLM context = system prompts + history_to_messages(history).
         compiled_info = ""
-        if engine and getattr(engine, "_active_agents", None):
+        if engine and engine.active_agents:
             from nanobot.groupchat.history.prompt_builder import PromptBuilder
             parts = []
-            for a in engine._active_agents:
+            for a in engine.active_agents:
                 try:
                     compiled = PromptBuilder.history_to_messages(
-                        engine._history, current_agent=a
+                        engine.history.messages, current_agent=a
                     )
                     c_chars = sum(len(m.get("content") or "") for m in compiled)
                     parts.append(f"{a}~{c_chars:,}字")

@@ -2,6 +2,7 @@
 
 import re
 
+from nanobot.groupchat.history.history_settings import min_synthesis_len
 
 # ── System Warning Templates ──────────────────────────────────
 
@@ -55,7 +56,6 @@ def get_system_warning(kind: str, **kwargs) -> str:
 
 # ── Synthesis Quality Check ───────────────────────────────────
 
-_MIN_SYNTHESIS_LEN = 400
 
 _META_PATTERNS = [
     "问题已解答", "无需补充", "已交付", "已完成",
@@ -114,7 +114,7 @@ def synthesis_quality_check(text: str, tools_used: list[str] | None = None) -> t
                 has_urls
                 or bool(re.search(r'\d{3,}', text))
                 or bool(re.search(r'```', text))
-            or len(text.strip()) >= _MIN_SYNTHESIS_LEN
+            or len(text.strip()) >= min_synthesis_len()
             )
             if not has_inline_data:
                 return False, (

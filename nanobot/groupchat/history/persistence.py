@@ -17,7 +17,6 @@ from loguru import logger
 
 from nanobot.utils.helpers import cn_now as _cn_now
 
-
 _NANOBOT_DIR = Path.home() / ".nanobot"
 
 
@@ -46,8 +45,8 @@ class GroupChatState:
         try:
             self._active_file.parent.mkdir(parents=True, exist_ok=True)
             self._active_file.write_text(json.dumps(agents, ensure_ascii=False))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Could not save active agents: {}", e)
 
     def load_active(self) -> list[str]:
         """Load active agents from disk, filtering out unregistered ones."""
@@ -58,8 +57,8 @@ class GroupChatState:
                 if valid:
                     logger.info("Restored active agents: {}", valid)
                 return valid
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Could not load active agents: {}", e)
         return []
 
     # ── Leader ───────────────────────────────────────────────
@@ -71,8 +70,8 @@ class GroupChatState:
                 p.write_text(leader)
             elif p.exists():
                 p.unlink()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Could not save leader: {}", e)
 
     def load_leader(self) -> str | None:
         p = _NANOBOT_DIR / "leader.txt"
@@ -82,8 +81,8 @@ class GroupChatState:
                 if name and name in self._registry:
                     logger.info("Restored leader: {}", name)
                     return name
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Could not load leader: {}", e)
         return None
 
     # ── Groups ───────────────────────────────────────────────
