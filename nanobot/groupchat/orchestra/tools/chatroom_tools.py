@@ -98,24 +98,8 @@ class SearchPool:
                 self._fractional[agent] -= whole
                 self._credits[agent] = self._credits.get(agent, 0.0) + whole
 
-    def transfer(self, from_agent: str, to_agent: str, amount: int) -> tuple[bool, str]:
-        """Transfer credits from one agent to another. Returns (success, message)."""
-        with self._lock:
-            if from_agent not in self._credits:
-                return False, f"Agent '{from_agent}' 不存在"
-            if to_agent not in self._credits:
-                return False, f"Agent '{to_agent}' 不存在"
-            available = self._credits[from_agent]
-            if amount <= 0:
-                return False, "转移数量必须大于0"
-            actual = min(amount, int(available))
-            if actual == 0:
-                return False, f"{from_agent} 没有可用额度"
-            self._credits[from_agent] -= actual
-            self._credits[to_agent] += actual
-            fa = int(self._credits[from_agent])
-            ta = int(self._credits[to_agent])
-            return True, f"✅ 转移 {actual} 额度: {from_agent}({fa}) → {to_agent}({ta})"
+    # NOTE: transfer() removed in Phase 4.3 — credit transfer is experimental
+    # and adds complexity without clear value. Per-agent quotas are sufficient.
 
     def agent_credits(self, agent: str) -> int:
         """Remaining whole credits for this agent."""
@@ -1331,7 +1315,11 @@ class ClearContextTool(Tool):
 
 
 class TransferCreditsTool(Tool):
-    """Leader-only tool: transfer search credits between agents."""
+    """DEPRECATED: Credit transfer removed in Phase 4.3.
+
+    Per-agent quotas are now independent and sufficient for fairness.
+    This tool is kept as a stub for backward compatibility.
+    """
 
     def __init__(self, *, search_pool: SearchPool, engine: Any) -> None:
         self._pool = search_pool
@@ -1344,8 +1332,8 @@ class TransferCreditsTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "划拨搜索额度：把一个 agent 的搜索额度转给另一个 agent。"
-            "例如把没有搜索工具的 agent 的额度划给有搜索能力的 agent。"
+            "⚠️ 已废弃：搜索额度转移功能已移除。"
+            "每个 agent 有独立的搜索配额，无需手动划拨。"
         )
 
     @property
@@ -1353,31 +1341,20 @@ class TransferCreditsTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "from_agent": {
-                    "type": "string",
-                    "description": "从哪个 agent 划出额度",
-                },
-                "to_agent": {
-                    "type": "string",
-                    "description": "划给哪个 agent",
-                },
-                "amount": {
-                    "type": "integer",
-                    "description": "划拨数量（如不确定可填大数，系统会自动取可用最大值）",
-                },
+                "from_agent": {"type": "string"},
+                "to_agent": {"type": "string"},
+                "amount": {"type": "integer"},
             },
             "required": ["from_agent", "to_agent", "amount"],
         }
 
     async def execute(self, from_agent: str = "", to_agent: str = "",
                       amount: int = 0, **kwargs: Any) -> str:
-        if not from_agent or not to_agent:
-            return "Error: 必须指定 from_agent 和 to_agent"
-        success, msg = self._pool.transfer(from_agent, to_agent, amount)
-        if success:
-            await self._engine._send(f"🔄 {msg}", progress=True)
-            return f"{msg}\n当前额度: {self._pool.status()}"
-        return f"Error: {msg}"
+        return (
+            "⚠️ transfer_credits 已废弃。\n"
+            "Phase 4.3 移除了额度转移功能 —— 每个 agent 有独立配额，无需手动划拨。\n"
+            f"当前额度: {self._pool.status()}"
+        )
 
 class QuoteMessageTool(Tool):
     """Quote a historical message by its ID.

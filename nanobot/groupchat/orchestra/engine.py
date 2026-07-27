@@ -137,7 +137,21 @@ class GroupChatEngine:
 
         registry = ToolRegistry()
         raw_search = WebSearchTool(config=self.web_search_config, proxy=self.web_proxy)
-        registry.register(SmartSearchTool(raw_search, provider=self.provider))
+        # SmartSearchTool is experimental: uses a cheap LLM to summarize long results.
+        # Disabled by default (Phase 4.3). Enable via config.features.smart_search=true.
+        smart_search_enabled = False
+        try:
+            cfg_path = Path.home() / ".nanobot" / "config.json"
+            if cfg_path.exists():
+                import json as _json
+                cfg = _json.loads(cfg_path.read_text())
+                smart_search_enabled = (cfg.get("features") or {}).get("smart_search", False)
+        except Exception:
+            pass
+        if smart_search_enabled:
+            registry.register(SmartSearchTool(raw_search, provider=self.provider))
+        else:
+            registry.register(raw_search)
         # Wrap web_fetch with AI reader — model configurable via agents/reader/
         raw_fetch = WebFetchTool()
         reader_model = self._get_reader_model()
