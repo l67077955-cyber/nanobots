@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-from nanobot.channels.web import WebChannel, WebConfig
+from nanobot.channels.web_shim import WebChannel, WebConfig
 from nanobot.runtime.dispatch import SLASH_COMMANDS, InboundDispatcher, parse_slash_command
 
 

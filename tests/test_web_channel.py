@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from nanobot.channels.web import WebChannel, WebConfig  # noqa: E402
+from nanobot.channels.web_shim import WebChannel, WebConfig  # noqa: E402
 
 
 def test_web_config_defaults() -> None:
