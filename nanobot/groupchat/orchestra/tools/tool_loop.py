@@ -374,7 +374,7 @@ async def tool_loop(
                     done, pending = await asyncio.wait(
                         [intr_task, llm_task],
                         return_when=asyncio.FIRST_COMPLETED,
-                        timeout=call_timeout
+                        timeout=call_timeout if call_timeout and call_timeout > 0 else None,
                     )
                 except asyncio.CancelledError:
                     # Clean up tasks if the main loop is cancelled (e.g. Leader end_discussion)
@@ -406,7 +406,7 @@ async def tool_loop(
                     raise asyncio.TimeoutError()
             else:
                 # Normal path without interrupt support
-                if call_timeout:
+                if call_timeout and call_timeout > 0:
                     response = await asyncio.wait_for(_coro, timeout=call_timeout)
                 else:
                     response = await _coro

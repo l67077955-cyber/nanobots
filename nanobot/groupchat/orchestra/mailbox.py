@@ -166,7 +166,9 @@ class ConversationPool:
                 try:
                     await asyncio.wait_for(sem.acquire(), timeout=0.01)
                 except (asyncio.TimeoutError, Exception):
-                    pass  # overflow: still decrement _available
+                    # No slot available — skip decrement to avoid negative
+                    # _available (the "-4/30" thread-bar display bug).
+                    continue
             self._available[r] = self._available.get(r, 0) - 1
 
         self._user_priority.set()
@@ -481,7 +483,7 @@ class MailboxHub:
         for agent in list(self._busy_agents):
             if agent == sender:
                 continue
-            if sender != "用户" and not self._can_interrupt(sender, agent):
+            if sender in self._active_agents and not self._can_interrupt(sender, agent):
                 continue
             self._last_interrupt_sender[agent] = sender
             evt = self.get_interrupt_event(agent)
@@ -679,6 +681,7 @@ class MailboxHub:
                     # so other agents' messages are not silently discarded.
                     if from_agent and msg.sender != from_agent:
                         q.put_nowait(msg)
+                        await asyncio.sleep(0.1)
                         continue
                     logger.info(
                         "MailboxHub.wait: {} received from {}: {}",

@@ -1056,7 +1056,9 @@ async def broadcast_round(
                     _interrupt_event.clear()
                     # Reset interrupt counter so newer messages can re-interrupt
                     # this agent in subsequent cycles (freshness guarantee).
-                    mailbox._interrupt_counts[name] = 0
+                    mailbox._interrupt_counts[name] = max(
+                        0, mailbox._interrupt_counts.get(name, 0) - 1
+                    )
                     # (agent is already idle — the try/finally around tool_loop handled it)
 
                     # Drain the entire queue and use the LATEST message so the
@@ -1362,6 +1364,11 @@ async def broadcast_round(
                         "Broadcast: {} pruned {} conversation messages (kept {})",
                         name, dropped, _conv_keep_turns * 3,
                     )
+                    # Refresh system-message count so future prunes keep the
+                    # correct system-prompt prefix (a stale count could drop it).
+                    _sys_msg_count = sum(
+                        1 for m in messages if m.get("role") == "system"
+                    )
 
                 # Inject agent's own previous output so LLM knows what it already said
                 if content:
@@ -1469,6 +1476,9 @@ async def broadcast_round(
                 except asyncio.TimeoutError:
                     continue
                 if msg == "__SUMMARY__":
+                    # Forward summary request to run_loop (handled after this
+                    # round ends) instead of silently dropping it.
+                    engine._summary_requested = True
                     continue
 
                 all_agent_names = list(mailbox.agent_names)
@@ -1605,6 +1615,9 @@ async def broadcast_round(
             )
 
             if not done_set:
+                # Global timeout reached — stop the engine so run_loop
+                # doesn't start another round.
+                engine._running = False
                 break
 
             for t in done_set:

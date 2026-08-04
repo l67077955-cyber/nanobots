@@ -139,6 +139,12 @@ async def run_loop(engine: Any) -> None:
                 global_timeout=600.0,   # 10 分钟（可根据需要调整）
             )
 
+            # Handle summary request received during the round
+            if getattr(engine, "_summary_requested", False):
+                engine._summary_requested = False
+                await generate_summary(engine)
+                continue
+
             # Compress history if approaching the message limit
             await engine._maybe_compress_history()
 
