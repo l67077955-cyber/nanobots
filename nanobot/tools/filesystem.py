@@ -143,7 +143,12 @@ class ReadFileTool(_FsTool):
                 result = "\n".join(trimmed)
 
             if end < total:
-                result += f"\n\n(Showing lines {offset}-{end} of {total}. Use offset={end + 1} to continue.)"
+                # Truncated (limit or _MAX_CHARS) — prepend a prominent notice
+                result = (
+                    f"⚠️ 已显示 {offset}-{end}/{total} 行，文件未读完"
+                    f"（limit 或字符上限截断）。用 offset={end + 1} 继续读取。\n\n"
+                    + result
+                )
             else:
                 result += f"\n\n(End of file — {total} lines total)"
             return result

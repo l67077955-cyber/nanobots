@@ -364,12 +364,20 @@ class MemoryPalaceTool(Tool):
 
             # ── Store: add_drawer ─────────────────────────────────────────────
             elif action == "store":
+                missing = []
                 if not content:
-                    return "❌ Error: 'content' is required for store."
+                    missing.append("'content'")
                 if not wing:
-                    return "❌ Error: 'wing' is required for store (e.g. 'wing_code')."
+                    missing.append("'wing'")
                 if not room:
-                    return "❌ Error: 'room' is required for store (e.g. 'api-design')."
+                    missing.append("'room'")
+                if missing:
+                    return (
+                        "❌ Error: missing required parameter(s) for store: "
+                        + ", ".join(missing)
+                        + ".\n💡 Correct usage: memory_palace(action='store', content='...', "
+                        "wing='wing_code', room='api-design')"
+                    )
                 # visible is already a named parameter
                 result = mp["add_drawer"](
                     wing=wing,
