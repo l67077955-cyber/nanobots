@@ -1543,7 +1543,7 @@ async def broadcast_round(
                 new_reg.register(ListMessagesTool(mailbox=mailbox))
                 agent_tool_registries[new_name] = new_reg
                 # Register with search pool (initialize credits for new agent)
-                with search_pool._lock:
+                async with search_pool._lock:
                     search_pool._agents.append(new_name)
                     search_pool._credits[new_name] = search_pool._initial
                     search_pool._searches[new_name] = 0
@@ -1656,17 +1656,27 @@ async def broadcast_round(
         # still have results. Collect them before computing the round summary.
         pending_cleanup = [t for t in tasks if not t.done()]
         if pending_cleanup:
-            done_late, _ = await asyncio.wait(pending_cleanup, timeout=3)
-            for t in done_late:
+            # First pass: gather swallows CancelledError via return_exceptions.
+            await asyncio.gather(*pending_cleanup, return_exceptions=True)
+            # Second pass: any task still not done gets cancelled again and
+            # awaited, guaranteeing no orphaned agent tasks leak into the next round.
+            still_pending = [t for t in pending_cleanup if not t.done()]
+            if still_pending:
+                for t in still_pending:
+                    t.cancel()
+                await asyncio.gather(*still_pending, return_exceptions=True)
+            for t in pending_cleanup:
                 if t in tasks:
                     try:
                         n, c, tools_l, *_ = t.result()
                         if c:
                             completed += 1
                             results.append((n, c, tools_l or []))
-                    except Exception:
+                    except BaseException:
                         pass
     except asyncio.TimeoutError:
+        # Stop the engine so run_loop doesn't start another round.
+        engine._running = False
         for task, name in tasks.items():
             if not task.done():
                 task.cancel()

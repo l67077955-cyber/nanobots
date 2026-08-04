@@ -291,6 +291,14 @@ async def tool_loop(
         else:
             llm_messages = messages
 
+        # Drop orphan tool messages (role=tool without tool_call_id) that would
+        # cause provider API errors. These can appear from stale cache, history
+        # reloads, or interrupted tool batches.
+        llm_messages = [
+            m for m in llm_messages
+            if not (m.get("role") == "tool" and not m.get("tool_call_id"))
+        ]
+
         # ── Context breakdown before LLM call ──
         # Always log at DEBUG level; also log at INFO when debug_context is set
         _ctx_total = 0
