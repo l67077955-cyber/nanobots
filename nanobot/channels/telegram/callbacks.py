@@ -2806,7 +2806,7 @@ class CallbacksMixin:
                 soul_dir.mkdir(parents=True, exist_ok=True)
                 (soul_dir / "SOUL.md").write_text(prompt)
                 config_path = soul_dir.parent / "config.json"
-                config_data = {"model": model, "rank": "pawn"}
+                config_data = {"model": model}
                 if agent_hp:
                     config_data["hyperparams"] = agent_hp
                 config_path.write_text(json.dumps(config_data, indent=2))
