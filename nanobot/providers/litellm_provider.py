@@ -39,12 +39,17 @@ class LiteLLMProvider(LLMProvider):
         self,
         api_key: str | None = None,
         api_base: str | None = None,
-        default_model: str = "anthropic/claude-opus-4-5",
+        default_model: str | None = None,
         extra_headers: dict[str, str] | None = None,
         provider_name: str | None = None,
         retry_delays: tuple[int, ...] | None = None,
     ):
         super().__init__(api_key, api_base, retry_delays=retry_delays)
+        # When no explicit default is passed, inherit the configured model from
+        # ~/.nanobot/config.json (agents.defaults.model) at construction time so
+        # the provider never silently falls back to a stale hardcoded model.
+        if default_model is None:
+            default_model = self._inherited_default_model()
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
 
@@ -115,6 +120,23 @@ class LiteLLMProvider(LLMProvider):
         self.sampling_params: dict[str, float] = defaults
 
         self._langsmith_enabled = bool(os.getenv("LANGSMITH_API_KEY"))
+
+    @staticmethod
+    def _inherited_default_model() -> str:
+        """Resolve the provider's default model from the main config, falling back
+        to a conservative last-resort — never a silently stale hardcode first."""
+        try:
+            import json as _json
+            from pathlib import Path
+            cfg_path = Path.home() / ".nanobot" / "config.json"
+            if cfg_path.exists():
+                cfg = _json.loads(cfg_path.read_text())
+                val = (cfg.get("agents", {}).get("defaults", {}) or {}).get("model")
+                if val:
+                    return str(val)
+        except Exception:
+            pass
+        return "anthropic/claude-opus-4-5"
 
     def _setup_env(self, api_key: str, api_base: str | None, model: str) -> None:
         """Set environment variables based on detected provider."""
@@ -525,7 +547,15 @@ class LiteLLMProvider(LLMProvider):
     })
 
     def _resolve_pm_overrides(self, model: str) -> dict[str, str | None]:
-        """Resolve api_base/api_key/model from ~/.nanobot/providers_models.json."""
+        """Resolve api_base/api_key/model from ~/.nanobot/providers_models.json.
+
+        Uses ``nanobot.providers.model_match.resolve_provider`` (exact → prefix
+        → normalized-family cascade). When nothing matches, logs an explicit
+        warning and returns all-None; the caller surfaces the failure instead of
+        silently routing to a hardcoded default model.
+        """
+        from nanobot.providers.model_match import resolve_provider
+
         import json as _json
         from pathlib import Path
         pm_path = Path.home() / ".nanobot" / "providers_models.json"
@@ -536,42 +566,21 @@ class LiteLLMProvider(LLMProvider):
         except Exception:
             return {"api_base": None, "api_key": None, "model": None, "provider_name": None}
 
-        def _make(prov_name: str, info: dict, raw_model: str) -> dict:
-            if prov_name in self._NATIVE_PROVIDERS:
-                api_base = (info.get("url") or "").rstrip("/")
-                return {
-                    "api_base": api_base if api_base else None,
-                    "api_key": info.get("apiKey") or None,
-                    "model": None,
-                    "provider_name": prov_name,
-                }
-            # Custom provider (API distributor):
-            # - Add openai/ prefix so LiteLLM uses OpenAI SDK
-            # - Keep URL as-is (e.g. https://xxx/v1) because LiteLLM
-            #   sends to {api_base}/chat/completions (no extra /v1)
-            url = (info.get("url") or "").rstrip("/")
-            return {
-                "api_base": url,
-                "api_key": info.get("apiKey"),
-                "model": f"openai/{raw_model}",
-                "provider_name": prov_name,
-            }
-
-        # 1) Exact match in model lists
-        for prov_name, model_list in pm.get("models", {}).items():
-            if model in model_list:
-                info = pm.get("providers", {}).get(prov_name, {})
-                raw = model.split("/", 1)[1] if "/" in model else model
-                return _make(prov_name, info, raw)
-
-        # 2) Prefix match (e.g. "api123/" -> provider "api123")
-        prefix = model.split("/")[0] if "/" in model else ""
-        if prefix and prefix in pm.get("providers", {}):
-            info = pm["providers"][prefix]
-            raw = model.split("/", 1)[1] if "/" in model else model
-            return _make(prefix, info, raw)
-
-        return {"api_base": None, "api_key": None, "model": None, "provider_name": None}
+        hit = resolve_provider(pm, model, native_providers=self._NATIVE_PROVIDERS)
+        if hit is None:
+            logger.warning(
+                "Provider routing: model '{}' matches no provider in providers_models.json "
+                "(exact/prefix/family). Will fall back to LiteLLM default — check the "
+                "provider's model list or add this model via /editprovider.",
+                model,
+            )
+            return {"api_base": None, "api_key": None, "model": None, "provider_name": None}
+        return {
+            "api_base": hit.get("api_base"),
+            "api_key": hit.get("api_key"),
+            "model": hit.get("model"),
+            "provider_name": hit.get("provider_name"),
+        }
 
 
     def _build_kwargs(

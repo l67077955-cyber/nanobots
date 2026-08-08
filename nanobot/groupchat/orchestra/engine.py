@@ -59,6 +59,7 @@ class GroupChatEngine:
         cron_service: Any | None = None,
         send_outbound_fn: Any | None = None,
         mcp_servers: dict | None = None,
+        state_dir: Path | None = None,
     ):
         self.config = config
         self.provider = provider
@@ -67,6 +68,7 @@ class GroupChatEngine:
         self.web_proxy = web_proxy
         self._cron_service = cron_service
         self._send_outbound_fn = send_outbound_fn  # Callable[[OutboundMessage], Awaitable[None]]
+        self._state_dir = state_dir
 
         self._mailbox = MailboxHub(on_message=self._on_agent_comm)
         self._prompt_builder = PromptBuilder(config=config, workspace=workspace)
@@ -175,10 +177,12 @@ class GroupChatEngine:
         return registry
 
     def _get_reader_model(self) -> str:
-        """Read the reader agent's model from config. Falls back to default."""
+        """Read the reader agent's model from config. Falls back to the provider's
+        resolved default (from config.agents.defaults.model), then a conservative
+        last-resort default — no silently stale hardcoded model is preferred over
+        the configured default."""
         import json as _json
         reader_cfg_path = Path.home() / ".nanobot" / "agents" / "reader" / "config.json"
-        default_model = "openai/gpt-4.1-nano"
         if reader_cfg_path.exists():
             try:
                 cfg = _json.loads(reader_cfg_path.read_text())
@@ -187,7 +191,14 @@ class GroupChatEngine:
                     return model
             except Exception:
                 pass
-        return default_model
+        # Prefer the provider's configured default (set from config.agents.defaults.model)
+        # so the reader inherits whatever model the user actually configured.
+        if self.provider is not None:
+            p_default = getattr(self.provider, "default_model", None)
+            if p_default:
+                return p_default
+        # Last resort — conservative, should rarely trigger.
+        return "openai/gpt-4.1-nano"
 
     def _get_agent_registry(self, agent_name: str) -> "ToolRegistry":
         """Get (or build and cache) the tool registry for an agent's workspace scope."""
@@ -255,6 +266,7 @@ class GroupChatEngine:
         # Persistence layer
         self._state = GroupChatState(
             registry=self.registry,
+            state_dir=self._state_dir,
         )
 
         # Restore persisted state

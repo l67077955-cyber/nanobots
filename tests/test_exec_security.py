@@ -34,11 +34,18 @@ async def test_exec_blocks_curl_metadata():
 
 
 @pytest.mark.asyncio
-async def test_exec_blocks_wget_localhost():
+async def test_exec_allows_localhost():
+    """Exec runs on the same host, so curling localhost is NOT an SSRF vector.
+
+    The internal-URL guard intentionally allows loopback (see contains_internal_url
+    docstring: only *non-loopback* private IPs are blocked, since the real threat
+    is cloud metadata and internal networks). This test locks in that policy.
+    """
     tool = ExecTool()
     with patch("nanobot.security.network.socket.getaddrinfo", _fake_resolve_localhost):
         result = await tool.execute(command="wget http://localhost:8080/secret -O /tmp/out")
-    assert "Error" in result
+    # Not blocked by the internal-URL guard — localhost is allowed by design.
+    assert "internal/private URL detected" not in result
 
 
 @pytest.mark.asyncio

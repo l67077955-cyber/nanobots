@@ -94,7 +94,7 @@ async def run_loop(engine: Any) -> None:
                     f"👥 成员: {', '.join(engine._active_agents)}\n"
                     f"📌 直接发消息，所有 agent 会轮流回复"
                 )
-            else:
+            elif engine._active_agents:
                 await engine._send(
                     f"💬 对话模式\n"
                     f"👤 {engine._active_agents[0]}"

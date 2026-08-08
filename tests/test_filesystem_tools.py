@@ -38,7 +38,7 @@ class TestReadFileTool:
         assert "5| line 5" in result
         assert "7| line 7" in result
         assert "8| line 8" not in result
-        assert "Use offset=8 to continue" in result
+        assert "用 offset=8 继续读取" in result
 
     @pytest.mark.asyncio
     async def test_offset_beyond_end(self, tool, sample_file):
@@ -72,7 +72,7 @@ class TestReadFileTool:
         f.write_text("\n".join("x" * 110 for _ in range(2000)), encoding="utf-8")
         result = await tool.execute(path=str(f))
         assert len(result) <= ReadFileTool._MAX_CHARS + 500  # small margin for footer
-        assert "Use offset=" in result
+        assert "用 offset=" in result
 
 
 # ---------------------------------------------------------------------------

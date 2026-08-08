@@ -1111,9 +1111,13 @@ class EndDiscussionTool(Tool):
             non_waiting = (active - waiting) - {leader}
             if non_waiting:
                 names = ", ".join(sorted(non_waiting))
+                # Wake stuck agents so they finish their current operation and
+                # enter wait() — this unblocks the leader's end_discussion retry.
+                for name in sorted(non_waiting):
+                    self._mailbox.nudge_agent(name, reason="end-discussion-blocked")
                 return (
                     f"❌ 结束讨论失败：以下 agent 尚未进入等待状态：{names}。\n"
-                    "请在所有 agent 进入等待状态后，再次调用 end_discussion。"
+                    f"已向 {names} 发送唤醒提醒，请稍后重试 end_discussion。"
                 )
 
         reason_str = f"（原因: {reason}）" if reason else ""

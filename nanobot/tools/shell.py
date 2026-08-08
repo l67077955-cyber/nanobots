@@ -85,7 +85,10 @@ class ExecTool(Tool):
                     ),
                 },
             },
-            "required": [],
+            "anyOf": [
+                {"required": ["command"]},
+                {"required": ["commands"]},
+            ],
         }
 
     async def execute(

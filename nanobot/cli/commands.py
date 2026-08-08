@@ -281,6 +281,27 @@ def gateway(
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
 ):
     """Start the nanobot gateway."""
+    # ── Single-instance lock ──────────────────────────────────────────
+    # Prevents a second gateway (manual `nanobot gateway`/`-v`, stray
+    # background process, cron, etc.) from polling the same Telegram bot
+    # and triggering Telegram's 409 Conflict → SIGTERM churn. flock
+    # auto-releases on process exit (even on kill), so no stale lock.
+    # Unit tests of gateway()'s setup path set NANOBOT_SKIP_LOCK=1 (see
+    # tests/conftest.py) because a live systemd gateway legitimately holds
+    # the lock — the tests never start a bot, so the lock would false-block.
+    if os.environ.get("NANOBOT_SKIP_LOCK") != "1":
+        import fcntl
+        from pathlib import Path as _Path
+        _lock_dir = _Path.home() / ".nanobot"
+        _lock_dir.mkdir(parents=True, exist_ok=True)
+        _lock_fh = open(_lock_dir / "gateway.lock", "w")
+        try:
+            fcntl.flock(_lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print("nanobot gateway already running (single-instance lock held). "
+                  "Refusing to start a duplicate to avoid Telegram bot Conflict.")
+            raise typer.Exit(1)
+    # ───────────────────────────────────────────────────────────────────
     from nanobot.bus.queue import MessageBus
     from nanobot.channels.manager import ChannelManager
     from nanobot.config.paths import get_cron_dir, get_logs_dir

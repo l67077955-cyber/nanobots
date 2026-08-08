@@ -376,19 +376,24 @@ async def test_exec_always_returns_exit_code() -> None:
     assert "hello" in result
 
 
-async def test_exec_head_tail_truncation() -> None:
-    """Long output should preserve both head and tail."""
-    tool = ExecTool()
-    # Generate output that exceeds _MAX_OUTPUT (10_000 chars)
-    # Use python to generate output to avoid command line length limits
-    result = await tool.execute(
-        command="python -c \"print('A' * 6000 + '\\n' + 'B' * 6000)\""
-    )
+async def test_exec_head_tail_truncation(monkeypatch) -> None:
+    """Long exec output should preserve both head and tail (result_processor)."""
+    # Exec truncation moved out of ExecTool into the unified result_processor
+    # pipeline (commit 30d7454aa). Test the real current implementation.
+    from nanobot.groupchat.history import result_processor as rp
+
+    # Force a small exec max_chars so a 12k output definitely truncates.
+    monkeypatch.setattr(rp, "_get_max_chars", lambda tool: 100)
+
+    content = "A" * 6000 + "\n" + "B" * 6000
+    result = rp.process_tool_result(content, "exec", "call_1", meta={"exit_code": 0})
     assert "chars truncated" in result
-    # Head portion should start with As
-    assert result.startswith("A")
-    # Tail portion should end with the exit code which comes after Bs
-    assert "Exit code:" in result
+    # Head portion preserved (starts with A)
+    assert result.lstrip().startswith("A")
+    # Tail portion preserved (B's remain at the end of the text body)
+    assert "B" * 20 in result
+    # Meta footer injected
+    assert "Exit code: 0" in result
 
 
 async def test_exec_timeout_parameter() -> None:

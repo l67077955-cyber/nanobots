@@ -317,6 +317,8 @@ class BroadcastOrchestrator:
             # Rank-based per-agent capacity
             self.pool = ConversationPool(agents=list(self.exec_agents), per_agent_capacity=per_agent_cap)
         self.pool.ALLOCATE_TIMEOUT = float(self.gc_settings["allocate_timeout"])
+        # Attach pool to mailbox so nudge can skip pool-full agents (deadloop fix).
+        self.mailbox.set_pool(self.pool)
         
         await self.engine._send(f"threads {self.pool.status()}")
 
@@ -1399,7 +1401,7 @@ async def broadcast_round(
 
         except Exception as e:
             await tracker.set_state(name, "error", reason=str(e)[:40])
-            logger.error("Broadcast: {} failed: {}", name, e)
+            logger.exception("Broadcast: {} failed: {}", name, e)
             await engine._send(f"  ✗ {name} error: {e}")
             log_request(engine, name, model, "broadcast",
                         error=str(e))
@@ -1579,6 +1581,39 @@ async def broadcast_round(
         async def _watch_leader_end() -> None:
             await leader_end_event.wait()
 
+        # ── No-leader convergence detection ─────────────────────────────
+        # Without a leader there is no end_discussion tool to signal the end.
+        # Agents just keep nudging each other ("已闭环/停止回复") forever until
+        # the global timeout. This sentinel ends the round when the whole group
+        # has fallen silent (all waiting) and the message history is stable.
+        if leader_name is None:
+            _conv_quiet_secs = 15.0  # silence required before declaring convergence
+
+            async def _watch_no_leader_convergence() -> None:
+                while True:
+                    await mailbox.all_waiting_event.wait()
+                    # All agents are simultaneously waiting — nothing new to say.
+                    # Give them one final short chance to interject, then check
+                    # the history stayed stable (no new exchanges during silence).
+                    _baseline_hist_len = len(mailbox.history)
+                    await asyncio.sleep(_conv_quiet_secs)
+                    if len(mailbox.history) == _baseline_hist_len:
+                        logger.info(
+                            "Broadcast: no leader and all agents waiting & silent — "
+                            "declaring discussion converged, ending round"
+                        )
+                        engine._leader_end_reason = "全员无新消息，讨论收敛"
+                        leader_end_event.set()
+                        return
+                    # New activity arrived during silence — re-arm and wait again.
+
+            convergence_sentinel = asyncio.create_task(_watch_no_leader_convergence())
+            all_tasks.add(convergence_sentinel)
+            if hasattr(engine, '_broadcast_tasks'):
+                engine._broadcast_tasks['__convergence_sentinel'] = convergence_sentinel
+        else:
+            convergence_sentinel = None
+
         leader_end_sentinel = asyncio.create_task(_watch_leader_end())
         all_tasks.add(leader_end_sentinel)
 
@@ -1600,10 +1635,15 @@ async def broadcast_round(
 
             for t in done_set:
                 if t is leader_end_sentinel:
-                    logger.info("Broadcast: leader ended discussion")
                     _end_reason = getattr(engine, '_leader_end_reason', '')
-                    _reason_suffix = f"（{_end_reason}）" if _end_reason else ""
-                    await engine._send(f"━━ Leader 结束讨论{_reason_suffix} — entering synthesis ━━")
+                    if leader_name is None:
+                        logger.info("Broadcast: no-leader discussion converged")
+                        _reason_suffix = f"（{_end_reason}）" if _end_reason else ""
+                        await engine._send(f"━━ 讨论已收敛，结束本轮{_reason_suffix} ━━")
+                    else:
+                        logger.info("Broadcast: leader ended discussion")
+                        _reason_suffix = f"（{_end_reason}）" if _end_reason else ""
+                        await engine._send(f"━━ Leader 结束讨论{_reason_suffix} — entering synthesis ━━")
                     for task_obj, task_name in tasks.items():
                         if not task_obj.done() and task_name != leader_name:
                             await tracker.set_state(task_name, "cancelled", reason="leader ended")
@@ -1668,7 +1708,7 @@ async def broadcast_round(
         _user_listener_running = False
         _join_listener_running = False
         _aux_to_cancel = []
-        for aux_task in (user_task, join_task, leader_end_sentinel):
+        for aux_task in (user_task, join_task, leader_end_sentinel, convergence_sentinel):
             if aux_task is not None and not aux_task.done():
                 aux_task.cancel()
                 _aux_to_cancel.append(aux_task)
@@ -1682,7 +1722,7 @@ async def broadcast_round(
             logger.debug("Broadcast: all auxiliary tasks finished")
         # Remove auxiliary task entries from engine registry
         if hasattr(engine, '_broadcast_tasks'):
-            for key in ('__user_listener', '__join_listener', '__leader_sentinel'):
+            for key in ('__user_listener', '__join_listener', '__leader_sentinel', '__convergence_sentinel'):
                 engine._broadcast_tasks.pop(key, None)
 
     # (auto-share logic is now inside _run_one's auto-wait cycle)

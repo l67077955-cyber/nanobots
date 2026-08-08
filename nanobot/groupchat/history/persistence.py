@@ -24,30 +24,35 @@ _NANOBOT_DIR = Path.home() / ".nanobot"
 class GroupChatState:
     """Unified persistence layer for group chat state.
 
-    All state files live under ``~/.nanobot/``:
+    All state files live under ``state_dir`` (default ``~/.nanobot/``):
     - ``active_agents.json``  — ordered list of active agent names
     - ``leader.txt``          — current leader name (or absent)
     - ``groups.json``         — saved named groups
     - ``collab-sessions/``    — per-session event logs
+
+    ``state_dir`` is injectable so tests can isolate state in a temp directory
+    instead of polluting the real ``~/.nanobot/``.  It defaults to the global
+    directory for backwards compatibility.
     """
 
-    def __init__(self, registry: dict[str, Any]) -> None:
+    def __init__(self, registry: dict[str, Any], state_dir: Path | None = None) -> None:
         self._registry = registry
+        self._state_dir = state_dir or _NANOBOT_DIR
         self._session_dir: Path | None = None
 
     # ── Active Agents ────────────────────────────────────────
 
     @property
     def _active_file(self) -> Path:
-        return _NANOBOT_DIR / "active_agents.json"
+        return self._state_dir / "active_agents.json"
 
     def save_active(self, agents: list[str]) -> None:
         """Persist active agents list (and order) to disk."""
         try:
             self._active_file.parent.mkdir(parents=True, exist_ok=True)
             self._active_file.write_text(json.dumps(agents, ensure_ascii=False))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to persist active agents to {}: {}", self._active_file, e)
 
     def load_active(self) -> list[str]:
         """Load active agents from disk, filtering out unregistered ones."""
@@ -58,39 +63,39 @@ class GroupChatState:
                 if valid:
                     logger.info("Restored active agents: {}", valid)
                 return valid
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to load active agents from {}: {}", self._active_file, e)
         return []
 
     # ── Leader ───────────────────────────────────────────────
 
     def save_leader(self, leader: str | None) -> None:
         try:
-            p = _NANOBOT_DIR / "leader.txt"
+            p = self._state_dir / "leader.txt"
             if leader:
                 p.write_text(leader)
             elif p.exists():
                 p.unlink()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to persist leader to {}: {}", p, e)
 
     def load_leader(self) -> str | None:
-        p = _NANOBOT_DIR / "leader.txt"
+        p = self._state_dir / "leader.txt"
         if p.exists():
             try:
                 name = p.read_text().strip()
                 if name and name in self._registry:
                     logger.info("Restored leader: {}", name)
                     return name
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to load leader from {}: {}", p, e)
         return None
 
     # ── Groups ───────────────────────────────────────────────
 
     @property
     def _groups_file(self) -> Path:
-        return _NANOBOT_DIR / "groups.json"
+        return self._state_dir / "groups.json"
 
     def load_groups(self) -> dict[str, list[str]]:
         if self._groups_file.exists():
@@ -117,7 +122,7 @@ class GroupChatState:
     def create_session(self) -> Path:
         """Create a new session directory and return its path."""
         timestamp = _cn_now().strftime("%Y%m%d-%H%M%S")
-        sessions_dir = _NANOBOT_DIR / "collab-sessions"
+        sessions_dir = self._state_dir / "collab-sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
         self._session_dir = sessions_dir / f"gc-{timestamp}"
         self._session_dir.mkdir(parents=True, exist_ok=True)

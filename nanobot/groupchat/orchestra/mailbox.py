@@ -68,6 +68,9 @@ class ConversationPool:
         }
         # Track pending replies: {recipient: [sender1, sender2, ...]}
         self._pending: dict[str, list[str]] = {a: [] for a in self._agents}
+        # Outstanding user-allocated slots per agent (taken from the agent's
+        # OWN pool; must be returned to the same agent when it waits/replies).
+        self._user_alloc: dict[str, int] = {a: 0 for a in self._agents}
         # User priority: when cleared, agents are blocked from allocating
         self._user_priority = asyncio.Event()
         self._user_priority.set()
@@ -168,8 +171,14 @@ class ConversationPool:
                 except (asyncio.TimeoutError, Exception):
                     # No slot available — skip decrement to avoid negative
                     # _available (the "-4/30" thread-bar display bug).
+                    # Also remove the "User" marker so it isn't later released
+                    # as if it had actually been allocated.
+                    if self._pending.get(r):
+                        self._pending[r] = [s for s in self._pending[r] if s != "User"]
                     continue
             self._available[r] = self._available.get(r, 0) - 1
+            # Slot came from r's OWN pool — register it so it can be returned.
+            self._user_alloc[r] = self._user_alloc.get(r, 0) + 1
 
         self._user_priority.set()
         logger.info(
@@ -186,12 +195,23 @@ class ConversationPool:
         pending = self._pending.get(agent_name, [])
         released = 0
         for sender in pending:
+            if self._is_user_sender(sender):
+                # User slot was taken from agent_name's OWN pool — return it there.
+                if self._release_user_slot(agent_name):
+                    released += 1
+                continue
             sem = self._sems.get(sender)
             if sem:
                 sem.release()
                 self._available[sender] = self._available.get(sender, 0) + 1
                 released += 1
         self._pending[agent_name] = []
+        # Return any leftover user slots not represented in _pending.
+        while self._user_alloc.get(agent_name, 0) > 0:
+            if self._release_user_slot(agent_name):
+                released += 1
+            else:
+                break
         if released > 0:
             logger.debug(
                 "ConversationPool: {} released {} unread slots back to senders",
@@ -202,9 +222,16 @@ class ConversationPool:
     def mark_replied(self, agent_name: str, to_sender: str) -> None:
         """Mark that agent replied to a message from to_sender.
 
-        Releases 1 slot back to to_sender's pool.
+        Releases 1 slot back to to_sender's pool (or back to agent_name's own
+        pool when to_sender is the user, since user slots are taken from the
+        recipient's own pool).
         """
         pending = self._pending.get(agent_name, [])
+        if self._is_user_sender(to_sender):
+            if "User" in pending:
+                pending.remove("User")
+                self._release_user_slot(agent_name)
+            return
         if to_sender in pending:
             pending.remove(to_sender)
             sem = self._sems.get(to_sender)
@@ -215,6 +242,27 @@ class ConversationPool:
                 "ConversationPool: {} replied to {} (released 1 slot to sender)",
                 agent_name, to_sender,
             )
+
+    @staticmethod
+    def _is_user_sender(sender: str) -> bool:
+        """True if the sender is the user broadcast (by any canonical alias)."""
+        return sender in ("User", "用户", "user")
+
+    def _release_user_slot(self, agent_name: str) -> bool:
+        """Return one outstanding user-allocated slot to the agent's own pool.
+
+        Returns True if a slot was actually returned.
+        """
+        n = self._user_alloc.get(agent_name, 0)
+        if n <= 0:
+            return False
+        sem = self._sems.get(agent_name)
+        if sem is None:
+            return False
+        sem.release()
+        self._available[agent_name] = self._available.get(agent_name, 0) + 1
+        self._user_alloc[agent_name] = n - 1
+        return True
 
     @property
     def available(self) -> int:
@@ -319,6 +367,13 @@ class MailboxHub:
         self._busy_agents: set[str] = set()
         # Auto-incrementing message ID for quote_message support
         self._next_msg_id: int = 0
+        # ── Nudge backoff + pool reference (deadloop fix) ──
+        self._last_nudge: dict[str, float] = {}
+        self._pool: Any = None
+
+    def set_pool(self, pool: Any) -> None:
+        """Attach the ConversationPool so nudge can skip pool-full agents."""
+        self._pool = pool
 
     def set_leader_name(self, leader_name: str) -> None:
         """Set/update the leader name (may not be known at construction time)."""
@@ -756,11 +811,34 @@ class MailboxHub:
         Called when all active agents are simultaneously waiting, which is
         a deadlock.  Picks one agent at random and injects a system message
         so it re-enters tool_loop and can either progress or end_discussion.
+
+        Deadloop guard: skips agents whose conversation pool is full (they
+        cannot act anyway — nudging them just wakes them into a BLOCKED
+        chatroom_send) and enforces a 30s backoff per agent so a stuck
+        agent is not re-nudged in a tight loop.
         """
         candidates = list(self._active_agents)
         if not candidates:
             return
-        chosen = random.choice(candidates)
+        now = _time.time()
+        nudgeable = []
+        for a in candidates:
+            # Skip pool-full agents: they have no free conversation slots,
+            # so a nudge would wake them only to fail chatroom_send.
+            if self._pool is not None and self._pool.agent_available(a) <= 0:
+                continue
+            # 30s backoff per agent prevents nudge storms.
+            if now - self._last_nudge.get(a, 0.0) < 30.0:
+                continue
+            nudgeable.append(a)
+        if not nudgeable:
+            logger.warning(
+                "MailboxHub: no nudgeable agent (pool-full or backoff) — "
+                "skipping nudge to avoid deadloop",
+            )
+            return
+        chosen = random.choice(nudgeable)
+        self._last_nudge[chosen] = now
         nudge = AgentMessage(
             sender="系统",
             content=(
@@ -776,6 +854,27 @@ class MailboxHub:
             logger.info(
                 "MailboxHub: nudged {} to break {} deadlock", chosen, reason,
             )
+
+    def nudge_agent(self, agent_name: str, reason: str = "manual") -> None:
+        """Inject a system nudge to a specific agent.
+
+        Used e.g. when end_discussion is blocked by an agent that has not
+        entered the waiting state — wake it so it can finish and wait().
+        """
+        q = self._queues.get(agent_name)
+        if q is None:
+            logger.warning("MailboxHub.nudge_agent: no mailbox for {}", agent_name)
+            return
+        nudge = AgentMessage(
+            sender="系统",
+            content=(
+                "[系统提醒] 你尚未进入等待状态，Leader 无法结束讨论。\n"
+                "请完成当前操作后调用 wait() 进入等待状态。"
+            ),
+            targets=[agent_name],
+        )
+        q.put_nowait(nudge)
+        logger.info("MailboxHub: nudged {} ({})", agent_name, reason)
 
     def mark_agent_done(self, agent_name: str) -> None:
         """Mark an agent as finished (no longer active)."""

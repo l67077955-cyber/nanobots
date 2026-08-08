@@ -2718,7 +2718,16 @@ class CallbacksMixin:
                     pm["models"][prov].append(model_id)
                 self._save_pm(pm)
                 del self._edit_state[chat_id]
-                await self._gc_send(chat_id, f"✅ 模型已添加!\n🏢 {prov} / 🤖 {model_id}")
+                # Linkage: confirm the added model will route to this provider.
+                try:
+                    from nanobot.providers.model_match import resolve_provider, describe_match
+                    hit = resolve_provider(pm, model_id)
+                    note = (describe_match(hit, model_id) if hit
+                            else "❌ " + describe_match(None, model_id))
+                except Exception:
+                    note = ""
+                suffix = f"\n{note}" if note else ""
+                await self._gc_send(chat_id, f"✅ 模型已添加!\n🏢 {prov} / 🤖 {model_id}{suffix}")
                 return
             elif field == "ep_url":
                 prov = state["prov_name"]
@@ -2872,6 +2881,16 @@ class CallbacksMixin:
             await self._gc_send(chat_id, f"✅ {agent_name} 人设已更新:\n{preview}")
         elif field == "model":
             new_model = content.strip()
+            # Linkage validation: does this model route to a provider? Surface an
+            # explicit warning instead of silently accepting a model that will
+            # fall through to a stale default at request time.
+            try:
+                from nanobot.providers.model_match import resolve_provider, describe_match
+                pm = self._load_pm()
+                hit = resolve_provider(pm, new_model)
+                route_note = describe_match(hit, new_model) if hit else "❌ " + (describe_match(None, new_model))
+            except Exception:
+                route_note = ""
             engine.registry[agent_name]["model"] = new_model
             # Persist to disk
             from pathlib import Path as _P
@@ -2888,7 +2907,8 @@ class CallbacksMixin:
                     cfg = json.loads(cfg_path.read_text())
                     cfg["model"] = new_model
                     cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
-            await self._gc_send(chat_id, f"✅ {agent_name} 模型: {new_model}")
+            suffix = f"\n{route_note}" if route_note else ""
+            await self._gc_send(chat_id, f"✅ {agent_name} 模型: {new_model}{suffix}")
 
         del self._edit_state[chat_id]
 

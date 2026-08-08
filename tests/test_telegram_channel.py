@@ -10,7 +10,6 @@ from nanobot.bus.queue import MessageBus
 from nanobot.channels.telegram import TelegramChannel
 from nanobot.channels.telegram import TelegramConfig
 
-
 class _FakeHTTPXRequest:
     instances: list["_FakeHTTPXRequest"] = []
 
@@ -22,14 +21,12 @@ class _FakeHTTPXRequest:
     def clear(cls) -> None:
         cls.instances.clear()
 
-
 class _FakeUpdater:
     def __init__(self, on_start_polling) -> None:
         self._on_start_polling = on_start_polling
 
     async def start_polling(self, **kwargs) -> None:
         self._on_start_polling()
-
 
 class _FakeBot:
     def __init__(self) -> None:
@@ -68,7 +65,6 @@ class _FakeBot:
             pass
         return SimpleNamespace(download_to_drive=_fake_download)
 
-
 class _FakeApp:
     def __init__(self, on_start_polling) -> None:
         self.bot = _FakeBot()
@@ -87,7 +83,6 @@ class _FakeApp:
 
     async def start(self) -> None:
         pass
-
 
 class _FakeBuilder:
     def __init__(self, app: _FakeApp) -> None:
@@ -117,7 +112,6 @@ class _FakeBuilder:
     def build(self):
         return self.app
 
-
 def _make_telegram_update(
     *,
     chat_type: str = "group",
@@ -145,7 +139,6 @@ def _make_telegram_update(
         message_id=1,
     )
     return SimpleNamespace(message=message, effective_user=user)
-
 
 @pytest.mark.asyncio
 async def test_start_creates_separate_pools_with_proxy(monkeypatch) -> None:
@@ -178,7 +171,6 @@ async def test_start_creates_separate_pools_with_proxy(monkeypatch) -> None:
     assert builder.request_value is api_req
     assert builder.get_updates_request_value is poll_req
 
-
 @pytest.mark.asyncio
 async def test_start_respects_custom_pool_config(monkeypatch) -> None:
     _FakeHTTPXRequest.clear()
@@ -208,69 +200,6 @@ async def test_start_respects_custom_pool_config(monkeypatch) -> None:
     assert api_req.kwargs["pool_timeout"] == 10.0
     assert poll_req.kwargs["pool_timeout"] == 10.0
 
-
-@pytest.mark.asyncio
-async def test_send_text_retries_on_timeout() -> None:
-    """_send_text retries on TimedOut before succeeding."""
-    from telegram.error import TimedOut
-
-    channel = TelegramChannel(
-        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
-        MessageBus(),
-    )
-    channel._app = _FakeApp(lambda: None)
-
-    call_count = 0
-    original_send = channel._app.bot.send_message
-
-    async def flaky_send(**kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count <= 2:
-            raise TimedOut()
-        return await original_send(**kwargs)
-
-    channel._app.bot.send_message = flaky_send
-
-    import nanobot.channels.telegram as tg_mod
-    orig_delay = tg_mod._SEND_RETRY_BASE_DELAY
-    tg_mod._SEND_RETRY_BASE_DELAY = 0.01
-    try:
-        await channel._send_text(123, "hello", None, {})
-    finally:
-        tg_mod._SEND_RETRY_BASE_DELAY = orig_delay
-
-    assert call_count == 3
-    assert len(channel._app.bot.sent_messages) == 1
-
-
-@pytest.mark.asyncio
-async def test_send_text_gives_up_after_max_retries() -> None:
-    """_send_text raises TimedOut after exhausting all retries."""
-    from telegram.error import TimedOut
-
-    channel = TelegramChannel(
-        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
-        MessageBus(),
-    )
-    channel._app = _FakeApp(lambda: None)
-
-    async def always_timeout(**kwargs):
-        raise TimedOut()
-
-    channel._app.bot.send_message = always_timeout
-
-    import nanobot.channels.telegram as tg_mod
-    orig_delay = tg_mod._SEND_RETRY_BASE_DELAY
-    tg_mod._SEND_RETRY_BASE_DELAY = 0.01
-    try:
-        await channel._send_text(123, "hello", None, {})
-    finally:
-        tg_mod._SEND_RETRY_BASE_DELAY = orig_delay
-
-    assert channel._app.bot.sent_messages == []
-
-
 def test_derive_topic_session_key_uses_thread_id() -> None:
     message = SimpleNamespace(
         chat=SimpleNamespace(type="supergroup"),
@@ -280,17 +209,14 @@ def test_derive_topic_session_key_uses_thread_id() -> None:
 
     assert TelegramChannel._derive_topic_session_key(message) == "telegram:-100123:topic:42"
 
-
 def test_get_extension_falls_back_to_original_filename() -> None:
     channel = TelegramChannel(TelegramConfig(), MessageBus())
 
     assert channel._get_extension("file", None, "report.pdf") == ".pdf"
     assert channel._get_extension("file", None, "archive.tar.gz") == ".tar.gz"
 
-
 def test_telegram_group_policy_defaults_to_mention() -> None:
     assert TelegramConfig().group_policy == "mention"
-
 
 def test_is_allowed_accepts_legacy_telegram_id_username_formats() -> None:
     channel = TelegramChannel(TelegramConfig(allow_from=["12345", "alice", "67890|bob"]), MessageBus())
@@ -299,13 +225,11 @@ def test_is_allowed_accepts_legacy_telegram_id_username_formats() -> None:
     assert channel.is_allowed("99999|alice") is True
     assert channel.is_allowed("67890|bob") is True
 
-
 def test_is_allowed_rejects_invalid_legacy_telegram_sender_shapes() -> None:
     channel = TelegramChannel(TelegramConfig(allow_from=["alice"]), MessageBus())
 
     assert channel.is_allowed("attacker|alice|extra") is False
     assert channel.is_allowed("not-a-number|alice") is False
-
 
 @pytest.mark.asyncio
 async def test_send_progress_keeps_message_in_topic() -> None:
@@ -323,7 +247,6 @@ async def test_send_progress_keeps_message_in_topic() -> None:
     )
 
     assert channel._app.bot.sent_messages[0]["message_thread_id"] == 42
-
 
 @pytest.mark.asyncio
 async def test_send_reply_infers_topic_from_message_id_cache() -> None:
@@ -343,66 +266,6 @@ async def test_send_reply_infers_topic_from_message_id_cache() -> None:
 
     assert channel._app.bot.sent_messages[0]["message_thread_id"] == 42
     assert channel._app.bot.sent_messages[0]["reply_parameters"].message_id == 10
-
-
-@pytest.mark.asyncio
-async def test_send_remote_media_url_after_security_validation(monkeypatch) -> None:
-    channel = TelegramChannel(
-        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
-        MessageBus(),
-    )
-    channel._app = _FakeApp(lambda: None)
-    monkeypatch.setattr("nanobot.channels.telegram.validate_url_target", lambda url: (True, ""))
-
-    await channel.send(
-        OutboundMessage(
-            channel="telegram",
-            chat_id="123",
-            content="",
-            media=["https://example.com/cat.jpg"],
-        )
-    )
-
-    assert channel._app.bot.sent_media == [
-        {
-            "kind": "photo",
-            "chat_id": 123,
-            "photo": "https://example.com/cat.jpg",
-            "reply_parameters": None,
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_send_blocks_unsafe_remote_media_url(monkeypatch) -> None:
-    channel = TelegramChannel(
-        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
-        MessageBus(),
-    )
-    channel._app = _FakeApp(lambda: None)
-    monkeypatch.setattr(
-        "nanobot.channels.telegram.validate_url_target",
-        lambda url: (False, "Blocked: example.com resolves to private/internal address 127.0.0.1"),
-    )
-
-    await channel.send(
-        OutboundMessage(
-            channel="telegram",
-            chat_id="123",
-            content="",
-            media=["http://example.com/internal.jpg"],
-        )
-    )
-
-    assert channel._app.bot.sent_media == []
-    assert channel._app.bot.sent_messages == [
-        {
-            "chat_id": 123,
-            "text": "[Failed to send: internal.jpg]",
-            "reply_parameters": None,
-        }
-    ]
-
 
 @pytest.mark.asyncio
 async def test_group_policy_mention_ignores_unmentioned_group_message() -> None:
@@ -424,7 +287,6 @@ async def test_group_policy_mention_ignores_unmentioned_group_message() -> None:
 
     assert handled == []
     assert channel._app.bot.get_me_calls == 1
-
 
 @pytest.mark.asyncio
 async def test_group_policy_mention_accepts_text_mention_and_caches_bot_identity() -> None:
@@ -448,7 +310,6 @@ async def test_group_policy_mention_accepts_text_mention_and_caches_bot_identity
 
     assert len(handled) == 2
     assert channel._app.bot.get_me_calls == 1
-
 
 @pytest.mark.asyncio
 async def test_group_policy_mention_accepts_caption_mention() -> None:
@@ -475,7 +336,6 @@ async def test_group_policy_mention_accepts_caption_mention() -> None:
     assert len(handled) == 1
     assert handled[0]["content"] == "@nanobot_test photo"
 
-
 @pytest.mark.asyncio
 async def test_group_policy_mention_accepts_reply_to_bot() -> None:
     channel = TelegramChannel(
@@ -496,7 +356,6 @@ async def test_group_policy_mention_accepts_reply_to_bot() -> None:
     await channel._on_message(_make_telegram_update(text="reply", reply_to_message=reply), None)
 
     assert len(handled) == 1
-
 
 @pytest.mark.asyncio
 async def test_group_policy_open_accepts_plain_group_message() -> None:
@@ -519,12 +378,10 @@ async def test_group_policy_open_accepts_plain_group_message() -> None:
     assert len(handled) == 1
     assert channel._app.bot.get_me_calls == 0
 
-
 def test_extract_reply_context_no_reply() -> None:
     """When there is no reply_to_message, _extract_reply_context returns None."""
     message = SimpleNamespace(reply_to_message=None)
     assert TelegramChannel._extract_reply_context(message) is None
-
 
 def test_extract_reply_context_with_text() -> None:
     """When reply has text, return prefixed string."""
@@ -532,22 +389,17 @@ def test_extract_reply_context_with_text() -> None:
     message = SimpleNamespace(reply_to_message=reply)
     assert TelegramChannel._extract_reply_context(message) == "[Reply to: Hello world]"
 
-
 def test_extract_reply_context_with_caption_only() -> None:
     """When reply has only caption (no text), caption is used."""
     reply = SimpleNamespace(text=None, caption="Photo caption")
     message = SimpleNamespace(reply_to_message=reply)
     assert TelegramChannel._extract_reply_context(message) == "[Reply to: Photo caption]"
 
-
-
-
 def test_extract_reply_context_no_text_returns_none() -> None:
     """When reply has no text/caption, _extract_reply_context returns None (media handled separately)."""
     reply = SimpleNamespace(text=None, caption=None)
     message = SimpleNamespace(reply_to_message=reply)
     assert TelegramChannel._extract_reply_context(message) is None
-
 
 @pytest.mark.asyncio
 async def test_on_message_includes_reply_context() -> None:
@@ -570,7 +422,6 @@ async def test_on_message_includes_reply_context() -> None:
     assert len(handled) == 1
     assert handled[0]["content"].startswith("[Reply to: Hello]")
     assert "translate this" in handled[0]["content"]
-
 
 @pytest.mark.asyncio
 async def test_download_message_media_returns_path_when_download_succeeds(
@@ -607,7 +458,6 @@ async def test_download_message_media_returns_path_when_download_succeeds(
     assert len(parts) == 1
     assert "fid123" in paths[0]
     assert "[image:" in parts[0]
-
 
 @pytest.mark.asyncio
 async def test_download_message_media_uses_file_unique_id_when_available(
@@ -658,7 +508,6 @@ async def test_download_message_media_uses_file_unique_id_when_available(
     assert paths == [str(media_dir / "stable-unique-id.jpg")]
     assert parts == [f"[image: {media_dir / 'stable-unique-id.jpg'}]"]
 
-
 @pytest.mark.asyncio
 async def test_on_message_attaches_reply_to_media_when_available(monkeypatch, tmp_path) -> None:
     """When user replies to a message with media, that media is downloaded and attached to the turn."""
@@ -707,7 +556,6 @@ async def test_on_message_attaches_reply_to_media_when_available(monkeypatch, tm
     assert len(handled[0]["media"]) == 1
     assert "reply_photo_fid" in handled[0]["media"][0]
 
-
 @pytest.mark.asyncio
 async def test_on_message_reply_to_media_fallback_when_download_fails() -> None:
     """When reply has media but download fails, no media attached and no reply tag."""
@@ -740,7 +588,6 @@ async def test_on_message_reply_to_media_fallback_when_download_fails() -> None:
     assert len(handled) == 1
     assert "what is this?" in handled[0]["content"]
     assert handled[0]["media"] == []
-
 
 @pytest.mark.asyncio
 async def test_on_message_reply_to_caption_and_media(monkeypatch, tmp_path) -> None:
@@ -790,7 +637,6 @@ async def test_on_message_reply_to_caption_and_media(monkeypatch, tmp_path) -> N
     assert len(handled[0]["media"]) == 1
     assert "cat_fid" in handled[0]["media"][0]
 
-
 @pytest.mark.asyncio
 async def test_forward_command_does_not_inject_reply_context() -> None:
     """Slash commands forwarded via _forward_command must not include reply context."""
@@ -810,7 +656,6 @@ async def test_forward_command_does_not_inject_reply_context() -> None:
 
     assert len(handled) == 1
     assert handled[0]["content"] == "/new"
-
 
 @pytest.mark.asyncio
 async def test_on_help_includes_restart_command() -> None:

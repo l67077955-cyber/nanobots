@@ -34,7 +34,7 @@ class TelegramConfig(Base):
     token: str = ""
     proxy: str | None = None
     reply_to_message: bool = True
-    group_policy: str = "restricted"  # "open" or "restricted"
+    group_policy: str = "mention"  # "open" or "mention" — non-open = @mention/reply-to-bot only
     allow_from: list[str] = []
 
 
@@ -246,21 +246,29 @@ class Config(BaseSettings):
         p, _ = self._match_provider(model)
         return p
 
+    @staticmethod
+    def _resolve_default_model(model: str | None, agent_defaults_model: str | None) -> str | None:
+        """If no explicit model, fall back to the configured default agent model."""
+        return model or agent_defaults_model or None
+
     def get_provider_name(self, model: str | None = None) -> str | None:
         """Get the registry name of the matched provider (e.g. "deepseek", "openrouter")."""
-        _, name = self._match_provider(model)
+        resolved = self._resolve_default_model(model, self.agents.defaults.model)
+        _, name = self._match_provider(resolved)
         return name
 
     def get_api_key(self, model: str | None = None) -> str | None:
         """Get API key for the given model. Falls back to first available key."""
-        p = self.get_provider(model)
+        resolved = self._resolve_default_model(model, self.agents.defaults.model)
+        p = self.get_provider(resolved)
         return p.api_key if p else None
 
     def get_api_base(self, model: str | None = None) -> str | None:
         """Get API base URL for the given model. Applies default URLs for gateway/local providers."""
         from nanobot.providers.registry import find_by_name
 
-        p, name = self._match_provider(model)
+        resolved = self._resolve_default_model(model, self.agents.defaults.model)
+        p, name = self._match_provider(resolved)
         if p and p.api_base:
             return p.api_base
         # Only gateways get a default api_base here. Standard providers

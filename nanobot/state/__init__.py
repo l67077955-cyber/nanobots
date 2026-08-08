@@ -1,0 +1,1 @@
+"""Shared storage for nanobot settings (single read/write point)."""

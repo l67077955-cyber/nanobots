@@ -18,10 +18,36 @@ class ProviderCommandsMixin:
         return Path.home() / ".nanobot" / "providers_models.json"
 
     def _load_pm(self) -> dict:
+        """Load provmodels_models.json, self-healing dirty model lists in code.
+
+        Model arrays can accumulate hand-edited separator/comment lines
+        (``═══ xxx ═══``). Instead of requiring manual cleanup, this loads,
+        sanitizes every model list with :func:`sanitize_model_list`, and writes
+        the clean version back — so the file heals itself on next use.
+        """
+        from nanobot.providers.model_match import sanitize_model_list
+
         p = self._pm_path()
-        if p.exists():
-            return json.loads(p.read_text())
-        return {"providers": {}, "models": {}}
+        if not p.exists():
+            return {"providers": {}, "models": {}}
+        try:
+            data = json.loads(p.read_text())
+        except Exception:
+            return {"providers": {}, "models": {}}
+        changed = False
+        models = data.setdefault("models", {})
+        for prov, mlist in list(models.items()):
+            if isinstance(mlist, list):
+                clean = sanitize_model_list(mlist)
+                if clean != mlist:
+                    models[prov] = clean
+                    changed = True
+        if changed:
+            try:
+                self._save_pm(data)
+            except Exception:
+                pass
+        return data
 
     def _save_pm(self, data: dict) -> None:
         self._pm_path().write_text(json.dumps(data, indent=2, ensure_ascii=False))

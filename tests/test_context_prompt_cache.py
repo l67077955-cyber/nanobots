@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from nanobot.groupchat.middleware.prompt_builder import PromptBuilder
-from nanobot.groupchat.middleware.config import GroupChatConfig
+from nanobot.groupchat.history.prompt_builder import PromptBuilder
+from nanobot.groupchat.config import GroupChatConfig
 from nanobot.utils.helpers import RUNTIME_CONTEXT_TAG
 
 

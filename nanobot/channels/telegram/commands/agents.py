@@ -161,7 +161,10 @@ class AgentCommandsMixin:
         if not available:
             await update.message.reply_text("所有 agent 都已在对话中")
             return
-        buttons = [[InlineKeyboardButton(f"{n} ({i.get('model','?')})", callback_data=f"add:{n}")] for n, i in available]
+        buttons = [[
+            InlineKeyboardButton(f"➕ {n} ({i.get('model','?')})", callback_data=f"add:{n}"),
+            InlineKeyboardButton("🗑️", callback_data=f"da:{n}"),
+        ] for n, i in available]
         await update.message.reply_text("➕ 选择要加入的 Agent:", reply_markup=InlineKeyboardMarkup(buttons))
 
     async def _on_removeagent(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
