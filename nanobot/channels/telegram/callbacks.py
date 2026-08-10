@@ -2684,6 +2684,19 @@ class CallbacksMixin:
                     )
                 await query.edit_message_text(text)
 
+    async def _cancel_edit(self, chat_id: str, content: str) -> bool:
+        """Abort the current interactive edit if ``content`` is a cancel token.
+
+        Used by every text-input branch: '0' / '取消' / '/cancel'. Clears the
+        edit state, sends the cancellation notice, and returns True so the
+        caller returns immediately.
+        """
+        if content.strip() not in ("0", "取消", "/cancel"):
+            return False
+        self._edit_state.pop(chat_id, None)
+        await self._gc_send(chat_id, "❌ 已取消")
+        return True
+
     async def _handle_edit_input(self, chat_id: str, content: str) -> None:
         """Process interactive edit state input."""
         state = self._edit_state[chat_id]
@@ -2809,9 +2822,7 @@ class CallbacksMixin:
 
         # Handle hyperparams value input
         if field == "hp_value":
-            del self._edit_state[chat_id]
-            if content.strip() in ("0", "取消", "/cancel"):
-                await self._gc_send(chat_id, "❌ 已取消")
+            if await self._cancel_edit(chat_id, content):
                 return
             hp_key = state.get("hp_key", "")
             raw_val = content.strip()
@@ -2846,9 +2857,7 @@ class CallbacksMixin:
 
         # Handle custom hyperparam name input
         if field == "hp_add_custom":
-            del self._edit_state[chat_id]
-            if content.strip() in ("0", "取消", "/cancel"):
-                await self._gc_send(chat_id, "❌ 已取消")
+            if await self._cancel_edit(chat_id, content):
                 return
             key = content.strip().lower().replace(" ", "_")
             self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key, "hp_is_new": True}
@@ -2857,9 +2866,7 @@ class CallbacksMixin:
 
         # Handle agent hyperparams value input
         if field == "ahp_value":
-            del self._edit_state[chat_id]
-            if content.strip() in ("0", "取消", "/cancel"):
-                await self._gc_send(chat_id, "❌ 已取消")
+            if await self._cancel_edit(chat_id, content):
                 return
             hp_key = state.get("hp_key", "")
             a_name = state.get("agent", "")
@@ -2907,9 +2914,7 @@ class CallbacksMixin:
 
         # Handle agent custom hyperparam name input
         if field == "ahp_add_custom":
-            del self._edit_state[chat_id]
-            if content.strip() in ("0", "取消", "/cancel"):
-                await self._gc_send(chat_id, "❌ 已取消")
+            if await self._cancel_edit(chat_id, content):
                 return
             a_name = state.get("agent", "")
             key = content.strip().lower().replace(" ", "_")
@@ -2919,9 +2924,7 @@ class CallbacksMixin:
 
         # Handle groupchat settings value input
         if field == "gc_value":
-            del self._edit_state[chat_id]
-            if content.strip() in ("0", "取消", "/cancel"):
-                await self._gc_send(chat_id, "❌ 已取消")
+            if await self._cancel_edit(chat_id, content):
                 return
             gc_key = state.get("gc_key", "")
             try:
@@ -2940,18 +2943,14 @@ class CallbacksMixin:
             await self._gc_send(chat_id, f"✅ {label}: {old_val} → {value}\n下次群聊生效，已持久化")
             return
         if field == "sg_name":
-            del self._edit_state[chat_id]
-            if content.strip() in ("0", "取消", "/cancel"):
-                await self._gc_send(chat_id, "❌ 已取消")
+            if await self._cancel_edit(chat_id, content):
                 return
             result = self._groupchat_engine.save_group(content.strip())
             await self._gc_send(chat_id, result)
             return
 
         # Universal cancel — works at any edit prompt
-        if content.strip() in ("0", "取消", "/cancel"):
-            del self._edit_state[chat_id]
-            await self._gc_send(chat_id, "❌ 已取消")
+        if await self._cancel_edit(chat_id, content):
             return
 
         # Handle provider/model management flows
@@ -3031,9 +3030,7 @@ class CallbacksMixin:
         if state.get("mode") == "create":
             if field == "create_name":
                 name = content.strip()
-                if name in ("0", "取消"):
-                    del self._edit_state[chat_id]
-                    await self._gc_send(chat_id, "❌ 已取消")
+                if await self._cancel_edit(chat_id, content):
                     return
                 if engine._resolve_agent_name(name):
                     await self._gc_send(chat_id, f"⚠️ '{name}' 已存在，请换个名字:")
@@ -3061,9 +3058,7 @@ class CallbacksMixin:
                 return
             if field == "create_model":
                 model_name = content.strip()
-                if model_name in ("0", "取消"):
-                    del self._edit_state[chat_id]
-                    await self._gc_send(chat_id, "❌ 已取消")
+                if await self._cancel_edit(chat_id, content):
                     return
                 await self._gc_send(chat_id, f"🔍 测试模型 {model_name}...")
                 try:
