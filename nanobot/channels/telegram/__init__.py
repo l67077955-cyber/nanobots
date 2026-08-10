@@ -18,6 +18,8 @@ from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import TelegramConfig
+from nanobot.i18n import i18n
+import nanobot.i18n_catalog  # noqa: F401  (registers UI strings)
 from nanobot.groupchat.orchestra.engine import GroupChatEngine
 from nanobot.groupchat.display import display as _d
 from nanobot.groupchat.history.prompt_builder import (
@@ -485,15 +487,17 @@ class TelegramChannel(
         """
         if not update.message:
             return
+        # Locale follows the bot's configured language (per-user later).
+        if getattr(self, "config", None) and getattr(self.config, "language", None):
+            i18n.set_locale(self.config.language)
         buttons = [
-            [InlineKeyboardButton("🤖 Agent 管理", callback_data="m:agents")],
-            [InlineKeyboardButton("🏢 提供商 & 模型", callback_data="m:providers")],
-            [InlineKeyboardButton("👥 分组 & 编排", callback_data="m:groups")],
-            [InlineKeyboardButton("📊 日志", callback_data="m:logs")],
+            [InlineKeyboardButton(i18n.t("ui.menu.root.agents"), callback_data="m:agents")],
+            [InlineKeyboardButton(i18n.t("ui.menu.root.providers"), callback_data="m:providers")],
+            [InlineKeyboardButton(i18n.t("ui.menu.root.groups"), callback_data="m:groups")],
+            [InlineKeyboardButton(i18n.t("ui.menu.root.logs"), callback_data="m:logs")],
         ]
         await update.message.reply_text(
-            "🎛️ **管理面板**\n\n选择要管理的内容 — 进入后点击对象即可操作。\n"
-            "(`/help` 仍可查看全部斜杠命令)",
+            i18n.t("ui.menu.root.title"),
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(buttons),
         )

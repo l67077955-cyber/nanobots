@@ -11,6 +11,9 @@ import re
 from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+
+from nanobot.i18n import i18n
+import nanobot.i18n_catalog  # noqa: F401 (registers UI strings)
 from telegram.ext import ContextTypes
 
 from loguru import logger
@@ -77,17 +80,17 @@ class CallbacksMixin:
         if action == "agents":
             engine = self._groupchat_engine
             if not engine or not getattr(engine, "registry", None):
-                await query.edit_message_text("🤖 暂无 agent\n\n用 /newagent 添加")
+                await query.edit_message_text(i18n.t("ui.agents.empty"))
                 return
             agents = list(engine.registry.keys())
             buttons = []
             for n in agents:
                 model = engine.registry[n].get("model", "?")
-                buttons.append([InlineKeyboardButton(f"{n} — {model}", callback_data=f"edit:{n}")])
-            buttons.append([InlineKeyboardButton("➕ 新建 Agent", callback_data="m:new_agent")])
-            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="m:root")])
+                buttons.append([InlineKeyboardButton(i18n.t("ui.agents.row", n=n, model=model), callback_data=f"edit:{n}")])
+            buttons.append([InlineKeyboardButton(i18n.t("ui.agents.new"), callback_data="m:new_agent")])
+            buttons.append([InlineKeyboardButton(i18n.t("ui.common.back"), callback_data="m:root")])
             await query.edit_message_text(
-                "🎛️ **Agent 管理** — 选择一个 agent 进行编辑:",
+                i18n.t("ui.agents.list_title"),
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
@@ -98,17 +101,17 @@ class CallbacksMixin:
             pm = self._load_pm()
             provs = pm.get("providers", {})
             if not provs:
-                await query.edit_message_text("🏢 暂无提供商\n\n用 /newprovider 添加")
+                await query.edit_message_text(i18n.t("ui.providers.empty"))
                 return
             buttons = []
             for name, info in provs.items():
                 url = info.get("url", "?")
-                buttons.append([InlineKeyboardButton(f"🏢 {name} — {url}", callback_data=f"ep_pick:{name}")])
-            buttons.append([InlineKeyboardButton("➕ 添加提供商", callback_data="m:new_provider")])
-            buttons.append([InlineKeyboardButton("➕ 添加模型", callback_data="m:new_model")])
-            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="m:root")])
+                buttons.append([InlineKeyboardButton(i18n.t("ui.providers.row", name=name, url=url), callback_data=f"ep_pick:{name}")])
+            buttons.append([InlineKeyboardButton(i18n.t("ui.providers.new"), callback_data="m:new_provider")])
+            buttons.append([InlineKeyboardButton(i18n.t("ui.models.new"), callback_data="m:new_model")])
+            buttons.append([InlineKeyboardButton(i18n.t("ui.common.back"), callback_data="m:root")])
             await query.edit_message_text(
-                "🎛️ **提供商 & 模型** — 选择提供商进行管理:",
+                i18n.t("ui.providers.list_title"),
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
@@ -117,29 +120,20 @@ class CallbacksMixin:
         # ── Groups ──
         if action == "groups":
             await query.edit_message_text(
-                "👥 **分组管理**\n\n"
-                "/groups — 查看所有分组\n"
-                "/savegroup <名称> — 保存当前成员\n"
-                "/loadgroup <名称> — 载入分组\n"
-                "/delgroup <名称> — 删除分组\n"
-                "/order — 调整发言顺序\n"
-                "/setleader <name> — 设置/取消 Leader 👑\n",
+                i18n.t("ui.groups.title"),
                 parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 返回", callback_data="m:root")]]),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("ui.common.back"), callback_data="m:root")]]),
             )
             return
 
         # ── Logs ──
         if action == "logs":
             await query.edit_message_text(
-                "📊 **日志**\n\n"
-                "/log — 浏览 LLM 调用记录(分页/状态/token/延迟)\n"
-                "/log <关键词> — 按 agent/模型/内容搜索\n"
-                "/history — 查看会话历史\n",
+                i18n.t("ui.logs.title"),
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📊 打开日志浏览", callback_data="m:log_browse")],
-                    [InlineKeyboardButton("⬅️ 返回", callback_data="m:root")],
+                    [InlineKeyboardButton(i18n.t("ui.logs.open"), callback_data="m:log_browse")],
+                    [InlineKeyboardButton(i18n.t("ui.common.back"), callback_data="m:root")],
                 ]),
             )
             return
@@ -156,16 +150,16 @@ class CallbacksMixin:
             chat_id = str(query.message.chat_id)
             self._edit_state[chat_id] = {"agent": "", "field": "create_name", "mode": "create"}
             await query.edit_message_text(
-                "🆕 创建新 Agent\n\n请输入 Agent 名字:",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 取消", callback_data="m:root")]]),
+                i18n.t("ui.create.agent_prompt"),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("ui.common.cancel"), callback_data="m:root")]]),
             )
             return
         if action == "new_provider":
             chat_id = str(query.message.chat_id)
             self._edit_state[chat_id] = {"field": "pm_prov_name", "mode": "pm"}
             await query.edit_message_text(
-                "🆕 创建提供商\n\n请输入提供商名称 (如 openrouter, aihubmix):",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 取消", callback_data="m:root")]]),
+                i18n.t("ui.create.provider_prompt"),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("ui.common.cancel"), callback_data="m:root")]]),
             )
             return
         if action == "new_model":
@@ -175,14 +169,14 @@ class CallbacksMixin:
             provs = list(pm.get("providers", {}).keys())
             if not provs:
                 await query.edit_message_text(
-                    "⚠️ 还没有提供商\n\n请先添加提供商:",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ 添加提供商", callback_data="m:new_provider")]]),
+                    i18n.t("ui.create.need_provider"),
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("ui.create.add_provider_btn"), callback_data="m:new_provider")]]),
                 )
                 return
             buttons = [[InlineKeyboardButton(f"🏢 {p}", callback_data=f"pm_newm:{p}")] for p in provs]
-            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="m:providers")])
+            buttons.append([InlineKeyboardButton(i18n.t("ui.common.back"), callback_data="m:providers")])
             await query.edit_message_text(
-                "🆕 添加模型\n\n选择提供商 (再输入模型ID):",
+                i18n.t("ui.create.model_pick_title"),
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
             return
@@ -197,20 +191,20 @@ class CallbacksMixin:
             await query.edit_message_text(
                 f"🏢 提供商: {prov}\n\n"
                 "请输入模型ID (如 google/gemini-3-flash-preview):",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")]]),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("ui.common.back"), callback_data=f"ep_pick:{prov}")]]),
             )
             return
 
         # ── Root (back) ──
         if action == "root":
             buttons = [
-                [InlineKeyboardButton("🤖 Agent 管理", callback_data="m:agents")],
-                [InlineKeyboardButton("🏢 提供商 & 模型", callback_data="m:providers")],
-                [InlineKeyboardButton("👥 分组 & 编排", callback_data="m:groups")],
-                [InlineKeyboardButton("📊 日志", callback_data="m:logs")],
+                [InlineKeyboardButton(i18n.t("ui.menu.root.agents"), callback_data="m:agents")],
+                [InlineKeyboardButton(i18n.t("ui.menu.root.providers"), callback_data="m:providers")],
+                [InlineKeyboardButton(i18n.t("ui.menu.root.groups"), callback_data="m:groups")],
+                [InlineKeyboardButton(i18n.t("ui.menu.root.logs"), callback_data="m:logs")],
             ]
             await query.edit_message_text(
-                "🎛️ **管理面板**\n\n选择要管理的内容:",
+                i18n.t("ui.menu.root.back_title"),
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(buttons),
             )

@@ -36,6 +36,7 @@ class TelegramConfig(Base):
     reply_to_message: bool = True
     group_policy: str = "mention"  # "open" or "mention" — non-open = @mention/reply-to-bot only
     allow_from: list[str] = []
+    language: str = "zh"  # UI locale for this channel: "zh" or "en" (per-user later)
 
 
 class AgentDefaults(Base):
