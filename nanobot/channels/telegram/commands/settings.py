@@ -66,21 +66,74 @@ class SettingsCommandsMixin:
         await self._send_hyperparams_keyboard(str(update.message.chat_id), params)
 
     async def _send_hyperparams_keyboard(self, chat_id: str, params: dict) -> None:
-        """Send hyperparams display with edit/delete buttons."""
+        """Send hyperparams display with edit/delete buttons, sorted by priority.
+
+        Ordering:
+          1. Defined params — sorted by hotness (temperature ranks above min_p).
+             Within defined, non-zero (active) values rank above 0.
+          2. High-hotness common params not yet set — shown as one-tap '➕' add.
+          3. A '➕ 自定义参数名' fallback that lets the user add any key.
+        """
         lines = ["⚙️ 默认超参数设置\n", "💡 新创建的 agent 将自动使用此配置\n"]
         buttons = []
-        for k, v in params.items():
+        H = self._hp_hotness
+
+        # Tier 1: defined params, hotness-sorted, non-zero first
+        defined = [k for k in params if params.get(k) not in (None,)]
+        def _rank(k: str) -> tuple:
+            hot = H.get(k, 1000)          # hotness first (lower = hotter)
+            active = 0 if params.get(k) not in (0, "0", 0.0, "") else 1  # non-zero first
+            return (active, hot, k)
+        for k in sorted(defined, key=_rank):
+            v = params[k]
             lines.append(f"  {k}: {v}")
             buttons.append([
                 InlineKeyboardButton(f"✏️ {k} = {v}", callback_data=f"hp:{k}"),
                 InlineKeyboardButton("🗑", callback_data=f"hp_del:{k}"),
             ])
-        buttons.append([InlineKeyboardButton("➕ 添加参数", callback_data="hp_add")])
+
+        # Tier 2: hot-but-undefined common params (one-tap add)
+        _hot_pending = [k for k in H if k not in params and H[k] < 200]
+        if _hot_pending:
+            lines.append("\n➕ 常用未设置:")
+            for k in _hot_pending:
+                hint = self._hp_hint.get(k, "")
+                lines.append(f"  · {k}{(' (' + hint + ')') if hint else ''}")
+                buttons.append([InlineKeyboardButton(f"➕ {k}", callback_data=f"hp_new:{k}")])
+
+        # Tier 3: custom key add
+        buttons.append([InlineKeyboardButton("➕ 自定义参数名", callback_data="hp_custom")])
         text = "\n".join(lines)
         await self._app.bot.send_message(
             chat_id=int(chat_id), text=text,
             reply_markup=InlineKeyboardMarkup(buttons),
         )
+
+
+    # Hotness ranking for common sampling hyperparams (lower = more commonly used)
+    _hp_hotness = {
+        "temperature": 1,
+        "max_tokens": 2,
+        "top_p": 3,
+        "top_k": 4,
+        "min_p": 5,
+        "top_a": 6,
+        "frequency_penalty": 7,
+        "presence_penalty": 8,
+        "repetition_penalty": 9,
+        "stop": 10,
+        "reasoning_effort": 11,
+        "seed": 12,
+    }
+    _hp_hint = {
+        "temperature": "创意度, 0~2",
+        "max_tokens": "单次最大输出",
+        "top_p": "核采样",
+        "min_p": "最小概率过滤",
+        "stop": "终止序列",
+        "reasoning_effort": "思考强度 low/med/high",
+        "seed": "固定随机种子",
+    }
 
     # ── Groupchat Settings ─────────────────────────────────────
 
