@@ -162,6 +162,7 @@ class CallbacksMixin:
                 [InlineKeyboardButton(i18n.t("ui.config.language", v=lang), callback_data="m:cfg:language")],
                 [InlineKeyboardButton(i18n.t("ui.config.reply_to_message", v="✓" if rtm else "✗"), callback_data="m:cfg:reply_to_message")],
                 [InlineKeyboardButton(i18n.t("ui.config.group_policy", v=gp), callback_data="m:cfg:group_policy")],
+                [InlineKeyboardButton(i18n.t("ui.common.cancel"), callback_data="m:cfg:cancel")],  # root → cancel
             ]
             await query.edit_message_text(
                 i18n.t("ui.config.title"),
