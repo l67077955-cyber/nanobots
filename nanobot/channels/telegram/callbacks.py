@@ -140,6 +140,11 @@ class CallbacksMixin:
             self._edit_state.pop(chat_id, None)
             await query.edit_message_text("❌ 已取消")
             return
+        if action == "inpc_cancel":
+            chat_id = str(query.message.chat_id)
+            self._edit_state.pop(chat_id, None)
+            await query.edit_message_text("❌ 已取消输入")
+            return
         if action.startswith("cfg:"):
             inv = action.split(":", 1)[1]
             await self._config_panel(query, inv)
@@ -419,7 +424,7 @@ class CallbacksMixin:
                 if field == "persona":
                     current = self._groupchat_engine.registry.get(name, {}).get("prompt", "")
                     await query.edit_message_text(f"📄 当前人设:\n\n{current[:3000]}")
-                    await self._gc_send(chat_id, "请输入新人设内容:")
+                    await self._start_input(chat_id, "请输入新人设内容:")
                 elif field == "model":
                     # Show provider selection keyboard
                     pm = self._load_pm()
@@ -2684,18 +2689,27 @@ class CallbacksMixin:
                     )
                 await query.edit_message_text(text)
 
-    async def _cancel_edit(self, chat_id: str, content: str) -> bool:
-        """Abort the current interactive edit if ``content`` is a cancel token.
+    async def _start_input(self, chat_id: str, text: str) -> None:
+        """Begin an interactive text-input state.
 
-        Used by every text-input branch: '0' / '取消' / '/cancel'. Clears the
-        edit state, sends the cancellation notice, and returns True so the
-        caller returns immediately.
+        Shows the prompt as a display bar plus a single '❌ 取消输入' button.
+        Cancellation is button-only (no token-based '0'/'取消'//cancel').
+        The caller is expected to have already set self._edit_state[chat_id];
+        this only renders the prompt plus the cancel affordance.
         """
-        if content.strip() not in ("0", "取消", "/cancel"):
-            return False
-        self._edit_state.pop(chat_id, None)
-        await self._gc_send(chat_id, "❌ 已取消")
-        return True
+        await self._gc_send(chat_id, text)
+        if not self._app:
+            return
+        try:
+            await self._app.bot.send_message(
+                int(chat_id),
+                "✍️ 输入中… (发送消息作为内容,或点下方按钮取消)",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("❌ 取消输入", callback_data="inpc_cancel")]]
+                ),
+            )
+        except Exception:
+            pass
 
     async def _handle_edit_input(self, chat_id: str, content: str) -> None:
         """Process interactive edit state input."""
@@ -2792,8 +2806,9 @@ class CallbacksMixin:
         if state.get("field") == "pradd_custom_name":
             del self._edit_state[chat_id]
             name_input = content.strip()
-            if not name_input or name_input in ("0", "取消", "/cancel"):
-                await self._gc_send(chat_id, "❌ 已取消")
+            if not name_input:
+                await self._gc_send(chat_id, "⚠️ 名字不能为空,请重新输入 (或点 ❌ 取消输入):")
+                self._edit_state[chat_id] = {"field": "pradd_custom_name"}
                 return
             # Sanitize: use the input as label, derive a key from it
             import re
@@ -2822,8 +2837,7 @@ class CallbacksMixin:
 
         # Handle hyperparams value input
         if field == "hp_value":
-            if await self._cancel_edit(chat_id, content):
-                return
+            
             hp_key = state.get("hp_key", "")
             raw_val = content.strip()
             if hp_key in ("reasoning_effort", "stop"):
@@ -2857,17 +2871,15 @@ class CallbacksMixin:
 
         # Handle custom hyperparam name input
         if field == "hp_add_custom":
-            if await self._cancel_edit(chat_id, content):
-                return
+            
             key = content.strip().lower().replace(" ", "_")
             self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key, "hp_is_new": True}
-            await self._gc_send(chat_id, f"➕ 添加 {key}\n\n请输入值 (数字):")
+            await self._start_input(chat_id, f"➕ 添加 {key}\n\n请输入值 (数字):")
             return
 
         # Handle agent hyperparams value input
         if field == "ahp_value":
-            if await self._cancel_edit(chat_id, content):
-                return
+            
             hp_key = state.get("hp_key", "")
             a_name = state.get("agent", "")
             raw_val = content.strip()
@@ -2914,18 +2926,16 @@ class CallbacksMixin:
 
         # Handle agent custom hyperparam name input
         if field == "ahp_add_custom":
-            if await self._cancel_edit(chat_id, content):
-                return
+            
             a_name = state.get("agent", "")
             key = content.strip().lower().replace(" ", "_")
             self._edit_state[chat_id] = {"field": "ahp_value", "agent": a_name, "hp_key": key, "hp_is_new": True}
-            await self._gc_send(chat_id, f"➕ 为 {a_name} 添加 {key}\n\n请输入值 (数字):")
+            await self._start_input(chat_id, f"➕ 为 {a_name} 添加 {key}\n\n请输入值 (数字):")
             return
 
         # Handle groupchat settings value input
         if field == "gc_value":
-            if await self._cancel_edit(chat_id, content):
-                return
+            
             gc_key = state.get("gc_key", "")
             try:
                 value = int(content.strip())
@@ -2943,14 +2953,9 @@ class CallbacksMixin:
             await self._gc_send(chat_id, f"✅ {label}: {old_val} → {value}\n下次群聊生效，已持久化")
             return
         if field == "sg_name":
-            if await self._cancel_edit(chat_id, content):
-                return
+            
             result = self._groupchat_engine.save_group(content.strip())
             await self._gc_send(chat_id, result)
-            return
-
-        # Universal cancel — works at any edit prompt
-        if await self._cancel_edit(chat_id, content):
             return
 
         # Handle provider/model management flows
@@ -2960,13 +2965,13 @@ class CallbacksMixin:
                 name = content.strip().lower()
                 state["prov_name"] = name
                 state["field"] = "pm_prov_url"
-                await self._gc_send(chat_id, f"提供商: {name}\n\n请输入 API Base URL\n(如 https://openrouter.ai/v1):")
+                await self._start_input(chat_id, f"提供商: {name}\n\n请输入 API Base URL\n(如 https://openrouter.ai/v1):")
                 return
             elif field == "pm_prov_url":
                 url = content.strip().rstrip("/")
                 state["prov_url"] = url
                 state["field"] = "pm_prov_key"
-                await self._gc_send(chat_id, f"🔗 URL: {url}\n\n请输入 API Key:")
+                await self._start_input(chat_id, f"🔗 URL: {url}\n\n请输入 API Key:")
                 return
             elif field == "pm_prov_key":
                 api_key = content.strip()
@@ -3030,8 +3035,6 @@ class CallbacksMixin:
         if state.get("mode") == "create":
             if field == "create_name":
                 name = content.strip()
-                if await self._cancel_edit(chat_id, content):
-                    return
                 if engine._resolve_agent_name(name):
                     await self._gc_send(chat_id, f"⚠️ '{name}' 已存在，请换个名字:")
                     return
@@ -3051,15 +3054,13 @@ class CallbacksMixin:
                         reply_markup=InlineKeyboardMarkup(prov_buttons),
                     )
                 else:
-                    await self._gc_send(chat_id,
+                    await self._start_input(chat_id,
                         f"Agent: {name}\n\n请输入模型名:\n"
                         "(如 anthropic/claude-sonnet-4-5, x-ai/grok-4.1-fast)"
                     )
                 return
             if field == "create_model":
                 model_name = content.strip()
-                if await self._cancel_edit(chat_id, content):
-                    return
                 await self._gc_send(chat_id, f"🔍 测试模型 {model_name}...")
                 try:
                     response = await engine.provider.chat(
@@ -3070,7 +3071,7 @@ class CallbacksMixin:
                     reply = (response.content or "").strip()
                     state["model"] = model_name
                     state["field"] = "create_persona"
-                    await self._gc_send(chat_id,
+                    await self._start_input(chat_id,
                         f"✅ 模型 {model_name} 可用!\n"
                         f"测试回复: {reply}\n\n"
                         f"请输入人设 (SOUL.md 内容):"

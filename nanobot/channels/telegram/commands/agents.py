@@ -208,14 +208,14 @@ class AgentCommandsMixin:
         chat_id = str(update.message.chat_id)
         if name:
             self._edit_state[chat_id] = {"agent": name, "field": "create_model", "mode": "create"}
-            await update.message.reply_text(
+            await self._start_input(chat_id,
                 f"🆕 创建 Agent: {name}\n\n"
                 "请输入模型名:\n"
                 "(如 anthropic/claude-sonnet-4-5, x-ai/grok-4.1-fast)"
             )
         else:
             self._edit_state[chat_id] = {"agent": "", "field": "create_name", "mode": "create"}
-            await update.message.reply_text("🆕 创建新 Agent\n\n请输入 Agent 名字:")
+            await self._start_input(chat_id, "🆕 创建新 Agent\n\n请输入 Agent 名字:")
 
     async def _on_editagent(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Interactive agent editing: name, persona, model."""
