@@ -1402,6 +1402,18 @@ class CallbacksMixin:
                 self._prompt_manage_mode = not getattr(self, '_prompt_manage_mode', False)
                 await self._prompt_show_components(query, manage_mode=self._prompt_manage_mode)
 
+            elif data.startswith("prinfo:"):
+                # Non-silent feedback for agent-editable / locked components
+                _kind, key = data[7:].split(":", 1)
+                label = _COMPONENT_LABELS.get(key, key)
+                if _kind == "agent":
+                    await query.answer(
+                        f"📂 {label} 是每个 agent 各自的,请用 /editagent 编辑该 agent 的人设",
+                        show_alert=False,
+                    )
+                else:
+                    await query.answer(f"🔒 {label} 为系统锁定组件,不可在 /prompt 编辑", show_alert=False)
+
             elif data in ("pr:refresh", "pr:"):
                 # Refresh global prompt order view (exits manage mode)
                 self._prompt_manage_mode = False

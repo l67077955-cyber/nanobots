@@ -456,9 +456,9 @@ class SettingsCommandsMixin:
                 dot = "●" if tpl else "○"
                 buttons.append([InlineKeyboardButton(f"✏️{dot} {label}", callback_data=f"pre:__global__:{key}")])
             elif key in agent_editable:
-                buttons.append([InlineKeyboardButton(f"📂 {label}", callback_data="pr:refresh")])
+                buttons.append([InlineKeyboardButton(f"📂 {label}", callback_data=f"prinfo:agent:{key}")])
             else:
-                buttons.append([InlineKeyboardButton(f"🔒 {label}", callback_data="pr:refresh")])
+                buttons.append([InlineKeyboardButton(f"🔒 {label}", callback_data=f"prinfo:lock:{key}")])
 
             # Action buttons — only in manage mode
             if manage_mode:
