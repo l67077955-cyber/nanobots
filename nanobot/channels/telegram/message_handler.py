@@ -137,13 +137,17 @@ class MessageHandlerMixin:
             elif now - since > 60 * 20:  # stale edit-session → don't swallow this message
                 del self._edit_state[str_chat_id]
                 self._edit_state_since.pop(str_chat_id, None)
+                self._pending_input.pop(str_chat_id, None)
                 self._stop_typing(str_chat_id)
                 await update.message.reply_text("⏱️ 上一次编辑已超时(20分钟),已自动取消。这条消息已作为普通消息处理。")
                 # fall through to normal group routing below
             else:
-                self._edit_state_since[str_chat_id] = now  # active, refresh
-                await self._handle_edit_input(str_chat_id, content)
+                # Stage the typed input; it is NOT consumed until the user taps
+                # the confirm button (or cancelled / times out).
+                self._edit_state_since[str_chat_id] = now
+                self._pending_input[str_chat_id] = {"content": content, "ts": now}
                 self._stop_typing(str_chat_id)
+                await self._stage_confirm(str_chat_id, content)
                 return
         else:
             pass

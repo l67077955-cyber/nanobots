@@ -124,6 +124,11 @@ class TelegramChannel(
         # tracks when a chat last had an active interactive edit, so stale
         # edit-sessions don't swallow later normal messages
         self._edit_state_since: dict[str, float] = {}
+        # pending confirmed-input buffer: chat_id -> {"content": str, "ts": float}
+        # A typed message is NOT consumed directly; it is staged here and only
+        # applied when the user taps the confirm button (inpc_confirm). Expires
+        # after EDIT_CONFIRM_TIMEOUT seconds.
+        self._pending_input: dict[str, dict] = {}
 
     def set_groupchat_engine(self, engine: GroupChatEngine) -> None:
         """Set the group chat engine for multi-agent discussions."""

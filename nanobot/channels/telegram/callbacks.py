@@ -143,7 +143,23 @@ class CallbacksMixin:
         if action == "inpc_cancel":
             chat_id = str(query.message.chat_id)
             self._edit_state.pop(chat_id, None)
+            self._pending_input.pop(chat_id, None)
             await query.edit_message_text("❌ 已取消输入")
+            return
+        if action == "inpc_confirm":
+            chat_id = str(query.message.chat_id)
+            pending = self._pending_input.pop(chat_id, None)
+            if not pending:
+                await query.edit_message_text("⚠️ 没有待确认的输入(可能已超时或被取消)")
+                return
+            import time as _t
+            if _t.time() - pending["ts"] > 30:  # 30s timeout — stop accepting
+                self._edit_state.pop(chat_id, None)
+                await query.edit_message_text("⏱️ 输入已超时(30秒),已停止接受。请重新操作。")
+                return
+            await query.edit_message_text("✅ 已确认")
+            # Apply: feed the staged content into the edit handler as normal input.
+            await self._handle_edit_input(chat_id, pending["content"])
             return
         if action.startswith("cfg:"):
             inv = action.split(":", 1)[1]
@@ -2688,6 +2704,31 @@ class CallbacksMixin:
                         f"请输入新值:"
                     )
                 await query.edit_message_text(text)
+
+    async def _stage_confirm(self, chat_id: str, content: str) -> None:
+        """Show the staged input as a display bar with confirm/cancel buttons.
+
+        The typed ``content`` is buffered in self._pending_input; this renders
+        a preview bar plus [✅ 确认输入] [❌ 取消输入]. The value is only applied
+        when the user confirms (inpc_confirm). Expires via EDIT_CONFIRM_TIMEOUT.
+        """
+        if not self._app:
+            return
+        preview = content[:400] + ("…" if len(content) > 400 else "")
+        try:
+            await self._app.bot.send_message(
+                int(chat_id),
+                f"📋 待确认输入:\n\n{preview}\n\n"
+                "点「✅ 确认输入」接受,或「❌ 取消输入」放弃 (30 秒后自动取消)",
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("✅ 确认输入", callback_data="inpc_confirm"),
+                        InlineKeyboardButton("❌ 取消输入", callback_data="inpc_cancel"),
+                    ]
+                ]),
+            )
+        except Exception:
+            pass
 
     async def _start_input(self, chat_id: str, text: str) -> None:
         """Begin an interactive text-input state.
