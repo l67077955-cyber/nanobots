@@ -280,9 +280,23 @@ class AgentCommandsMixin:
         capability = [
             [InlineKeyboardButton("🤖 更换模型/提供商", callback_data=f"ef:{agent_name}:model")],
             [InlineKeyboardButton("🔧 工具权限设置", callback_data=f"ef:{agent_name}:tools")],
-            [InlineKeyboardButton("⚙️ 超参数设置", callback_data=f"ef:{agent_name}:hyperparams")],
             [InlineKeyboardButton("🧠 思考强度", callback_data=f"ef:{agent_name}:reasoning_effort")],
         ]
+        # ── children = this agent's hyperparams (Create + per-child Delete on
+        #    the parent panel, per the object-CRUD rule) ──
+        agent = None
+        if self._groupchat_engine and agent_name in self._groupchat_engine.registry:
+            agent = self._groupchat_engine.registry[agent_name]
+        agent_hp = (agent or {}).get("hyperparams") or {}
+        hyperparams = []
+        for k, v in agent_hp.items():
+            hyperparams.append([
+                InlineKeyboardButton(f"⚙️ {k} = {v}", callback_data=f"ahp:{agent_name}:{k}"),
+                InlineKeyboardButton("🗑️", callback_data=f"ahp_del:{agent_name}:{k}"),
+            ])
+        if not hyperparams:
+            hyperparams = [[InlineKeyboardButton("⚙️ 超参数设置", callback_data=f"ef:{agent_name}:hyperparams")]]
+        hyperparams.append([InlineKeyboardButton("➕ 添加参数", callback_data=f"ahp_add:{agent_name}")])
         # ── 危险操作(删除,与取消分离)──
         danger = [
             [InlineKeyboardButton("🗑️ 删除 Agent", callback_data=f"da:{agent_name}")],
@@ -290,7 +304,7 @@ class AgentCommandsMixin:
         ]
         separator = [InlineKeyboardButton("━━━━━━━━", callback_data="noop")]
         return InlineKeyboardMarkup(
-            identity + [separator] + capability + [separator] + danger
+            identity + [separator] + capability + hyperparams + [separator] + danger
         )
 
     async def _show_edit_menu(self, update_or_query, agent_name: str) -> None:

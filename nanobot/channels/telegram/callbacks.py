@@ -222,6 +222,20 @@ class CallbacksMixin:
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
             return
+        if action.startswith("add_model:"):
+            # Child Create from provider's main panel: go straight to that
+            # provider's model-add flow (pm_newm asks for a model id on use).
+            prov = action.split(":", 1)[1]
+            if prov not in self._load_pm().get("providers", {}):
+                await query.edit_message_text(f"⚠️ 提供商 {prov} 不存在")
+                return
+            self._edit_state[chat_id] = {"field": "pm_model_id", "mode": "pm", "provider": prov}
+            await query.edit_message_text(
+                f"🏢 提供商: {prov}\n\n"
+                "请输入模型ID (如 google/gemini-3-flash-preview):",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")]]),
+            )
+            return
 
         # ── Root (back) ──
         if action == "root":
@@ -402,10 +416,12 @@ class CallbacksMixin:
                     )
                     return
                 elif field == "hyperparams":
-                    # Per-agent hyperparams (same UX as /hyperparams but per-agent)
-                    agent = self._groupchat_engine.registry.get(name, {})
-                    agent_hp = agent.get("hyperparams") or {}
-                    await self._send_agent_hyperparams_keyboard(chat_id, name, agent_hp, edit_query=query)
+                    # Fallback entry (children are listed on the parent edit
+                    # panel now); re-render the parent panel so nav stays uniform.
+                    await query.edit_message_text(
+                        self._edit_menu_text(name),
+                        reply_markup=self._edit_menu_buttons(name),
+                    )
                     return
                 elif field == "reasoning_effort":
                     # Show effort level selection (reuse think panel logic)
@@ -1254,7 +1270,13 @@ class CallbacksMixin:
                             except Exception as e:
                                 logger.error("Failed to persist agent hyperparams: {}", e)
                         await query.edit_message_text(f"🗑 已删除 {a_name} 的 {key}")
-                        await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp, edit_query=query)
+                        # Child lives on the parent agent panel now — re-render it
+                        # (shows remaining hyperparams + Create/Delete) instead of
+                        # the old dedicated hyperparams sub-panel.
+                        await query.edit_message_text(
+                            self._edit_menu_text(a_name),
+                            reply_markup=self._edit_menu_buttons(a_name),
+                        )
 
             elif data.startswith("ahp_sync:"):
                 # ahp_sync:AgentName
@@ -1288,7 +1310,11 @@ class CallbacksMixin:
                             except Exception as e:
                                 logger.error("Failed to persist agent hyperparams: {}", e)
                         await query.answer("✅ 已复制全局超参数")
-                        await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp, edit_query=query)
+                        # re-render parent agent panel (children listed there)
+                        await query.edit_message_text(
+                            self._edit_menu_text(a_name),
+                            reply_markup=self._edit_menu_buttons(a_name),
+                        )
                     else:
                         await query.answer("⚠️ 全局超参数为空", show_alert=True)
 
@@ -1304,7 +1330,7 @@ class CallbacksMixin:
                 for p in available:
                     buttons.append([InlineKeyboardButton(f"➕ {p}", callback_data=f"ahp_new:{a_name}:{p}")])
                 buttons.append([InlineKeyboardButton("✏️ 自定义参数名", callback_data=f"ahp_custom:{a_name}")])
-                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ahp_back:{a_name}")])
+                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{a_name}")])
                 await query.edit_message_text(
                     f"➕ 为 {a_name} 添加参数:",
                     reply_markup=InlineKeyboardMarkup(buttons)
@@ -1326,12 +1352,16 @@ class CallbacksMixin:
                 await query.edit_message_text("✏️ 请输入参数名:")
 
             elif data.startswith("ahp_back:"):
-                # ahp_back:AgentName
+                # ahp_back:AgentName — obsolete sub-panel nav; route to parent panel
                 a_name = data[9:]
-                agent = self._groupchat_engine.registry.get(a_name, {}) if self._groupchat_engine else {}
-                agent_hp = agent.get("hyperparams") or {}
-                await query.edit_message_text("⚙️ 返回...")
-                await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp, edit_query=query)
+                if self._groupchat_engine and a_name in self._groupchat_engine.registry:
+                    await query.edit_message_text(
+                        self._edit_menu_text(a_name),
+                        reply_markup=self._edit_menu_buttons(a_name),
+                    )
+                else:
+                    await query.edit_message_text("⚙️")
+                return
 
             elif data.startswith("gc:"):
                 key = data[3:]
@@ -1750,18 +1780,31 @@ class CallbacksMixin:
                 key_preview = info.get("apiKey", "")[:8] + "..." if info.get("apiKey") else "(none)"
                 retry = info.get("retryDelays", [1, 2, 4])
                 retry_str = f"{len(retry)}次 ({','.join(str(d) for d in retry)}s)"
+                # ── children = this provider's models ──
+                models = pm.get("models", {}).get(prov, [])
+                lines = [f"✏️ 编辑提供商: {prov}\n\n", f"🔗 URL: {url}\n", f"🔑 Key: {key_preview}\n", f"🔄 重试: {retry_str}\n"]
+                # Parent panel exposes child C/R/D directly (per-model delete on panel)
+                if models:
+                    lines.append(f"\n🤖 模型 ({len(models)}):")
+                    for m in models:
+                        lines.append(f"   {m}  [🗑 delete]")
+                else:
+                    lines.append("\n🤖 模型: (无,用下方 添加/拉取)")
+                text = "\n".join(lines)
                 buttons = [
                     [InlineKeyboardButton("🔗 修改 URL", callback_data=f"ep_field:{prov}:url")],
                     [InlineKeyboardButton("🔑 修改 API Key", callback_data=f"ep_field:{prov}:key")],
                     [InlineKeyboardButton(f"🔄 重试策略: {retry_str}", callback_data=f"ep_retry:{prov}")],
                     [InlineKeyboardButton("📋 拉取模型列表", callback_data=f"ep_models:{prov}")],
-                    [InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")],
                 ]
+                # ── child Create / Delete on the parent panel ──
+                child_buttons = [InlineKeyboardButton("➕ 添加模型", callback_data=f"m:add_model:{prov}")]
+                if models:
+                    child_buttons.append(InlineKeyboardButton("🗑 删除模型", callback_data=f"pm_delm_p:{prov}"))
+                buttons.append(child_buttons)
+                buttons.append([InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")])
                 await query.edit_message_text(
-                    f"✏️ 编辑提供商: {prov}\n\n"
-                    f"🔗 URL: {url}\n"
-                    f"🔑 Key: {key_preview}\n"
-                    f"🔄 重试: {retry_str}",
+                    text[:4096],
                     reply_markup=InlineKeyboardMarkup(buttons),
                 )
 
@@ -2810,7 +2853,16 @@ class CallbacksMixin:
                     await self._gc_send(chat_id, f"✅ {a_name} {hp_key}: {old_val} → {value}")
                 else:
                     await self._gc_send(chat_id, f"✅ {a_name} 已添加 {hp_key} = {value}")
-                await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent["hyperparams"])
+                if self._app:
+                    from telegram import InlineKeyboardMarkup as _IKM
+                    try:
+                        await self._app.bot.send_message(
+                            chat_id=int(chat_id),
+                            text=self._edit_menu_text(a_name),
+                            reply_markup=_IKM(self._edit_menu_buttons(a_name).inline_keyboard),
+                        )
+                    except Exception:
+                        pass
             return
 
         # Handle agent custom hyperparam name input
