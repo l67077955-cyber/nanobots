@@ -1875,6 +1875,8 @@ class CallbacksMixin:
                 if models:
                     child_buttons.append(InlineKeyboardButton("🗑 删除模型", callback_data=f"pm_delm_p:{prov}"))
                 buttons.append(child_buttons)
+                # ── self-destruct, bottom of panel, destructive ──
+                buttons.append([InlineKeyboardButton("🗑 删除此提供商", callback_data=f"pm_delp:{prov}")])
                 buttons.append([InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")])
                 await query.edit_message_text(
                     text[:4096],
