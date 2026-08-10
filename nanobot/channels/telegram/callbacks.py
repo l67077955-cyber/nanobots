@@ -186,20 +186,39 @@ class CallbacksMixin:
             # query carries neither cleanly, so reuse its rendering core instead.
             await self._render_log_index(query.message)
             return
+        # Each enters the SAME guided state the slash commands use, so the
+        # existing _handle_edit_input wizard drives the rest (no dead bare prompt).
         if action == "new_agent":
-            await query.edit_message_text("➕ 新建 Agent\n\n请输入 agent 名字:")
+            chat_id = str(query.message.chat_id)
+            self._edit_state[chat_id] = {"agent": "", "field": "create_name", "mode": "create"}
+            await query.edit_message_text(
+                "🆕 创建新 Agent\n\n请输入 Agent 名字:",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 取消", callback_data="m:root")]]),
+            )
             return
         if action == "new_provider":
-            await query.edit_message_text("➕ 添加提供商\n\n请输入提供商名称 (如 openrouter, aihubmix):")
+            chat_id = str(query.message.chat_id)
+            self._edit_state[chat_id] = {"field": "pm_prov_name", "mode": "pm"}
+            await query.edit_message_text(
+                "🆕 创建提供商\n\n请输入提供商名称 (如 openrouter, aihubmix):",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 取消", callback_data="m:root")]]),
+            )
             return
         if action == "new_model":
-            callback_data = query.data  # placeholder; replaced below
-            buttons = [
-                [InlineKeyboardButton("⬅️ 返回", callback_data="m:providers")],
-            ]
+            # Choose a provider first (button), then the existing pm_newm flow
+            # asks for a model id — button-first, manual only as fallback.
+            pm = self._load_pm()
+            provs = list(pm.get("providers", {}).keys())
+            if not provs:
+                await query.edit_message_text(
+                    "⚠️ 还没有提供商\n\n请先添加提供商:",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ 添加提供商", callback_data="m:new_provider")]]),
+                )
+                return
+            buttons = [[InlineKeyboardButton(f"🏢 {p}", callback_data=f"pm_newm:{p}")] for p in provs]
+            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="m:providers")])
             await query.edit_message_text(
-                "➕ 添加模型\n\n请先用 /newprovider 添加提供商,或用 /newmodel 开始。\n"
-                "(此入口简化,完整流程见 /newmodel)",
+                "🆕 添加模型\n\n选择提供商 (再输入模型ID):",
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
             return
