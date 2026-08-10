@@ -96,23 +96,32 @@ class ProviderCommandsMixin:
         buttons.append([InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")])
         await update.message.reply_text("🗑 删除模型\n\n先选择提供商:", reply_markup=InlineKeyboardMarkup(buttons))
 
-    async def _on_editprovider(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Edit an existing provider's URL or API key."""
-        if not update.message or not self.is_allowed(self._sender_id(update.effective_user)):
-            return
+    async def _render_provider_edit_list(self) -> tuple[str, InlineKeyboardMarkup | None]:
+        """Build the provider-pick list (shared by /editprovider and its back).
+
+        Returns (text, markup); markup is None when there are no providers.
+        """
         pm = self._load_pm()
         provs = list(pm.get("providers", {}).keys())
         if not provs:
-            await update.message.reply_text("⚠️ 没有提供商，请先 /newprovider")
-            return
+            return "⚠️ 没有提供商,请先 /newprovider", None
         buttons = []
         for p in provs:
             info = pm["providers"][p]
             url = info.get("url", "?")
-            key_preview = info.get("apiKey", "")[:8] + "..." if info.get("apiKey") else "(none)"
             buttons.append([InlineKeyboardButton(f"✏️ {p} ({url})", callback_data=f"ep_pick:{p}")])
         buttons.append([InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")])
-        await update.message.reply_text("✏️ 编辑提供商\n\n选择要编辑的:", reply_markup=InlineKeyboardMarkup(buttons))
+        return "✏️ 编辑提供商\n\n选择要编辑的:", InlineKeyboardMarkup(buttons)
+
+    async def _on_editprovider(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Edit an existing provider's URL or API key."""
+        if not update.message or not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        text, markup = await self._render_provider_edit_list()
+        if markup is None:
+            await update.message.reply_text(text)
+            return
+        await update.message.reply_text(text, reply_markup=markup)
 
     async def _on_providers(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """List all providers and their models."""

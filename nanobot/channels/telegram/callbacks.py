@@ -1690,7 +1690,7 @@ class CallbacksMixin:
                     await query.edit_message_text("⚠️ 该提供商没有模型")
                     return
                 buttons = [[InlineKeyboardButton(f"🗑 {m}", callback_data=f"pm_delm:{prov}:{m}")] for m in models]
-                buttons.append([InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")])
+                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")])
                 await query.edit_message_text(f"🗑 删除 {prov} 的模型:", reply_markup=InlineKeyboardMarkup(buttons))
 
             elif data.startswith("pm_delm:"):
@@ -1708,7 +1708,7 @@ class CallbacksMixin:
                 remaining = pm.get("models", {}).get(prov, [])
                 if remaining:
                     buttons = [[InlineKeyboardButton(f"🗑 {m}", callback_data=f"pm_delm:{prov}:{m}")] for m in remaining]
-                    buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="pm_cancel")])
+                    buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"ep_pick:{prov}")])
                     await query.edit_message_text(f"🗑 删除 {prov} 的模型 ({len(remaining)}):", reply_markup=InlineKeyboardMarkup(buttons))
                 else:
                     await query.edit_message_text(f"✅ {prov} 的模型已全部删除")
@@ -1845,6 +1845,14 @@ class CallbacksMixin:
                 )
 
             # ── Edit provider callbacks ──
+            elif data == "ep_back":
+                # Return from a provider's secondary panel to the pick list
+                text, markup = await self._render_provider_edit_list()
+                if markup is None:
+                    await query.edit_message_text(text)
+                else:
+                    await query.edit_message_text(text, reply_markup=markup)
+
             elif data.startswith("ep_pick:"):
                 prov = data[8:]
                 pm = self._load_pm()
@@ -1877,7 +1885,8 @@ class CallbacksMixin:
                 buttons.append(child_buttons)
                 # ── self-destruct, bottom of panel, destructive ──
                 buttons.append([InlineKeyboardButton("🗑 删除此提供商", callback_data=f"pm_delp:{prov}")])
-                buttons.append([InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")])
+                # secondary panel: back (not cancel) to the provider list
+                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="ep_back")])
                 await query.edit_message_text(
                     text[:4096],
                     reply_markup=InlineKeyboardMarkup(buttons),
