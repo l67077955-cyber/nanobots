@@ -120,6 +120,9 @@ class TelegramChannel(
         self._groupchat_engine: GroupChatEngine | None = None
         # Edit state for interactive /editagent flow
         self._edit_state: dict[str, dict] = {}  # chat_id -> {agent, field}
+        # tracks when a chat last had an active interactive edit, so stale
+        # edit-sessions don't swallow later normal messages
+        self._edit_state_since: dict[str, float] = {}
 
     def set_groupchat_engine(self, engine: GroupChatEngine) -> None:
         """Set the group chat engine for multi-agent discussions."""

@@ -1744,6 +1744,72 @@ class CallbacksMixin:
                 self._edit_state[chat_id] = {"agent": agent_name, "field": "model"}
                 await query.edit_message_text("请输入新模型名 (如 anthropic/claude-sonnet-4-5):")
 
+            # ── Create-model button chain (new agent, field=create_model) ──
+            elif data.startswith("emc_prov:"):
+                # emc_prov:agentName:prov — pick provider's model list for create
+                parts = data.split(":", 2)
+                if len(parts) < 3:
+                    return
+                agent_name, prov = parts[1], parts[2]
+                st = self._edit_state.get(chat_id)
+                pm = self._load_pm()
+                models = pm.get("models", {}).get(prov, [])
+                if not models:
+                    self._edit_state[chat_id] = {"agent": agent_name, "field": "create_model"}
+                    await query.edit_message_text(
+                        f"🏢 {prov} 暂无已注册模型\n\n请直接输入模型ID (如 anthropic/claude-sonnet-4-5):"
+                    )
+                    return
+                if not hasattr(self, "_emc_model_cache"):
+                    self._emc_model_cache = {}
+                self._emc_model_cache[f"{agent_name}:{prov}"] = models
+                buttons = [[InlineKeyboardButton(f"🤖 {m}", callback_data=f"emc_mi:{agent_name}:{prov}:{i}")] for i, m in enumerate(models)]
+                buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=f"emc_manual:{agent_name}")])
+                await query.edit_message_text(f"🏢 {prov} — 选择模型:", reply_markup=InlineKeyboardMarkup(buttons))
+
+            elif data.startswith("emc_mi:"):
+                # emc_mi:agentName:prov:idx — model chosen during create; advance to persona
+                parts = data.split(":")
+                if len(parts) < 5:
+                    return
+                agent_name, prov, idx = parts[1], parts[2], parts[4]
+                try:
+                    idx = int(idx)
+                except ValueError:
+                    return
+                cache = getattr(self, "_emc_model_cache", {})
+                models = cache.get(f"{agent_name}:{prov}", [])
+                if idx >= len(models):
+                    await query.edit_message_text("⚠️ 模型索引无效，请重新操作")
+                    return
+                model = models[idx]
+                st = self._edit_state.get(chat_id) or {}
+                st.update({"model": model, "field": "create_persona"})
+                self._edit_state[chat_id] = st
+                await query.edit_message_text(
+                    f"✅ 模型 {model} 已选择\n\n请输入人设 (SOUL.md 内容):"
+                )
+
+            elif data.startswith("emc_skip:"):
+                # emc_skip:model — model test failed, but user wants to use it anyway.
+                # Agent isn't in registry yet; stash model into edit-state and
+                # advance to persona, so /newagent still completes.
+                model = data[len("emc_skip:"):]
+                st = self._edit_state.get(chat_id) or {}
+                st.update({"model": model, "field": "create_persona"})
+                self._edit_state[chat_id] = st
+                await query.edit_message_text(
+                    f"✅ 已跳过测试,为该 Agent 使用 {model}\n\n请输入人设 (SOUL.md 内容):"
+                )
+
+            elif data.startswith("emc_manual:"):
+                # emc_manual:agentName — enter model id by hand during create
+                agent_name = data[11:]
+                self._edit_state[chat_id] = {"agent": agent_name, "field": "create_model"}
+                await query.edit_message_text(
+                    "请输入模型名 (如 anthropic/claude-sonnet-4-5):\n(发 0 或 /cancel 取消)"
+                )
+
             # ── Edit provider callbacks ──
             elif data.startswith("ep_pick:"):
                 prov = data[8:]
@@ -2973,10 +3039,24 @@ class CallbacksMixin:
                     return
                 state["agent"] = name
                 state["field"] = "create_model"
-                await self._gc_send(chat_id,
-                    f"Agent: {name}\n\n请输入模型名:\n"
-                    "(如 anthropic/claude-sonnet-4-5, x-ai/grok-4.1-fast)"
-                )
+                # Model is a finite, enumerable set (per provider) → buttons,
+                # per the data-driven-button rule. Manual typing only as
+                # fallback when no provider/model list is configured.
+                pm = self._load_pm()
+                provs = list(pm.get("providers", {}).keys())
+                if provs:
+                    prov_buttons = [[InlineKeyboardButton(f"🏢 {p}", callback_data=f"emc_prov:{name}:{p}")] for p in provs]
+                    prov_buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=f"emc_manual:{name}")])
+                    await self._app.bot.send_message(
+                        int(chat_id),
+                        f"Agent: {name}\n\n🤖 选择提供商:",
+                        reply_markup=InlineKeyboardMarkup(prov_buttons),
+                    )
+                else:
+                    await self._gc_send(chat_id,
+                        f"Agent: {name}\n\n请输入模型名:\n"
+                        "(如 anthropic/claude-sonnet-4-5, x-ai/grok-4.1-fast)"
+                    )
                 return
             if field == "create_model":
                 model_name = content.strip()
@@ -3002,8 +3082,17 @@ class CallbacksMixin:
                 except Exception as e:
                     await self._gc_send(chat_id,
                         f"❌ 模型 {model_name} 不可用: {e}\n\n"
-                        f"请重新输入模型名，或发 0 取消:"
+                        f"(可在下方选择:重新输入模型名,或跳过测试直接使用该模型)"
                     )
+                    # Escape hatch: model test failing (slow/blocked provider)
+                    # shouldn't dead-end agent creation. Offer skip-test now.
+                    if self._app:
+                        skip_btn = [[InlineKeyboardButton("⏭ 跳过测试,直接创建", callback_data=f"emc_skip:{model_name}")]]
+                        await self._app.bot.send_message(
+                            int(chat_id),
+                            f"⚠️ 模型测试失败。\n是否为 Agent 使用 {model_name} (跳过测试)?",
+                            reply_markup=InlineKeyboardMarkup(skip_btn),
+                        )
                 return
             elif field == "create_persona":
                 name = agent_name
@@ -3027,21 +3116,6 @@ class CallbacksMixin:
                 await self._gc_send(chat_id, f"✅ Agent {name} 已创建!\n模型: {model}\n人设: {preview}")
                 del self._edit_state[chat_id]
                 return
-
-        if field is None:
-            c = content.strip()
-            if c in ("0", "取消"):
-                del self._edit_state[chat_id]
-                await self._gc_send(chat_id, "❌ 已取消")
-                return
-            field_map = {"1": "name", "2": "persona", "3": "model"}
-            if c in field_map:
-                state["field"] = field_map[c]
-                prompts = {"name": "新名字", "persona": "新人设内容", "model": "新模型名 (如 anthropic/claude-sonnet-4-5)"}
-                await self._gc_send(chat_id, f"请输入{prompts[field_map[c]]}:")
-            else:
-                await self._gc_send(chat_id, "请输入 1/2/3 或 0 取消")
-            return
 
         if field == "name":
             new_name = content.strip()

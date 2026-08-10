@@ -129,9 +129,24 @@ class MessageHandlerMixin:
 
         # Check for interactive edit state
         if str_chat_id in self._edit_state:
-            await self._handle_edit_input(str_chat_id, content)
-            self._stop_typing(str_chat_id)
-            return
+            import time as _t
+            now = _t.time()
+            since = self._edit_state_since.get(str_chat_id)
+            if since is None:
+                self._edit_state_since[str_chat_id] = now  # first time we see it
+            elif now - since > 60 * 20:  # stale edit-session → don't swallow this message
+                del self._edit_state[str_chat_id]
+                self._edit_state_since.pop(str_chat_id, None)
+                self._stop_typing(str_chat_id)
+                await update.message.reply_text("⏱️ 上一次编辑已超时(20分钟),已自动取消。这条消息已作为普通消息处理。")
+                # fall through to normal group routing below
+            else:
+                self._edit_state_since[str_chat_id] = now  # active, refresh
+                await self._handle_edit_input(str_chat_id, content)
+                self._stop_typing(str_chat_id)
+                return
+        else:
+            pass
 
         # Route to GroupChatEngine (always active)
         if self._groupchat_engine and self._groupchat_engine.active_agents:
