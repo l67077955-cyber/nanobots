@@ -495,6 +495,7 @@ class TelegramChannel(
             [InlineKeyboardButton(i18n.t("ui.menu.root.providers"), callback_data="m:providers")],
             [InlineKeyboardButton(i18n.t("ui.menu.root.groups"), callback_data="m:groups")],
             [InlineKeyboardButton(i18n.t("ui.menu.root.logs"), callback_data="m:logs")],
+            [InlineKeyboardButton(i18n.t("ui.menu.root.config"), callback_data="m:config")],
         ]
         await update.message.reply_text(
             i18n.t("ui.menu.root.title"),

@@ -22,6 +22,7 @@ _MENU: dict[str, dict[str, str]] = {
     "ui.menu.root.providers": {"zh": "🏢 提供商 & 模型", "en": "🏢 Providers & Models"},
     "ui.menu.root.groups": {"zh": "👥 分组 & 编排", "en": "👥 Groups & Orchestration"},
     "ui.menu.root.logs": {"zh": "📊 日志", "en": "📊 Logs"},
+    "ui.menu.root.config": {"zh": "⚙️ 配置", "en": "⚙️ Settings"},
 
     # ── agents panel ────────────────────────────────────────
     "ui.agents.empty": {"zh": "🤖 暂无 agent\n\n用 /newagent 添加", "en": "🤖 No agents yet\n\nUse /newagent to add one"},
@@ -69,6 +70,25 @@ _MENU: dict[str, dict[str, str]] = {
         "zh": "🆕 添加模型\n\n选择提供商 (再输入模型ID):",
         "en": "🆕 Add Model\n\nPick a provider (then enter model ID):",
     },
+
+    # ── config panel ────────────────────────────────────────
+    "ui.config.title": {
+        "zh": "⚙️ **配置** — 选择要编辑的配置项:\n\n修改会保存到 config.yaml;需要重启才能生效的项会标注 🔁",
+        "en": "⚙️ **Settings** — pick a setting to edit:\n\nChanges are saved to config.yaml; items needing a restart are marked 🔁",
+    },
+    "ui.config.language": {"zh": "🌐 界面语言: {v}", "en": "🌐 UI language: {v}"},
+    "ui.config.reply_to_message": {"zh": "📩 回复引用降级: {v}", "en": "📩 Reply-quote fallback: {v}"},
+    "ui.config.group_policy": {"zh": "👥 群聊策略: {v}", "en": "👥 Group policy: {v}"},
+    "ui.config.group_policy_open": {"zh": "所有人可直接对话", "en": "Open — anyone can talk"},
+    "ui.config.group_policy_mention": {"zh": "需 @提及/回复", "en": "Mention/reply only"},
+    "ui.config.language_zh": {"zh": "🇨🇳 中文", "en": "🇨🇳 Chinese"},
+    "ui.config.language_en": {"zh": "🇺🇸 English", "en": "🇺🇸 English"},
+    "ui.config.saved": {
+        "zh": "✅ 已保存到 config.yaml\n({note})",
+        "en": "✅ Saved to config.yaml\n({note})",
+    },
+    "ui.config.restart_hint": {"zh": "🔁 部分改动需要重启 bot 生效", "en": "🔁 Some changes need a bot restart to take effect"},
+    "ui.config.back": {"zh": "⬅️ 配置", "en": "⬅️ Settings"},
 }
 
 # Register the block.

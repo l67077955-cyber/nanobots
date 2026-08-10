@@ -203,6 +203,7 @@ class CallbacksMixin:
                 [InlineKeyboardButton(i18n.t("ui.menu.root.providers"), callback_data="m:providers")],
                 [InlineKeyboardButton(i18n.t("ui.menu.root.groups"), callback_data="m:groups")],
                 [InlineKeyboardButton(i18n.t("ui.menu.root.logs"), callback_data="m:logs")],
+                [InlineKeyboardButton(i18n.t("ui.menu.root.config"), callback_data="m:config")],
             ]
             await query.edit_message_text(
                 i18n.t("ui.menu.root.back_title"),
@@ -210,6 +211,118 @@ class CallbacksMixin:
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
             return
+
+        # ── Config panel ──
+        if action == "config":
+            await self._config_panel(query, None)
+            return
+        if action.startswith("cfg:"):
+            inv = action.split(":", 1)[1]
+            await self._config_panel(query, inv)
+            return
+
+    async def _config_panel(self, query, field: str | None) -> None:
+        """Render the unified config panel, or apply a single field toggle.
+
+        ``field`` is None → list all editable config items (buttons).
+        ``field`` is e.g. ``language`` / ``reply_to_message`` / ``group_policy``
+        → render the choice for that single item. Changes persist to config.yaml;
+        fields needing a restart are surfaced with 🔁.
+        """
+        cfg = getattr(self, "config", None) or type("C", (), {})()
+        if field is None:
+            lang = getattr(cfg, "language", "zh")
+            rtm = getattr(cfg, "reply_to_message", True)
+            gp = getattr(cfg, "group_policy", "mention")
+            buttons = [
+                [InlineKeyboardButton(i18n.t("ui.config.language", v=lang), callback_data="m:cfg:language")],
+                [InlineKeyboardButton(i18n.t("ui.config.reply_to_message", v="✓" if rtm else "✗"), callback_data="m:cfg:reply_to_message")],
+                [InlineKeyboardButton(i18n.t("ui.config.group_policy", v=gp), callback_data="m:cfg:group_policy")],
+            ]
+            buttons.append([InlineKeyboardButton(i18n.t("ui.common.back"), callback_data="m:root")])
+            await query.edit_message_text(
+                i18n.t("ui.config.title") + "\n\n" + i18n.t("ui.config.restart_hint"),
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            return
+
+        # Single-field choice panel.
+        if field == "language":
+            current = getattr(cfg, "language", "zh")
+            buttons = [
+                [InlineKeyboardButton(i18n.t("ui.config.language_zh") + (" ✓" if current == "zh" else ""), callback_data="m:cfg:language:set:zh")],
+                [InlineKeyboardButton(i18n.t("ui.config.language_en") + (" ✓" if current == "en" else ""), callback_data="m:cfg:language:set:en")],
+                [InlineKeyboardButton(i18n.t("ui.config.back"), callback_data="m:config")],
+            ]
+            await query.edit_message_text(
+                i18n.t("ui.config.language", v=current),
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            return
+        if field.startswith("language:set:"):
+            lang = field.split(":", 2)[2]
+            await self._apply_config_set(query, language=lang if lang in ("zh", "en") else None)
+            return
+        if field == "reply_to_message":
+            current = getattr(cfg, "reply_to_message", True)
+            await self._apply_config_set(query, reply_to_message=not current)
+            return
+        if field.startswith("group_policy:set:"):
+            gp = field.split(":", 2)[2]
+            await self._apply_config_set(query, group_policy=gp)
+            return
+        if field == "group_policy":
+            current = getattr(cfg, "group_policy", "mention")
+            buttons = [
+                [InlineKeyboardButton(i18n.t("ui.config.group_policy_open") + (" ✓" if current == "open" else ""), callback_data="m:cfg:group_policy:set:open")],
+                [InlineKeyboardButton(i18n.t("ui.config.group_policy_mention") + (" ✓" if current == "mention" else ""), callback_data="m:cfg:group_policy:set:mention")],
+                [InlineKeyboardButton(i18n.t("ui.config.back"), callback_data="m:config")],
+            ]
+            await query.edit_message_text(
+                i18n.t("ui.config.group_policy", v=current),
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            return
+
+    async def _apply_config_set(self, query, **changes) -> None:
+        """Apply + persist config changes to config.yaml and live self.config."""
+        from nanobot.config.loader import load_config, save_config
+        cfg = getattr(self, "config", None)
+        if cfg is not None:
+            for k, v in changes.items():
+                if v is not None:
+                    setattr(cfg, k, v)
+        # Persist the full config (channels.telegram lives under Config.channels
+        # as an extra-allow field, stored as a dict in the file).
+        try:
+            full = load_config()
+            tg = getattr(full.channels, "telegram", None)
+            if tg is None:
+                tg = {}
+            if not isinstance(tg, dict):
+                tg = tg.model_dump(mode="json") if hasattr(tg, "model_dump") else dict(tg)
+            tg = dict(tg)
+            for k, v in changes.items():
+                if v is not None:
+                    tg[k] = v
+            full.channels.telegram = tg
+            save_config(full)
+            note = i18n.t("ui.config.restart_hint") if "language" not in changes else ""
+            text = i18n.t("ui.config.saved", note=note or "👌")
+        except Exception as e:
+            from loguru import logger
+            logger.error("config save failed: {}", e)
+            text = f"⚠️ 保存失败: {e}"
+        # Refresh locale immediately for language changes.
+        if "language" in changes and getattr(cfg, "language", None):
+            i18n.set_locale(getattr(cfg, "language"))
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("ui.config.back"), callback_data="m:config")]]),
+        )
 
     async def _render_log_index(self, message) -> None:
         """Render the log browser (reuses LogCommandsMixin core) and append a back button.
