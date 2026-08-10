@@ -181,6 +181,7 @@ class TelegramChannel(
         self._app.add_handler(CommandHandler("stop", self._forward_command))
         self._app.add_handler(CommandHandler("cancel", self._on_cancel))
         self._app.add_handler(CommandHandler("help", self._on_help))
+        self._app.add_handler(CommandHandler("menu", self._on_menu))
         # Agent management commands
         self._app.add_handler(CommandHandler("agents", self._on_agents))
         self._app.add_handler(CommandHandler("addagent", self._on_addagent))
@@ -471,6 +472,30 @@ class TelegramChannel(
             "/groupchat — 对话池/搜索预算等参数\n"
             "💡 加入 agent 后直接发消息即可对话\n"
             "2+ agent 自动进入群聊模式"
+        )
+
+    # ── Unified object-first menu (/menu) ──────────────────────
+    async def _on_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Unified object-first entry point: choose what to manage, then act on it.
+
+        Converges the flat 28-command surface into a small set of object roots
+        (agents / providers / groups / logs). Each root renders its objects;
+        pressing one opens that object's action panel. Complements — not
+        replaces — the existing slash commands.
+        """
+        if not update.message:
+            return
+        buttons = [
+            [InlineKeyboardButton("🤖 Agent 管理", callback_data="m:agents")],
+            [InlineKeyboardButton("🏢 提供商 & 模型", callback_data="m:providers")],
+            [InlineKeyboardButton("👥 分组 & 编排", callback_data="m:groups")],
+            [InlineKeyboardButton("📊 日志", callback_data="m:logs")],
+        ]
+        await update.message.reply_text(
+            "🎛️ **管理面板**\n\n选择要管理的内容 — 进入后点击对象即可操作。\n"
+            "(`/help` 仍可查看全部斜杠命令)",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons),
         )
 
     # ── Agent Management Commands ────────────────────────────

@@ -65,10 +65,17 @@ class CallbacksMixin:
         return buttons
 
 
-    async def _send_agent_hyperparams_keyboard(self, chat_id: str, agent_name: str, agent_hp) -> None:
+    async def _send_agent_hyperparams_keyboard(self, chat_id: str, agent_name: str, agent_hp, edit_query=None) -> None:
         if not isinstance(agent_hp, dict):
             agent_hp = {}
-        """Send per-agent hyperparams keyboard."""
+        """Send per-agent hyperparams keyboard.
+
+        When ``edit_query`` is provided (an in-flight InlineKeyboard callback
+        query), the panel is rendered *in place* by editing that very message —
+        so the hyperparams panel and its parent menu live on the SAME message
+        and no duplicate/leftover message is left behind. When omitted, a new
+        message is sent (used by input handlers that have no query object).
+        """
         buttons = []
         if agent_hp:
             for k, v in agent_hp.items():
@@ -84,10 +91,155 @@ class CallbacksMixin:
         text = f"⚙️ {agent_name} 超参数设置:"
         if agent_hp:
             text += f"\n\n" + "\n".join(f"  {k} = {v}" for k, v in agent_hp.items())
-        await self._app.bot.send_message(
-            chat_id=int(chat_id), text=text[:4096],
-            reply_markup=InlineKeyboardMarkup(buttons),
-        )
+        markup = InlineKeyboardMarkup(buttons)
+        if edit_query is not None:
+            # Inline edit: replace the parent menu message in place (no duplicate).
+            await edit_query.edit_message_text(text=text[:4096], reply_markup=markup)
+        else:
+            await self._app.bot.send_message(
+                chat_id=int(chat_id), text=text[:4096],
+                reply_markup=markup,
+            )
+
+    async def _dispatch_menu_action(self, query, action: str) -> None:
+        """Route /menu root actions to each object domain's list view.
+
+        ``action`` is the root tapped in the /menu panel (agents/providers/
+        groups/logs). Each branch renders that domain's *object list*; pressing
+        an object opens its existing action panel (the same callback_data the
+        slash commands already produce).
+        """
+        # ── Agents ──
+        if action == "agents":
+            engine = self._groupchat_engine
+            if not engine or not getattr(engine, "registry", None):
+                await query.edit_message_text("🤖 暂无 agent\n\n用 /newagent 添加")
+                return
+            agents = list(engine.registry.keys())
+            buttons = []
+            for n in agents:
+                model = engine.registry[n].get("model", "?")
+                buttons.append([InlineKeyboardButton(f"{n} — {model}", callback_data=f"edit:{n}")])
+            buttons.append([InlineKeyboardButton("➕ 新建 Agent", callback_data="m:new_agent")])
+            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="m:root")])
+            await query.edit_message_text(
+                "🎛️ **Agent 管理** — 选择一个 agent 进行编辑:",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            return
+
+        # ── Providers & Models ──
+        if action == "providers":
+            pm = self._load_pm()
+            provs = pm.get("providers", {})
+            if not provs:
+                await query.edit_message_text("🏢 暂无提供商\n\n用 /newprovider 添加")
+                return
+            buttons = []
+            for name, info in provs.items():
+                url = info.get("url", "?")
+                buttons.append([InlineKeyboardButton(f"🏢 {name} — {url}", callback_data=f"ep_pick:{name}")])
+            buttons.append([InlineKeyboardButton("➕ 添加提供商", callback_data="m:new_provider")])
+            buttons.append([InlineKeyboardButton("➕ 添加模型", callback_data="m:new_model")])
+            buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="m:root")])
+            await query.edit_message_text(
+                "🎛️ **提供商 & 模型** — 选择提供商进行管理:",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            return
+
+        # ── Groups ──
+        if action == "groups":
+            await query.edit_message_text(
+                "👥 **分组管理**\n\n"
+                "/groups — 查看所有分组\n"
+                "/savegroup <名称> — 保存当前成员\n"
+                "/loadgroup <名称> — 载入分组\n"
+                "/delgroup <名称> — 删除分组\n"
+                "/order — 调整发言顺序\n"
+                "/setleader <name> — 设置/取消 Leader 👑\n",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 返回", callback_data="m:root")]]),
+            )
+            return
+
+        # ── Logs ──
+        if action == "logs":
+            await query.edit_message_text(
+                "📊 **日志**\n\n"
+                "/log — 浏览 LLM 调用记录(分页/状态/token/延迟)\n"
+                "/log <关键词> — 按 agent/模型/内容搜索\n"
+                "/history — 查看会话历史\n",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📊 打开日志浏览", callback_data="m:log_browse")],
+                    [InlineKeyboardButton("⬅️ 返回", callback_data="m:root")],
+                ]),
+            )
+            return
+
+        # ── Sub-actions (creation shortcuts) ──
+        if action == "log_browse":
+            # _on_log expects update.message + update.effective_user; a callback
+            # query carries neither cleanly, so reuse its rendering core instead.
+            await self._render_log_index(query.message)
+            return
+        if action == "new_agent":
+            await query.edit_message_text("➕ 新建 Agent\n\n请输入 agent 名字:")
+            return
+        if action == "new_provider":
+            await query.edit_message_text("➕ 添加提供商\n\n请输入提供商名称 (如 openrouter, aihubmix):")
+            return
+        if action == "new_model":
+            callback_data = query.data  # placeholder; replaced below
+            buttons = [
+                [InlineKeyboardButton("⬅️ 返回", callback_data="m:providers")],
+            ]
+            await query.edit_message_text(
+                "➕ 添加模型\n\n请先用 /newprovider 添加提供商,或用 /newmodel 开始。\n"
+                "(此入口简化,完整流程见 /newmodel)",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            return
+
+        # ── Root (back) ──
+        if action == "root":
+            buttons = [
+                [InlineKeyboardButton("🤖 Agent 管理", callback_data="m:agents")],
+                [InlineKeyboardButton("🏢 提供商 & 模型", callback_data="m:providers")],
+                [InlineKeyboardButton("👥 分组 & 编排", callback_data="m:groups")],
+                [InlineKeyboardButton("📊 日志", callback_data="m:logs")],
+            ]
+            await query.edit_message_text(
+                "🎛️ **管理面板**\n\n选择要管理的内容:",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+            return
+
+    async def _render_log_index(self, message) -> None:
+        """Render the log browser (reuses LogCommandsMixin core) and append a back button.
+
+        ``message`` is the callback query's message object — reply_text on it
+        posts into the same chat the menu lives in, so the back button is
+        reachable without the effective_user guard that /log uses.
+        """
+        try:
+            from nanobot.utils.helpers import split_message as _sm
+            logs = self._load_request_logs()
+            if not logs:
+                await message.reply_text("📭 无 LLM 调用记录\n(记录保存在 ~/.nanobot/request_logs/)")
+            else:
+                total_pages = max(1, (len(logs) + 7) // 8)
+                text, markup = self._build_log_page_v2(logs, total_pages - 1, keyword="")
+                buttons = (markup.inline_keyboard if markup else [])
+                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="m:root")])
+                from telegram import InlineKeyboardMarkup as _IKM
+                await message.reply_text(text, reply_markup=_IKM(buttons))
+        except Exception:
+            await message.reply_text("📊 日志入口\n\n使用 /log 浏览详细日志\n/log <关键词> 可搜索")
 
     async def _on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle InlineKeyboard button presses."""
@@ -100,6 +252,11 @@ class CallbacksMixin:
         try:
             data = query.data
             chat_id = str(query.message.chat_id)
+
+            if data.startswith("m:"):
+                await query.answer()
+                await self._dispatch_menu_action(query, data[2:])
+                return
 
             if data.startswith("add:"):
                 name = data[4:]
@@ -229,7 +386,7 @@ class CallbacksMixin:
                     # Per-agent hyperparams (same UX as /hyperparams but per-agent)
                     agent = self._groupchat_engine.registry.get(name, {})
                     agent_hp = agent.get("hyperparams") or {}
-                    await self._send_agent_hyperparams_keyboard(chat_id, name, agent_hp)
+                    await self._send_agent_hyperparams_keyboard(chat_id, name, agent_hp, edit_query=query)
                     return
                 elif field == "reasoning_effort":
                     # Show effort level selection (reuse think panel logic)
@@ -265,8 +422,11 @@ class CallbacksMixin:
                     else:
                         await query.edit_message_text("请输入新模型名 (如 anthropic/claude-sonnet-4-5):")
                 else:
+                    # 检测是否有取消/退出能力:所有输入态都应提示如何退出
+                    state_has_escape = self._edit_state.get(chat_id) is not None
+                    guide = "\n\n(发送 /cancel 取消)" if state_has_escape else ""
                     prompts = {"name": "新名字"}
-                    await query.edit_message_text(f"请输入{prompts.get(field, field)}:")
+                    await query.edit_message_text(f"请输入{prompts.get(field, field)}:{guide}")
 
             elif data.startswith("log:"):
                 mode = data[4:]
@@ -1075,7 +1235,7 @@ class CallbacksMixin:
                             except Exception as e:
                                 logger.error("Failed to persist agent hyperparams: {}", e)
                         await query.edit_message_text(f"🗑 已删除 {a_name} 的 {key}")
-                        await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
+                        await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp, edit_query=query)
 
             elif data.startswith("ahp_sync:"):
                 # ahp_sync:AgentName
@@ -1109,7 +1269,7 @@ class CallbacksMixin:
                             except Exception as e:
                                 logger.error("Failed to persist agent hyperparams: {}", e)
                         await query.answer("✅ 已复制全局超参数")
-                        await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
+                        await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp, edit_query=query)
                     else:
                         await query.answer("⚠️ 全局超参数为空", show_alert=True)
 
@@ -1152,7 +1312,7 @@ class CallbacksMixin:
                 agent = self._groupchat_engine.registry.get(a_name, {}) if self._groupchat_engine else {}
                 agent_hp = agent.get("hyperparams") or {}
                 await query.edit_message_text("⚙️ 返回...")
-                await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp)
+                await self._send_agent_hyperparams_keyboard(chat_id, a_name, agent_hp, edit_query=query)
 
             elif data.startswith("gc:"):
                 key = data[3:]

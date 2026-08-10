@@ -270,17 +270,28 @@ class AgentCommandsMixin:
         )
 
     def _edit_menu_buttons(self, agent_name: str) -> InlineKeyboardMarkup:
-        return InlineKeyboardMarkup([
+        # ── 身份(改名/等级/人设)──
+        identity = [
             [InlineKeyboardButton("✏️ 修改名字", callback_data=f"ef:{agent_name}:name")],
             [InlineKeyboardButton("🎖️ 更改等级", callback_data=f"ef:{agent_name}:rank")],
             [InlineKeyboardButton("📝 修改提示词", callback_data=f"ef:{agent_name}:persona")],
+        ]
+        # ── 能力(模型/工具/超参/思考)──
+        capability = [
             [InlineKeyboardButton("🤖 更换模型/提供商", callback_data=f"ef:{agent_name}:model")],
             [InlineKeyboardButton("🔧 工具权限设置", callback_data=f"ef:{agent_name}:tools")],
             [InlineKeyboardButton("⚙️ 超参数设置", callback_data=f"ef:{agent_name}:hyperparams")],
             [InlineKeyboardButton("🧠 思考强度", callback_data=f"ef:{agent_name}:reasoning_effort")],
+        ]
+        # ── 危险操作(删除,与取消分离)──
+        danger = [
             [InlineKeyboardButton("🗑️ 删除 Agent", callback_data=f"da:{agent_name}")],
             [InlineKeyboardButton("❌ 取消", callback_data=f"ef:{agent_name}:cancel")],
-        ])
+        ]
+        separator = [InlineKeyboardButton("━━━━━━━━", callback_data="noop")]
+        return InlineKeyboardMarkup(
+            identity + [separator] + capability + [separator] + danger
+        )
 
     async def _show_edit_menu(self, update_or_query, agent_name: str) -> None:
         """Show edit menu for an agent."""
