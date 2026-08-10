@@ -26,7 +26,7 @@ _MENU: dict[str, dict[str, str]] = {
 
     # ── agents panel ────────────────────────────────────────
     "ui.agents.empty": {"zh": "🤖 暂无 agent\n\n用 /newagent 添加", "en": "🤖 No agents yet\n\nUse /newagent to add one"},
-    "ui.agents.list_title": {"zh": "🎛️ **Agent 管理** — 选择一个 agent 进行编辑:", "en": "🎛️ **Agent Management** — pick an agent to edit:"},
+    "ui.agents.list_title": {"zh": "🤖 Agent 管理", "en": "🤖 Agents"},
     "ui.agents.row": {"zh": "{n} — {model}", "en": "{n} — {model}"},
     "ui.agents.new": {"zh": "➕ 新建 Agent", "en": "➕ New Agent"},
     "ui.common.back": {"zh": "⬅️ 返回", "en": "⬅️ Back"},
@@ -34,7 +34,7 @@ _MENU: dict[str, dict[str, str]] = {
 
     # ── providers panel ─────────────────────────────────────
     "ui.providers.empty": {"zh": "🏢 暂无提供商\n\n用 /newprovider 添加", "en": "🏢 No providers yet\n\nUse /newprovider to add one"},
-    "ui.providers.list_title": {"zh": "🎛️ **提供商 & 模型** — 选择提供商进行管理:", "en": "🎛️ **Providers & Models** — pick a provider to manage:"},
+    "ui.providers.list_title": {"zh": "🏢 提供商 & 模型", "en": "🏢 Providers & Models"},
     "ui.providers.row": {"zh": "🏢 {name} — {url}", "en": "🏢 {name} — {url}"},
     "ui.providers.new": {"zh": "➕ 添加提供商", "en": "➕ Add Provider"},
     "ui.models.new": {"zh": "➕ 添加模型", "en": "➕ Add Model"},
@@ -73,8 +73,8 @@ _MENU: dict[str, dict[str, str]] = {
 
     # ── config panel ────────────────────────────────────────
     "ui.config.title": {
-        "zh": "⚙️ **配置** — 选择要编辑的配置项:\n\n修改会保存到 config.yaml;需要重启才能生效的项会标注 🔁",
-        "en": "⚙️ **Settings** — pick a setting to edit:\n\nChanges are saved to config.yaml; items needing a restart are marked 🔁",
+        "zh": "⚙️ 配置",
+        "en": "⚙️ Settings",
     },
     "ui.config.language": {"zh": "🌐 界面语言: {v}", "en": "🌐 UI language: {v}"},
     "ui.config.reply_to_message": {"zh": "📩 回复引用降级: {v}", "en": "📩 Reply-quote fallback: {v}"},
@@ -83,10 +83,7 @@ _MENU: dict[str, dict[str, str]] = {
     "ui.config.group_policy_mention": {"zh": "需 @提及/回复", "en": "Mention/reply only"},
     "ui.config.language_zh": {"zh": "🇨🇳 中文", "en": "🇨🇳 Chinese"},
     "ui.config.language_en": {"zh": "🇺🇸 English", "en": "🇺🇸 English"},
-    "ui.config.saved": {
-        "zh": "✅ 已保存到 config.yaml\n({note})",
-        "en": "✅ Saved to config.yaml\n({note})",
-    },
+    "ui.config.saved": {"zh": "✅ 已保存", "en": "✅ Saved"},
     "ui.config.restart_hint": {"zh": "🔁 部分改动需要重启 bot 生效", "en": "🔁 Some changes need a bot restart to take effect"},
     "ui.config.back": {"zh": "⬅️ 配置", "en": "⬅️ Settings"},
 }

@@ -76,82 +76,17 @@ class CallbacksMixin:
         an object opens its existing action panel (the same callback_data the
         slash commands already produce).
         """
-        # ── Agents ──
-        if action == "agents":
-            engine = self._groupchat_engine
-            if not engine or not getattr(engine, "registry", None):
-                await query.edit_message_text(i18n.t("ui.agents.empty"))
-                return
-            agents = list(engine.registry.keys())
-            buttons = []
-            for n in agents:
-                model = engine.registry[n].get("model", "?")
-                buttons.append([InlineKeyboardButton(i18n.t("ui.agents.row", n=n, model=model), callback_data=f"edit:{n}")])
-            buttons.append([InlineKeyboardButton(i18n.t("ui.agents.new"), callback_data="m:new_agent")])
-            buttons.append([InlineKeyboardButton(i18n.t("ui.common.back"), callback_data="m:root")])
-            await query.edit_message_text(
-                i18n.t("ui.agents.list_title"),
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(buttons),
-            )
-            return
-
-        # ── Providers & Models ──
-        if action == "providers":
-            pm = self._load_pm()
-            provs = pm.get("providers", {})
-            if not provs:
-                await query.edit_message_text(i18n.t("ui.providers.empty"))
-                return
-            buttons = []
-            for name, info in provs.items():
-                url = info.get("url", "?")
-                buttons.append([InlineKeyboardButton(i18n.t("ui.providers.row", name=name, url=url), callback_data=f"ep_pick:{name}")])
-            buttons.append([InlineKeyboardButton(i18n.t("ui.providers.new"), callback_data="m:new_provider")])
-            buttons.append([InlineKeyboardButton(i18n.t("ui.models.new"), callback_data="m:new_model")])
-            buttons.append([InlineKeyboardButton(i18n.t("ui.common.back"), callback_data="m:root")])
-            await query.edit_message_text(
-                i18n.t("ui.providers.list_title"),
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(buttons),
-            )
-            return
-
-        # ── Groups ──
-        if action == "groups":
-            await query.edit_message_text(
-                i18n.t("ui.groups.title"),
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("ui.common.back"), callback_data="m:root")]]),
-            )
-            return
-
-        # ── Logs ──
-        if action == "logs":
-            await query.edit_message_text(
-                i18n.t("ui.logs.title"),
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton(i18n.t("ui.logs.open"), callback_data="m:log_browse")],
-                    [InlineKeyboardButton(i18n.t("ui.common.back"), callback_data="m:root")],
-                ]),
-            )
-            return
-
-        # ── Sub-actions (creation shortcuts) ──
-        if action == "log_browse":
-            # _on_log expects update.message + update.effective_user; a callback
-            # query carries neither cleanly, so reuse its rendering core instead.
-            await self._render_log_index(query.message)
-            return
-        # Each enters the SAME guided state the slash commands use, so the
-        # existing _handle_edit_input wizard drives the rest (no dead bare prompt).
+        """Create/config wizards re-entrant from object panels (create buttons).
+        Each enters the SAME guided state the matching slash command uses, so
+        the existing _handle_edit_input wizard drives the rest.
+        """
+        # ── Create wizards (object's own C button) ──
         if action == "new_agent":
             chat_id = str(query.message.chat_id)
             self._edit_state[chat_id] = {"agent": "", "field": "create_name", "mode": "create"}
             await query.edit_message_text(
                 i18n.t("ui.create.agent_prompt"),
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("ui.common.cancel"), callback_data="m:root")]]),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("ui.common.cancel"), callback_data="m:cfg:cancel")]]),
             )
             return
         if action == "new_provider":
@@ -159,7 +94,7 @@ class CallbacksMixin:
             self._edit_state[chat_id] = {"field": "pm_prov_name", "mode": "pm"}
             await query.edit_message_text(
                 i18n.t("ui.create.provider_prompt"),
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("ui.common.cancel"), callback_data="m:root")]]),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("ui.common.cancel"), callback_data="m:cfg:cancel")]]),
             )
             return
         if action == "new_model":
@@ -174,7 +109,7 @@ class CallbacksMixin:
                 )
                 return
             buttons = [[InlineKeyboardButton(f"🏢 {p}", callback_data=f"pm_newm:{p}")] for p in provs]
-            buttons.append([InlineKeyboardButton(i18n.t("ui.common.back"), callback_data="m:providers")])
+            buttons.append([InlineKeyboardButton(i18n.t("ui.common.back"), callback_data="m:cfg:cancel")])
             await query.edit_message_text(
                 i18n.t("ui.create.model_pick_title"),
                 reply_markup=InlineKeyboardMarkup(buttons),
@@ -196,25 +131,14 @@ class CallbacksMixin:
             )
             return
 
-        # ── Root (back) ──
-        if action == "root":
-            buttons = [
-                [InlineKeyboardButton(i18n.t("ui.menu.root.agents"), callback_data="m:agents")],
-                [InlineKeyboardButton(i18n.t("ui.menu.root.providers"), callback_data="m:providers")],
-                [InlineKeyboardButton(i18n.t("ui.menu.root.groups"), callback_data="m:groups")],
-                [InlineKeyboardButton(i18n.t("ui.menu.root.logs"), callback_data="m:logs")],
-                [InlineKeyboardButton(i18n.t("ui.menu.root.config"), callback_data="m:config")],
-            ]
-            await query.edit_message_text(
-                i18n.t("ui.menu.root.back_title"),
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(buttons),
-            )
-            return
-
-        # ── Config panel ──
+        # ── Config panel (from /settings) ──
         if action == "config":
             await self._config_panel(query, None)
+            return
+        if action == "cfg:cancel":
+            chat_id = str(query.message.chat_id)
+            self._edit_state.pop(chat_id, None)
+            await query.edit_message_text("❌ 已取消")
             return
         if action.startswith("cfg:"):
             inv = action.split(":", 1)[1]
@@ -239,9 +163,8 @@ class CallbacksMixin:
                 [InlineKeyboardButton(i18n.t("ui.config.reply_to_message", v="✓" if rtm else "✗"), callback_data="m:cfg:reply_to_message")],
                 [InlineKeyboardButton(i18n.t("ui.config.group_policy", v=gp), callback_data="m:cfg:group_policy")],
             ]
-            buttons.append([InlineKeyboardButton(i18n.t("ui.common.back"), callback_data="m:root")])
             await query.edit_message_text(
-                i18n.t("ui.config.title") + "\n\n" + i18n.t("ui.config.restart_hint"),
+                i18n.t("ui.config.title"),
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
@@ -310,41 +233,19 @@ class CallbacksMixin:
                     tg[k] = v
             full.channels.telegram = tg
             save_config(full)
-            note = i18n.t("ui.config.restart_hint") if "language" not in changes else ""
-            text = i18n.t("ui.config.saved", note=note or "👌")
-        except Exception as e:
-            from loguru import logger
-            logger.error("config save failed: {}", e)
-            text = f"⚠️ 保存失败: {e}"
+        except Exception:
+            return
         # Refresh locale immediately for language changes.
         if "language" in changes and getattr(cfg, "language", None):
             i18n.set_locale(getattr(cfg, "language"))
         await query.edit_message_text(
-            text,
+            i18n.t("ui.config.saved"),
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("ui.config.back"), callback_data="m:config")]]),
         )
 
     async def _render_log_index(self, message) -> None:
-        """Render the log browser (reuses LogCommandsMixin core) and append a back button.
-
-        ``message`` is the callback query's message object — reply_text on it
-        posts into the same chat the menu lives in, so the back button is
-        reachable without the effective_user guard that /log uses.
-        """
-        try:
-            from nanobot.utils.helpers import split_message as _sm
-            logs = self._load_request_logs()
-            if not logs:
-                await message.reply_text("📭 无 LLM 调用记录\n(记录保存在 ~/.nanobot/request_logs/)")
-            else:
-                total_pages = max(1, (len(logs) + 7) // 8)
-                text, markup = self._build_log_page_v2(logs, total_pages - 1, keyword="")
-                buttons = (markup.inline_keyboard if markup else [])
-                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="m:root")])
-                from telegram import InlineKeyboardMarkup as _IKM
-                await message.reply_text(text, reply_markup=_IKM(buttons))
-        except Exception:
-            await message.reply_text("📊 日志入口\n\n使用 /log 浏览详细日志\n/log <关键词> 可搜索")
+        # Deprecated: superseded by /log native browser. Kept as no-op guard.
+        await message.reply_text("📊 使用 /log 浏览日志 (/log <关键词> 可搜索)")
 
     async def _on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle InlineKeyboard button presses."""

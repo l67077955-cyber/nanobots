@@ -107,7 +107,8 @@ class AgentCommandsMixin:
         else:
             lines.append("💤 无活跃 agent")
         text = "\n".join(lines)
-        await update.message.reply_text(text[:4096])
+        buttons = [[InlineKeyboardButton("➕ 新建 Agent", callback_data="m:new_agent")]]
+        await update.message.reply_text(text[:4096], reply_markup=InlineKeyboardMarkup(buttons))
 
     async def _on_setleader(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Set or clear the leader agent."""

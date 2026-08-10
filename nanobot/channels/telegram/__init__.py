@@ -183,7 +183,7 @@ class TelegramChannel(
         self._app.add_handler(CommandHandler("stop", self._forward_command))
         self._app.add_handler(CommandHandler("cancel", self._on_cancel))
         self._app.add_handler(CommandHandler("help", self._on_help))
-        self._app.add_handler(CommandHandler("menu", self._on_menu))
+        self._app.add_handler(CommandHandler("settings", self._on_settings))
         # Agent management commands
         self._app.add_handler(CommandHandler("agents", self._on_agents))
         self._app.add_handler(CommandHandler("addagent", self._on_addagent))
@@ -476,30 +476,28 @@ class TelegramChannel(
             "2+ agent 自动进入群聊模式"
         )
 
-    # ── Unified object-first menu (/menu) ──────────────────────
-    async def _on_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Unified object-first entry point: choose what to manage, then act on it.
-
-        Converges the flat 28-command surface into a small set of object roots
-        (agents / providers / groups / logs). Each root renders its objects;
-        pressing one opens that object's action panel. Complements — not
-        replaces — the existing slash commands.
+    # ── Config settings (/settings) ─────────────────────────────
+    async def _on_settings(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Edit bot configuration. First screen is the edit panel itself —
+        not a routing hub. Each row is one editable setting (button), tapping
+        it opens the choice/toggle for that setting. Persists to config.yaml.
         """
         if not update.message:
             return
-        # Locale follows the bot's configured language (per-user later).
+        # Locale follows the bot's configured language.
         if getattr(self, "config", None) and getattr(self.config, "language", None):
             i18n.set_locale(self.config.language)
+        cfg = self.config
+        lang = getattr(cfg, "language", "zh")
+        rtm = getattr(cfg, "reply_to_message", True)
+        gp = getattr(cfg, "group_policy", "mention")
         buttons = [
-            [InlineKeyboardButton(i18n.t("ui.menu.root.agents"), callback_data="m:agents")],
-            [InlineKeyboardButton(i18n.t("ui.menu.root.providers"), callback_data="m:providers")],
-            [InlineKeyboardButton(i18n.t("ui.menu.root.groups"), callback_data="m:groups")],
-            [InlineKeyboardButton(i18n.t("ui.menu.root.logs"), callback_data="m:logs")],
-            [InlineKeyboardButton(i18n.t("ui.menu.root.config"), callback_data="m:config")],
+            [InlineKeyboardButton(i18n.t("ui.config.language", v=lang), callback_data="m:cfg:language")],
+            [InlineKeyboardButton(i18n.t("ui.config.reply_to_message", v="✓" if rtm else "✗"), callback_data="m:cfg:reply_to_message")],
+            [InlineKeyboardButton(i18n.t("ui.config.group_policy", v=gp), callback_data="m:cfg:group_policy")],
         ]
         await update.message.reply_text(
-            i18n.t("ui.menu.root.title"),
-            parse_mode="Markdown",
+            i18n.t("ui.config.title"),
             reply_markup=InlineKeyboardMarkup(buttons),
         )
 
