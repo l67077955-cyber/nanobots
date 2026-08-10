@@ -183,6 +183,7 @@ class CallbacksMixin:
         if action.startswith("add_model:"):
             # Child Create from provider's main panel: go straight to that
             # provider's model-add flow (pm_newm asks for a model id on use).
+            chat_id = str(query.message.chat_id)
             prov = action.split(":", 1)[1]
             if prov not in self._load_pm().get("providers", {}):
                 await query.edit_message_text(f"⚠️ 提供商 {prov} 不存在")
