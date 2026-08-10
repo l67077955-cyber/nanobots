@@ -303,10 +303,8 @@ class CallbacksMixin:
                 if not agent:
                     await query.edit_message_text(f"❌ Agent '{name}' 不存在")
                     return
-                await query.edit_message_text(
-                    self._edit_menu_text(name),
-                    reply_markup=self._edit_menu_buttons(name),
-                )
+                # Re-render via the shared panel renderer (entry + back same path)
+                await self._send_panel(query, self._render_edit_menu, name)
 
             elif data.startswith("da:"):
                 # da:AgentName — show delete confirmation

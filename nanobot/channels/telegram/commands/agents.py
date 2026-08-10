@@ -309,13 +309,17 @@ class AgentCommandsMixin:
         )
 
     async def _show_edit_menu(self, update_or_query, agent_name: str) -> None:
-        """Show edit menu for an agent."""
-        if hasattr(update_or_query, 'message') and update_or_query.message:
-            chat_id = str(update_or_query.message.chat_id)
-            await update_or_query.message.reply_text(
-                self._edit_menu_text(agent_name),
-                reply_markup=self._edit_menu_buttons(agent_name),
-            )
-        else:
+        """Show edit menu for an agent (command entry → reply_text)."""
+        if not (hasattr(update_or_query, 'message') and update_or_query.message):
             return
+        text, markup = self._render_edit_menu(agent_name)
+        await update_or_query.message.reply_text(text, reply_markup=markup)
+
+    def _render_edit_menu(self, agent_name: str) -> tuple[str, InlineKeyboardMarkup]:
+        """Pure render of an agent's edit panel (text + markup, no sends).
+
+        Shared by /editagent entry and the '⬅️ 返回' (edit:{name}) navigation,
+        so back re-renders the exact same panel.
+        """
+        return self._edit_menu_text(agent_name), self._edit_menu_buttons(agent_name)
 
