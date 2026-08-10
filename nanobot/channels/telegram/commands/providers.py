@@ -123,6 +123,40 @@ class ProviderCommandsMixin:
             return
         await update.message.reply_text(text, reply_markup=markup)
 
+    def _render_ep_panel(self, prov: str) -> tuple[str, InlineKeyboardMarkup]:
+        """Build a single provider's edit panel (secondary). Pure: no sends.
+
+        Shared by ep_pick (enter) and any 'return to this provider' handler,
+        so back navigation re-renders the exact same panel.
+        """
+        pm = self._load_pm()
+        info = pm.get("providers", {}).get(prov, {})
+        url = info.get("url", "?")
+        key_preview = info.get("apiKey", "")[:8] + "..." if info.get("apiKey") else "(none)"
+        retry = info.get("retryDelays", [1, 2, 4])
+        retry_str = f"{len(retry)}次 ({','.join(str(d) for d in retry)}s)"
+        models = pm.get("models", {}).get(prov, [])
+        lines = [f"✏️ 编辑提供商: {prov}\n\n", f"🔗 URL: {url}\n", f"🔑 Key: {key_preview}\n", f"🔄 重试: {retry_str}\n"]
+        if models:
+            lines.append(f"\n🤖 模型 ({len(models)}):")
+            for m in models:
+                lines.append(f"   {m}  [🗑 delete]")
+        else:
+            lines.append("\n🤖 模型: (无,用下方 添加/拉取)")
+        buttons = [
+            [InlineKeyboardButton("🔗 修改 URL", callback_data=f"ep_field:{prov}:url")],
+            [InlineKeyboardButton("🔑 修改 API Key", callback_data=f"ep_field:{prov}:key")],
+            [InlineKeyboardButton(f"🔄 重试策略: {retry_str}", callback_data=f"ep_retry:{prov}")],
+            [InlineKeyboardButton("📋 拉取模型列表", callback_data=f"ep_models:{prov}")],
+        ]
+        child_buttons = [InlineKeyboardButton("➕ 添加模型", callback_data=f"m:add_model:{prov}")]
+        if models:
+            child_buttons.append(InlineKeyboardButton("🗑 删除模型", callback_data=f"pm_delm_p:{prov}"))
+        buttons.append(child_buttons)
+        buttons.append([InlineKeyboardButton("🗑 删除此提供商", callback_data=f"pm_delp:{prov}")])
+        buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="ep_back")])
+        return "\n".join(lines), InlineKeyboardMarkup(buttons)
+
     async def _on_providers(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """List all providers and their models."""
         if not update.message or not self.is_allowed(self._sender_id(update.effective_user)):

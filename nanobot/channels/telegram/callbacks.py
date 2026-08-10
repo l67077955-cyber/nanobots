@@ -1847,50 +1847,13 @@ class CallbacksMixin:
             # ── Edit provider callbacks ──
             elif data == "ep_back":
                 # Return from a provider's secondary panel to the pick list
-                text, markup = await self._render_provider_edit_list()
-                if markup is None:
-                    await query.edit_message_text(text)
-                else:
-                    await query.edit_message_text(text, reply_markup=markup)
+                await self._send_panel(query, self._render_provider_edit_list)
 
             elif data.startswith("ep_pick:"):
                 prov = data[8:]
-                pm = self._load_pm()
-                info = pm.get("providers", {}).get(prov, {})
-                url = info.get("url", "?")
-                key_preview = info.get("apiKey", "")[:8] + "..." if info.get("apiKey") else "(none)"
-                retry = info.get("retryDelays", [1, 2, 4])
-                retry_str = f"{len(retry)}次 ({','.join(str(d) for d in retry)}s)"
-                # ── children = this provider's models ──
-                models = pm.get("models", {}).get(prov, [])
-                lines = [f"✏️ 编辑提供商: {prov}\n\n", f"🔗 URL: {url}\n", f"🔑 Key: {key_preview}\n", f"🔄 重试: {retry_str}\n"]
-                # Parent panel exposes child C/R/D directly (per-model delete on panel)
-                if models:
-                    lines.append(f"\n🤖 模型 ({len(models)}):")
-                    for m in models:
-                        lines.append(f"   {m}  [🗑 delete]")
-                else:
-                    lines.append("\n🤖 模型: (无,用下方 添加/拉取)")
-                text = "\n".join(lines)
-                buttons = [
-                    [InlineKeyboardButton("🔗 修改 URL", callback_data=f"ep_field:{prov}:url")],
-                    [InlineKeyboardButton("🔑 修改 API Key", callback_data=f"ep_field:{prov}:key")],
-                    [InlineKeyboardButton(f"🔄 重试策略: {retry_str}", callback_data=f"ep_retry:{prov}")],
-                    [InlineKeyboardButton("📋 拉取模型列表", callback_data=f"ep_models:{prov}")],
-                ]
-                # ── child Create / Delete on the parent panel ──
-                child_buttons = [InlineKeyboardButton("➕ 添加模型", callback_data=f"m:add_model:{prov}")]
-                if models:
-                    child_buttons.append(InlineKeyboardButton("🗑 删除模型", callback_data=f"pm_delm_p:{prov}"))
-                buttons.append(child_buttons)
-                # ── self-destruct, bottom of panel, destructive ──
-                buttons.append([InlineKeyboardButton("🗑 删除此提供商", callback_data=f"pm_delp:{prov}")])
-                # secondary panel: back (not cancel) to the provider list
-                buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data="ep_back")])
-                await query.edit_message_text(
-                    text[:4096],
-                    reply_markup=InlineKeyboardMarkup(buttons),
-                )
+                # Enter edit panel — delegated to the shared panel renderer
+                text, markup = self._render_ep_panel(prov)
+                await query.edit_message_text(text[:4096], reply_markup=markup)
 
             elif data.startswith("ep_field:"):
                 parts = data.split(":", 2)
@@ -2727,6 +2690,22 @@ class CallbacksMixin:
                         f"请输入新值:"
                     )
                 await query.edit_message_text(text)
+
+    async def _send_panel(self, query, renderer, *args, **kwargs):
+        """Render a panel in place via edit_message_text.
+
+        ``renderer`` may be sync or async and returns (text, markup | None).
+        Centralizes 'send/re-render a panel' so entry and back navigation share
+        one path (True reuse — back re-renders the exact parent renderer).
+        """
+        out = renderer(*args, **kwargs)
+        if asyncio.iscoroutine(out):
+            out = await out
+        text, markup = out
+        if markup is None:
+            await query.edit_message_text(text)
+        else:
+            await query.edit_message_text(text, reply_markup=markup)
 
     async def _stage_confirm(self, chat_id: str, content: str) -> None:
         """Show the staged input as a display bar with confirm/cancel buttons.
