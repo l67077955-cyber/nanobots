@@ -83,6 +83,7 @@ class TelegramChannel(
         BotCommand("groups", "List saved groups"),
         BotCommand("order", "Change agent speaking order"),
         BotCommand("setleader", "Set/clear leader agent"),
+        BotCommand("settings", "⚙️ 配置:语言/回复/群聊策略"),
         BotCommand("providers", "查看提供商和模型"),
         BotCommand("newprovider", "添加提供商"),
         BotCommand("newmodel", "添加模型"),
