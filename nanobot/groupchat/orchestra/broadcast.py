@@ -1034,11 +1034,15 @@ async def broadcast_round(
                 if is_interrupted:
                     # Clear the event so it can be set again by a future message
                     _interrupt_event.clear()
-                    # Reset interrupt counter so newer messages can re-interrupt
-                    # this agent in subsequent cycles (freshness guarantee).
-                    mailbox._interrupt_counts[name] = max(
-                        0, mailbox._interrupt_counts.get(name, 0) - 1
-                    )
+                    # NOTE: do NOT decrement _interrupt_counts here.
+                    # mailbox._try_interrupt enforces a per-round hard quota of 3
+                    # interrupts per agent (>=3 rejects); mailbox.reset_round()
+                    # clears it each round. Refunding the quota on every handled
+                    # interrupt makes the quota unreachable, so a leader requesting
+                    # delivery and an agent replying status keep re-interrupting
+                    # each other forever (索求↔交付 dead-loop). User messages go
+                    # through interrupt_busy_agents which bypasses this quota and
+                    # resets it, so dropping the refund does NOT block user interrupts.
                     # (agent is already idle — the try/finally around tool_loop handled it)
 
                     # Drain the entire queue and use the LATEST message so the
