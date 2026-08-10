@@ -65,42 +65,6 @@ class CallbacksMixin:
         return buttons
 
 
-    async def _send_agent_hyperparams_keyboard(self, chat_id: str, agent_name: str, agent_hp, edit_query=None) -> None:
-        if not isinstance(agent_hp, dict):
-            agent_hp = {}
-        """Send per-agent hyperparams keyboard.
-
-        When ``edit_query`` is provided (an in-flight InlineKeyboard callback
-        query), the panel is rendered *in place* by editing that very message —
-        so the hyperparams panel and its parent menu live on the SAME message
-        and no duplicate/leftover message is left behind. When omitted, a new
-        message is sent (used by input handlers that have no query object).
-        """
-        buttons = []
-        if agent_hp:
-            for k, v in agent_hp.items():
-                buttons.append([InlineKeyboardButton(f"✏️ {k} = {v}", callback_data=f"ahp:{agent_name}:{k}"),
-                                InlineKeyboardButton("🗑️", callback_data=f"ahp_del:{agent_name}:{k}")])
-        else:
-            buttons.append([InlineKeyboardButton("（无参数）", callback_data="noop")])
-        buttons.append([
-            InlineKeyboardButton("➕ 添加参数", callback_data=f"ahp_add:{agent_name}"),
-            InlineKeyboardButton("📥 复制全局设置", callback_data=f"ahp_sync:{agent_name}")
-        ])
-        buttons.append([InlineKeyboardButton("⬅️ 返回", callback_data=f"edit:{agent_name}")])
-        text = f"⚙️ {agent_name} 超参数设置:"
-        if agent_hp:
-            text += f"\n\n" + "\n".join(f"  {k} = {v}" for k, v in agent_hp.items())
-        markup = InlineKeyboardMarkup(buttons)
-        if edit_query is not None:
-            # Inline edit: replace the parent menu message in place (no duplicate).
-            await edit_query.edit_message_text(text=text[:4096], reply_markup=markup)
-        else:
-            await self._app.bot.send_message(
-                chat_id=int(chat_id), text=text[:4096],
-                reply_markup=markup,
-            )
-
     async def _dispatch_menu_action(self, query, action: str) -> None:
         """Route /menu root actions to each object domain's list view.
 
