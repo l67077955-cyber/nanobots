@@ -555,17 +555,11 @@ class LiteLLMProvider(LLMProvider):
         silently routing to a hardcoded default model.
         """
         from nanobot.providers.model_match import resolve_provider
+        from nanobot.state.settings_store import load_pm as store_load_pm
 
-        import json as _json
-        from pathlib import Path
-        pm_path = Path.home() / ".nanobot" / "providers_models.json"
-        if not pm_path.exists():
+        pm = store_load_pm()
+        if not pm.get("providers"):
             return {"api_base": None, "api_key": None, "model": None, "provider_name": None}
-        try:
-            pm = _json.loads(pm_path.read_text())
-        except Exception:
-            return {"api_base": None, "api_key": None, "model": None, "provider_name": None}
-
         hit = resolve_provider(pm, model, native_providers=self._NATIVE_PROVIDERS)
         if hit is None:
             logger.warning(
@@ -653,12 +647,8 @@ class LiteLLMProvider(LLMProvider):
         if pm_provider_name:
             _needs_flatten = pm_provider_name in self._compat_flatten
             if not _needs_flatten:
-                import json as _json
-                _pm_path = Path.home() / ".nanobot" / "providers_models.json"
-                try:
-                    pm = _json.loads(_pm_path.read_text()) if _pm_path.exists() else {}
-                except Exception:
-                    pm = {}
+                from nanobot.state.settings_store import load_pm as _store_load_pm
+                pm = _store_load_pm()
                 prov_cfg = pm.get("providers", {}).get(pm_provider_name, {})
                 _needs_flatten = prov_cfg.get("flattenTools", False)
             if _needs_flatten:

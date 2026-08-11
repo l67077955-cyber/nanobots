@@ -96,14 +96,9 @@ class HttpxProvider(LLMProvider):
 
     @staticmethod
     def _load_pm() -> dict:
-        """Load ~/.nanobot/providers_models.json."""
-        pm_path = Path.home() / ".nanobot" / "providers_models.json"
-        if not pm_path.exists():
-            return {}
-        try:
-            return _json.loads(pm_path.read_text())
-        except Exception:
-            return {}
+        """Load ~/.nanobot/providers_models.json (single store, sanitize-on-load)."""
+        from nanobot.state.settings_store import load_pm as _store_load_pm
+        return _store_load_pm()
 
     def _resolve_provider(self, model: str) -> dict[str, str | None]:
         """Resolve api_base, api_key, raw model name, and provider name.

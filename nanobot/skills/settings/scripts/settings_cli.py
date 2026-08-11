@@ -13,26 +13,17 @@ Usage (from exec tool):
 """
 
 import argparse
-import json
 import sys
-from pathlib import Path
-
-
-def _pm_path() -> Path:
-    return Path.home() / ".nanobot" / "providers_models.json"
 
 
 def _load() -> dict:
-    p = _pm_path()
-    if p.exists():
-        return json.loads(p.read_text(encoding="utf-8"))
-    return {"providers": {}, "models": {}}
+    from nanobot.state.settings_store import load_pm as _store_load_pm
+    return _store_load_pm()
 
 
 def _save(data: dict) -> None:
-    p = _pm_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    from nanobot.state.settings_store import save_pm as _store_save_pm
+    _store_save_pm(data)
 
 
 # ── Providers ──
