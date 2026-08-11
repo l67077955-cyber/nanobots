@@ -50,6 +50,7 @@ class ProviderCommandsMixin:
             await update.message.reply_text("⚠️ 还没有提供商，请先 /newprovider")
             return
         buttons = [[InlineKeyboardButton(f"🏢 {p}", callback_data=f"pm_newm:{p}")] for p in provs]
+        buttons.append([InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")])
         await update.message.reply_text("🆕 添加模型\n\n选择提供商:", reply_markup=InlineKeyboardMarkup(buttons))
 
     async def _on_deleteprovider(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -162,7 +163,12 @@ class ProviderCommandsMixin:
             else:
                 lines.append("   (无模型，用 /newmodel 添加)")
             lines.append("")
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        buttons = [
+            [InlineKeyboardButton("➕ 新建提供商", callback_data="m:new_provider")],
+            [InlineKeyboardButton("✏️ 编辑提供商", callback_data="ep_list")],
+        ]
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown",
+                                        reply_markup=InlineKeyboardMarkup(buttons))
 
     async def _on_speedtest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Benchmark providers or active agents."""

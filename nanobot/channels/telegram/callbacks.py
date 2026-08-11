@@ -1148,7 +1148,10 @@ class CallbacksMixin:
 
             elif data.startswith("sl:"):
                 name = data[3:]
-                result = self._groupchat_engine.set_leader(name)
+                if name == "clear":
+                    result = self._groupchat_engine.set_leader(None)
+                else:
+                    result = self._groupchat_engine.set_leader(name)
                 await query.edit_message_text(result)
 
             elif data.startswith("lg:"):
@@ -1846,6 +1849,14 @@ class CallbacksMixin:
             elif data == "ep_back":
                 # Return from a provider's secondary panel to the pick list
                 await self._send_panel(query, self._render_provider_edit_list)
+
+            elif data == "ep_list":
+                # /providers 的「✏️ 编辑提供商」入口 → provider-pick list
+                text, markup = await self._render_provider_edit_list()
+                if markup is None:
+                    await query.edit_message_text(text)
+                else:
+                    await query.edit_message_text(text, reply_markup=markup)
 
             elif data.startswith("ep_pick:"):
                 prov = data[8:]

@@ -107,7 +107,11 @@ class AgentCommandsMixin:
         else:
             lines.append("💤 无活跃 agent")
         text = "\n".join(lines)
-        buttons = [[InlineKeyboardButton("➕ 新建 Agent", callback_data="m:new_agent")]]
+        # One ✏️ per agent → its edit panel (aligns with /editagent), plus Create.
+        buttons = [
+            [InlineKeyboardButton(f"✏️ {n}", callback_data=f"edit:{n}")] for n in registry
+        ]
+        buttons.append([InlineKeyboardButton("➕ 新建 Agent", callback_data="m:new_agent")])
         await update.message.reply_text(text[:4096], reply_markup=InlineKeyboardMarkup(buttons))
 
     async def _on_setleader(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -121,26 +125,24 @@ class AgentCommandsMixin:
             return
 
         args = context.args or []
-        if not args:
-            # Clear leader or show current
-            if self._groupchat_engine.leader:
-                result = self._groupchat_engine.set_leader(None)
-            else:
-                # Show selection buttons
-                buttons = []
-                for name in self._groupchat_engine.registry:
-                    buttons.append([InlineKeyboardButton(
-                        f"👑 {name}",
-                        callback_data=f"sl:{name}"
-                    )])
-                await update.message.reply_text(
-                    "👑 选择 Leader:",
-                    reply_markup=InlineKeyboardMarkup(buttons)
-                )
-                return
-        else:
+        if args:
             result = self._groupchat_engine.set_leader(args[0])
-        await update.message.reply_text(result)
+            await update.message.reply_text(result)
+            return
+        # Show selection panel; includes a clear button only when a leader exists.
+        buttons = []
+        for name in self._groupchat_engine.registry:
+            mark = "👑 " if name == self._groupchat_engine.leader else ""
+            buttons.append([InlineKeyboardButton(
+                f"{mark}{name}", callback_data=f"sl:{name}"
+            )])
+        if self._groupchat_engine.leader:
+            buttons.append([InlineKeyboardButton("🗑 清除 Leader", callback_data="sl:clear")])
+        buttons.append([InlineKeyboardButton("❌ 取消", callback_data="pm_cancel")])
+        await update.message.reply_text(
+            "👑 选择 Leader:",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
 
     async def _on_addagent(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message or not update.effective_user:
@@ -164,7 +166,6 @@ class AgentCommandsMixin:
             return
         buttons = [[
             InlineKeyboardButton(f"➕ {n} ({i.get('model','?')})", callback_data=f"add:{n}"),
-            InlineKeyboardButton("🗑️", callback_data=f"da:{n}"),
         ] for n, i in available]
         await update.message.reply_text("➕ 选择要加入的 Agent:", reply_markup=InlineKeyboardMarkup(buttons))
 
