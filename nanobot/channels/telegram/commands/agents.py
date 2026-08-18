@@ -290,6 +290,8 @@ class AgentCommandsMixin:
         if self._groupchat_engine and agent_name in self._groupchat_engine.registry:
             agent = self._groupchat_engine.registry[agent_name]
         agent_hp = (agent or {}).get("hyperparams") or {}
+        if not isinstance(agent_hp, dict):
+            agent_hp = {}
         hyperparams = []
         for k, v in agent_hp.items():
             hyperparams.append([

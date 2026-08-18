@@ -142,11 +142,61 @@ def agent_config_path(name: str) -> Path:
     return AGENTS_DIR / name.lower() / "config.json"
 
 
+def sanitize_agent_config(cfg: dict[str, Any]) -> bool:
+    """Heal legacy (upstream HKUDS) agent-config shapes in place.
+
+    Upstream writes sections like::
+
+        "hyperparams": [
+            {"temperature": [0.35, {"NANOBOT_*": "…"}], "top_p": [0.88, …]},
+            {"NANOBOT_MAXTOKENS": "16384", …},   # trailing env-override dict
+        ]
+
+    while this fork's consumers expect plain dicts/values::
+
+        "hyperparams": {"temperature": 0.35, "top_p": 0.88}
+
+    Rewrites ``hyperparams`` / ``tools`` lists → dict (each ``[value, {env}]``
+    pair unwraps to its value, pure env-override dicts are dropped) and
+    unwraps list-wrapped scalars like ``maxToolIterations: [50, {env}]`` → 50.
+    Returns True if anything changed (caller persists).
+    """
+    changed = False
+    for key in ("hyperparams", "tools"):
+        val = cfg.get(key)
+        if not isinstance(val, list):
+            continue
+        merged: dict[str, Any] = {}
+        for item in val:
+            if not isinstance(item, dict):
+                continue
+            # Pure env-override dict: all values are plain strings.
+            if item and all(isinstance(v, str) for v in item.values()):
+                continue
+            for k, v in item.items():
+                if isinstance(v, list) and len(v) == 2 and isinstance(v[1], dict):
+                    v = v[0]
+                merged[k] = v
+        cfg[key] = merged
+        changed = True
+    for key in ("maxToolIterations",):
+        val = cfg.get(key)
+        if isinstance(val, list) and len(val) >= 1:
+            cfg[key] = val[0]
+            changed = True
+    return changed
+
+
 def load_agent(name: str) -> dict[str, Any]:
     p = agent_config_path(name)
     if not p.exists():
         raise KeyError(f"agent '{name}' has no config ({p})")
-    return json.loads(p.read_text(encoding="utf-8"))
+    cfg = json.loads(p.read_text(encoding="utf-8"))
+    if not isinstance(cfg, dict):
+        cfg = {}
+    if sanitize_agent_config(cfg):
+        save_agent(name, cfg)  # heal in place, like load_pm
+    return cfg
 
 
 def save_agent(name: str, cfg: dict[str, Any]) -> None:

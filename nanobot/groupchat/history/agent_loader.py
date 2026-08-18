@@ -14,6 +14,7 @@ from typing import Any
 from loguru import logger
 
 from nanobot.groupchat.config import GroupChatConfig
+from nanobot.state.settings_store import sanitize_agent_config
 
 
 def load_agents(config: GroupChatConfig, workspace: Path) -> dict[str, dict[str, Any]]:
@@ -44,6 +45,7 @@ def load_agents(config: GroupChatConfig, workspace: Path) -> dict[str, dict[str,
                 if cfg_file.exists():
                     try:
                         _cfg = json.loads(cfg_file.read_text())
+                        sanitize_agent_config(_cfg)
                         if isinstance(_cfg.get("tools"), dict):
                             agent_data["tools"] = _cfg["tools"]
                         if _cfg.get("tools_enabled"):
@@ -163,6 +165,7 @@ def _scan_agents_dir(
         if config_file.exists():
             try:
                 _cfg = json.loads(config_file.read_text())
+                sanitize_agent_config(_cfg)
                 if _cfg.get("role") == "system":
                     model = _cfg.get("model", "?")
                     desc = _cfg.get("description", "系统 agent")
@@ -207,6 +210,7 @@ def _scan_agents_dir(
         if config_file.exists():
             try:
                 acfg = json.loads(config_file.read_text())
+                sanitize_agent_config(acfg)
                 # Top-level 'model' takes priority (written by /editagent)
                 model = acfg.get("model", model)
                 # Granular tools config: {web_search: true, exec: false, ...}

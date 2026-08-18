@@ -92,3 +92,43 @@ def test_agent_crud_and_editable_whitelist(isolated):
 def test_agent_edit_missing_agent(isolated):
     with pytest.raises(KeyError):
         store.update_agent("Ghost", "model", "m")
+
+
+# ── legacy (upstream HKUDS) agent-config sanitize ─────────────────
+
+def test_sanitize_legacy_hyperparams_list(isolated):
+    """Upstream writes hyperparams as [{param: [val, {env}]}, {env}]; load heals it."""
+    cfg = {
+        "model": "m1",
+        "hyperparams": [
+            {"temperature": [0.35, {"NANOBOT_MAXTOKENS": "16384"}],
+             "top_p": [0.88, {"NANOBOT_MAXTOKENS": "16384"}]},
+            {"NANOBOT_MAXTOKENS": "16384", "NANOBOT_CONTEXTWINDOWTOKENS": "200000"},
+        ],
+        "tools": [
+            {"web_search": [True, {"NANOBOT_MAXTOKENS": "16384"}],
+             "write_file": [False, {"NANOBOT_MAXTOKENS": "16384"}]},
+            {"NANOBOT_MAXTOKENS": "16384"},
+        ],
+        "maxToolIterations": [50, {"NANOBOT_MAXTOKENS": "16384"}],
+    }
+    store.create_agent("Kirk", "m1")
+    store.agent_config_path("Kirk").write_text(json.dumps(cfg))
+
+    loaded = store.load_agent("Kirk")
+    assert loaded["hyperparams"] == {"temperature": 0.35, "top_p": 0.88}, "env-override dict dropped, pairs unwrapped"
+    assert loaded["tools"] == {"web_search": True, "write_file": False}
+    assert loaded["maxToolIterations"] == 50
+
+    # load_agent self-heals on disk (like load_pm)
+    on_disk = json.loads(store.agent_config_path("Kirk").read_text())
+    assert isinstance(on_disk["hyperparams"], dict) and on_disk["hyperparams"] == {"temperature": 0.35, "top_p": 0.88}
+
+
+def test_sanitize_agent_idempotent_on_plain_dict(isolated):
+    store.create_agent("Facet", "m1")
+    store.agent_config_path("Facet").write_text(json.dumps({"model": "m1", "hyperparams": {"temperature": 0.1}}))
+    assert store.load_agent("Facet")["hyperparams"] == {"temperature": 0.1}, "already-clean config untouched"
+
+    cfg = {"hyperparams": {"temperature": 0.1}}
+    assert store.sanitize_agent_config(cfg) is False
