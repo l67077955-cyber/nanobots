@@ -799,7 +799,7 @@ async def broadcast_round(
                 )
                 
                 # Append to the volatile user message, addressed by object
-                # reference (see ~line 651) - an index would go stale after
+                # reference (see its definition above) - an index would go stale
                 # history compression or tool-result appends.
                 orig_volatile = volatile_msg["content"]
                 if "### [本轮状态汇总]" in orig_volatile:
@@ -1352,12 +1352,23 @@ async def broadcast_round(
                         name, dropped, _conv_keep_turns * 3,
                     )
                     # _sys_msg_count intentionally NOT recalculated here.
-                    # Its original value (line 711, = len(messages) at prefix-build time)
+                    # Its original value (= len(messages) at prefix-build time)
                     # is the correct boundary index for messages[sys_msg_count:].
                     # Prune never touches the prefix, so the boundary stays valid.
-                    # volatile_msg needs no adjustment either - it is held by
-                    # object reference (line 651), so dropping messages before
-                    # it is harmless.
+                    # volatile_msg is held by object reference, so it survives
+                    # the prune itself. But prune keeps only the last
+                    # keep_turns*3 conversation messages, and the volatile
+                    # message was last only at build time - once enough tool
+                    # results are appended after it, it gets evicted.
+                    # It carries the task + per-cycle status summary, so put
+                    # it back at the tail (identity check: an equal dict is
+                    # not the same message).
+                    if not any(m is volatile_msg for m in messages):
+                        messages.append(volatile_msg)
+                        logger.debug(
+                            "Broadcast: {} re-inserted evicted volatile state message",
+                            name,
+                        )
 
                 # Inject agent's own previous output so LLM knows what it already said
                 if content:
