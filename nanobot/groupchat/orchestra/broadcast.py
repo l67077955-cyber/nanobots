@@ -647,9 +647,11 @@ async def broadcast_round(
             "content": "[团队工具权限及搜索额度见消息末尾 [本轮状态汇总]]",
         })
 
-        # The volatile state message is always the last one (added by PromptBuilder)
-        volatile_msg_idx = len(messages) - 1
-
+        # Hold a direct object reference instead of an index: history compression
+        # drops messages *before* it and tool results are appended *after* it, so
+        # any cached index goes stale (IndexError, or worse, a silent write to the
+        # wrong message). The dict object survives both operations.
+        volatile_msg = messages[-1]
         # ── Edit-in-place display (broadcast mode) ──
         # Each tool call gets one message (🟡), then edited with result (🟢/🔴).
         _tool_lines: list[str] = []
@@ -796,14 +798,15 @@ async def broadcast_round(
                     "如需搜索，请通过 chatroom_send 请求有搜索权限的队友帮忙。"
                 )
                 
-                # Append to the volatile user message (the last message)
-                # This ensures the system messages remain stable and cacheable.
-                orig_volatile = messages[volatile_msg_idx]["content"]
+                # Append to the volatile user message, addressed by object
+                # reference (see ~line 651) - an index would go stale after
+                # history compression or tool-result appends.
+                orig_volatile = volatile_msg["content"]
                 if "### [本轮状态汇总]" in orig_volatile:
                     # Strip previous summary if retrying/looping
                     orig_volatile = orig_volatile.split("### [本轮状态汇总]")[0].strip()
                 
-                messages[volatile_msg_idx]["content"] = orig_volatile + status_summary
+                volatile_msg["content"] = orig_volatile + status_summary
 
                 _cycle_t0 = _t.time()
                 _cycle_usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
@@ -1348,11 +1351,13 @@ async def broadcast_round(
                         "Broadcast: {} pruned {} conversation messages (kept {})",
                         name, dropped, _conv_keep_turns * 3,
                     )
-                    # Refresh system-message count so future prunes keep the
-                    # correct system-prompt prefix (a stale count could drop it).
-                    _sys_msg_count = sum(
-                        1 for m in messages if m.get("role") == "system"
-                    )
+                    # _sys_msg_count intentionally NOT recalculated here.
+                    # Its original value (line 711, = len(messages) at prefix-build time)
+                    # is the correct boundary index for messages[sys_msg_count:].
+                    # Prune never touches the prefix, so the boundary stays valid.
+                    # volatile_msg needs no adjustment either - it is held by
+                    # object reference (line 651), so dropping messages before
+                    # it is harmless.
 
                 # Inject agent's own previous output so LLM knows what it already said
                 if content:
