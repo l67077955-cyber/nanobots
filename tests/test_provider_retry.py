@@ -211,3 +211,65 @@ async def test_image_fallback_without_meta_uses_default_placeholder() -> None:
         content = msg.get("content")
         if isinstance(content, list):
             assert any("[image omitted]" in (b.get("text") or "") for b in content)
+
+
+@pytest.mark.asyncio
+async def test_chat_with_retry_honors_server_retry_after(monkeypatch) -> None:
+    """A 429 carrying retry_after_seconds must wait the server-advised time,
+    not the default 1/2/4s backoff that would burn attempts into a live
+    rate limit."""
+    provider = ScriptedProvider([
+        LLMResponse(
+            content='litellm.RateLimitError: OpenrouterException - {"code":429,'
+                    '"metadata":{"retry_after_seconds":60,"headers":{"Retry-After":"60"}}}',
+            finish_reason="error",
+        ),
+        LLMResponse(content="ok"),
+    ])
+    delays: list[int] = []
+
+    async def _fake_sleep(delay: int) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr("nanobot.providers.base.asyncio.sleep", _fake_sleep)
+
+    response = await provider.chat_with_retry(messages=[{"role": "user", "content": "hello"}])
+
+    assert response.content == "ok"
+    assert delays == [60]
+
+
+@pytest.mark.asyncio
+async def test_chat_with_retry_keeps_default_backoff_without_hint(monkeypatch) -> None:
+    """A 429 with no parseable Retry-After keeps the default backoff."""
+    provider = ScriptedProvider([
+        LLMResponse(content="429 rate limit", finish_reason="error"),
+        LLMResponse(content="ok"),
+    ])
+    delays: list[int] = []
+
+    async def _fake_sleep(delay: int) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr("nanobot.providers.base.asyncio.sleep", _fake_sleep)
+
+    response = await provider.chat_with_retry(messages=[{"role": "user", "content": "hello"}])
+
+    assert response.content == "ok"
+    assert delays == [1]
+
+
+def test_rate_limit_retry_delay_parsing() -> None:
+    # Real OpenRouter payload shape seen in gateway.log on 2026-08-29
+    real = ('Error calling LLM: litellm.RateLimitError: OpenrouterException - '
+            '{"code":429,"metadata":{"retry_after_seconds":60,'
+            '"headers":{"Retry-After":"60"}}}')
+    assert LLMProvider._rate_limit_retry_delay(real) == 60
+    # Plain header style
+    assert LLMProvider._rate_limit_retry_delay("429 Too Many Requests, Retry-After: 30") == 30
+    # Capped
+    assert LLMProvider._rate_limit_retry_delay("rate limit, retry_after_seconds: 3600") == 120
+    # Not rate-limited
+    assert LLMProvider._rate_limit_retry_delay("litellm.InternalServerError: Connection error") is None
+    # Rate-limited but no hint
+    assert LLMProvider._rate_limit_retry_delay("429 rate limit") is None

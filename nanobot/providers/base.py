@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
@@ -203,6 +204,28 @@ class LLMProvider(ABC):
     def _is_transient_error(cls, content: str | None) -> bool:
         err = (content or "").lower()
         return any(marker in err for marker in cls._TRANSIENT_ERROR_MARKERS)
+
+    _RATE_LIMIT_MARKERS = ("rate limit", "ratelimit", "too many requests", "429")
+    # Matches retry_after_seconds":60, "Retry-After":"60", Retry-After: 60 ...
+    _RETRY_AFTER_RE = re.compile(
+        r"retry[_-]after(?:_seconds)?[\"'\s:=]{1,4}(\d{1,5})", re.IGNORECASE
+    )
+    _RATE_LIMIT_DELAY_CAP = 120
+
+    @classmethod
+    def _rate_limit_retry_delay(cls, content: str | None) -> int | None:
+        """Server-advised delay for rate-limit errors, capped.
+
+        Returns None when the error is not rate-limited or carries no
+        Retry-After hint; callers then keep their default backoff.
+        """
+        err = (content or "").lower()
+        if not any(marker in err for marker in cls._RATE_LIMIT_MARKERS):
+            return None
+        m = cls._RETRY_AFTER_RE.search(content or "")
+        if not m:
+            return None
+        return min(int(m.group(1)), cls._RATE_LIMIT_DELAY_CAP)
 
     def _detect_compat_issues(
         self,
@@ -421,6 +444,15 @@ class LLMProvider(ABC):
                 return response
 
             err_msg = (response.content or "")[:120]
+            rl_delay = self._rate_limit_retry_delay(response.content)
+            if rl_delay is not None and rl_delay > delay:
+                logger.warning(
+                    "Rate-limited upstream, honoring server Retry-After {}s "
+                    "(default backoff was {}s)",
+                    rl_delay,
+                    delay,
+                )
+                delay = rl_delay
             retry_log.append({
                 "attempt": attempt,
                 "ts": _time.strftime("%H:%M:%S"),
