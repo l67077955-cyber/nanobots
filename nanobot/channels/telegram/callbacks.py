@@ -25,6 +25,15 @@ from nanobot.groupchat.history.prompt_builder import (
     COMPONENT_PHASES as _COMPONENT_PHASES,
 )
 from .formatting import TELEGRAM_MAX_MESSAGE_LEN
+from .callbacks_registry import (
+    AG_MDL_PROV, AG_MDL_PICK, AG_MDL_BY_NAME, AG_MDL_MANUAL,
+    AG_MDL_CREATE_PROV, AG_MDL_CREATE_PICK, AG_MDL_CREATE_MANUAL,
+    AG_MDL_CREATE_SKIP,
+    ag_mdl_prov, ag_mdl_pick, ag_mdl_manual,
+    ag_mdl_create_prov, ag_mdl_create_pick, ag_mdl_create_manual,
+    ag_mdl_create_skip,
+    parse_args,
+)
 
 
 class CallbacksMixin:
@@ -452,8 +461,8 @@ class CallbacksMixin:
                     pm = self._load_pm()
                     provs = list(pm.get("providers", {}).keys())
                     if provs:
-                        buttons = [[InlineKeyboardButton(f"🏢 {p}", callback_data=f"em_prov:{name}:{p}")] for p in provs]
-                        buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=f"em_manual:{name}")])
+                        buttons = [[InlineKeyboardButton(f"🏢 {p}", callback_data=ag_mdl_prov(name, p))] for p in provs]
+                        buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=ag_mdl_manual(name))])
                         await query.edit_message_text("🤖 选择提供商:", reply_markup=InlineKeyboardMarkup(buttons))
                     else:
                         await query.edit_message_text("请输入新模型名 (如 anthropic/claude-sonnet-4-5):")
@@ -1723,9 +1732,8 @@ class CallbacksMixin:
                     await query.edit_message_text(f"✅ {prov} 的模型已全部删除")
 
             # ── Edit agent model: 2-step provider → model selection ──
-            elif data.startswith("em_prov:"):
-                parts = data.split(":", 2)
-                agent_name, prov = parts[1], parts[2]
+            elif data.startswith(AG_MDL_PROV + ":"):
+                agent_name, prov = parse_args(data, AG_MDL_PROV, maxsplit=1)
                 pm = self._load_pm()
                 models = pm.get("models", {}).get(prov, [])
                 if not models:
@@ -1741,15 +1749,15 @@ class CallbacksMixin:
                 self._em_model_cache[f"{agent_name}:{prov}"] = models
                 buttons = []
                 for i, m in enumerate(models):
-                    buttons.append([InlineKeyboardButton(f"🤖 {m}", callback_data=f"em_mi:{agent_name}:{prov}:{i}")])
-                buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=f"em_manual:{agent_name}")])
+                    buttons.append([InlineKeyboardButton(f"🤖 {m}", callback_data=ag_mdl_pick(agent_name, prov, i))])
+                buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=ag_mdl_manual(agent_name))])
                 await query.edit_message_text(f"🏢 {prov} — 选择模型:", reply_markup=InlineKeyboardMarkup(buttons))
 
-            elif data.startswith("em_mi:") or data.startswith("em_model:"):
-                # em_mi:agent:prov:index — resolve model from index cache
-                if data.startswith("em_mi:"):
-                    parts = data.split(":")
-                    agent_name, prov, idx = parts[1], parts[2], int(parts[3])
+            elif data.startswith(AG_MDL_PICK + ":") or data.startswith(AG_MDL_BY_NAME + ":"):
+                # <pick>:agent:prov:index — resolve model from index cache
+                if data.startswith(AG_MDL_PICK + ":"):
+                    agent_name, prov, idx_raw = parse_args(data, AG_MDL_PICK)
+                    idx = int(idx_raw)
                     cache = getattr(self, "_em_model_cache", {})
                     models = cache.get(f"{agent_name}:{prov}", [])
                     if idx >= len(models):
@@ -1757,8 +1765,7 @@ class CallbacksMixin:
                         return
                     model = models[idx]
                 else:
-                    parts = data.split(":", 3)
-                    agent_name, prov, model = parts[1], parts[2], parts[3]
+                    agent_name, prov, model = parse_args(data, AG_MDL_BY_NAME, maxsplit=2)
                 if self._groupchat_engine and agent_name in self._groupchat_engine.registry:
                     self._groupchat_engine.registry[agent_name]["model"] = model
                     # Update config on disk
@@ -1782,18 +1789,18 @@ class CallbacksMixin:
                     await query.edit_message_text(f"❌ Agent '{agent_name}' 不存在")
                 self._edit_state.pop(chat_id, None)
 
-            elif data.startswith("em_manual:"):
-                agent_name = data[10:]
+            elif data.startswith(AG_MDL_MANUAL + ":"):
+                agent_name = parse_args(data, AG_MDL_MANUAL, maxsplit=0)[0]
                 self._begin_edit(chat_id, {"agent": agent_name, "field": "model"})
                 await query.edit_message_text("请输入新模型名 (如 anthropic/claude-sonnet-4-5):")
 
             # ── Create-model button chain (new agent, field=create_model) ──
-            elif data.startswith("emc_prov:"):
-                # emc_prov:agentName:prov — pick provider's model list for create
-                parts = data.split(":", 2)
-                if len(parts) < 3:
+            elif data.startswith(AG_MDL_CREATE_PROV + ":"):
+                # <prov>:agentName:prov — pick provider's model list for create
+                args = parse_args(data, AG_MDL_CREATE_PROV, maxsplit=1)
+                if len(args) < 2:
                     return
-                agent_name, prov = parts[1], parts[2]
+                agent_name, prov = args
                 st = self._edit_state.get(chat_id)
                 pm = self._load_pm()
                 models = pm.get("models", {}).get(prov, [])
@@ -1806,18 +1813,18 @@ class CallbacksMixin:
                 if not hasattr(self, "_emc_model_cache"):
                     self._emc_model_cache = {}
                 self._emc_model_cache[f"{agent_name}:{prov}"] = models
-                buttons = [[InlineKeyboardButton(f"🤖 {m}", callback_data=f"emc_mi:{agent_name}:{prov}:{i}")] for i, m in enumerate(models)]
-                buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=f"emc_manual:{agent_name}")])
+                buttons = [[InlineKeyboardButton(f"🤖 {m}", callback_data=ag_mdl_create_pick(agent_name, prov, i))] for i, m in enumerate(models)]
+                buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=ag_mdl_create_manual(agent_name))])
                 await query.edit_message_text(f"🏢 {prov} — 选择模型:", reply_markup=InlineKeyboardMarkup(buttons))
 
-            elif data.startswith("emc_mi:"):
-                # emc_mi:agentName:prov:idx — model chosen during create; advance to persona
-                parts = data.split(":")
-                if len(parts) < 4:
+            elif data.startswith(AG_MDL_CREATE_PICK + ":"):
+                # <pick>:agentName:prov:idx — model chosen during create; advance to persona
+                args = parse_args(data, AG_MDL_CREATE_PICK)
+                if len(args) < 3:
                     return
-                agent_name, prov, idx = parts[1], parts[2], parts[3]
+                agent_name, prov, idx_raw = args[0], args[1], args[2]
                 try:
-                    idx = int(idx)
+                    idx = int(idx_raw)
                 except ValueError:
                     return
                 cache = getattr(self, "_emc_model_cache", {})
@@ -1833,11 +1840,11 @@ class CallbacksMixin:
                     f"✅ 模型 {model} 已选择\n\n请输入人设 (SOUL.md 内容):"
                 )
 
-            elif data.startswith("emc_skip:"):
-                # emc_skip:model — model test failed, but user wants to use it anyway.
+            elif data.startswith(AG_MDL_CREATE_SKIP + ":"):
+                # <skip>:model — model test failed, but user wants to use it anyway.
                 # Agent isn't in registry yet; stash model into edit-state and
                 # advance to persona, so /newagent still completes.
-                model = data[len("emc_skip:"):]
+                model = parse_args(data, AG_MDL_CREATE_SKIP, maxsplit=0)[0]
                 st = self._edit_state.get(chat_id) or {}
                 st.update({"model": model, "field": "create_persona"})
                 self._begin_edit(chat_id, st)
@@ -1845,9 +1852,9 @@ class CallbacksMixin:
                     f"✅ 已跳过测试,为该 Agent 使用 {model}\n\n请输入人设 (SOUL.md 内容):"
                 )
 
-            elif data.startswith("emc_manual:"):
-                # emc_manual:agentName — enter model id by hand during create
-                agent_name = data[11:]
+            elif data.startswith(AG_MDL_CREATE_MANUAL + ":"):
+                # <manual>:agentName — enter model id by hand during create
+                agent_name = parse_args(data, AG_MDL_CREATE_MANUAL, maxsplit=0)[0]
                 self._begin_edit(chat_id, {"agent": agent_name, "field": "create_model"})
                 await query.edit_message_text(
                     "请输入模型名 (如 anthropic/claude-sonnet-4-5):\n(发 0 或 /cancel 取消)"
@@ -3106,8 +3113,8 @@ class CallbacksMixin:
                 pm = self._load_pm()
                 provs = list(pm.get("providers", {}).keys())
                 if provs:
-                    prov_buttons = [[InlineKeyboardButton(f"🏢 {p}", callback_data=f"emc_prov:{name}:{p}")] for p in provs]
-                    prov_buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=f"emc_manual:{name}")])
+                    prov_buttons = [[InlineKeyboardButton(f"🏢 {p}", callback_data=ag_mdl_create_prov(name, p))] for p in provs]
+                    prov_buttons.append([InlineKeyboardButton("✏️ 手动输入", callback_data=ag_mdl_create_manual(name))])
                     await self._app.bot.send_message(
                         int(chat_id),
                         f"Agent: {name}\n\n🤖 选择提供商:",
@@ -3144,7 +3151,7 @@ class CallbacksMixin:
                     # Escape hatch: model test failing (slow/blocked provider)
                     # shouldn't dead-end agent creation. Offer skip-test now.
                     if self._app:
-                        skip_btn = [[InlineKeyboardButton("⏭ 跳过测试,直接创建", callback_data=f"emc_skip:{model_name}")]]
+                        skip_btn = [[InlineKeyboardButton("⏭ 跳过测试,直接创建", callback_data=ag_mdl_create_skip(model_name))]]
                         await self._app.bot.send_message(
                             int(chat_id),
                             f"⚠️ 模型测试失败。\n是否为 Agent 使用 {model_name} (跳过测试)?",
