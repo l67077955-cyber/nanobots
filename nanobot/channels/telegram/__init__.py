@@ -130,6 +130,16 @@ class TelegramChannel(
         # after EDIT_CONFIRM_TIMEOUT seconds.
         self._pending_input: dict[str, dict] = {}
 
+    def _begin_edit(self, chat_id: str, state: dict) -> None:
+        """Create/replace an interactive edit session, stamping its start time.
+
+        ALL ``_edit_state`` creation must go through here: the stamp is what
+        keeps the 20-min staleness check in message_handler from eating the
+        first typed input of a fresh session (or one started after a long gap).
+        """
+        self._edit_state[chat_id] = state
+        self._edit_state_since[chat_id] = time.time()
+
     def set_groupchat_engine(self, engine: GroupChatEngine) -> None:
         """Set the group chat engine for multi-agent discussions."""
         self._groupchat_engine = engine
@@ -491,7 +501,10 @@ class TelegramChannel(
         not a routing hub. Each row is one editable setting (button), tapping
         it opens the choice/toggle for that setting. Persists to config.yaml.
         """
-        if not update.message:
+        if not update.message or not update.effective_user:
+            return
+        sender = self._sender_id(update.effective_user)
+        if not self.is_allowed(sender):
             return
         # Locale follows the bot's configured language.
         if getattr(self, "config", None) and getattr(self.config, "language", None):

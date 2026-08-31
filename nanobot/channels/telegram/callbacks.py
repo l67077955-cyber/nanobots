@@ -83,7 +83,7 @@ class CallbacksMixin:
         # ── Create wizards (object's own C button) ──
         if action == "new_agent":
             chat_id = str(query.message.chat_id)
-            self._edit_state[chat_id] = {"agent": "", "field": "create_name", "mode": "create"}
+            self._begin_edit(chat_id, {"agent": "", "field": "create_name", "mode": "create"})
             await query.edit_message_text(
                 i18n.t("ui.create.agent_prompt"),
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("ui.common.cancel"), callback_data="m:cfg:cancel")]]),
@@ -91,7 +91,7 @@ class CallbacksMixin:
             return
         if action == "new_provider":
             chat_id = str(query.message.chat_id)
-            self._edit_state[chat_id] = {"field": "pm_prov_name", "mode": "pm"}
+            self._begin_edit(chat_id, {"field": "pm_prov_name", "mode": "pm"})
             await query.edit_message_text(
                 i18n.t("ui.create.provider_prompt"),
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("ui.common.cancel"), callback_data="m:cfg:cancel")]]),
@@ -123,7 +123,7 @@ class CallbacksMixin:
             if prov not in self._load_pm().get("providers", {}):
                 await query.edit_message_text(f"⚠️ 提供商 {prov} 不存在")
                 return
-            self._edit_state[chat_id] = {"field": "pm_model_id", "mode": "pm", "provider": prov}
+            self._begin_edit(chat_id, {"field": "pm_model_id", "mode": "pm", "provider": prov})
             await query.edit_message_text(
                 f"🏢 提供商: {prov}\n\n"
                 "请输入模型ID (如 google/gemini-3-flash-preview):",
@@ -273,6 +273,14 @@ class CallbacksMixin:
         """Handle InlineKeyboard button presses."""
         query = update.callback_query
         if not query or not query.data:
+            return
+        # Buttons must pass the same allowlist as text commands; without this,
+        # any group member could press delete/edit buttons on a panel message.
+        if query.from_user and not self.is_allowed(self._sender_id(query.from_user)):
+            try:
+                await query.answer("⛔️ 无权限操作", show_alert=True)
+            except Exception:
+                pass
             return
         logger.debug("Callback received: data={} from={}", query.data, query.from_user.id if query.from_user else "?")
         await query.answer()
@@ -434,7 +442,7 @@ class CallbacksMixin:
                         reply_markup=InlineKeyboardMarkup(buttons)
                     )
                     return
-                self._edit_state[chat_id] = {"agent": name, "field": field}
+                self._begin_edit(chat_id, {"agent": name, "field": field})
                 if field == "persona":
                     current = self._groupchat_engine.registry.get(name, {}).get("prompt", "")
                     await query.edit_message_text(f"📄 当前人设:\n\n{current[:3000]}")
@@ -1170,7 +1178,7 @@ class CallbacksMixin:
                 provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
                 params = getattr(provider, 'sampling_params', None) if provider else None
                 if params and key in params:
-                    self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key}
+                    self._begin_edit(chat_id, {"field": "hp_value", "hp_key": key})
                     await query.edit_message_text(
                         f"✏️ 修改 {key}\n"
                         f"当前值: {params[key]}\n\n"
@@ -1213,11 +1221,11 @@ class CallbacksMixin:
 
             elif data.startswith("hp_new:"):
                 key = data[7:]
-                self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key, "hp_is_new": True}
+                self._begin_edit(chat_id, {"field": "hp_value", "hp_key": key, "hp_is_new": True})
                 await query.edit_message_text(f"➕ 添加 {key}\n\n请输入值 (数字):")
 
             elif data == "hp_custom":
-                self._edit_state[chat_id] = {"field": "hp_add_custom"}
+                self._begin_edit(chat_id, {"field": "hp_add_custom"})
                 await query.edit_message_text("✏️ 请输入参数名:")
 
             elif data == "hp_back":
@@ -1236,7 +1244,7 @@ class CallbacksMixin:
                 agent = self._groupchat_engine.registry.get(a_name, {}) if self._groupchat_engine else {}
                 agent_hp = agent.get("hyperparams") or {}
                 if key in agent_hp:
-                    self._edit_state[chat_id] = {"field": "ahp_value", "agent": a_name, "hp_key": key}
+                    self._begin_edit(chat_id, {"field": "ahp_value", "agent": a_name, "hp_key": key})
                     await query.edit_message_text(
                         f"✏️ 修改 {a_name} 的 {key}\n"
                         f"当前值: {agent_hp[key]}\n\n"
@@ -1338,13 +1346,13 @@ class CallbacksMixin:
                 if len(parts) < 3:
                     return
                 a_name, key = parts[1], parts[2]
-                self._edit_state[chat_id] = {"field": "ahp_value", "agent": a_name, "hp_key": key, "hp_is_new": True}
+                self._begin_edit(chat_id, {"field": "ahp_value", "agent": a_name, "hp_key": key, "hp_is_new": True})
                 await query.edit_message_text(f"➕ 为 {a_name} 添加 {key}\n\n请输入值 (数字):")
 
             elif data.startswith("ahp_custom:"):
                 # ahp_custom:AgentName
                 a_name = data[11:]
-                self._edit_state[chat_id] = {"field": "ahp_add_custom", "agent": a_name}
+                self._begin_edit(chat_id, {"field": "ahp_add_custom", "agent": a_name})
                 await query.edit_message_text("✏️ 请输入参数名:")
 
             elif data.startswith("ahp_back:"):
@@ -1364,7 +1372,7 @@ class CallbacksMixin:
                 settings = self._load_gc_settings()
                 label = self.GC_SETTINGS_LABELS.get(key, key)
                 val = settings.get(key, self.GC_SETTINGS_DEFAULTS.get(key, "?"))
-                self._edit_state[chat_id] = {"field": "gc_value", "gc_key": key}
+                self._begin_edit(chat_id, {"field": "gc_value", "gc_key": key})
                 await query.edit_message_text(
                     f"✏️ 修改 {label}\n"
                     f"当前值: {val}\n\n"
@@ -1435,7 +1443,7 @@ class CallbacksMixin:
                         if phase == "static"
                         else "{{agent}} {{members}} {{tools}} {{others}} {{identity}} {{datetime}} {{round}} {{agent_idx}} {{total}} {{teammates}}"
                     )
-                    self._edit_state[chat_id] = {"field": "prompt_edit", "agent": "__global__", "key": key}
+                    self._begin_edit(chat_id, {"field": "prompt_edit", "agent": "__global__", "key": key})
                     preview = (content[:3500] + "…") if len(content) > 3500 else (content or "(空)")
                     await query.edit_message_text(
                         f"✏️ 编辑全局模板 - {label} [{phase_label}]\n\n"
@@ -1520,7 +1528,7 @@ class CallbacksMixin:
             elif data == "pradd_custom":
                 # Enter edit state for user to type a custom component name
                 chat_id = str(query.message.chat_id)
-                self._edit_state[chat_id] = {"field": "pradd_custom_name"}
+                self._begin_edit(chat_id, {"field": "pradd_custom_name"})
                 await query.edit_message_text(
                     "✏️ 创建自定义提示词组件\n\n"
                     "请输入组件名称（如: 角色背景、安全规则、写作风格 等）:\n\n"
@@ -1654,7 +1662,7 @@ class CallbacksMixin:
             elif data.startswith("pm_newm:"):
                 # User picked a provider for /newmodel
                 prov = data[8:]
-                self._edit_state[chat_id] = {"field": "pm_model_id", "mode": "pm", "provider": prov}
+                self._begin_edit(chat_id, {"field": "pm_model_id", "mode": "pm", "provider": prov})
                 await query.edit_message_text(
                     f"🏢 提供商: {prov}\n\n"
                     "请输入模型ID (如 google/gemini-3-flash-preview):"
@@ -1721,7 +1729,7 @@ class CallbacksMixin:
                 pm = self._load_pm()
                 models = pm.get("models", {}).get(prov, [])
                 if not models:
-                    self._edit_state[chat_id] = {"agent": agent_name, "field": "model", "provider": prov}
+                    self._begin_edit(chat_id, {"agent": agent_name, "field": "model", "provider": prov})
                     await query.edit_message_text(
                         f"🏢 {prov} 暂无已注册模型\n\n"
                         "请直接输入模型ID:"
@@ -1776,7 +1784,7 @@ class CallbacksMixin:
 
             elif data.startswith("em_manual:"):
                 agent_name = data[10:]
-                self._edit_state[chat_id] = {"agent": agent_name, "field": "model"}
+                self._begin_edit(chat_id, {"agent": agent_name, "field": "model"})
                 await query.edit_message_text("请输入新模型名 (如 anthropic/claude-sonnet-4-5):")
 
             # ── Create-model button chain (new agent, field=create_model) ──
@@ -1790,7 +1798,7 @@ class CallbacksMixin:
                 pm = self._load_pm()
                 models = pm.get("models", {}).get(prov, [])
                 if not models:
-                    self._edit_state[chat_id] = {"agent": agent_name, "field": "create_model"}
+                    self._begin_edit(chat_id, {"agent": agent_name, "field": "create_model"})
                     await query.edit_message_text(
                         f"🏢 {prov} 暂无已注册模型\n\n请直接输入模型ID (如 anthropic/claude-sonnet-4-5):"
                     )
@@ -1805,9 +1813,9 @@ class CallbacksMixin:
             elif data.startswith("emc_mi:"):
                 # emc_mi:agentName:prov:idx — model chosen during create; advance to persona
                 parts = data.split(":")
-                if len(parts) < 5:
+                if len(parts) < 4:
                     return
-                agent_name, prov, idx = parts[1], parts[2], parts[4]
+                agent_name, prov, idx = parts[1], parts[2], parts[3]
                 try:
                     idx = int(idx)
                 except ValueError:
@@ -1820,7 +1828,7 @@ class CallbacksMixin:
                 model = models[idx]
                 st = self._edit_state.get(chat_id) or {}
                 st.update({"model": model, "field": "create_persona"})
-                self._edit_state[chat_id] = st
+                self._begin_edit(chat_id, st)
                 await query.edit_message_text(
                     f"✅ 模型 {model} 已选择\n\n请输入人设 (SOUL.md 内容):"
                 )
@@ -1832,7 +1840,7 @@ class CallbacksMixin:
                 model = data[len("emc_skip:"):]
                 st = self._edit_state.get(chat_id) or {}
                 st.update({"model": model, "field": "create_persona"})
-                self._edit_state[chat_id] = st
+                self._begin_edit(chat_id, st)
                 await query.edit_message_text(
                     f"✅ 已跳过测试,为该 Agent 使用 {model}\n\n请输入人设 (SOUL.md 内容):"
                 )
@@ -1840,7 +1848,7 @@ class CallbacksMixin:
             elif data.startswith("emc_manual:"):
                 # emc_manual:agentName — enter model id by hand during create
                 agent_name = data[11:]
-                self._edit_state[chat_id] = {"agent": agent_name, "field": "create_model"}
+                self._begin_edit(chat_id, {"agent": agent_name, "field": "create_model"})
                 await query.edit_message_text(
                     "请输入模型名 (如 anthropic/claude-sonnet-4-5):\n(发 0 或 /cancel 取消)"
                 )
@@ -1867,7 +1875,7 @@ class CallbacksMixin:
             elif data.startswith("ep_field:"):
                 parts = data.split(":", 2)
                 prov, fld = parts[1], parts[2]
-                self._edit_state[chat_id] = {"field": f"ep_{fld}", "mode": "pm", "prov_name": prov}
+                self._begin_edit(chat_id, {"field": f"ep_{fld}", "mode": "pm", "prov_name": prov})
                 prompts = {"url": "请输入新的 API Base URL:", "key": "请输入新的 API Key:"}
                 await query.edit_message_text(f"✏️ {prov} — {prompts.get(fld, fld)}")
 
@@ -2034,7 +2042,7 @@ class CallbacksMixin:
                 # ml_srch:provider — prompt user to type search keyword
                 prov = data[8:]
                 chat_id = str(query.message.chat_id)
-                self._edit_state[chat_id] = {"action": "model_search", "provider": prov}
+                self._begin_edit(chat_id, {"action": "model_search", "provider": prov})
                 await query.edit_message_text(f"🔍 搜索 {prov} 模型\n\n请输入关键词 (如 claude, llama, qwen):")
 
             elif data.startswith("ep_addm:"):
@@ -2673,11 +2681,11 @@ class CallbacksMixin:
                 else:
                     current = hs.get_all().get(section, {}).get(key, "?")
                 chat_id = str(query.message.chat_id)
-                self._edit_state[chat_id] = {
+                self._begin_edit(chat_id, {
                     "action": "history_setting",
                     "section": section,
                     "key": key,
-                }
+                })
                 # Build rich edit prompt with parameter documentation
                 doc_key = f"{section}:{key}"
                 param_doc = self._PARAM_DOCS.get(doc_key)
@@ -2860,7 +2868,7 @@ class CallbacksMixin:
             name_input = content.strip()
             if not name_input:
                 await self._gc_send(chat_id, "⚠️ 名字不能为空,请重新输入 (或点 ❌ 取消输入):")
-                self._edit_state[chat_id] = {"field": "pradd_custom_name"}
+                self._begin_edit(chat_id, {"field": "pradd_custom_name"})
                 return
             # Sanitize: use the input as label, derive a key from it
             import re
@@ -2925,7 +2933,7 @@ class CallbacksMixin:
         if field == "hp_add_custom":
             
             key = content.strip().lower().replace(" ", "_")
-            self._edit_state[chat_id] = {"field": "hp_value", "hp_key": key, "hp_is_new": True}
+            self._begin_edit(chat_id, {"field": "hp_value", "hp_key": key, "hp_is_new": True})
             await self._start_input(chat_id, f"➕ 添加 {key}\n\n请输入值 (数字):")
             return
 
@@ -2981,7 +2989,7 @@ class CallbacksMixin:
             
             a_name = state.get("agent", "")
             key = content.strip().lower().replace(" ", "_")
-            self._edit_state[chat_id] = {"field": "ahp_value", "agent": a_name, "hp_key": key, "hp_is_new": True}
+            self._begin_edit(chat_id, {"field": "ahp_value", "agent": a_name, "hp_key": key, "hp_is_new": True})
             await self._start_input(chat_id, f"➕ 为 {a_name} 添加 {key}\n\n请输入值 (数字):")
             return
 

@@ -29,7 +29,7 @@ class GroupCommandsMixin:
                 return
             members = ', '.join(self._groupchat_engine.active_agents)
             chat_id = str(update.message.chat_id)
-            self._edit_state[chat_id] = {"field": "sg_name"}
+            self._begin_edit(chat_id, {"field": "sg_name"})
             await update.message.reply_text(f"👥 当前成员: {members}\n\n请输入分组名称（或发送 0 取消）:")
             return
         name = " ".join(args)

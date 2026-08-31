@@ -37,7 +37,7 @@ class ProviderCommandsMixin:
         if not update.message or not self.is_allowed(self._sender_id(update.effective_user)):
             return
         chat_id = str(update.message.chat_id)
-        self._edit_state[chat_id] = {"field": "pm_prov_name", "mode": "pm"}
+        self._begin_edit(chat_id, {"field": "pm_prov_name", "mode": "pm"})
         await update.message.reply_text("🆕 创建提供商\n\n请输入提供商名称 (如 openrouter, aihubmix):")
 
     async def _on_newmodel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

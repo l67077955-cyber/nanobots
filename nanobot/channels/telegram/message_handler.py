@@ -132,9 +132,7 @@ class MessageHandlerMixin:
             import time as _t
             now = _t.time()
             since = self._edit_state_since.get(str_chat_id)
-            if since is None:
-                self._edit_state_since[str_chat_id] = now  # first time we see it
-            elif now - since > 60 * 20:  # stale edit-session → don't swallow this message
+            if since is not None and now - since > 60 * 20:  # stale edit-session → don't swallow this message
                 del self._edit_state[str_chat_id]
                 self._edit_state_since.pop(str_chat_id, None)
                 self._pending_input.pop(str_chat_id, None)
@@ -143,14 +141,13 @@ class MessageHandlerMixin:
                 # fall through to normal group routing below
             else:
                 # Stage the typed input; it is NOT consumed until the user taps
-                # the confirm button (or cancelled / times out).
+                # the confirm button (or cancelled / times out). since=None means
+                # the session predates the stamping in _begin_edit — treat as fresh.
                 self._edit_state_since[str_chat_id] = now
                 self._pending_input[str_chat_id] = {"content": content, "ts": now}
                 self._stop_typing(str_chat_id)
                 await self._stage_confirm(str_chat_id, content)
                 return
-        else:
-            pass
 
         # Route to GroupChatEngine (always active)
         if self._groupchat_engine and self._groupchat_engine.active_agents:
