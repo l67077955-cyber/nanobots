@@ -499,13 +499,12 @@ class SettingsCommandsMixin:
 
     # ── Group Config Commands ───────────────────────────────
 
-    async def _on_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Display history management as a precise visual pipeline conversation."""
-        if not update.message or not update.effective_user:
-            return
-        if not self.is_allowed(self._sender_id(update.effective_user)):
-            return
+    def _render_history_main_panel(self) -> tuple[str, InlineKeyboardMarkup]:
+        """Build the /history main pipeline panel (shared by entry and hs_back).
 
+        Pure: no sends. The /history command and the hs_back callback render
+        from this one builder, so forward and back navigation cannot drift.
+        """
         from nanobot.groupchat.history import history_settings as hs
         settings = hs.get_all()
         tr = settings["tool_results"]
@@ -646,9 +645,16 @@ class SettingsCommandsMixin:
             ],
         ]
 
-        await update.message.reply_text(
-            text, reply_markup=InlineKeyboardMarkup(buttons),
-        )
+        return text[:4096], InlineKeyboardMarkup(buttons)
+
+    async def _on_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Display history management as a precise visual pipeline conversation."""
+        if not update.message or not update.effective_user:
+            return
+        if not self.is_allowed(self._sender_id(update.effective_user)):
+            return
+        text, markup = self._render_history_main_panel()
+        await update.message.reply_text(text, reply_markup=markup)
 
     # ── Think command ───────────────────────────────────────
 
@@ -669,4 +675,15 @@ class SettingsCommandsMixin:
             "🌐 全部 Agent", callback_data="think_agent:__all__"
         )])
         return "\n".join(lines), buttons
+
+    def _render_think_panel(self) -> tuple[str, InlineKeyboardMarkup | None]:
+        """Build the think status panel (shared by think_set refresh and think_back).
+
+        Pure: no sends; markup is None when the engine is missing.
+        """
+        engine = self._groupchat_engine
+        if not engine:
+            return "⚠️ 未配置群聊引擎", None
+        text, buttons = self._build_think_status_panel(engine)
+        return text, InlineKeyboardMarkup(buttons)
 

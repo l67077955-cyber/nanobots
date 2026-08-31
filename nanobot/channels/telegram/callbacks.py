@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import BadRequest
 
 from nanobot.i18n import i18n
 import nanobot.i18n_catalog  # noqa: F401 (registers UI strings)
@@ -2540,117 +2541,8 @@ class CallbacksMixin:
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
         elif data == "hs_back":
-            # Rebuild main /history view
-            settings = hs.get_all()
-            tr = settings["tool_results"]
-            hist = settings["history"]
-            cp = settings.get("context_pruning", {})
-            engine = self._groupchat_engine
-            current_msgs = len(engine._history) if engine else 0
-            current_chars = sum(len(m.get("content", "")) for m in (engine._history if engine else []))
-            compress_trigger = int(hist["max_messages"] * hist.get("compress_ratio", 0.8))
-            ctx_chars_limit = settings["context_window_tokens"] * 4
-            ai_on = tr["summarize_enabled"]
-            html_on = tr.get("html_detect_enabled", True)
-            prune_soft_budget = int(ctx_chars_limit * cp.get("soft_ratio", 0.3))
-            prune_hard_budget = int(ctx_chars_limit * cp.get("hard_ratio", 0.5))
-            text = (
-                "─── 上下文管线 · 实时演示 ───\n"
-                f"全局: context_window={settings['context_window_tokens']:,} tokens"
-                f" | tool_result_max={settings['tool_result_max_chars']:,} 字符\n"
-                f"历史: max_messages={hist['max_messages']}条"
-                f" | max_context_chars={hist['max_context_chars']:,}\n"
-                f"当前: {current_msgs}条 / {current_chars:,}字符\n"
-                "━━━━━━━━━━━━━━━━━━━━━\n"
-                "\n"
-                "👤 用户: 帮我搜索特朗普的图片并下载\n"
-                f" └─ 🛡 [头部永久保护] 此消息不压缩不截断\n"
-                "\n"
-                "── 轮次 1 ──\n"
-                "🤖 Agent: 我来搜索… → web_search(query='特朗普图片')\n"
-                "\n"
-                f"📡 web_search 返回 12,000 字符:\n"
-                f" └─ [截断①] web_search_max_chars={tr['web_search_max_chars']:,}\n"
-                f"    原始 12,000 > {tr['web_search_max_chars']:,} → 仅保留前后各一半\n"
-                f" └─ [截断②] tool_result_max_chars={settings['tool_result_max_chars']:,}\n"
-                f"    全局硬上限，截断后结果不超此值\n"
-                f" └─ [AI压缩] summarize_enabled={'✅' if ai_on else '❌'}"
-                f" | 触发阈值=>{tr['summarize_threshold']:,}字符\n"
-                f"    {'✅ 触发: ' if ai_on else '🚫 未触发(已关闭): '}"
-                f"model={tr['summarize_model']}"
-                f" | 最大输入={tr.get('summarize_max_input_chars', 8000):,}"
-                f" | 最大输出={tr.get('summarize_max_output_chars', 4000):,}tokens\n"
-                f"    → 摘要注入上下文(广播模式最大={tr.get('broadcast_result_max_chars', 20000):,}"
-                f" | 直接模式最大={tr.get('direct_result_max_chars', 8000):,})\n"
-                f" └─ [HTML检测] html_detect={'✅' if html_on else '❌'}"
-                f"  {'(若返回HTML会注入警告)' if html_on else '(已关闭)'}\n"
-                "\n"
-                "── 轮次 2 ──\n"
-                "🤖 Agent: 现在执行下载 → exec(python send_photo.py)\n"
-                "\n"
-                f"💻 exec 返回报错 3,000 字符:\n"
-                f" └─ [截断①] exec_max_chars={tr['exec_max_chars']:,}\n"
-                f"    3,000 < {tr['exec_max_chars']:,} → 未触发截断，完整保留\n"
-                f" └─ [AI压缩] 3,000 < {tr['summarize_threshold']:,} → 未触发AI压缩\n"
-                "\n"
-                f"── [上下文裁剪] tool_loop 第2次迭代起自动检查 ──\n"
-                f" 软裁剪: 上下文>{prune_soft_budget:,}字符({cp.get('soft_ratio',0.3)}×窗口)\n"
-                f"   → 对超过soft_max_chars={cp.get('soft_max_chars',4000):,}的旧工具结果\n"
-                f"     保留头部{cp.get('soft_head_chars',1500):,}字符 + 尾部{cp.get('soft_tail_chars',1500):,}字符\n"
-                f" 硬裁剪: 上下文>{prune_hard_budget:,}字符({cp.get('hard_ratio',0.5)}×窗口)\n"
-                f"   → 旧工具结果替换为精简摘要(仅保留路径/错误/kv)\n"
-                f" 保护: 最近{cp.get('keep_recent',3)}轮的工具结果不裁剪\n"
-                "\n"
-                f"── [历史记忆压缩] 消息数>={compress_trigger}条触发 ──\n"
-                f"   compress_ratio={hist.get('compress_ratio',0.8)} × max_messages={hist['max_messages']}"
-                f" = {compress_trigger}条时触发\n"
-                f"   🛡 头部保护: 首条消息+首条用户消息 → 永不压缩\n"
-                f"   🗜 压缩中间段 → model={tr['summarize_model']}"
-                f" | max_tokens={hist.get('compress_max_summary_tokens',600)}\n"
-                f"   🛡 尾部保护: 最近6轮完整保留\n"
-                "\n"
-                "── 超过总限制时 ──\n"
-                f"   max_messages={hist['max_messages']}条 或 max_context_chars={hist['max_context_chars']:,}字符\n"
-                f"   → 从最早消息开始丢弃(tool_call与result配对一起丢)\n"
-                f"\n📊 当前: {current_msgs}/{hist['max_messages']}条"
-                f" | {current_chars:,}/{hist['max_context_chars']:,}字符\n"
-            )
-            buttons = [
-                [
-                    InlineKeyboardButton(
-                        f"🌐 全局: ctx={settings['context_window_tokens']:,}tok / max_result={settings['tool_result_max_chars']:,}",
-                        callback_data="hs_global",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        f"✂️ 工具截断: exec={tr['exec_max_chars']:,} fetch={tr['web_fetch_max_chars']:,} search={tr['web_search_max_chars']:,}",
-                        callback_data="hs_stage1",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        f"🧠 AI压缩: {'✅' if ai_on else '❌'} 阈值={tr['summarize_threshold']:,} 模型={tr['summarize_model'].split('/')[-1]}",
-                        callback_data="hs_stage2",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        f"📚 历史: max={hist['max_messages']}条/{hist['max_context_chars']:,}字 压缩@{compress_trigger}条",
-                        callback_data="hs_stage3",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        f"🔪 迭代裁剪: soft@{cp.get('soft_ratio',0.3)} hard@{cp.get('hard_ratio',0.5)} 保留最近{cp.get('keep_recent',3)}轮",
-                        callback_data="hs_stage4",
-                    )
-                ],
-                [
-                    InlineKeyboardButton("🔄 重载配置", callback_data="hs_reload"),
-                ],
-            ]
-            await query.edit_message_text(text[:4096], reply_markup=InlineKeyboardMarkup(buttons))
+            # Rebuild main /history view — same renderer as the /history entry
+            await self._send_panel(query, self._render_history_main_panel)
 
         elif data.startswith("hs_set:"):
             # Direct toggle: hs_set:section:key:value
@@ -2726,10 +2618,15 @@ class CallbacksMixin:
         if asyncio.iscoroutine(out):
             out = await out
         text, markup = out
-        if markup is None:
-            await query.edit_message_text(text)
-        else:
-            await query.edit_message_text(text, reply_markup=markup)
+        try:
+            if markup is None:
+                await query.edit_message_text(text)
+            else:
+                await query.edit_message_text(text, reply_markup=markup)
+        except BadRequest as e:
+            # Identical re-render (e.g. back with nothing changed) is a no-op
+            if "Message is not modified" not in str(e):
+                raise
 
     async def _stage_confirm(self, chat_id: str, content: str) -> None:
         """Show the staged input as a display bar with confirm/cancel buttons.
@@ -3324,16 +3221,10 @@ class CallbacksMixin:
             names_str = ", ".join(updated)
             await query.answer(f"✅ {names_str} → {effort_display}", show_alert=False)
 
-            # Refresh the status panel
-            text, buttons = self._build_think_status_panel(engine)
-            await query.edit_message_text(
-                text, reply_markup=InlineKeyboardMarkup(buttons)
-            )
+            # Refresh the status panel — same renderer as think_back
+            await self._send_panel(query, self._render_think_panel)
 
         elif data == "think_back":
-            # Return to the main think status panel
-            text, buttons = self._build_think_status_panel(engine)
-            await query.edit_message_text(
-                text, reply_markup=InlineKeyboardMarkup(buttons)
-            )
+            # Return to the main think status panel — same renderer as think_set refresh
+            await self._send_panel(query, self._render_think_panel)
 
