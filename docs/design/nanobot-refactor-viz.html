@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>nanobot UI 改动可视化 — 055fd3e63 · 4bab58c8f</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#11151f; --panel2:#161b28; --line:#232a3a;
+    --txt:#dbe2f0; --dim:#7a86a0; --cyan:#39d0d8; --green:#4ade80;
+    --red:#f87171; --amber:#fbbf24; --violet:#a78bfa; --blue:#60a5fa;
+    --code-bg:#0d1117; --mono:'JetBrains Mono','Fira Code',ui-monospace,'SF Mono',Consolas,monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--txt);font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;line-height:1.65;padding:40px 20px 80px}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:26px;font-weight:700;letter-spacing:.5px}
+  h1 .tag{font-family:var(--mono);font-size:13px;color:var(--cyan);border:1px solid #2a4a4d;border-radius:6px;padding:2px 10px;margin-left:12px;vertical-align:middle;background:#0d1a1c}
+  .sub{color:var(--dim);font-size:14px;margin-top:6px}
+  .commits{display:flex;gap:14px;margin:26px 0 8px;flex-wrap:wrap}
+  .commit{flex:1;min-width:300px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;position:relative;overflow:hidden}
+  .commit::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px}
+  .commit.fix::before{background:var(--green)}
+  .commit.ref::before{background:var(--violet)}
+  .commit .hash{font-family:var(--mono);font-size:12px;color:var(--dim)}
+  .commit .title{font-size:15px;font-weight:600;margin:4px 0 6px}
+  .commit .meta{font-size:12.5px;color:var(--dim);font-family:var(--mono)}
+  .badge{display:inline-block;font-size:11px;font-weight:700;border-radius:5px;padding:1px 8px;margin-right:6px;vertical-align:1px}
+  .badge.fix{background:#0e2a1a;color:var(--green);border:1px solid #1d4a2f}
+  .badge.ref{background:#221a3a;color:var(--violet);border:1px solid #3d2f6b}
+  /* test count bar */
+  .tests{margin:22px 0 34px}
+  .tests .bar{display:flex;height:44px;border-radius:10px;overflow:hidden;font-family:var(--mono);font-size:13px;font-weight:700}
+  .tests .seg{display:flex;align-items:center;justify-content:center;gap:6px;position:relative}
+  .seg s{position:absolute;bottom:-24px;left:0;right:0;text-align:center;text-decoration:none;color:var(--dim);font-weight:400;font-size:12px}
+  .tests .cap{margin-top:30px;color:var(--dim);font-size:13px}
+  /* section cards */
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin:18px 0}
+  .card h2{font-size:17px;display:flex;align-items:center;gap:10px;margin-bottom:4px}
+  .card .file{font-family:var(--mono);font-size:12px;color:var(--cyan);margin-bottom:14px}
+  .card p.desc{color:var(--dim);font-size:13.5px;margin-bottom:16px}
+  .num{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:26px;border-radius:50%;font-family:var(--mono);font-size:13px;font-weight:700}
+  .num.red{background:#3a1416;color:var(--red)} .num.green{background:#0e2a1a;color:var(--green)} .num.violet{background:#221a3a;color:var(--violet)}
+  /* before/after */
+  .ba{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:760px){.ba{grid-template-columns:1fr}}
+  .ba .col{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .ba .col h3{font-size:12.5px;font-family:var(--mono);letter-spacing:1px;margin-bottom:10px}
+  .ba .old h3{color:var(--red)} .ba .new h3{color:var(--green)}
+  .ba .old{border-color:#4a2028} .ba .new{border-color:#1d4a2f}
+  /* flow diagram */
+  .flow{display:flex;flex-direction:column;gap:8px}
+  .frow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .node{background:#1a2130;border:1px solid var(--line);border-radius:8px;padding:6px 12px;font-size:12.5px;font-family:var(--mono);white-space:nowrap}
+  .node.bad{border-color:#6b2530;color:#fca5a5;background:#241318}
+  .node.good{border-color:#1d5a38;color:#86efac;background:#0f2018}
+  .node.warn{border-color:#5a4a1d;color:#fde68a;background:#211d0f}
+  .node.ghost{opacity:.55;border-style:dashed}
+  .arr{color:var(--dim);font-family:var(--mono);font-size:13px}
+  .down{color:var(--dim);text-align:left;font-size:13px;padding-left:6px}
+  .lbl{font-size:11px;color:var(--dim);font-family:var(--mono);margin-right:2px}
+  .result{font-size:12.5px;font-family:var(--mono);padding:5px 10px;border-radius:6px}
+  .result.bad{background:#241318;color:var(--red)}
+  .result.good{background:#0f2018;color:var(--green)}
+  /* code blocks */
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;font-family:var(--mono);font-size:12.2px;line-height:1.7;overflow-x:auto;color:#c9d4e8}
+  pre .k{color:#c792ea} pre .s{color:#89ca78} pre .f{color:#82aaff} pre .c{color:#5c6a85;font-style:italic} pre .r{color:var(--red)} pre .g{color:var(--green)} pre .y{color:var(--amber)} pre .n{color:#f78c6c}
+  code.inline{font-family:var(--mono);font-size:12.5px;background:#1a2130;border:1px solid var(--line);border-radius:5px;padding:1px 7px;color:var(--cyan)}
+  .cols2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:760px){.cols2{grid-template-columns:1fr}}
+  /* payload segments */
+  .payload{display:flex;gap:0;flex-wrap:wrap;font-family:var(--mono);font-size:12.5px;border-radius:8px;overflow:hidden;border:1px solid var(--line);width:max-content;max-width:100%}
+  .payload span{padding:7px 13px;border-right:1px solid var(--line);background:#1a2130;position:relative}
+  .payload span:last-child{border-right:none}
+  .payload .idx{position:absolute;top:-9px;right:2px;font-size:10px;color:var(--dim)}
+  .payload .hit{background:#0f2018;color:var(--green)}
+  .payload .miss{background:#241318;color:var(--red);text-decoration:line-through}
+  .payload .emp{background:transparent;border-style:dashed;color:var(--red)}
+  /* gates */
+  .gates{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+  .gate{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .gate .g-title{font-size:13.5px;font-weight:600;margin-bottom:4px}
+  .gate .g-sub{font-size:12px;color:var(--dim);font-family:var(--mono)}
+  /* stats */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:6px}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .stat .v{font-family:var(--mono);font-size:26px;font-weight:700;color:var(--cyan)}
+  .stat .k{font-size:12px;color:var(--dim);margin-top:2px}
+  .sect-title{font-size:13px;font-family:var(--mono);color:var(--dim);letter-spacing:2px;margin:38px 0 6px;text-transform:uppercase}
+  .sect-title b{color:var(--txt)}
+  .rollback{background:#151320;border:1px dashed #3a3560;border-radius:12px;padding:16px 20px;margin-top:26px;font-size:13px}
+  .rollback .cmd{font-family:var(--mono);color:var(--amber);display:block;margin-top:6px;font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>nanobot Telegram UI — 改动可视化 <span class="tag">feat/ui-redesign</span></h1>
+  <div class="sub">两个 commit · 10 个文件 · 净 +540 / −78 行 · 测试 537 → 557 全绿</div>
+
+  <div class="commits">
+    <div class="commit fix">
+      <div class="hash">055fd3e63 · 8月31日</div>
+      <div class="title"><span class="badge fix">FIX</span>edit-flow 生命周期 + emc_mi 死按钮 + 回调权限</div>
+      <div class="meta">7 files · +225 / −40 · 8 个回归测试</div>
+    </div>
+    <div class="commit ref">
+      <div class="hash">4bab58c8f · 8月31日</div>
+      <div class="title"><span class="badge ref">REFACTOR</span>callback 路由注册表 + 契约测试（试点 em*/emc*）</div>
+      <div class="meta">3 files · +315 / −38 · 12 个契约测试</div>
+    </div>
+  </div>
+
+  <div class="tests">
+    <div class="bar">
+      <div class="seg" style="flex:537;background:#1c2433">537</div>
+      <div class="seg" style="flex:8;background:#0e2a1a">+8<s>bug 修复回归测试</s></div>
+      <div class="seg" style="flex:12;background:#221a3a">+12<s>契约测试</s></div>
+    </div>
+    <div class="cap">测试数量演进：修复前基线 → bug 修复 commit → 重构 commit，最终 557 passed / 0 failed</div>
+  </div>
+
+  <!-- ══════════════ COMMIT 1 ══════════════ -->
+  <div class="sect-title"><b>COMMIT 1 · 055fd3e63</b> — 三个 bug 修复</div>
+
+  <div class="card">
+    <h2><span class="num red">1</span>向导第一条输入被注入群聊 + 残留时间戳误杀新会话</h2>
+    <div class="file">message_handler.py · __init__.py · callbacks.py + commands/* （30 处创建点）</div>
+    <p class="desc"><code class="inline">_edit_state_since</code> 只在消息处理器里写入，28 处创建编辑会话的代码都不盖时间戳 —— 两个症状：新会话第一条输入直接落穿进群聊；上一个会话残留的旧时间戳会把新会话当场"超时"。</p>
+    <div class="ba">
+      <div class="col old">
+        <h3>✗ BEFORE</h3>
+        <div class="flow">
+          <div class="frow"><span class="node">用户输入 "MyAgent"</span><span class="arr">→</span><span class="node bad">since is None</span></div>
+          <div class="down">↓ 只记时间戳，不拦截</div>
+          <div class="frow"><span class="node ghost">落穿到群聊路由</span><span class="arr">→</span><span class="result bad">❌ 输入发给 AI 群聊，向导原地不动</span></div>
+        </div>
+      </div>
+      <div class="col new">
+        <h3>✓ AFTER</h3>
+        <div class="flow">
+          <div class="frow"><span class="node">按钮创建会话</span><span class="arr">→</span><span class="node good">_begin_edit() 盖时间戳</span></div>
+          <div class="down">↓ 30 处创建点全部收敛到这一个函数</div>
+          <div class="frow"><span class="node">用户输入 "MyAgent"</span><span class="arr">→</span><span class="node good">暂存 + 确认条</span><span class="arr">→</span><span class="result good">✅ 进入 staged → confirm 流程</span></div>
+        </div>
+      </div>
+    </div>
+    <br>
+    <pre><span class="c"># __init__.py — 新增的唯一入口，创建会话必经此地</span>
+<span class="k">def</span> <span class="f">_begin_edit</span>(self, chat_id, state):
+    self.<span class="n">_edit_state</span>[chat_id] = state
+    self.<span class="n">_edit_state_since</span>[chat_id] = <span class="f">time</span>.<span class="f">time</span>()  <span class="c"># ← 以前 28 处全漏了这行</span>
+
+<span class="c"># message_handler.py — 分支反转：None 视为新会话，直接暂存</span>
+<span class="k">if</span> since <span class="k">is not</span> <span class="k">None</span> <span class="k">and</span> now - since &gt; <span class="n">60*20</span>:   <span class="c"># 只有真超时才清除放行</span>
+    ...清空 + 提示超时...
+<span class="k">else</span>:                                              <span class="c"># None 或活跃 → 暂存</span>
+    self.<span class="n">_pending_input</span>[chat] = {...}; <span class="k">await</span> <span class="f">_stage_confirm</span>(...)  <span class="k">return</span></pre>
+  </div>
+
+  <div class="card">
+    <h2><span class="num red">2</span>创建 Agent 的模型按钮是静默死按钮</h2>
+    <div class="file">callbacks.py:1813 · emc_mi（新建 agent 选模型）</div>
+    <p class="desc">按钮生成 4 段 payload，解析器却要求 5 段并读 <code class="inline">parts[4]</code> —— 点击无任何反馈。这就是"字符串契约有两份手打副本"的代价。</p>
+    <div class="cols2">
+      <div>
+        <div class="lbl">payload 实际只有 4 段：</div>
+        <div class="payload" style="margin:6px 0 14px">
+          <span class="hit">emc_mi<i class="idx">[0]</i></span><span>Kirk<i class="idx">[1]</i></span><span>openrouter<i class="idx">[2]</i></span><span class="hit">3<i class="idx">[3]</i></span><span class="emp">∅<i class="idx">[4]</i></span>
+        </div>
+        <pre><span class="c"># BEFORE —— len&lt;5 直接 return（按钮死亡）</span>
+<span class="k">if</span> <span class="f">len</span>(parts) &lt; <span class="r">5</span>: <span class="k">return</span>
+agent, prov, idx = parts[<span class="r">4</span>]  <span class="c"># ← 越界段</span>
+
+<span class="c"># AFTER</span>
+<span class="k">if</span> <span class="f">len</span>(parts) &lt; <span class="g">4</span>: <span class="k">return</span>
+agent, prov, idx = parts[<span class="g">3</span>]  <span class="c"># ← 索引存在</span></pre>
+      </div>
+      <div>
+        <div class="flow">
+          <div class="frow"><span class="lbl">旧：</span><span class="node">点模型按钮</span><span class="arr">→</span><span class="node bad">len(parts)=4 &lt; 5</span><span class="arr">→</span><span class="result bad">静默 return，无任何反馈</span></div>
+          <div class="frow" style="margin-top:10px"><span class="lbl">新：</span><span class="node">点模型按钮</span><span class="arr">→</span><span class="node good">解析 ✓</span><span class="arr">→</span><span class="node good">_emc_model_cache[idx]</span><span class="arr">→</span><span class="result good">✅ 模型选中 → 进入人设步骤</span></div>
+        </div>
+        <p class="desc" style="margin-top:14px">由端到端回归测试守护：<code class="inline">test_emc_mi_model_button_selects_model_and_advances</code> 直接驱动 <code class="inline">_on_callback</code> 验证完整链路。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2><span class="num red">3</span>回调按钮与 /settings 完全绕过权限白名单</h2>
+    <div class="file">callbacks.py:_on_callback · __init__.py:_on_settings</div>
+    <p class="desc">文本命令都过 <code class="inline">is_allowed</code>，但按钮回调没有检查 —— 群里任何成员可按删除 agent / 删提供商 / 改 Key。</p>
+    <div class="cols2">
+      <div class="flow">
+        <div class="frow"><span class="lbl">旧：</span><span class="node">任意群成员按按钮</span><span class="arr">→</span><span class="node bad">无检查</span><span class="arr">→</span><span class="result bad">❌ 直接执行 pm_delp_yes / dac / 改Key</span></div>
+        <div class="frow" style="margin-top:10px"><span class="lbl">新：</span><span class="node">按按钮</span><span class="arr">→</span><span class="node good">is_allowed(sender)</span><span class="arr">→</span><span class="result good">⛔️ 无权限弹窗 / ✅ 放行</span></div>
+      </div>
+      <pre><span class="c"># _on_callback 入口，先于一切分发</span>
+<span class="k">if</span> query.from_user <span class="k">and not</span> self.<span class="f">is_allowed</span>(
+        self.<span class="f">_sender_id</span>(query.from_user)):
+    <span class="k">await</span> query.<span class="f">answer</span>(<span class="s">"⛔️ 无权限操作"</span>, show_alert=<span class="k">True</span>)
+    <span class="k">return</span></pre>
+    </div>
+  </div>
+
+  <!-- ══════════════ COMMIT 2 ══════════════ -->
+  <div class="sect-title"><b>COMMIT 2 · 4bab58c8f</b> — 骨架重构第一步</div>
+
+  <div class="card">
+    <h2><span class="num violet">4</span>核心：前缀契约从"两份手打副本"变"一个定义点"</h2>
+    <div class="file">callbacks_registry.py（新增 126 行）· callbacks.py 9 处生成 + 8 个解析分支</div>
+    <div class="ba">
+      <div class="col old">
+        <h3>✗ BEFORE — 同一个契约，两份手写</h3>
+        <div class="flow">
+          <div class="frow"><span class="lbl">生成侧</span><span class="node bad">f"emc_mi:{a}:{p}:{i}"</span></div>
+          <div class="down">↕ 无人保证一致（emc_mi 就死在这）</div>
+          <div class="frow"><span class="lbl">解析侧</span><span class="node bad">parts = data.split(":") … parts[4]</span></div>
+        </div>
+      </div>
+      <div class="col new">
+        <h3>✓ AFTER — 一个模块，两侧引用</h3>
+        <div class="flow">
+          <div class="frow"><span class="node good">callbacks_registry.py</span><span class="arr">←──</span><span class="node">生成：ag_mdl_create_pick(a,p,i)</span></div>
+          <div class="down">↕ 契约测试守护 round-trip</div>
+          <div class="frow"><span class="node good">常量 + builder + parse_args</span><span class="arr">←──</span><span class="node">解析：parse_args(data, AG_MDL_CREATE_PICK)</span></div>
+        </div>
+      </div>
+    </div>
+    <br>
+    <pre><span class="c"># callbacks_registry.py —— 常量名讲语义，wire 值保持 legacy（旧按钮不坏）</span>
+AG_MDL_CREATE_PICK = <span class="s">"emc_mi"</span>          <span class="c"># create flow: pick model by index</span>
+
+<span class="k">def</span> <span class="f">ag_mdl_create_pick</span>(agent, prov, idx): <span class="k">return</span> <span class="s">f"{AG_MDL_CREATE_PICK}:{agent}:{prov}:{idx}"</span>
+
+<span class="c"># 生成侧（callbacks.py 1809）</span>
+callback_data=<span class="f">ag_mdl_create_pick</span>(agent_name, prov, i)      <span class="c"># ← 不再手拼字符串</span>
+<span class="c"># 解析侧（callbacks.py 1813）</span>
+args = <span class="f">parse_args</span>(data, AG_MDL_CREATE_PICK)              <span class="c"># ← 段数错误直接 ValueError</span></pre>
+  </div>
+
+  <div class="card">
+    <h2><span class="num violet">5</span>契约测试：四道 CI 关卡</h2>
+    <div class="file">tests/test_callback_contracts.py（144 行 · 12 个测试）</div>
+    <div class="gates">
+      <div class="gate"><div class="g-title">🚫 死按钮检查</div><div class="g-sub">emitted ⊆ parsed<br>任何生成了没人接的按钮 → "Dead buttons"</div></div>
+      <div class="gate"><div class="g-title">📋 注册表棘轮</div><div class="g-sub">所有前缀 ⊆ ROUTES<br>绕过注册表偷加路由 → "Undeclared routes"</div></div>
+      <div class="gate"><div class="g-title">🛡️ 遮蔽检查</div><div class="g-sub">startswith 两两不吞噬<br>log: 不得吞 log_pg:</div></div>
+      <div class="gate"><div class="g-title">🔁 Round-trip</div><div class="g-sub">builder 输出必须解析回原值<br>parts[3]/parts[4] 类手误灭绝</div></div>
+    </div>
+    <p class="desc" style="margin-top:14px">扫描器静态扫源码的三种分发形式（startswith / == / <code class="inline">data in (...)</code>）。首轮就抓出 3 个"违规"，逐一核实全是扫描器盲区（<code class="inline">pr:refresh</code> 走成员判断、m: 走二级分发、cfg:cancel 走精确匹配）——修正扫描器后确认：现存无死按钮，emc_mi 是唯一真实案例。</p>
+  </div>
+
+  <div class="card">
+    <h2><span class="num violet">6</span>数字总览</h2>
+    <div class="stats">
+      <div class="stat"><div class="v">90+</div><div class="k">前缀收入 ROUTES 清单</div></div>
+      <div class="stat"><div class="v">8</div><div class="k">路由迁移到 builder/parser</div></div>
+      <div class="stat"><div class="v">30</div><div class="k">创建点收敛 _begin_edit</div></div>
+      <div class="stat"><div class="v">20</div><div class="k">新增测试（8 回归 + 12 契约）</div></div>
+      <div class="stat"><div class="v">557</div><div class="k">全套测试通过</div></div>
+      <div class="stat"><div class="v">0</div><div class="k">wire 格式变更（旧按钮全兼容）</div></div>
+    </div>
+  </div>
+
+  <div class="rollback">
+    <b>↩️ 不满意怎么退</b>——两个 commit 相互独立，精确回滚：
+    <span class="cmd">git revert 4bab58c8f&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# 只退重构，保留 bug 修复</span>
+    <span class="cmd">git revert 4bab58c8f 055fd3e63&nbsp;# 全部退回审查前状态</span>
+  </div>
+
+</div>
+</body>
+</html>

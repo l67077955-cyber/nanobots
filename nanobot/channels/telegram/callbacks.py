@@ -1954,27 +1954,36 @@ class CallbacksMixin:
                     # Fetch /v1/models
                     import aiohttp
                     import json as _json
+                    import re as _re
                     if "openrouter" in url.lower():
-                        models_url = "https://openrouter.ai/api/v1/models"
-                    elif "/v1" in url:
-                        models_url = f"{url}/models"
+                        candidates = ["https://openrouter.ai/api/v1/models"]
+                    elif _re.search(r"/v\d+$", url):
+                        # base already carries a version segment (e.g. .../paas/v4)
+                        candidates = [f"{url}/models", f"{url}/v1/models"]
                     else:
-                        models_url = f"{url}/v1/models"
+                        candidates = [f"{url}/v1/models", f"{url}/models"]
+                    result = None
+                    last_err = ""
                     try:
                         async with aiohttp.ClientSession() as session:
                             headers = {"Authorization": f"Bearer {api_key}"}
-                            async with session.get(models_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                                body = await resp.text()
-                                if resp.status != 200:
-                                    await query.edit_message_text(f"❌ 拉取失败 (HTTP {resp.status})\n{body[:200]}")
-                                    return
-                                try:
-                                    result = _json.loads(body)
-                                except Exception:
-                                    await query.edit_message_text("❌ 拉取失败: 返回非JSON格式")
-                                    return
+                            for models_url in candidates:
+                                async with session.get(models_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                                    body = await resp.text()
+                                    if resp.status != 200:
+                                        last_err = f"HTTP {resp.status} @ {models_url}\n{body[:200]}"
+                                        continue
+                                    try:
+                                        result = _json.loads(body)
+                                        break
+                                    except Exception:
+                                        last_err = f"非JSON @ {models_url}"
+                                        continue
                     except Exception as e:
                         await query.edit_message_text(f"❌ 拉取失败: {str(e)[:100]}")
+                        return
+                    if result is None:
+                        await query.edit_message_text(f"❌ 拉取失败\n{last_err[:300]}")
                         return
 
                     model_list = result.get("data", []) if isinstance(result, dict) else []

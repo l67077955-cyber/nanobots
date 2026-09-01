@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UI 交互变化 — 用户视角前后对比</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#11151f; --line:#232a3a; --txt:#dbe2f0; --dim:#7a86a0;
+    --cyan:#39d0d8; --green:#4ade80; --red:#f87171; --violet:#a78bfa; --amber:#fbbf24;
+    /* telegram-ish */
+    --tg-bg:#0e1621; --tg-me:#2b5278; --tg-bot:#182533; --tg-btn:#1f2f42; --tg-btn-edge:#2a3f5a;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--txt);font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;line-height:1.6;padding:40px 20px 90px}
+  .wrap{max-width:1020px;margin:0 auto}
+  h1{font-size:24px;font-weight:700}
+  .sub{color:var(--dim);font-size:14px;margin-top:6px;margin-bottom:8px}
+  .tldr{background:linear-gradient(135deg,#0f1a1c,#101425);border:1px solid #24404a;border-radius:14px;padding:18px 22px;margin:20px 0 8px;font-size:14.5px}
+  .tldr b{color:var(--cyan)}
+  /* scenario */
+  .scen{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px 24px;margin:20px 0}
+  .scen h2{font-size:16.5px;margin-bottom:2px}
+  .scen .impact{font-size:12px;font-family:ui-monospace,monospace;padding:2px 10px;border-radius:6px;margin-left:8px;vertical-align:2px}
+  .impact.big{background:#3a1416;color:var(--red)}
+  .impact.mid{background:#3a2c14;color:var(--amber)}
+  .scen .desc{color:var(--dim);font-size:13.5px;margin:8px 0 16px}
+  /* chat mockup */
+  .chats{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:780px){.chats{grid-template-columns:1fr}}
+  .chat{background:var(--tg-bg);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+  .chat .head{padding:9px 14px;font-size:12px;font-family:ui-monospace,monospace;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line)}
+  .chat.before .head{color:var(--red)} .chat.after .head{color:var(--green)}
+  .chat .head .dot{width:8px;height:8px;border-radius:50%}
+  .before .dot{background:var(--red)} .after .dot{background:var(--green)}
+  .body{padding:16px 14px;display:flex;flex-direction:column;gap:10px;flex:1}
+  .msg{max-width:82%;padding:8px 12px;border-radius:12px;font-size:13px;position:relative;white-space:pre-wrap}
+  .msg .who{font-size:10px;font-family:ui-monospace,monospace;color:var(--dim);margin-bottom:2px}
+  .me{align-self:flex-end;background:var(--tg-me);border-bottom-right-radius:4px}
+  .bot{align-self:flex-start;background:var(--tg-bot);border-bottom-left-radius:4px}
+  .bot.redx{border:1px solid #5c2530}
+  .bot.okx{border:1px solid #1d5a38}
+  /* inline keyboard attached to bot msg */
+  .kb{align-self:flex-start;width:82%;margin-top:-4px;background:var(--tg-bot);border:1px solid var(--tg-btn-edge);border-radius:0 0 12px 12px;overflow:hidden}
+  .kb .btn{display:block;text-align:center;padding:8px 10px;font-size:12.5px;color:#6ab3f3;border-top:1px solid var(--tg-btn-edge);cursor:default}
+  .kb .btn:first-child{border-top:none}
+  .kb .btn.tapped{color:#fff;background:var(--tg-btn)}
+  .kb .row{display:flex}
+  .kb .row .btn{flex:1}
+  .note{align-self:center;font-size:11.5px;color:var(--dim);font-style:italic;font-family:ui-monospace,monospace;text-align:center;padding:2px 8px}
+  .note.bad{color:#f08080} .note.good{color:#7dd3a0}
+  .typing{align-self:flex-start;font-size:12px;color:var(--dim);font-style:italic}
+  .alert{align-self:center;background:#2a1a1a;border:1px solid #5c2530;color:#fca5a5;font-size:12px;padding:7px 14px;border-radius:10px;font-family:ui-monospace,monospace}
+  .alert.ok{background:#12210f;border-color:#1d5a38;color:#86efac}
+  /* unchanged list */
+  .unchanged{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px 24px;margin:20px 0}
+  .unchanged h2{font-size:16.5px;margin-bottom:10px;color:var(--amber)}
+  .unchanged li{color:var(--dim);font-size:13.5px;margin:7px 0 7px 20px}
+  .unchanged li b{color:var(--txt);font-weight:600}
+  .zero{background:#141020;border:1px solid #33295c;border-radius:16px;padding:22px 24px;margin:20px 0}
+  .zero h2{font-size:16.5px;color:var(--violet);margin-bottom:8px}
+  .zero p{font-size:13.5px;color:var(--dim)}
+  .zero p b{color:var(--txt)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>UI 交互变化 — 你在 Telegram 里会感觉到什么</h1>
+  <div class="sub">两个 commit 落地后的用户视角前后对比 · 共 4 处可感知变化 + 1 处刻意零变化</div>
+
+  <div class="tldr">
+    一句话：<b>向导终于对你的第一次输入有反应了</b>（以前第一条必被吞进群聊）、<b>新建 Agent 的模型按钮从"点了没反应"变成"点了就走"</b>、<b>群里其他人按你的面板按钮会被拦截</b>。其余交互——确认条、面板导航、按钮长相——全部保持原样。
+  </div>
+
+  <!-- ─────────── 场景 1 ─────────── -->
+  <div class="scen">
+    <h2>场景 1 · 任何向导的第一条输入<span class="impact big">以前：必被吞进群聊</span></h2>
+    <div class="desc">适用于所有需要打字的流程：/newagent 起名字、/newprovider 起名字、改人设、改超参的值、/savegroup 起分组名……以前每一条向导的第一句话都会被当成普通聊天发给 AI。</div>
+    <div class="chats">
+      <div class="chat before">
+        <div class="head"><span class="dot"></span>BEFORE · 第一条输入消失</div>
+        <div class="body">
+          <div class="me">/newagent</div>
+          <div class="bot">请输入 Agent 名称 (如 Kirk):</div>
+          <div class="me">Luna</div>
+          <div class="note bad">↓ 这条没有进向导，落穿进了群聊</div>
+          <div class="bot redx">（群聊 AI 收到 "Luna"，开始一本正经地回复）</div>
+          <div class="note bad">向导面板停在原地，没有任何反馈</div>
+          <div class="me">Luna</div>
+          <div class="note">↓ 第二次才被拦住</div>
+          <div class="bot">📋 待确认输入: Luna<br>[✅ 确认输入] [❌ 取消输入]</div>
+          <div class="note bad">用户感受："是不是卡了？" 每个向导都要经历一次</div>
+        </div>
+      </div>
+      <div class="chat after">
+        <div class="head"><span class="dot"></span>AFTER · 第一条就正确暂存</div>
+        <div class="body">
+          <div class="me">/newagent</div>
+          <div class="bot">请输入 Agent 名称 (如 Kirk):</div>
+          <div class="me">Luna</div>
+          <div class="bot okx">📋 待确认输入: Luna<br>点「✅ 确认输入」接受 (30 秒后自动取消)</div>
+          <div class="kb"><span class="btn">✅ 确认输入 ｜ ❌ 取消输入</span></div>
+          <div class="note good">↓ 点确认</div>
+          <div class="bot">✅ 已确认 → 选择提供商…</div>
+          <div class="note good">输入一次 = 一次到位，群聊不再收到误发内容</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────── 场景 2 ─────────── -->
+  <div class="scen">
+    <h2>场景 2 · 隔了一段时间再开向导<span class="impact big">以前：新会话被旧时间戳当场"超时"击杀</span></h2>
+    <div class="desc">以前用过一次编辑流程后，那个内部时间戳永不清理。20 分钟后你新开一个向导，第一条输入会撞上"上次超时"的清除逻辑——刚开的会话直接死掉。</div>
+    <div class="chats">
+      <div class="chat before">
+        <div class="head"><span class="dot"></span>BEFORE · 25 分钟前用过 /hyperparams</div>
+        <div class="body">
+          <div class="me">/newagent</div>
+          <div class="bot">请输入 Agent 名称:</div>
+          <div class="me">Kirk</div>
+          <div class="bot redx">⏱️ 上一次编辑已超时(20分钟),已自动取消。这条消息已作为普通消息处理。</div>
+          <div class="note bad">↓ 刚创建的向导被上一场会话的残留时间戳杀死</div>
+          <div class="me">/newagent</div>
+          <div class="note bad">只能重来一次，第二次才能用</div>
+        </div>
+      </div>
+      <div class="chat after">
+        <div class="head"><span class="dot"></span>AFTER · 新会话自带新时间戳</div>
+        <div class="body">
+          <div class="me">/newagent</div>
+          <div class="bot">请输入 Agent 名称:</div>
+          <div class="me">Kirk</div>
+          <div class="bot okx">📋 待确认输入: Kirk</div>
+          <div class="note good">无论上一个会话是多久以前结束的，新向导都干净启动</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────── 场景 3 ─────────── -->
+  <div class="scen">
+    <h2>场景 3 · 新建 Agent 时点模型按钮<span class="impact big">以前：按钮完全无反应</span></h2>
+    <div class="desc">/newagent → 选提供商后出现的模型列表，以前每个模型按钮都是死的（点击静默失败，无任何提示），唯一出路是"手动输入"。现在点了就选中并进入下一步。</div>
+    <div class="chats">
+      <div class="chat before">
+        <div class="head"><span class="dot"></span>BEFORE · 按钮是装饰品</div>
+        <div class="body">
+          <div class="bot">🏢 openrouter — 选择模型:</div>
+          <div class="kb">
+            <span class="btn">🤖 anthropic/claude-opus-4.5</span>
+            <span class="btn tapped">🤖 x-ai/grok-4.1-fast ←点击</span>
+            <span class="btn">🤖 qwen/qwen-2.5-72b-instruct</span>
+            <span class="btn">✏️ 手动输入</span>
+          </div>
+          <div class="note bad">↓ 没有任何反应（连错误提示都没有）</div>
+          <div class="typing">（loading 一闪而过，然后…没有然后）</div>
+          <div class="note bad">连点三次，换来的只有沉默</div>
+          <div class="me">只好点 ✏️ 手动输入</div>
+          <div class="bot">请输入模型名 (如 anthropic/claude-sonnet-4-5):</div>
+          <div class="note bad">而手动输入的第一条又会被场景 1 吞一次…</div>
+        </div>
+      </div>
+      <div class="chat after">
+        <div class="head"><span class="dot"></span>AFTER · 点了就走</div>
+        <div class="body">
+          <div class="bot">🏢 openrouter — 选择模型:</div>
+          <div class="kb">
+            <span class="btn">🤖 anthropic/claude-opus-4.5</span>
+            <span class="btn tapped">🤖 x-ai/grok-4.1-fast ←点击</span>
+            <span class="btn">🤖 qwen/qwen-2.5-72b-instruct</span>
+            <span class="btn">✏️ 手动输入</span>
+          </div>
+          <div class="note good">↓ 立即响应</div>
+          <div class="bot okx">✅ 模型 x-ai/grok-4.1-fast 已选择<br><br>请输入人设 (SOUL.md 内容):</div>
+          <div class="note good">创建流程从"双重断裂"恢复为一条通路</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────── 场景 4 ─────────── -->
+  <div class="scen">
+    <h2>场景 4 · 群里其他成员按你的面板按钮<span class="impact mid">以前：任何人都能动你的配置</span></h2>
+    <div class="desc">以前面板按钮完全绕过白名单：群成员可以删你的 agent、连提供商带模型一起删、改 API Key、改语言。现在所有按钮和 /settings 都要过 allow_from 白名单。</div>
+    <div class="chats">
+      <div class="chat before">
+        <div class="head"><span class="dot"></span>BEFORE · 按钮裸奔</div>
+        <div class="body">
+          <div class="note">（群里挂着管理员开的 /editprovider 面板）</div>
+          <div class="me">路人甲：点 [🗑 删除提供商 openrouter]</div>
+          <div class="kb"><span class="btn">⚠️ 确认删除</span></div>
+          <div class="me">路人甲：点 [⚠️ 确认删除]</div>
+          <div class="bot redx">✅ 已删除提供商 openrouter 及其 46 个模型</div>
+          <div class="note bad">任何群成员都能执行 —— 删 agent、改 Key、改语言同理</div>
+        </div>
+      </div>
+      <div class="chat after">
+        <div class="head"><span class="dot"></span>AFTER · 白名单统一生效</div>
+        <div class="body">
+          <div class="me">路人甲：点任意面板按钮</div>
+          <div class="alert">⛔️ 无权限操作</div>
+          <div class="note good">弹窗提示，什么都不会执行</div>
+          <div class="me">管理员：点同一按钮</div>
+          <div class="note good">↓ 正常执行</div>
+          <div class="bot okx">（面板正常工作）</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────── 刻意零变化 ─────────── -->
+  <div class="zero">
+    <h2>重构 commit（4bab58c8f）· 刻意做到零可见变化</h2>
+    <p><b>你在 Telegram 里感觉不到它的存在。</b>所有按钮、面板、流程与之前完全一致；连你聊天记录里的旧按钮都继续有效（线上前缀一个没改）。它改变的是幕后保险：今后任何人写出"生成了但没人接"的按钮，会在测试阶段被拦下，而不是部署后变成又一个静默死按钮。</p>
+  </div>
+
+  <!-- ─────────── 没变的东西 ─────────── -->
+  <div class="unchanged">
+    <h2>⚠️ 同样重要：这些痛点还没变（后续批次）</h2>
+    <ul>
+      <li><b>30 秒确认窗仍然偏短</b> —— 长人设写完回来确认会超时，输入内容无处找回</li>
+      <li><b>改完超参后状态残留</b> —— 之后发的普通聊天仍会被当成"待确认输入"拦住（bug #7，未修）</li>
+      <li><b>切模型仍是两个旅程</b> —— 先 /editprovider 注册，再 /editagent 绑定；模型选择器仍是平铺长列表</li>
+      <li><b>选了哪个提供商不决定路由</b> —— 同名模型多提供商时仍由文件顺序决定（绑定未存 provider）</li>
+      <li><b>模型列表缓存</b> —— 运行期仍无法强制刷新，重启才重新拉取</li>
+    </ul>
+    <p style="color:var(--dim);font-size:13px;margin-top:12px">这五项是下一批工作（settings_store 收敛 → agent 卡片 + 芯片级联选模型）的输入。</p>
+  </div>
+
+</div>
+</body>
+</html>
