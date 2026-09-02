@@ -16,6 +16,8 @@ from loguru import logger
 
 from nanobot.groupchat.display import display as _d
 from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool
+from nanobot.groupchat.orchestra.round_lifecycle import RoundLifecycle
+from nanobot.groupchat.orchestra.user_ingress import UserIngress
 from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
 from nanobot.groupchat.history.component_manager import (
     get_system_warning,
@@ -281,6 +283,11 @@ class BroadcastOrchestrator:
         self._search_cache: dict[str, tuple[str, str]] = {}
         
         self.leader_end_event = asyncio.Event()
+        # Single owner of round phase state; transitions also flip the legacy
+        # signals (leader_end_event / engine._running) for un-migrated readers.
+        self.lifecycle = RoundLifecycle(
+            leader_end_event=self.leader_end_event, engine=self.engine,
+        )
         self._leader_agent_tasks: dict = {}
         self.tasks: dict[asyncio.Task, str] = {}
         self.all_tasks: set[asyncio.Task] = set()
@@ -382,7 +389,7 @@ class BroadcastOrchestrator:
                 mailbox=self.mailbox,
                 spawn_fn=spawn_fn,
             )
-            end_tool = EndDiscussionTool(end_event=self.leader_end_event, engine=self.engine, mailbox=self.mailbox)
+            end_tool = EndDiscussionTool(end_event=self.leader_end_event, engine=self.engine, mailbox=self.mailbox, lifecycle=self.lifecycle)
             transfer_tool = TransferCreditsTool(search_pool=self.search_pool, engine=self.engine)
             clear_ctx_tool = ClearContextTool(
                 engine=self.engine,
@@ -502,6 +509,7 @@ async def broadcast_round(
     agent_tool_registries = orch.agent_tool_registries
     _search_cache = orch._search_cache
     leader_end_event = orch.leader_end_event
+    lifecycle = orch.lifecycle
     _leader_agent_tasks = orch._leader_agent_tasks
     tasks = orch.tasks
     all_tasks = orch.all_tasks
@@ -731,7 +739,9 @@ async def broadcast_round(
             if _synthesis_retries >= 3:
                 logger.warning("Broadcast: leader {} synthesis retry exhausted ({} attempts), forcing exit", name, _synthesis_retries)
                 return False
-            engine._running = True
+            # Reopen the round so the leader's synthesis-retry cycles keep
+            # running (flips engine._running back True like the legacy code).
+            lifecycle.reopen()
             return True
 
         try:
@@ -764,8 +774,8 @@ async def broadcast_round(
                 # Exception: leader called end_discussion but hasn't produced valid
                 # synthesis yet — allow the cycle loop to continue so the leader
                 # can retry (guards at line ~1125/1140 force a text-producing cycle).
-                if not engine._running and not (is_leader and _leader_ended_discussion):
-                    logger.info("Broadcast: {} exiting — engine stopped", name)
+                if lifecycle.agents_should_exit(is_leader=is_leader):
+                    logger.info("Broadcast: {} exiting — round ending ({})", name, lifecycle.reason or "engine stopped")
                     break
                 cycle += 1
                 # Re-read model from registry each cycle so mid-round changes take effect
@@ -873,7 +883,7 @@ async def broadcast_round(
                 total_iterations += result.iterations
                 all_tools_used.extend(result.tools_used or [])
 
-                if is_leader and "end_discussion" in (result.tools_used or []) and not engine._running:
+                if is_leader and "end_discussion" in (result.tools_used or []) and not lifecycle.accepts_interjection():
                     _leader_ended_discussion = True
 
                 if is_error or is_timeout:
@@ -982,8 +992,8 @@ async def broadcast_round(
                             if is_leader:
                                 _reason = f"Leader {name} 连续 {_consecutive_error_count} 次 LLM 错误"
                                 engine._leader_end_reason = _reason
-                                engine._running = False
-                                leader_end_event.set()
+                                # WINDING_DOWN + legacy flips (event set, _running off)
+                                lifecycle.mark_winding_down("leader_crash", flip_running=True)
                                 logger.warning(
                                     "Broadcast: leader %s force-exited, ending group chat: %s",
                                     name, _reason,
@@ -1340,9 +1350,9 @@ async def broadcast_round(
 
                 if msg is None:
                     # No message — check if engine stopped or leader ended discussion
-                    if not engine._running or leader_end_event.is_set():
+                    if lifecycle.wait_should_exit():
                         await tracker.set_state(name, "done", reason="engine stopped")
-                        logger.info("Broadcast: {} wait returned None, engine stopped, exiting", name)
+                        logger.info("Broadcast: {} wait returned None, round ending, exiting", name)
                         break
                     # Leader fallback: if no text was produced, force synthesis
                     if is_leader and not content:
@@ -1361,8 +1371,8 @@ async def broadcast_round(
 
                 # Got a message! Inject it and re-run tool_loop
                 # But first check if /stop was issued or leader ended discussion
-                if not engine._running or leader_end_event.is_set():
-                    logger.info("Broadcast: {} exiting after wait — engine stopped", name)
+                if lifecycle.wait_should_exit():
+                    logger.info("Broadcast: {} exiting after wait — round ending", name)
                     break
                 logger.info("Broadcast: {} reactivated by {}: {}", name, msg.sender, msg.content[:60])
                 await tracker.set_state(name, "thinking")
@@ -1504,63 +1514,28 @@ async def broadcast_round(
 
     try:
         # ── User interjection listener ──
+        # All classification / delivery / acknowledgement decisions live in
+        # UserIngress; this listener only polls the queue and delegates.
+        ingress = UserIngress(engine, mailbox, lifecycle, pool=pool)
 
         async def _user_listener() -> None:
             while _user_listener_running:
+                if ingress.parked:
+                    # A message was requeued because the round is winding down;
+                    # stop consuming so run_loop owns the queue for the next
+                    # round (no double-consumer race, no dead-mailbox drops).
+                    await asyncio.sleep(1.0)
+                    continue
+                # All agents finished without anyone requesting an end (e.g.
+                # everyone hit their cycle caps): mark winding down so ingress
+                # requeues instead of delivering into unread mailboxes.
+                if lifecycle.accepts_interjection() and all(t.done() for t in tasks):
+                    lifecycle.mark_winding_down("agents_exited")
                 try:
                     msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
                 except asyncio.TimeoutError:
                     continue
-                if msg == "__SUMMARY__":
-                    # Forward summary request to run_loop (handled after this
-                    # round ends) instead of silently dropping it.
-                    engine._summary_requested = True
-                    continue
-
-                # Round winding down (end_discussion / all agents exiting):
-                # agents will never read the mailbox — requeue the message so
-                # run_loop processes it as a fresh round instead of silently
-                # swallowing it (the "stuck until next user message" bug).
-                if (
-                    not engine._running
-                    or leader_end_event.is_set()
-                    or all(t.done() for t in tasks)
-                ):
-                    engine._input_queue.put_nowait(msg)
-                    logger.info(
-                        "Broadcast: round ending — user message requeued for next round: {}",
-                        msg[:60],
-                    )
-                    # Tell the user their message was parked rather than
-                    # letting it silently vanish for the rest of this round.
-                    await engine._send(
-                        "📥 本轮正在收尾，消息已排队，本轮结束后立即处理"
-                    )
-                    # Park instead of returning: consuming more messages here
-                    # would deliver them into mailboxes nobody reads (lost)
-                    # and race run_loop on _input_queue at the round boundary.
-                    # Staying parked also keeps the listener valid if the
-                    # winding-down state is transient. Round teardown cancels
-                    # this task (see finally in run_broadcast).
-                    while _user_listener_running:
-                        await asyncio.sleep(1.0)
-                    return
-
-                all_agent_names = list(mailbox.agent_names)
-                await pool.allocate_user(all_agent_names)
-
-                mailbox.create("用户")
-                mailbox.send("用户", ["All"], msg)
-                # Interrupt any agents currently inside tool_loop so they pick
-                # up the user message at the next safe checkpoint rather than
-                # waiting for their current tool batch to finish.
-                _interrupted = mailbox.interrupt_busy_agents("用户")
-                engine._add_message("用户", msg)
-                await engine._send(
-                    f"── User ──\n{msg}\n"
-                    f"  {pool.status()}"
-                )
-                logger.info("Broadcast: user interjected: {} ({} agent(s) interrupted)", msg[:60], _interrupted)
+                await ingress.handle_round_message(msg)
 
 
         user_task = asyncio.create_task(_user_listener())
@@ -1688,7 +1663,9 @@ async def broadcast_round(
                             "declaring discussion converged, ending round"
                         )
                         engine._leader_end_reason = "全员无新消息，讨论收敛"
-                        leader_end_event.set()
+                        # WINDING_DOWN without flipping engine._running —
+                        # legacy parity: converged rounds keep the session alive.
+                        lifecycle.mark_winding_down("converged")
                         return
                     # New activity arrived during silence — re-arm and wait again.
 
@@ -1721,7 +1698,7 @@ async def broadcast_round(
             if not done_set:
                 # Global timeout reached — stop the engine so run_loop
                 # doesn't start another round.
-                engine._running = False
+                lifecycle.mark_winding_down("global_timeout", flip_running=True)
                 break
 
             for t in done_set:
@@ -1830,7 +1807,7 @@ async def broadcast_round(
                         pass
     except asyncio.TimeoutError:
         # Stop the engine so run_loop doesn't start another round.
-        engine._running = False
+        lifecycle.mark_winding_down("global_timeout", flip_running=True)
         for task, name in tasks.items():
             if not task.done():
                 task.cancel()
@@ -1841,6 +1818,7 @@ async def broadcast_round(
         # Without this, /stop causes CancelledError which bypasses the normal
         # cleanup path, leaving user_task/join_task/leader_end_sentinel as
         # orphaned tasks that steal messages from future sessions.
+        lifecycle.mark_ended()
         _user_listener_running = False
         _join_listener_running = False
         _aux_to_cancel = []

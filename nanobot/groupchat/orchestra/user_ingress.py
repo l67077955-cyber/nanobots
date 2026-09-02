@@ -41,6 +41,23 @@ class IngressAction(Enum):
     ROUND_OPENED = "round_opened"      # between rounds; new round starting
 
 
+async def open_round_with(engine: Any, user_input: str) -> IngressAction:
+    """Between-rounds entry used by run_loop: record + uniform receipt.
+
+    Kept module-level because run_loop consumes messages outside any live
+    round (no mailbox/lifecycle in scope there yet); open_round only ever
+    touches the engine.
+    """
+    if user_input == SUMMARY_SENTINEL:  # defensive; run_loop handles first
+        engine._summary_requested = True
+        return IngressAction.SUMMARY_DEFERRED
+    engine._add_message("用户", user_input)
+    n = len(engine._active_agents)
+    if n:
+        await engine._send(ROUND_OPEN_RECEIPT.format(n=n))
+    return IngressAction.ROUND_OPENED
+
+
 class UserIngress:
     """Classify and dispatch everything consumed from ``engine._input_queue``.
 
@@ -102,18 +119,10 @@ class UserIngress:
     async def open_round(self, user_input: str) -> IngressAction:
         """Record a user message that opens a new round and emit its receipt.
 
-        Called by run_loop after it consumes the message; replaces the old
-        "record with no echo" step. Single-agent groups get the receipt too.
+        Delegates to the module-level ``open_round_with`` (also used directly
+        by run_loop between rounds).
         """
-        if user_input == SUMMARY_SENTINEL:  # defensive; run_loop handles first
-            self._engine._summary_requested = True
-            return IngressAction.SUMMARY_DEFERRED
-
-        self._engine._add_message("用户", user_input)
-        n = len(self._engine._active_agents)
-        if n:
-            await self._engine._send(ROUND_OPEN_RECEIPT.format(n=n))
-        return IngressAction.ROUND_OPENED
+        return await open_round_with(self._engine, user_input)
 
     # ── Delivery ───────────────────────────────────────────────────────────
 

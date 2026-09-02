@@ -11,6 +11,7 @@ import asyncio
 from loguru import logger
 
 from nanobot.groupchat.orchestra.broadcast import broadcast_round
+from nanobot.groupchat.orchestra.user_ingress import open_round_with
 
 
 async def generate_summary(engine: Any) -> None:
@@ -123,18 +124,11 @@ async def run_loop(engine: Any) -> None:
                 await generate_summary(engine)
                 continue
 
-            # Record user message (no echo)
-            engine._add_message("用户", user_input)
+            # Record + uniform receipt via UserIngress — the single
+            # acknowledgement policy shared by every user-message path
+            # (mid-round interjection / requeue-at-boundary / new round).
+            await open_round_with(engine, user_input)
             engine._round = rounds
-
-            # Receipt for the new-round path: mid-round interjections show
-            # "← agent received from 用户", but a message that opens a new
-            # round historically echoed nothing, making it look swallowed
-            # when rounds run long.
-            if len(engine._active_agents) >= 2:
-                await engine._send(
-                    f"📮 已收到用户消息，{len(engine._active_agents)} 个 agent 开始处理"
-                )
 
             # Determine speaking order
             speak_order = list(engine._active_agents)

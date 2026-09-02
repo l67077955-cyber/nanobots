@@ -299,11 +299,16 @@ class GroupChatEngine:
         self._on_round_done: Callable[[], Awaitable[None]] | None = None
         self._send_and_get_id_fn: Callable[[str], Awaitable[int | None]] | None = None
         self._topic: str = ""
-        self._request_log: list[dict[str, Any]] = []
+        self._request_log: list[dict] = []
         self._debug_context: bool = False
         self._prompt_order: dict[str, list[str]] = self._prompt_builder._load_prompt_order()
         self._current_group_name: str | None = None
         self._session_tools_override: dict[str, dict] = {}
+        # Cross-round handoff attrs — previously set dynamically by
+        # _user_listener / EndDiscussionTool; declared here so getattr
+        # fallbacks and typos can't hide state.
+        self._summary_requested: bool = False
+        self._leader_end_reason: str = ""
 
         # Direct chat interjection state (single-agent mode)
         self._direct_chat_task: asyncio.Task | None = None
@@ -862,7 +867,17 @@ class GroupChatEngine:
         if self._running:
             return
         self._running = True
+        # Recreating the queue here used to drop any messages pending in the
+        # old object (e.g. queued while the loop was stopped). Drain instead.
+        # (getattr: engines built via __new__ in tests may lack the attr.)
+        old_queue = getattr(self, "_input_queue", None)
         self._input_queue = asyncio.Queue()
+        if old_queue is not None:
+            while True:
+                try:
+                    self._input_queue.put_nowait(old_queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
         if not self._topic:
             self._topic = "自由讨论"
 

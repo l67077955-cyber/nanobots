@@ -1086,10 +1086,12 @@ class EndDiscussionTool(Tool):
     All agent tasks are cancelled and the leader enters the synthesis phase.
     """
 
-    def __init__(self, *, end_event: Any, engine: Any, mailbox: Any = None) -> None:
+    def __init__(self, *, end_event: Any, engine: Any, mailbox: Any = None,
+                 lifecycle: Any = None) -> None:
         self._end_event = end_event  # asyncio.Event
         self._engine = engine
         self._mailbox = mailbox
+        self._lifecycle = lifecycle  # RoundLifecycle; optional for bare tests
 
     @property
     def name(self) -> str:
@@ -1140,8 +1142,15 @@ class EndDiscussionTool(Tool):
         # Store reason so broadcast_round sentinel can include it in the
         # single unified termination message (avoids duplicate notifications).
         self._engine._leader_end_reason = reason
-        self._end_event.set()
-        self._engine._running = False
+        if self._lifecycle is not None:
+            # Single transition point: sets phase WINDING_DOWN (leader still
+            # composing synthesis), plus the legacy end_event / _running flips.
+            self._lifecycle.mark_winding_down(
+                "leader_end_discussion", leader_exempt=True, flip_running=True,
+            )
+        else:
+            self._end_event.set()
+            self._engine._running = False
         return f"✅ 讨论已结束{reason_str}，即将进入总结阶段"
 
 
