@@ -209,6 +209,10 @@ async def tool_loop(
     tool_defs: list[dict[str, Any]] | None = None,
     metadata: dict[str, Any] | None = None,
     reasoning_effort: str | None = None,
+    # Per-caller sampling params (e.g. per-agent hyperparams), merged on top
+    # of the provider defaults inside _build_kwargs. Passed explicitly so
+    # concurrent callers sharing one provider never mutate shared state.
+    sampling_override: dict[str, Any] | None = None,
     # ── Callbacks ──
     on_tool_start: Callable[..., Awaitable[None]] | None = None,
     on_tool_result: Callable[[str, str, str], Awaitable[None]] | None = None,
@@ -359,6 +363,7 @@ async def tool_loop(
                 _coro = _stream_call(
                     provider, llm_messages, iter_tool_defs, model, max_tokens, metadata,
                     on_content_delta, reasoning_effort=reasoning_effort,
+                    sampling_override=sampling_override,
                 )
             else:
                 _coro = provider.chat_with_retry(
@@ -368,6 +373,7 @@ async def tool_loop(
                     max_tokens=max_tokens,
                     metadata=metadata,
                     reasoning_effort=reasoning_effort,
+                    sampling_override=sampling_override,
                 )
                 
             if interrupt_event is not None:
@@ -816,6 +822,7 @@ async def tool_loop(
                         max_tokens=max_tokens,
                         metadata=metadata,
                         reasoning_effort=reasoning_effort,
+                        sampling_override=sampling_override,
                     )
                     if retried.finish_reason != "error":
                         response = retried
@@ -876,6 +883,7 @@ async def _stream_call(
     on_content_delta: Callable[[str], Awaitable[None]],
     *,
     reasoning_effort: str | None = None,
+    sampling_override: dict[str, Any] | None = None,
 ) -> LLMResponse:
     """Call provider.chat_stream(), forwarding content deltas to the callback.
 
@@ -892,6 +900,7 @@ async def _stream_call(
             model=model,
             max_tokens=max_tokens,
             metadata=metadata,
+            sampling_override=sampling_override,
         ):
             if isinstance(item, str):
                 await on_content_delta(item)
@@ -939,6 +948,7 @@ async def _stream_call(
             max_tokens=max_tokens,
             metadata=metadata,
             reasoning_effort=reasoning_effort,
+            sampling_override=sampling_override,
         )
 
     return response

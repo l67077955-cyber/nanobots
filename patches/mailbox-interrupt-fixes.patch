@@ -1,0 +1,83 @@
+--- nanobot/groupchat/orchestra/mailbox.py	2026-08-06 17:52:54.503499754 +0800
++++ /tmp/mailbox_patched.py	2026-09-01 16:42:38.858347591 +0800
+@@ -213,7 +213,7 @@
+             else:
+                 break
+         if released > 0:
+-            logger.debug(
++            logger.info(
+                 "ConversationPool: {} released {} unread slots back to senders",
+                 agent_name, released,
+             )
+@@ -476,7 +476,14 @@
+         """
+         s_rank = self._ranks.get(sender, 0)
+         t_rank = self._ranks.get(target, 0)
+-        return s_rank > t_rank
++        if s_rank > t_rank:
++            return True
++        # Upward-correction channel: low rank may interrupt up to 3 levels
++        # higher (knight->leader), so correct evidence can reach the leader.
++        # Equal rank still queues (no interrupt).
++        if s_rank < t_rank and (t_rank - s_rank) <= 3:
++            return True
++        return False
+ 
+     def _try_interrupt(self, target: str, sender: str) -> bool:
+         """Attempt to interrupt a busy agent.
+@@ -494,16 +501,17 @@
+         self._last_interrupt_sender[target] = sender
+         # Rank check: low-rank agents cannot interrupt higher-or-equal rank
+         if not self._can_interrupt(sender, target):
+-            logger.debug(
++            logger.info(
+                 "MailboxHub: interrupt blocked — {} (rank {}) vs {} (rank {})",
+                 sender, self._ranks.get(sender, 0),
+                 target, self._ranks.get(target, 0),
+             )
+             return False
+-        if self._interrupt_counts.get(target, 0) >= 3:
++        _pair = f"{sender}->{target}"
++        if self._interrupt_counts.get(_pair, 0) >= 3:
+             logger.debug(
+-                "MailboxHub: interrupt skipped for {} (already interrupted {} times this round)",
+-                target, self._interrupt_counts.get(target, 0),
++                "MailboxHub: interrupt skipped for {} from {} (pair {} already interrupted {} times this round)",
++                target, sender, _pair, self._interrupt_counts.get(_pair, 0),
+             )
+             return False
+         # Record who caused this interrupt (persists beyond queue consumption)
+@@ -511,10 +519,10 @@
+         # Trigger the interrupt
+         evt = self.get_interrupt_event(target)
+         evt.set()
+-        self._interrupt_counts[target] = self._interrupt_counts.get(target, 0) + 1
++        self._interrupt_counts[_pair] = self._interrupt_counts.get(_pair, 0) + 1
+         logger.info(
+-            "MailboxHub: ⚡ interrupt triggered for {} by {} (count={}/1)",
+-            target, sender, self._interrupt_counts[target],
++            "MailboxHub: ⚡ interrupt triggered for {} by {} (pair-count={}/3)",
++            target, sender, self._interrupt_counts[_pair],
+         )
+         return True
+ 
+@@ -546,7 +554,8 @@
+                 evt.set()
+                 # Reset interrupt counter so the agent can be interrupted
+                 # again by newer messages after it re-enters tool_loop.
+-                self._interrupt_counts[agent] = 0
++                for _k in [k for k in self._interrupt_counts if k.endswith(f"->{agent}")]:
++                    self._interrupt_counts[_k] = 0
+                 count += 1
+                 logger.info(
+                     "MailboxHub: ⚡ user interrupt set for busy agent {} (sender={}, counter reset)",
+@@ -886,7 +895,8 @@
+             repliers.discard(agent_name)
+         # Cleanup interrupt state
+         self._busy_agents.discard(agent_name)
+-        self._interrupt_counts.pop(agent_name, None)
++        for _k in [k for k in self._interrupt_counts if k.endswith(f"->{agent_name}")]:
++            self._interrupt_counts.pop(_k, None)
+         if agent_name in self._interrupt_events:
+             self._interrupt_events[agent_name].clear()
+         # Re-check: if remaining active agents are all waiting

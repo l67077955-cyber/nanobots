@@ -127,6 +127,15 @@ async def run_loop(engine: Any) -> None:
             engine._add_message("用户", user_input)
             engine._round = rounds
 
+            # Receipt for the new-round path: mid-round interjections show
+            # "← agent received from 用户", but a message that opens a new
+            # round historically echoed nothing, making it look swallowed
+            # when rounds run long.
+            if len(engine._active_agents) >= 2:
+                await engine._send(
+                    f"📮 已收到用户消息，{len(engine._active_agents)} 个 agent 开始处理"
+                )
+
             # Determine speaking order
             speak_order = list(engine._active_agents)
 

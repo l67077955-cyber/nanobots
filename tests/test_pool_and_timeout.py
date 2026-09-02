@@ -59,11 +59,27 @@ class TestPoolAllocate:
         assert "Alpha" in p._pending["Beta"]
 
     @pytest.mark.asyncio
-    async def test_allocate_exceeding_capacity_rejected(self):
+    async def test_allocate_exceeding_capacity_charges_cap_only(self):
+        # Broadcast affordability: a wide send costs at most the sender's full
+        # pool (min(n, cap)) instead of being structurally rejected — low-cap
+        # agents (pawn=2 in a 3-agent room) must still address the whole room.
         p = _pool(capacity=2)
-        ok = await p.allocate("Alpha", ["Beta", "Gamma", "Alpha"])  # 3 > 2
+        ok = await p.allocate("Alpha", ["Beta", "Gamma", "Alpha"])  # n=3 > cap=2
+        assert ok is True
+        assert p.agent_available("Alpha") == 0  # charged exactly cap=2
+        # Pending markers stay 1:1 with slots — only the charged recipients
+        # hold an "expects reply" marker, so release_unread never over-refunds.
+        assert "Alpha" in p._pending["Beta"]
+        assert "Alpha" in p._pending["Gamma"]
+        assert p._pending.get("Alpha") == [] or "Alpha" not in p._pending["Alpha"]
+
+    @pytest.mark.asyncio
+    async def test_allocate_zero_capacity_rejected(self):
+        p = ConversationPool(capacity=0, agents=["A", "B"],
+                             per_agent_capacity={"A": 0, "B": 2})
+        ok = await p.allocate("A", ["B"])
         assert ok is False
-        assert p.agent_available("Alpha") == 2  # not drained
+        assert p.agent_available("A") == 0
 
 
 class TestPoolRelease:

@@ -1479,12 +1479,12 @@ async def chat_with_tools(
         sampling = {**sampling, **agent_sampling}
         logger.info("chat_with_tools: agent={} merged hyperparams: {}", agent_name, list(agent_sampling.keys()))
 
-    # Inject merged sampling params into provider so _build_body/_build_kwargs
-    # (which read self.sampling_params) use the per-agent overrides.
-    # Restore original after call to avoid leaking between agents.
-    _orig_sampling = getattr(provider, "sampling_params", None)
-    if _orig_sampling is not None:
-        provider.sampling_params = sampling
+    # The merged sampling is passed to tool_loop explicitly as
+    # sampling_override; the provider merges it per call inside
+    # _build_kwargs. Mutating provider.sampling_params here would race
+    # with concurrent callers sharing the same provider instance
+    # (broadcast agents / heartbeat direct chats) and could leak one
+    # agent's overrides into the shared defaults.
     tool_names = [d.get("function", {}).get("name", "?") for d in (tool_defs or [])]
 
     # Per-iteration token usage callback — update shared ref so tool callbacks
@@ -1493,29 +1493,25 @@ async def chat_with_tools(
         _iter_usage_ref.clear()
         _iter_usage_ref.update(usage)
 
-    try:
-        result = await tool_loop(
-            provider=provider,
-            messages=messages,
-            tool_registry=tool_registry,
-            model=model,
-            max_tokens=max_tokens,
-            max_iterations=max_iterations,
-            tool_defs=effective_defs,
-            metadata=trace_metadata,
-            reasoning_effort=sampling.get("reasoning_effort") if sampling else None,
-            on_tool_start=on_tool_start_override or default_start,
-            on_tool_result=on_tool_result_override or default_result,
-            on_iteration_usage=_on_iter_usage,
-            on_content_delta=on_content_delta,
-            on_content_reset=on_content_reset,
-            clean_response=clean_response,
-            result_max_chars=_direct_result_max,
-        )
-    finally:
-        # Restore original sampling params to avoid leaking between agents
-        if _orig_sampling is not None:
-            provider.sampling_params = _orig_sampling
+    result = await tool_loop(
+        provider=provider,
+        messages=messages,
+        tool_registry=tool_registry,
+        model=model,
+        max_tokens=max_tokens,
+        max_iterations=max_iterations,
+        tool_defs=effective_defs,
+        metadata=trace_metadata,
+        reasoning_effort=sampling.get("reasoning_effort") if sampling else None,
+        sampling_override=sampling or None,
+        on_tool_start=on_tool_start_override or default_start,
+        on_tool_result=on_tool_result_override or default_result,
+        on_iteration_usage=_on_iter_usage,
+        on_content_delta=on_content_delta,
+        on_content_reset=on_content_reset,
+        clean_response=clean_response,
+        result_max_chars=_direct_result_max,
+    )
 
     content = result.content or ""
     # Use effective_defs (not original tool_defs) for accurate stats

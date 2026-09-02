@@ -380,12 +380,15 @@ class LLMProvider(ABC):
         reasoning_effort: object = _SENTINEL,
         metadata: dict[str, Any] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        sampling_override: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """Call chat() with retry on transient provider failures.
 
         Parameters default to ``self.generation`` when not explicitly passed,
         so callers no longer need to thread temperature / max_tokens /
-        reasoning_effort through every layer.
+        reasoning_effort through every layer. ``sampling_override`` merges
+        per-caller sampling params on top of the provider defaults without
+        mutating shared state.
         """
         if max_tokens is self._SENTINEL:
             max_tokens = self.generation.max_tokens
@@ -409,6 +412,7 @@ class LLMProvider(ABC):
                     reasoning_effort=reasoning_effort,
                     metadata=metadata,
                     tool_choice=tool_choice,
+                    sampling_override=sampling_override,
                 )
             except asyncio.CancelledError:
                 raise
@@ -435,6 +439,7 @@ class LLMProvider(ABC):
                             max_tokens=max_tokens, temperature=temperature,
                             reasoning_effort=reasoning_effort, metadata=metadata,
                             tool_choice=tool_choice,
+                            sampling_override=sampling_override,
                         )
                         resp.retry_log = retry_log
                         return resp

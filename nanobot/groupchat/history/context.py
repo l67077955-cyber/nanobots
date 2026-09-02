@@ -157,7 +157,8 @@ class HistoryContext:
         """Compress the middle section of history when it approaches the limit.
 
         Head-tail protection always runs.  AI summarisation is gated by
-        ``summarize_enabled``; if disabled, the middle region is simply dropped.
+        ``summarize_enabled``; if disabled (or if the summarisation call
+        fails), the middle region is dropped as the fallback.
         """
         from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
             max_messages,
@@ -172,6 +173,30 @@ class HistoryContext:
         limit = max_messages()
         ratio = compress_ratio()
         if len(self.messages) < int(limit * ratio):
+            return
+
+        # Effective-pressure gate: compress when either the message-count
+        # ratio or the estimated token ratio crosses the threshold.
+        token_ratio = 0.0
+        try:
+            from nanobot.groupchat.history.history_settings import get_context_window_tokens
+            from nanobot.utils.helpers import estimate_message_tokens
+
+            token_window = get_context_window_tokens()
+
+            def _as_llm_msg(m):
+                role = "user" if m.get("sender") in ("User", "user", "用户") else "assistant"
+                return {"role": role, "content": m.get("content", "")}
+
+            current_tok = sum(
+                int(estimate_message_tokens(_as_llm_msg(m)) or 0) for m in self.messages
+            )
+            token_ratio = current_tok / max(1, token_window)
+        except Exception:
+            pass
+        msg_count_ratio = len(self.messages) / max(1, limit)
+        effective_ratio = max(msg_count_ratio, token_ratio)
+        if effective_ratio < ratio and token_ratio < 0.55:
             return
 
         total_len = len(self.messages)
@@ -208,11 +233,20 @@ class HistoryContext:
         # ── 3.5 Age tool logs in middle region before summarisation ──
         # Strip verbose previews from tool call logs to reduce summary input
         # size and preserve more semantic content in the compressed output.
+        #
+        # IMPORTANT: we build a NEW message list rather than mutating originals.
+        # Mutating `msg["content"]` in-place would corrupt self.messages even if
+        # AI summarisation later fails and we fall back to `self.messages = head + tail`,
+        # because `to_compress` holds direct references into self.messages.
+        aged_to_compress: list[dict[str, str]] = []
         for msg in to_compress:
             original = msg["content"]
             aged = age_tool_log(original)
             if aged != original:
-                msg["content"] = aged
+                aged_to_compress.append({**msg, "content": aged})
+            else:
+                aged_to_compress.append(msg)
+        to_compress = aged_to_compress
 
         # ── 4a. AI Summarise ──
         if history_summarize_enabled() and self._provider is not None:
@@ -226,130 +260,71 @@ class HistoryContext:
                 f"摘要不超过 500 字。\n\n{history_text}"
             )
             max_tok = compress_max_summary_tokens()
-            try:
-                from nanobot.groupchat.history.history_settings import get_context_window_tokens
-                from nanobot.utils.helpers import estimate_message_tokens
-                _est = estimate_message_tokens
-                token_window = get_context_window_tokens()
-                # Map our sender-based history items to something the estimator understands
-                def _as_llm_msg(m):
-                    role = "user" if m.get("sender") in ("User", "user", "用户") else "assistant"
-                    return {"role": role, "content": m.get("content", "")}
-                current_tok = sum(int(_est(_as_llm_msg(m)) or 0) for m in self.messages)
-                token_ratio = current_tok / max(1, token_window)
-            except Exception:
-                _est = None
 
-            msg_count_ratio = len(self.messages) / max(1, limit)
-            effective_ratio = max(msg_count_ratio, token_ratio)
-
-            if effective_ratio < ratio and token_ratio < 0.55:
-                return
-
-
-            total_len = len(self.messages)
-
-            # ── 1. Protected Head ──
-            protected_head_indices = self._find_head_indices(
-                self.messages, keep_all_users=keep_user_messages()
-            )
-
-            # ── 2. Protected Tail ──
-            keep_recent = compression_keep_recent()
-            protected_tail_indices = set(
-                range(max(0, total_len - keep_recent), total_len)
-            )
-
-            # ── 3. Compressible Middle ──
-            # Use set exclusion instead of contiguous range — head indices may be
-            # non-contiguous when keep_user_messages=True (user messages scattered).
-            all_protected = protected_head_indices | protected_tail_indices
-
-            head = [self.messages[i] for i in sorted(protected_head_indices)]
-            tail = [
-                self.messages[i]
-                for i in sorted(protected_tail_indices)
-                if i not in protected_head_indices
-            ]
-            to_compress = [
-                self.messages[i] for i in range(total_len) if i not in all_protected
-            ]
-
-            if not to_compress:
-                return
-
-            # ── 3.5 Age tool logs in middle region before summarisation ──
-            # Strip verbose previews from tool call logs to reduce summary input
-            # size and preserve more semantic content in the compressed output.
-            # 
-            # IMPORTANT: we build a NEW message list rather than mutating originals.
-            # Mutating `msg["content"]` in-place would corrupt self.messages even if
-            # AI summarisation later fails and we fall back to `self.messages = head + tail`,
-            # because `to_compress` holds direct references into self.messages.
-            aged_to_compress: list[dict[str, str]] = []
-            for msg in to_compress:
-                original = msg["content"]
-                aged = age_tool_log(original)
-                # Preserve the original message reference for tail reconstruction
-                if aged != original:
-                    aged_to_compress.append({**msg, "content": aged})
-                else:
-                    aged_to_compress.append(msg)
-            to_compress = aged_to_compress
-
-            # ── 4a. AI Summarise ──
-            if history_summarize_enabled() and self._provider is not None:
-                history_text = "\n".join(
-                    f"[{m['sender']}]: {m['content']}" for m in to_compress
-                )
-                prompt = (
-                    f"以下是群聊的一段中期历史记录（共 {len(to_compress)} 条）。\n"
-                    "请用简洁的中文摘要这些内容，重点保留核心发现、关键决策、重要事实以及已经完成的进度。\n"
-                    "如果有具体的数值、文件路径或关键结论，请务必保留。\n"
-                    f"摘要不超过 500 字。\n\n{history_text}"
-                )
-                max_tok = compress_max_summary_tokens()
+            # One retry for empty summaries (reasoning models can burn the
+            # whole budget on thinking and return zero visible content).
+            summary = ""
+            for attempt in (1, 2):
                 try:
                     response = await self._provider.chat_with_retry(
                         messages=[{"role": "user", "content": prompt}],
                         model=summarize_model(),
                         max_tokens=max_tok,
                     )
-                    summary = (response.content or "").strip()
-                    if summary:
-                        summary_msg = {
-                            "sender": "系统",
-                            "content": (
-                                f"[早期对话摘要（压缩了 {len(to_compress)} 条中间消息）]\n"
-                                + summary
-                            ),
-                        }
-                        # Rebuild preserving original chronological order
-                        # (head+tail would pull all user messages to the front)
-                        summary_inserted = False
-                        rebuilt: list[dict[str, str]] = []
-                        for i, m in enumerate(self.messages):
-                            if i in all_protected:
-                                rebuilt.append(m)
-                            elif not summary_inserted:
-                                # Insert summary once at the position of the
-                                # first compressible message
-                                rebuilt.append(summary_msg)
-                                summary_inserted = True
-                        self.messages = rebuilt
-                        logger.info(
-                            "HistoryContext: AI compressed {} middle → summary "
-                            "(head: {}, tail: {})",
-                            len(to_compress),
-                            len(head),
-                            len(tail),
-                        )
-                        return
                 except Exception as e:
                     logger.warning(
-                        "HistoryContext: AI compress failed: {}, falling back to drop", e
+                        "HistoryContext: AI compress attempt {} failed: {}",
+                        attempt, e,
                     )
-                    return
+                    continue
+                summary = (response.content or "").strip()
+                if summary:
+                    break
+                logger.warning(
+                    "HistoryContext: AI compress attempt {} produced empty summary "
+                    "(finish_reason={})",
+                    attempt, getattr(response, "finish_reason", "?"),
+                )
+
+            if not summary:
+                # Empty or failed summary — KEEP the middle region instead of
+                # silently dropping it.  History stays bounded by add_message's
+                # max_messages trim, so skipping compression is safe.
+                logger.warning(
+                    "HistoryContext: AI summary unavailable — keeping {} middle "
+                    "messages uncompressed (head: {}, tail: {})",
+                    len(to_compress), len(head), len(tail),
+                )
+                return
+
+            summary_msg = {
+                "sender": "系统",
+                "content": (
+                    f"[早期对话摘要（压缩了 {len(to_compress)} 条中间消息）]\n"
+                    + summary
+                ),
+            }
+            # Rebuild preserving original chronological order
+            # (head+tail would pull all user messages to the front)
+            summary_inserted = False
+            rebuilt: list[dict[str, str]] = []
+            for i, m in enumerate(self.messages):
+                if i in all_protected:
+                    rebuilt.append(m)
+                elif not summary_inserted:
+                    # Insert summary once at the position of the
+                    # first compressible message
+                    rebuilt.append(summary_msg)
+                    summary_inserted = True
+            self.messages = rebuilt
+            logger.info(
+                "HistoryContext: AI compressed {} middle → summary "
+                "(head: {}, tail: {})",
+                len(to_compress),
+                len(head),
+                len(tail),
+            )
+            return
 
         # ── 4b. Fallback: drop middle region ──
         self.messages = head + tail

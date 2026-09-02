@@ -36,6 +36,10 @@ from .callbacks_registry import (
     parse_args,
 )
 
+# Staged-input confirm window (seconds). A real timer expires the staged
+# value and updates the bar; the edit session itself is kept alive.
+EDIT_CONFIRM_TIMEOUT = 300
+
 
 class CallbacksMixin:
     """Mixin providing inline keyboard callback handling."""
@@ -154,18 +158,20 @@ class CallbacksMixin:
             chat_id = str(query.message.chat_id)
             self._edit_state.pop(chat_id, None)
             self._pending_input.pop(chat_id, None)
+            self._cancel_pending_expire(chat_id)
             await query.edit_message_text("❌ 已取消输入")
             return
         if action == "inpc_confirm":
             chat_id = str(query.message.chat_id)
+            self._cancel_pending_expire(chat_id)
             pending = self._pending_input.pop(chat_id, None)
             if not pending:
-                await query.edit_message_text("⚠️ 没有待确认的输入(可能已超时或被取消)")
-                return
-            import time as _t
-            if _t.time() - pending["ts"] > 30:  # 30s timeout — stop accepting
-                self._edit_state.pop(chat_id, None)
-                await query.edit_message_text("⏱️ 输入已超时(30秒),已停止接受。请重新操作。")
+                # Staged value already expired (timer) or was cancelled.
+                # The edit session is kept — tell the user to retype.
+                await query.edit_message_text(
+                    "⚠️ 没有待确认的输入(可能已超时或被取消)\n"
+                    "编辑会话仍在，请直接重新发送内容。"
+                )
                 return
             await query.edit_message_text("✅ 已确认")
             # Apply: feed the staged content into the edit handler as normal input.
@@ -302,6 +308,13 @@ class CallbacksMixin:
             if data.startswith("m:"):
                 await query.answer()
                 await self._dispatch_menu_action(query, data[2:])
+                return
+
+            # Input-confirm buttons are emitted WITHOUT the "m:" prefix
+            # (_stage_confirm / _start_input); route them to the same
+            # dispatcher so the action handlers there actually fire.
+            if data in ("inpc_confirm", "inpc_cancel"):
+                await self._dispatch_menu_action(query, data)
                 return
 
             if data.startswith("add:"):
@@ -2642,25 +2655,55 @@ class CallbacksMixin:
 
         The typed ``content`` is buffered in self._pending_input; this renders
         a preview bar plus [✅ 确认输入] [❌ 取消输入]. The value is only applied
-        when the user confirms (inpc_confirm). Expires via EDIT_CONFIRM_TIMEOUT.
+        when the user confirms (inpc_confirm). A real expire timer
+        (EDIT_CONFIRM_TIMEOUT) drops the staged value and updates the bar;
+        the edit session itself survives so the user can simply retype.
         """
         if not self._app:
             return
+        # A fresh stage supersedes any earlier expire timer for this chat.
+        self._cancel_pending_expire(chat_id)
         preview = content[:400] + ("…" if len(content) > 400 else "")
         try:
-            await self._app.bot.send_message(
+            bar = await self._app.bot.send_message(
                 int(chat_id),
                 f"📋 待确认输入:\n\n{preview}\n\n"
-                "点「✅ 确认输入」接受,或「❌ 取消输入」放弃 (30 秒后自动取消)",
+                f"点「✅ 确认输入」接受,或「❌ 取消输入」放弃 ({EDIT_CONFIRM_TIMEOUT // 60} 分钟后自动取消)",
                 reply_markup=InlineKeyboardMarkup([
                     [
-                        InlineKeyboardButton("✅ 确认输入", callback_data="inpc_confirm"),
-                        InlineKeyboardButton("❌ 取消输入", callback_data="inpc_cancel"),
+                        InlineKeyboardButton("✅ 确认输入", callback_data="m:inpc_confirm"),
+                        InlineKeyboardButton("❌ 取消输入", callback_data="m:inpc_cancel"),
                     ]
                 ]),
             )
         except Exception:
-            pass
+            return
+        bar_msg_id = getattr(bar, "message_id", None)
+
+        async def _expire() -> None:
+            await asyncio.sleep(EDIT_CONFIRM_TIMEOUT)
+            pending = self._pending_input.get(chat_id)
+            # Only expire if this bar's staged content is still the pending one.
+            if not pending or pending.get("content") != content:
+                return
+            self._pending_input.pop(chat_id, None)
+            if bar_msg_id and self._app:
+                try:
+                    await self._app.bot.edit_message_text(
+                        chat_id=int(chat_id),
+                        message_id=bar_msg_id,
+                        text="⏳ 输入已超时自动取消（编辑会话仍保留），请重新发送内容。",
+                    )
+                except Exception:
+                    pass
+
+        self._pending_expire_tasks[chat_id] = asyncio.create_task(_expire())
+
+    def _cancel_pending_expire(self, chat_id: str) -> None:
+        """Cancel the staged-input expire timer for a chat, if any."""
+        task = self._pending_expire_tasks.pop(chat_id, None)
+        if task and not task.done():
+            task.cancel()
 
     async def _start_input(self, chat_id: str, text: str) -> None:
         """Begin an interactive text-input state.
@@ -2678,7 +2721,7 @@ class CallbacksMixin:
                 int(chat_id),
                 "✍️ 输入中… (发送消息作为内容,或点下方按钮取消)",
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("❌ 取消输入", callback_data="inpc_cancel")]]
+                    [[InlineKeyboardButton("❌ 取消输入", callback_data="m:inpc_cancel")]]
                 ),
             )
         except Exception:
@@ -2810,7 +2853,6 @@ class CallbacksMixin:
 
         # Handle hyperparams value input
         if field == "hp_value":
-            
             hp_key = state.get("hp_key", "")
             raw_val = content.strip()
             if hp_key in ("reasoning_effort", "stop"):
@@ -2819,8 +2861,12 @@ class CallbacksMixin:
                 try:
                     value = float(raw_val)
                 except ValueError:
-                    await self._gc_send(chat_id, "⚠️ 值必须是数字")
+                    # Keep the session alive so the retry message is staged,
+                    # not leaked into the group chat.
+                    self._begin_edit(chat_id, state)
+                    await self._start_input(chat_id, f"⚠️ 值必须是数字，请重新输入 {hp_key} 的新值:")
                     return
+            del self._edit_state[chat_id]
             provider = getattr(self._groupchat_engine, 'provider', None) if self._groupchat_engine else None
             params = getattr(provider, 'sampling_params', None) if provider else None
             if params is not None:
@@ -2852,7 +2898,6 @@ class CallbacksMixin:
 
         # Handle agent hyperparams value input
         if field == "ahp_value":
-            
             hp_key = state.get("hp_key", "")
             a_name = state.get("agent", "")
             raw_val = content.strip()
@@ -2862,8 +2907,12 @@ class CallbacksMixin:
                 try:
                     value = float(raw_val)
                 except ValueError:
-                    await self._gc_send(chat_id, "⚠️ 值必须是数字")
+                    # Keep the session alive so the retry message is staged,
+                    # not leaked into the group chat.
+                    self._begin_edit(chat_id, state)
+                    await self._start_input(chat_id, f"⚠️ 值必须是数字，请重新输入 {a_name} 的 {hp_key} 新值:")
                     return
+            del self._edit_state[chat_id]
             if self._groupchat_engine and a_name in self._groupchat_engine.registry:
                 agent = self._groupchat_engine.registry[a_name]
                 if "hyperparams" not in agent or not isinstance(agent["hyperparams"], dict):
@@ -2908,16 +2957,18 @@ class CallbacksMixin:
 
         # Handle groupchat settings value input
         if field == "gc_value":
-            
             gc_key = state.get("gc_key", "")
             try:
                 value = int(content.strip())
             except ValueError:
-                await self._gc_send(chat_id, "⚠️ 值必须是整数")
+                self._begin_edit(chat_id, state)
+                await self._start_input(chat_id, f"⚠️ 值必须是整数，请重新输入 {gc_key} 的新值:")
                 return
             if value < 1:
-                await self._gc_send(chat_id, "⚠️ 值必须 ≥ 1")
+                self._begin_edit(chat_id, state)
+                await self._start_input(chat_id, f"⚠️ 值必须 ≥ 1，请重新输入 {gc_key} 的新值:")
                 return
+            del self._edit_state[chat_id]
             settings = self._load_gc_settings()
             old_val = settings.get(gc_key, self.GC_SETTINGS_DEFAULTS.get(gc_key))
             settings[gc_key] = value
@@ -2926,7 +2977,7 @@ class CallbacksMixin:
             await self._gc_send(chat_id, f"✅ {label}: {old_val} → {value}\n下次群聊生效，已持久化")
             return
         if field == "sg_name":
-            
+            del self._edit_state[chat_id]
             result = self._groupchat_engine.save_group(content.strip())
             await self._gc_send(chat_id, result)
             return

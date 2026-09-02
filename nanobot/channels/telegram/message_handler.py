@@ -106,7 +106,12 @@ class MessageHandlerMixin:
         session_key = self._derive_topic_session_key(message)
 
         # Telegram media groups: buffer briefly, forward as one aggregated turn.
-        if media_group_id := getattr(message, "media_group_id", None):
+        # Interactive edit sessions take precedence: staging each message
+        # immediately keeps the confirm flow intact (buffering + return here
+        # would bypass the edit state and leak the content into the engine).
+        if (
+            media_group_id := getattr(message, "media_group_id", None)
+        ) and str_chat_id not in self._edit_state:
             key = f"{str_chat_id}:{media_group_id}"
             if key not in self._media_group_buffers:
                 self._media_group_buffers[key] = {

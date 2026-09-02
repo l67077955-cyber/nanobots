@@ -176,7 +176,10 @@ class LiteLLMProvider(LLMProvider):
         spec = find_by_model(model)
         if spec and spec.litellm_prefix:
             model = self._canonicalize_explicit_prefix(model, spec.name, spec.litellm_prefix)
-            if not any(model.startswith(s) for s in spec.skip_prefixes):
+            # Idempotent: never stack the gateway prefix on a model that
+            # already carries it ("openrouter/openrouter/…" → 400 invalid ID).
+            already_prefixed = model.startswith(spec.litellm_prefix + "/")
+            if not already_prefixed and not any(model.startswith(s) for s in spec.skip_prefixes):
                 model = f"{spec.litellm_prefix}/{model}"
 
         return model
@@ -587,6 +590,7 @@ class LiteLLMProvider(LLMProvider):
         metadata: dict[str, Any] | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
+        sampling_override: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build the kwargs dict for acompletion (shared by chat and chat_stream)."""
         original_model = model or self.default_model
@@ -634,7 +638,11 @@ class LiteLLMProvider(LLMProvider):
             "model": model,
             "messages": self._sanitize_messages(self._sanitize_empty_content(messages), extra_keys=extra_msg_keys),
             "max_tokens": max_tokens,
-            **self.sampling_params,
+            # Per-call sampling merge (agent overrides win). Explicit
+            # threading instead of mutating self.sampling_params, which races
+            # when concurrent callers (broadcast agents / direct chat) share
+            # one provider instance.
+            **{**self.sampling_params, **(sampling_override or {})},
         }
 
         self._apply_model_overrides(model, kwargs)
@@ -749,11 +757,13 @@ class LiteLLMProvider(LLMProvider):
         tool_choice: str | dict[str, Any] | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
+        sampling_override: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """Send a chat completion request via LiteLLM."""
         import time as _time
         kwargs = self._build_kwargs(
             messages, tools, model, max_tokens, reasoning_effort, metadata, api_base, api_key,
+            sampling_override=sampling_override,
         )
         # Override tool_choice if explicitly passed
         if tool_choice and tools:
@@ -793,6 +803,7 @@ class LiteLLMProvider(LLMProvider):
                     max_tokens=max_tokens, temperature=temperature,
                     reasoning_effort=reasoning_effort,
                     metadata=metadata, api_base=api_base, api_key=api_key,
+                    sampling_override=sampling_override,
                 )
 
             return LLMResponse(
@@ -810,6 +821,7 @@ class LiteLLMProvider(LLMProvider):
         metadata: dict[str, Any] | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
+        sampling_override: dict[str, Any] | None = None,
     ):
         """Stream a chat completion, yielding text deltas.
 
@@ -825,6 +837,7 @@ class LiteLLMProvider(LLMProvider):
         import time as _time
         kwargs = self._build_kwargs(
             messages, tools, model, max_tokens, reasoning_effort, metadata, api_base, api_key,
+            sampling_override=sampling_override,
         )
         kwargs["stream"] = True
         kwargs["stream_options"] = {"include_usage": True}
@@ -859,6 +872,7 @@ class LiteLLMProvider(LLMProvider):
                     messages=messages, tools=tools, model=model,
                     max_tokens=max_tokens, reasoning_effort=reasoning_effort,
                     metadata=metadata, api_base=api_base, api_key=api_key,
+                    sampling_override=sampling_override,
                 ):
                     yield item
                 return

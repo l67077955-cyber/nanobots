@@ -16,15 +16,27 @@ class AgentCommandsMixin:
     """Mixin providing agent management commands."""
 
     def _ensure_gc_send(self, chat_id: str) -> None:
-        """Ensure the group chat engine has send/edit callbacks for this chat."""
-        if self._groupchat_engine and not self._groupchat_engine.has_send_fn:
+        """Ensure the group chat engine has send/edit callbacks for this chat.
+
+        Callbacks are (re)bound whenever the requesting chat differs from the
+        one currently bound — otherwise a second chat (e.g. a group after a
+        private chat) would keep receiving the first chat's replies.
+        """
+        if self._groupchat_engine and (
+            not self._groupchat_engine.has_send_fn
+            or getattr(self, "_gc_bound_chat", None) != chat_id
+        ):
             async def send_fn(text: str) -> None:
                 await self._gc_send(chat_id, text)
             self._groupchat_engine.set_send_fn(send_fn)
+            self._gc_bound_chat = chat_id
             # Set tool routing context so cron/message tools know the target
             self._groupchat_engine.set_tool_context("telegram", chat_id)
 
-        if self._groupchat_engine and not self._groupchat_engine.has_edit_fn:
+        if self._groupchat_engine and (
+            not self._groupchat_engine.has_edit_fn
+            or getattr(self, "_gc_bound_edit_chat", None) != chat_id
+        ):
             int_chat_id = int(chat_id)
 
             async def send_and_get_id_fn(text: str) -> int | None:
@@ -54,6 +66,7 @@ class AgentCommandsMixin:
                     logger.debug("gc_edit failed (likely text unchanged): {}", e)
 
             self._groupchat_engine.set_edit_fn(edit_fn, send_and_get_id_fn)
+            self._gc_bound_edit_chat = chat_id
 
         if self._groupchat_engine and not self._groupchat_engine.has_on_round_done:
             async def on_round_done() -> None:

@@ -37,7 +37,7 @@ class ConversationPool:
     the *sender's* pool (one per recipient). This prevents any single agent
     from monopolizing the conversation.
 
-    - chatroom_send(to="All") with 3 recipients → costs 3 slots from sender
+    - chatroom_send(to="All") with 3 recipients → costs min(3, sender cap) slots
     - chatroom_send(to="Harper") → costs 1 slot from sender
     - When recipient calls wait() without replying → releases 1 slot back to sender
     - When sender's pool is empty → chatroom_send blocks until slots freed
@@ -90,12 +90,17 @@ class ConversationPool:
 
         n = len(recipients)
         cap = self._per_cap.get(sender, 0)
-        if n > cap:
+        if cap < 1:
             logger.warning(
-                "ConversationPool: {} rejected — requested {} slots exceeds capacity {}",
-                sender, n, cap,
+                "ConversationPool: {} rejected — no capacity configured",
+                sender,
             )
             return False
+        # Broadcast affordability: a wide broadcast costs at most the sender's
+        # full pool (min(n, cap)), so a low-cap agent (e.g. pawn=2 in a 3-agent
+        # room) can still address the whole room instead of being structurally
+        # rejected by "requested N slots exceeds capacity".
+        n = min(n, cap)
 
         sem = self._sems.get(sender)
         avail = self._available.get(sender, 0)
@@ -138,8 +143,10 @@ class ConversationPool:
             )
             return False
 
-        # Record pending replies for each recipient
-        for r in recipients:
+        # Record pending replies for the CHARGED recipients only — pending
+        # markers must stay 1:1 with acquired slots, or release_unread would
+        # over-refund the sender's pool when uncharged recipients wait.
+        for r in recipients[:n]:
             if r in self._pending:
                 self._pending[r].append(sender)
 
@@ -582,9 +589,11 @@ class MailboxHub:
             # Broadcast to everyone except sender
             for name, q in self._queues.items():
                 if name != sender:
-                    # Check listener restriction before delivery
+                    # Check listener restriction before delivery.
+                    # 用户/系统 are always exempt — a restricted listener must
+                    # never be cut off from user interjections.
                     restriction = self._listener_restrictions.get(name)
-                    if restriction and sender != restriction and sender != "系统":
+                    if restriction and sender != restriction and sender not in ("系统", "用户"):
                         continue
                     q.put_nowait(msg)
                     delivered += 1
@@ -594,9 +603,9 @@ class MailboxHub:
             for name in targets:
                 q = self._queues.get(name)
                 if q is not None and name != sender:
-                    # Check listener restriction before delivery
+                    # Check listener restriction before delivery (用户/系统 exempt)
                     restriction = self._listener_restrictions.get(name)
-                    if restriction and sender != restriction and sender != "系统":
+                    if restriction and sender != restriction and sender not in ("系统", "用户"):
                         continue
                     q.put_nowait(msg)
                     delivered += 1

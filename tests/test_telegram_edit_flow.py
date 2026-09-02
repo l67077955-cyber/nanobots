@@ -36,6 +36,11 @@ def _engine_mock():
         has_send_fn=True,
         has_edit_fn=True,
         has_on_round_done=True,
+        # Re-binding callbacks when the requesting chat differs calls these
+        # setters on the real engine; the mock must accept them too.
+        set_send_fn=AsyncMock(),
+        set_edit_fn=AsyncMock(),
+        set_tool_context=AsyncMock(),
     )
 
 

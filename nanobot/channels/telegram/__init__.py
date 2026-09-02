@@ -129,6 +129,8 @@ class TelegramChannel(
         # applied when the user taps the confirm button (inpc_confirm). Expires
         # after EDIT_CONFIRM_TIMEOUT seconds.
         self._pending_input: dict[str, dict] = {}
+        # expire timers for staged input: chat_id -> asyncio.Task
+        self._pending_expire_tasks: dict[str, asyncio.Task] = {}
 
     def _begin_edit(self, chat_id: str, state: dict) -> None:
         """Create/replace an interactive edit session, stamping its start time.

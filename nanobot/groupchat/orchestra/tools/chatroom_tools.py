@@ -670,6 +670,17 @@ class ChatroomSendTool(Tool):
         if not message:
             return "Error: message cannot be empty"
 
+        # Leader-gated speaking order (leader mode only): each non-leader agent
+        # may send at most 1 message between consecutive leader messages.
+        # This enforces the rule promised in the non-leader system prompt
+        # ("违反此规则的消息会被系统拦截").
+        if self._leader_gate is not None:
+            if not self._leader_gate.try_send(self._agent_name):
+                return (
+                    "⛔ 已拦截：你在 Leader 两次发言之间只能发送 1 条消息。"
+                    "请先调用 wait() 等待 Leader 发言，配额会自动重置。"
+                )
+
         # Normalize targets
         if isinstance(to, str):
             targets = [to]
@@ -708,6 +719,11 @@ class ChatroomSendTool(Tool):
                 self._pool.mark_replied(self._agent_name, self._last_received_from)
 
         delivered = self._mailbox.send(self._agent_name, targets, message)
+
+        # Record for the leader gate AFTER delivery: leader sends reset every
+        # non-leader's quota; non-leader sends consume their own.
+        if delivered > 0 and self._leader_gate is not None:
+            self._leader_gate.record_send(self._agent_name)
 
         # Count successful sends as "output" for search credit recovery
         if delivered > 0 and self._search_pool:

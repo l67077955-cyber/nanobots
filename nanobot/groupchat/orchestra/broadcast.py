@@ -815,6 +815,15 @@ async def broadcast_round(
                     for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
                         _cycle_usage[k] += usage.get(k, 0)
 
+                # Per-agent hyperparams: merge on top of the provider defaults
+                # and pass explicitly via sampling_override — the shared
+                # provider is never mutated, so concurrent agents can't leak
+                # overrides into each other (or into the global defaults).
+                _merged_sampling = dict(getattr(engine.provider, "sampling_params", {}) or {})
+                _agent_hp = _live_cfg.get("hyperparams")
+                if isinstance(_agent_hp, dict):
+                    _merged_sampling.update(_agent_hp)
+
                 # Mark agent busy so incoming messages can trigger interrupt
                 mailbox.mark_busy(name)
                 try:
@@ -826,7 +835,9 @@ async def broadcast_round(
                         max_tokens=engine.config.max_tokens,
                         max_iterations=agent_max_iters,
                         tool_defs=tool_defs if tool_defs else None,
-                        reasoning_effort=_live_cfg.get("reasoning_effort") or None,
+                        reasoning_effort=_live_cfg.get("reasoning_effort")
+                            or (_merged_sampling.get("reasoning_effort") if _merged_sampling else None),
+                        sampling_override=_merged_sampling or None,
                         metadata={
                             "trace_name": f"broadcast_{name}_c{cycle}",
                             "trace_user_id": "groupchat",
@@ -926,12 +937,17 @@ async def broadcast_round(
                             )
                             content = _placeholder
                             engine._add_message(name, _placeholder)
-                            mailbox.send(name, ["All"], _placeholder)
+                            # Notify the LEADER only — an error/timeout placeholder
+                            # must not interrupt busy teammates: it looks like a
+                            # normal message to the rank check, so a failing agent
+                            # broadcasting to All derails productive work.
+                            _ph_targets = [leader_name] if (leader_name and name != leader_name) else ["All"]
+                            mailbox.send(name, _ph_targets, _placeholder)
                             await engine._send(
                                 _d.chatroom_send_msg(
                                     name, "超时占位", _placeholder, max_len=1000, leader=leader_name
                                 )
-                                )
+                            )
                             await tracker.set_state(name, "waiting", detail="timeout recovery")
                             logger.warning(
                                 "Broadcast: {} timeout recovery failed, injecting placeholder and continuing",
@@ -981,7 +997,10 @@ async def broadcast_round(
                         )
                         content = _placeholder
                         engine._add_message(name, _placeholder)
-                        mailbox.send(name, ["All"], _placeholder)
+                        # Same as timeout placeholder: error placeholders go to
+                        # the LEADER only, never broadcast to busy teammates.
+                        _ph_targets = [leader_name] if (leader_name and name != leader_name) else ["All"]
+                        mailbox.send(name, _ph_targets, _placeholder)
                         await engine._send(
                             _d.chatroom_send_msg(
                                 name, "错误恢复", _placeholder, max_len=1000, leader=leader_name
@@ -1060,9 +1079,21 @@ async def broadcast_round(
                             except Exception:
                                 break
                     # Latest message is the one we respond to; earlier ones
-                    # become background context.
+                    # become background context — EXCEPT that a pending user
+                    # message always wins the primary slot: a teammate message
+                    # arriving later must not demote a user interjection to
+                    # background context.
                     _intr_msg = _intr_all[-1] if _intr_all else None
-                    _intr_earlier = _intr_all[:-1] if len(_intr_all) > 1 else []
+                    _user_pend = [
+                        m for m in _intr_all
+                        if getattr(m, "sender", "") in ("用户", "User", "user")
+                    ]
+                    if _user_pend:
+                        _intr_msg = _user_pend[-1]
+                    _intr_earlier = (
+                        [m for m in _intr_all if m is not _intr_msg]
+                        if _intr_msg is not None else []
+                    )
 
                     # UI: show who interrupted whom, with distinct label for user vs agent
                     # Fallback to mailbox._last_interrupt_sender because the actual message
@@ -1492,7 +1523,7 @@ async def broadcast_round(
                 # swallowing it (the "stuck until next user message" bug).
                 if (
                     not engine._running
-                    or mailbox.is_discussion_ended()
+                    or leader_end_event.is_set()
                     or all(t.done() for t in tasks)
                 ):
                     engine._input_queue.put_nowait(msg)
@@ -1500,6 +1531,19 @@ async def broadcast_round(
                         "Broadcast: round ending — user message requeued for next round: {}",
                         msg[:60],
                     )
+                    # Tell the user their message was parked rather than
+                    # letting it silently vanish for the rest of this round.
+                    await engine._send(
+                        "📥 本轮正在收尾，消息已排队，本轮结束后立即处理"
+                    )
+                    # Park instead of returning: consuming more messages here
+                    # would deliver them into mailboxes nobody reads (lost)
+                    # and race run_loop on _input_queue at the round boundary.
+                    # Staying parked also keeps the listener valid if the
+                    # winding-down state is transient. Round teardown cancels
+                    # this task (see finally in run_broadcast).
+                    while _user_listener_running:
+                        await asyncio.sleep(1.0)
                     return
 
                 all_agent_names = list(mailbox.agent_names)
@@ -1661,10 +1705,16 @@ async def broadcast_round(
         if hasattr(engine, '_broadcast_tasks'):
             engine._broadcast_tasks['__leader_sentinel'] = leader_end_sentinel
 
+        # Global timeout = hard deadline for the WHOLE round. Compute it once:
+        # passing `timeout=global_timeout` to each asyncio.wait would reset the
+        # clock on every task completion, letting a trickling round run forever.
+        _round_deadline = asyncio.get_event_loop().time() + global_timeout
+
         while not all(t.done() for t in all_tasks):
+            _remaining = _round_deadline - asyncio.get_event_loop().time()
             done_set, _ = await asyncio.wait(
                 [t for t in all_tasks if not t.done()],
-                timeout=global_timeout,
+                timeout=max(_remaining, 0.001),
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
