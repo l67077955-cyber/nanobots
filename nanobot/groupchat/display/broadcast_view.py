@@ -3,7 +3,6 @@ import json as _json
 from typing import Any
 from loguru import logger
 from nanobot.groupchat.display import display as _d
-from nanobot.groupchat.orchestra.broadcast import _trigger_realtime_interrupts
 
 class BroadcastView:
     """Handles Telegram UI rendering for broadcast events."""
@@ -118,32 +117,18 @@ class BroadcastView:
                 await self.engine._send(
                     f"  {self.pool.status()}"
                 )
-                await _trigger_realtime_interrupts(
-                    sender=name,
-                    targets=self.last_chatroom_send_to.get(name, []),
-                    mailbox=self.mailbox,
-                    engine=self.engine,
-                    leader_name=self.leader_name,
-                )
-            else:
-                await _trigger_realtime_interrupts(
-                    sender=name,
-                    targets=self.last_chatroom_send_to.get(name, []),
-                    mailbox=self.mailbox,
-                    engine=self.engine,
-                    leader_name=self.leader_name,
-                )
-                
+            # NOTE: realtime interrupt triggering moved into ChatroomSendTool
+            # (orchestration layer) — the view is pure rendering now.
+            # NOTE: search credit on_output moved into broadcast's
+            # _on_tool_result wrapper — same reason.
+
         elif tool_name == "wait" and result and not result.startswith("⏰"):
             await self.engine._send(_d.chatroom_wait_msg(name, result, leader=self.leader_name))
-            
+
         elif tool_name not in ("chatroom_send", "wait") and result:
             brief = _d.tool_result_brief(name, tool_name, result)
             if tool_name == "web_search" and self.search_pool:
-                self.search_pool.on_output(name)
                 brief += f"  🔧 {self.search_pool.status()}"
-            elif self.search_pool:
-                self.search_pool.on_output(name)
                 
             pending = self.pending_tool_msgs.pop(tool_call_id, None)
             if pending:

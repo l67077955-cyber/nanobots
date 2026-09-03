@@ -19,6 +19,9 @@ from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool
 from nanobot.groupchat.orchestra.round_lifecycle import RoundLifecycle
 from nanobot.groupchat.orchestra.user_ingress import UserIngress
 from nanobot.groupchat.orchestra.events import get_bus as _get_bus
+from nanobot.groupchat.orchestra.tools.chatroom_tools import (
+    trigger_realtime_interrupts as _trigger_realtime_interrupts,
+)
 from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
 from nanobot.groupchat.history.component_manager import (
     get_system_warning,
@@ -213,44 +216,6 @@ class BroadcastContext(Protocol):
     def prompt_builder(self) -> Any: ...
 
 
-async def _trigger_realtime_interrupts(
-    sender: str,
-    targets: list[str],
-    mailbox: MailboxHub,
-    engine: BroadcastContext,
-    leader_name: str | None,
-) -> None:
-    """Handle bi-directional real-time interrupts after a successful chatroom_send.
-    
-    Teammate -> Leader: Make leader aware of the report immediately.
-    Leader -> Teammate: Make teammate respond to instructions without waiting for poll.
-    """
-    _targets_lower = [t.lower() for t in targets]
-    
-    # Check if the target set effectively includes someone we want to interrupt
-    # (someone other than the sender).
-    has_others = "all" in _targets_lower or any(t != sender.lower() for t in _targets_lower)
-    if not leader_name or not has_others:
-        return
-
-    _interrupted_count = 0
-    for _tgt in targets:
-        if _tgt.lower() == "all":
-            _interrupted_count += mailbox.interrupt_busy_agents(sender)
-            break
-        else:
-            if mailbox._try_interrupt(_tgt, sender):
-                _interrupted_count += 1
-
-    if _interrupted_count > 0:
-        _dir = "队友" if sender != leader_name else "Leader"
-        _recv_str = ", ".join(targets)
-        logger.info(
-            "Broadcast: {} {} → {} 实时打断 {} 个 busy agent",
-            _dir, sender, _recv_str, _interrupted_count,
-        )
-
-
 
 class BroadcastOrchestrator:
     """State manager for a single broadcast round."""
@@ -372,6 +337,7 @@ class BroadcastOrchestrator:
             send_tool = ChatroomSendTool(
                 mailbox=self.mailbox, agent_name=name, pool=self.pool,
                 search_pool=self.search_pool, leader_gate=self.leader_gate,
+                leader_name=self.leader_name,
             )
             wait_tool = WaitTool(mailbox=self.mailbox, agent_name=name, pool=self.pool)
             wait_tool._send_tool = send_tool
@@ -680,6 +646,12 @@ async def broadcast_round(
             await view.on_tool_start(name, tool_name, args, tool_call_id, _cycle_t0, _cycle_usage)
 
         async def _on_tool_result(tool_name: str, tool_call_id: str, result: str) -> None:
+            # Search-credit recovery on tool output — orchestration-owned
+            # (moved out of the display layer so the view is pure rendering).
+            # Parity with the old view logic: every non-empty result of a
+            # non-chatroom/non-wait tool earns output credit.
+            if search_pool is not None and result and tool_name not in ("chatroom_send", "wait"):
+                search_pool.on_output(name)
             await view.on_tool_result(name, tool_name, tool_call_id, result)
 
 
@@ -1059,7 +1031,6 @@ async def broadcast_round(
                             sender=name,
                             targets=_implicit_targets,
                             mailbox=mailbox,
-                            engine=engine,
                             leader_name=leader_name,
                         )
 
@@ -1591,6 +1562,7 @@ async def broadcast_round(
                 send_tool = ChatroomSendTool(
                     mailbox=mailbox, agent_name=new_name, pool=pool,
                     search_pool=search_pool, leader_gate=leader_gate,
+                    leader_name=leader_name,
                 )
                 wait_tool = WaitTool(mailbox=mailbox, agent_name=new_name, pool=pool)
                 wait_tool._send_tool = send_tool

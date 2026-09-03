@@ -13,6 +13,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from nanobot.tools.base import Tool
 from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool, SpeakQueue
 
@@ -597,6 +599,40 @@ class LeaderGate:
     def leader(self) -> str:
         return self._leader
 
+async def trigger_realtime_interrupts(
+    sender: str,
+    targets: list[str],
+    mailbox: MailboxHub,
+    leader_name: str | None,
+) -> None:
+    """Bi-directional real-time interrupts after a successful chatroom_send.
+
+    Teammate → Leader: leader becomes aware of the report immediately.
+    Leader → Teammate: teammate responds to instructions without waiting
+    for its poll timeout. Lives here (not in the display layer) so the
+    behaviour survives view swaps — orchestrating control flow must never
+    depend on rendering being attached.
+    """
+    _targets_lower = [t.lower() for t in targets]
+    has_others = "all" in _targets_lower or any(t != sender.lower() for t in _targets_lower)
+    if not leader_name or not has_others:
+        return
+
+    _interrupted_count = 0
+    for _tgt in targets:
+        if _tgt.lower() == "all":
+            _interrupted_count += mailbox.interrupt_busy_agents(sender)
+            break
+        if mailbox._try_interrupt(_tgt, sender):
+            _interrupted_count += 1
+
+    if _interrupted_count > 0:
+        logger.info(
+            "chatroom: {} → {} 实时打断 {} 个 busy agent",
+            sender, ", ".join(targets), _interrupted_count,
+        )
+
+
 class ChatroomSendTool(Tool):
     """Send a message to one or more agents in the group chat.
 
@@ -607,13 +643,15 @@ class ChatroomSendTool(Tool):
 
     def __init__(self, mailbox: MailboxHub, agent_name: str = "", pool: ConversationPool | None = None,
                  search_pool: "SearchPool | None" = None,
-                 leader_gate: LeaderGate | None = None) -> None:
+                 leader_gate: LeaderGate | None = None,
+                 leader_name: str | None = None) -> None:
         self._mailbox = mailbox
         self._agent_name = agent_name  # Set per-round by the engine
         self._pool = pool
         self._search_pool = search_pool  # for credit recovery on successful sends
         self._last_received_from: str | None = None  # track who we last received from
         self._leader_gate = leader_gate
+        self._leader_name = leader_name
 
     def set_agent(self, name: str) -> None:
         """Set which agent is using this tool instance."""
@@ -728,6 +766,13 @@ class ChatroomSendTool(Tool):
         # Count successful sends as "output" for search credit recovery
         if delivered > 0 and self._search_pool:
             self._search_pool.on_output(self._agent_name)
+
+        # Real-time interrupt of busy recipients — control flow that used to
+        # live in the display layer; the tool itself is the correct home.
+        if delivered > 0:
+            await trigger_realtime_interrupts(
+                self._agent_name, targets, self._mailbox, self._leader_name,
+            )
 
         avail_hint = ""
         if self._pool:
