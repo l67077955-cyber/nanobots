@@ -759,7 +759,7 @@ class GroupChatEngine:
         on_tool_result_override: Callable | None = None,
         force_no_tools: bool = False,
     ) -> tuple[str, list[str], dict[str, Any]]:
-        """Chat with tool calling loop — delegates to tool_chat module.
+        """Chat with tool calling loop (embedded implementation).
 
         Returns (content, tools_used, stats).
         """
