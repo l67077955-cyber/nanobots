@@ -26,6 +26,7 @@ from typing import Any
 from loguru import logger
 
 from nanobot.groupchat.display.display import user_interjection_msg
+from nanobot.groupchat.orchestra.events import get_bus
 from nanobot.groupchat.orchestra.round_lifecycle import RoundLifecycle
 
 SUMMARY_SENTINEL = "__SUMMARY__"
@@ -55,6 +56,7 @@ async def open_round_with(engine: Any, user_input: str) -> IngressAction:
     n = len(engine._active_agents)
     if n:
         await engine._send(ROUND_OPEN_RECEIPT.format(n=n))
+    await get_bus().emit("user:round_opened", engine=engine, user_input=user_input, agent_count=n)
     return IngressAction.ROUND_OPENED
 
 
@@ -100,6 +102,7 @@ class UserIngress:
         """Dispatch one message consumed while a round is in flight."""
         if msg == SUMMARY_SENTINEL:
             self._engine._summary_requested = True
+            await get_bus().emit("summary:deferred", engine=self._engine)
             return IngressAction.SUMMARY_DEFERRED
 
         if not self._lifecycle.accepts_interjection():
@@ -109,6 +112,7 @@ class UserIngress:
                 "UserIngress: round winding down — message requeued for next round: {}",
                 msg[:60],
             )
+            await get_bus().emit("user:message_requeued", engine=self._engine, message=msg)
             await self._engine._send(QUEUED_NOTICE)
             return IngressAction.REQUEUED
 
@@ -144,5 +148,10 @@ class UserIngress:
         logger.info(
             "UserIngress: interjected ({} delivered, {} interrupted): {}",
             delivered, interrupted, msg[:60],
+        )
+        await get_bus().emit(
+            "user:message_delivered",
+            engine=self._engine, message=msg,
+            delivered_to=delivered, interrupted=interrupted,
         )
         return IngressAction.DELIVERED

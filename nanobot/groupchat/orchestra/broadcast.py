@@ -18,6 +18,7 @@ from nanobot.groupchat.display import display as _d
 from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool
 from nanobot.groupchat.orchestra.round_lifecycle import RoundLifecycle
 from nanobot.groupchat.orchestra.user_ingress import UserIngress
+from nanobot.groupchat.orchestra.events import get_bus as _get_bus
 from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
 from nanobot.groupchat.history.component_manager import (
     get_system_warning,
@@ -1134,6 +1135,9 @@ async def broadcast_round(
                         "Broadcast: ⚡ {} interrupted by {} mid-turn (cycle {})",
                         name, _sender_name, cycle,
                     )
+                    await _get_bus().emit(
+                        "agent:interrupted", engine=engine, agent=name, by=_sender_name,
+                    )
 
                     # Save any partial content already produced this cycle
                     if content:
@@ -1257,6 +1261,12 @@ async def broadcast_round(
                         target_label = f"进展 [{cycle}]" if is_leader else "Self/Final"
                         await engine._send(_d.chatroom_send_msg(name, target_label, content + tok_suffix, max_len=3000, leader=leader_name))
                         logger.info("Broadcast: displayed {} cycle {} output ({} chars) [Local Only]", name, cycle, len(content))
+                    await _get_bus().emit(
+                        "agent:cycle_output",
+                        engine=engine, agent=name,
+                        chars=len(content) if content else 0,
+                        tools=list(result.tools_used or []),
+                    )
                     # else: chatroom_send already displayed the message — no duplicate needed
                 
                 # If leader called end_discussion this cycle, validate synthesis length & quality.
@@ -1341,6 +1351,7 @@ async def broadcast_round(
                 # Now wait for teammate messages
                 await tracker.set_state(name, "waiting")
                 logger.info("Broadcast: {} entering auto-wait (cycle {})", name, cycle)
+                await _get_bus().emit("agent:waiting", engine=engine, agent=name)
                 # Release unread pool slots before waiting (mirrors WaitTool behavior)
                 # Without this, slots consumed by messages sent TO this agent are never
                 # freed, causing pool exhaustion and blocking other agents' replies.
@@ -1447,6 +1458,7 @@ async def broadcast_round(
 
             # ── Final completion ──
             await tracker.set_state(name, "done")
+            await _get_bus().emit("agent:done", engine=engine, agent=name, reason="completed")
             comp = _d.completion_msg(name, round(total_latency, 1), total_iterations, all_tools_used, leader=leader_name)
             if comp:
                 await engine._send(comp)
@@ -1483,6 +1495,11 @@ async def broadcast_round(
     for name in exec_agents:
         mailbox.create(name)
     mailbox.start_round(active_agents=list(exec_agents))
+    await _get_bus().emit(
+        "round:started",
+        engine=engine, agents=list(exec_agents),
+        leader=leader_name, round_num=getattr(engine, "_round", 0),
+    )
 
     # populate tasks dict previously initialized
     for idx, name in enumerate(exec_agents):

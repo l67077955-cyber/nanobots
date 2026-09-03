@@ -21,6 +21,8 @@ import asyncio
 from enum import Enum
 from typing import Any
 
+from nanobot.groupchat.orchestra.events import get_bus
+
 # Reasons after which the whole session loop should exit once the round
 # returns (parity with the legacy writers that set engine._running=False).
 # "converged" (leaderless quiet group) keeps the session alive.
@@ -87,6 +89,10 @@ class RoundLifecycle:
             self._leader_end_event.set()
         if flip_running and self._engine is not None:
             self._engine._running = False
+        get_bus().emit_nowait(
+            "round:winding_down",
+            engine=self._engine, reason=reason, leader_exempt=leader_exempt,
+        )
 
     def reopen(self, reason: str = "synthesis_retry") -> None:
         """Return WINDING_DOWN → ACTIVE (leader synthesis retry).
@@ -105,11 +111,13 @@ class RoundLifecycle:
         self._leader_exempt = False
         if self._engine is not None:
             self._engine._running = True
+        get_bus().emit_nowait("round:reopened", engine=self._engine, reason=reason)
 
     def mark_ended(self) -> None:
         """Round fully torn down. Terminal — no transition leaves ENDED."""
         self._phase = RoundPhase.ENDED
         self._leader_exempt = False
+        get_bus().emit_nowait("round:ended", engine=self._engine)
 
     # ── Queries (replace scattered flag conjunctions) ──────────────────────
 

@@ -686,6 +686,12 @@ async def tool_loop(
                         "tool_call_id": tc.id,
                         "content": tool_content,
                     })
+                    from nanobot.groupchat.orchestra.events import get_bus
+                    get_bus().emit_nowait(
+                        "tool:result",
+                        tool=tc.name, ok=not isinstance(tool_result, BaseException),
+                        chars=len(tool_content) if isinstance(tool_content, str) else 0,
+                    )
 
                 # ── Phase 3b: Handle forget tool — delete matched tool call+result pairs ──
                 _forget_ids: set[str] = set()

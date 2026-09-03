@@ -647,6 +647,13 @@ class MailboxHub:
             except Exception:
                 pass
 
+        from nanobot.groupchat.orchestra.events import get_bus
+        get_bus().emit_nowait(
+            "message:delivered",
+            sender=sender, targets=targets, delivered=delivered,
+            preview=content[:80],
+        )
+
         return delivered
 
     async def wait(
