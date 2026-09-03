@@ -464,6 +464,13 @@ def gateway(
     console.print(f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s")
 
     async def run():
+        # ── Mods: attach to the orchestration event bus and start whatever
+        # ~/.nanobot/mods.json enables. Per-mod fault isolation lives inside
+        # the manager — a broken mod never blocks the gateway. ──
+        from nanobot.groupchat.orchestra.events import get_bus
+        from nanobot.mods.manager import ModManager
+        mods_manager = ModManager(get_bus(), send=gc_engine._send)
+        mods_manager.start_all()
         try:
             await cron.start()
             await heartbeat.start()
@@ -478,6 +485,7 @@ def gateway(
             console.print("\n[red]Error: Gateway crashed unexpectedly[/red]")
             console.print(traceback.format_exc())
         finally:
+            mods_manager.stop_all()
             heartbeat.stop()
             cron.stop()
             await channels.stop_all()

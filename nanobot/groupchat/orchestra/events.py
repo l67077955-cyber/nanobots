@@ -43,6 +43,7 @@ EVENTS: dict[str, str] = {
     "agent:cycle_output":   "engine, agent, chars, tools",
     "agent:interrupted":    "engine, agent, by",
     "agent:waiting":        "engine, agent",
+    "agent:reactivated":    "engine, agent, message, recent_texts, inject (tier-2 mutable list)",
     "agent:done":           "engine, agent, reason",
     # inter-agent delivery (emitted from MailboxHub.send)
     "message:delivered":    "sender, targets, delivered, preview",

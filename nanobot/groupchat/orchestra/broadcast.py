@@ -1404,23 +1404,22 @@ async def broadcast_round(
                         "role": "assistant",
                         "content": content,
                     })
-                # Anti-repeat injection: remind agent not to repeat itself
-                # Only inject if not already present (avoid accumulation across rounds)
-                _anti_repeat_tag = f"[提醒] 你（{name}）已经发表过上述观点"
-                _already_injected = any(
-                    m.get("role") == "system"
-                    and isinstance(m.get("content"), str)
-                    and _anti_repeat_tag in m["content"]
-                    for m in messages[-6:]  # check last 6 only — sufficient
+                # Reactive injections (anti-repeat etc.) are decided by mods via
+                # the tier-2 agent:reactivated filter event; the emitter turns
+                # whatever they append to `inject` into system messages.
+                _inject: list[str] = []
+                await _get_bus().emit(
+                    "agent:reactivated",
+                    engine=engine, agent=name,
+                    message=str(msg),
+                    recent_texts=[
+                        m.get("content", "") for m in messages[-6:]
+                        if isinstance(m.get("content"), str)
+                    ],
+                    inject=_inject,
                 )
-                if not _already_injected:
-                    messages.append({
-                        "role": "system",
-                        "content": (
-                            f"{_anti_repeat_tag}。"
-                            f"针对队友的新消息做出回应或补充新观点，不要重复已说的内容。"
-                        ),
-                    })
+                for _note in _inject:
+                    messages.append({"role": "system", "content": _note})
                 # Then inject the received teammate message
                 messages.append({
                     "role": "user",
