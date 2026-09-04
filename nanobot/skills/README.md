@@ -8,6 +8,12 @@ Each skill is a directory containing a `SKILL.md` file with:
 - YAML frontmatter (name, description, metadata)
 - Markdown instructions for the agent
 
+**Agent Skills 标准兼容**（2026-09-04 起）：frontmatter 解析支持标准折叠/字面块
+（`>-`、`|` 等）、可选字段（`license`、`allowed-tools`）和嵌套 `metadata:` map
+（nanobot 专属键如 `always` 可直接写成嵌套 YAML，不必再塞 JSON 字符串）。
+生态技能（如 superpowers / Anthropic skills）整个目录拷进 `skills/` 即可用；
+PyYAML 缺席时自动降级到内置子集解析器（契约由 `tests/test_skill_frontmatter_compat.py` 钉死）。
+
 ## Attribution
 
 These skills are adapted from [OpenClaw](https://github.com/openclaw/openclaw)'s skill system.

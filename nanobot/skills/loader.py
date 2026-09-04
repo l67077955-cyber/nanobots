@@ -6,6 +6,11 @@ import re
 import shutil
 from pathlib import Path
 
+try:
+    import yaml  # type: ignore
+except ImportError:  # pragma: no cover - minimal envs without PyYAML
+    yaml = None
+
 # Default builtin skills directory (relative to this file)
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
 
@@ -21,6 +26,9 @@ MAX_ALWAYS_SKILL_INLINE: int = 700
 
 _BOOL_TRUE = frozenset({"true", "yes", "1", "on"})
 
+# YAML block-scalar indicators (literal | and folded >, with strip/keep chomping)
+_BLOCK_INDICATORS = frozenset({"|", ">", "|-", ">-", "|+", ">+", "|2", ">2"})
+
 
 def _parse_bool(value) -> bool:
     """Parse a value that may be a string like 'true'/'false' into a real bool."""
@@ -29,6 +37,100 @@ def _parse_bool(value) -> bool:
     if isinstance(value, str):
         return value.lower().strip() in _BOOL_TRUE
     return bool(value)
+
+
+def _extract_frontmatter_block(content: str) -> str | None:
+    """Return the raw frontmatter text between --- fences, or None."""
+    if not content.startswith("---"):
+        return None
+    match = re.match(r"^---\r?\n(.*?)\r?\n---", content, re.DOTALL)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def parse_frontmatter(raw: str) -> dict:
+    """Parse SKILL.md frontmatter into a dict.
+
+    Uses PyYAML when importable (full fidelity, incl. nested maps), else falls
+    back to a hand-rolled subset parser (scalars, quoted scalars, block
+    scalars ``|``/``>`` variants, one-level nested maps, comments/lists
+    skipped). Both paths must satisfy tests/test_skill_frontmatter_compat.py.
+    """
+    if yaml is not None:
+        try:
+            parsed = yaml.safe_load(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except yaml.YAMLError:
+            pass  # fall through to subset parser
+    return _parse_frontmatter_subset(raw)
+
+
+def _parse_yaml_scalar(value: str):
+    """Convert YAML scalar strings to proper Python types (bool, str)."""
+    v = value.strip().strip('"\'').strip()
+    if v.lower() in ("true", "yes", "on"):
+        return True
+    if v.lower() in ("false", "no", "off"):
+        return False
+    return v
+
+
+def _parse_frontmatter_subset(raw: str) -> dict:
+    """Parse the YAML subset used by Agent Skills SKILL.md frontmatter."""
+    lines = raw.replace("\r\n", "\n").split("\n")
+    metadata: dict = {}
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        stripped = line.strip()
+        if (
+            not stripped
+            or stripped.startswith("#")
+            or stripped.startswith("- ")
+        ):
+            i += 1
+            continue
+        if ":" not in line:
+            i += 1
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+
+        if value in _BLOCK_INDICATORS:
+            # Block scalar: collect following indented (or blank) lines.
+            folded = value.startswith(">")
+            sub: list[str] = []
+            i += 1
+            while i < n and (not lines[i].strip() or lines[i].startswith((" ", "\t"))):
+                if lines[i].strip():
+                    sub.append(lines[i].strip())
+                i += 1
+            metadata[key] = (" ".join(sub) if folded else "\n".join(sub)).strip()
+            continue
+
+        if value == "":
+            # Possibly a nested map (e.g. standard `metadata:`) or a list.
+            nested: dict | None = None
+            j = i + 1
+            while j < n and (not lines[j].strip() or lines[j].startswith((" ", "\t"))):
+                sub_line = lines[j].strip()
+                if sub_line and ":" in sub_line and not sub_line.startswith("- "):
+                    k, v = sub_line.split(":", 1)
+                    if nested is None:
+                        nested = {}
+                    nested[k.strip()] = _parse_yaml_scalar(v)
+                j += 1
+            if nested is not None:
+                metadata[key] = nested
+                i = j
+                continue
+
+        metadata[key] = _parse_yaml_scalar(value)
+        i += 1
+    return metadata
 
 
 def build_skills_section(workspace: Path) -> tuple[str, str]:
@@ -368,23 +470,17 @@ class SkillsLoader:
                 return content[match.end():].strip()
         return content
 
-    def _parse_nanobot_metadata(self, raw: str) -> dict:
-        """Parse skill metadata JSON from frontmatter (supports nanobot and openclaw keys)."""
-        try:
-            data = json.loads(raw)
-            return data.get("nanobot", data.get("openclaw", {})) if isinstance(data, dict) else {}
-        except (json.JSONDecodeError, TypeError):
-            return {}
-
-    @staticmethod
-    def _parse_yaml_value(value: str):
-        """Convert YAML scalar strings to proper Python types (bool, str)."""
-        v = value.strip('"\'')
-        if v.lower() in ("true", "yes", "on"):
-            return True
-        if v.lower() in ("false", "no", "off"):
-            return False
-        return v
+    def _parse_nanobot_metadata(self, raw) -> dict:
+        """Parse skill metadata from frontmatter: dict (YAML nesting) or JSON string."""
+        if isinstance(raw, dict):
+            return raw.get("nanobot", raw.get("openclaw", raw))
+        if isinstance(raw, str):
+            try:
+                data = json.loads(raw)
+                return data.get("nanobot", data.get("openclaw", {})) if isinstance(data, dict) else {}
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return {}
 
     def _check_requirements(self, skill_meta: dict) -> bool:
         """Check if skill requirements are met (bins, env vars)."""
@@ -480,44 +576,20 @@ class SkillsLoader:
         """
         Get metadata from a skill's frontmatter.
 
+        Compatible with the Agent Skills standard (SKILL.md YAML frontmatter:
+        name/description required, license/allowed-tools/metadata optional,
+        folded ``>-`` and literal ``|`` descriptions supported).
+
         Args:
             name: Skill name.
 
         Returns:
-            Metadata dict or None.
+            Metadata dict or None (no frontmatter).
         """
         content = self.load_skill(name)
         if not content:
             return None
-
-        if content.startswith("---"):
-            match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
-            if match:
-                # YAML parsing with multiline string support (| and >)
-                metadata = {}
-                lines = match.group(1).split("\n")
-                i = 0
-                while i < len(lines):
-                    line = lines[i]
-                    if ":" in line:
-                        key, value = line.split(":", 1)
-                        key = key.strip()
-                        value = value.strip()
-                        # Handle multiline strings
-                        if value in ("|", ">"):
-                            # Collect subsequent indented lines
-                            sub_lines = []
-                            i += 1
-                            while i < len(lines) and (lines[i].startswith("  ") or lines[i] == ""):
-                                sub_lines.append(lines[i].rstrip())
-                                i += 1
-                            i -= 1  # compensate for loop increment
-                            # Join and dedent
-                            joined = "\n".join(sub_lines).strip()
-                            metadata[key] = joined
-                        else:
-                            metadata[key] = value.strip('"\'')
-                    i += 1
-                return metadata
-
-        return None
+        raw = _extract_frontmatter_block(content)
+        if raw is None:
+            return None
+        return parse_frontmatter(raw)
