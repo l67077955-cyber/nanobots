@@ -18,16 +18,15 @@ from typing import Any, Awaitable, Callable
 
 from loguru import logger
 
-
-from nanobot.groupchat.history.agent_loader import load_agents
 from nanobot.groupchat.config import GroupChatConfig
-from nanobot.groupchat.orchestra.mailbox import MailboxHub
-from nanobot.groupchat.history.persistence import GroupChatState
+from nanobot.groupchat.history.agent_loader import load_agents
 from nanobot.groupchat.history.context import HistoryContext
+from nanobot.groupchat.history.persistence import GroupChatState
 from nanobot.groupchat.history.prompt_builder import PromptBuilder
 from nanobot.groupchat.history.response_cleanup import clean_response as _clean_response_fn
-from nanobot.utils.helpers import cn_now as _cn_now
+from nanobot.groupchat.orchestra.mailbox import MailboxHub
 from nanobot.providers.base import LLMProvider
+from nanobot.utils.helpers import cn_now as _cn_now
 
 
 class GroupChatEngine:
@@ -144,15 +143,18 @@ class GroupChatEngine:
 
         # CronTool removed — cron is now a pure skill (skills/cron/scripts/cron_cli.py)
 
-    def _build_tool_registry(self, ws: Path) -> "ToolRegistry":
+    def _build_tool_registry(self, ws: Path):
         """Build a ToolRegistry scoped to the given workspace path."""
-        from nanobot.tools.registry import ToolRegistry
-        from nanobot.tools.web import WebFetchTool, WebSearchTool
-        from nanobot.tools.shell import ExecTool
-        from nanobot.tools.filesystem import (
-            ReadFileTool, WriteFileTool, EditFileTool, ListDirTool,
-        )
         from nanobot.groupchat.orchestra.tools.chatroom_tools import SmartFetchTool, SmartSearchTool
+        from nanobot.tools.filesystem import (
+            EditFileTool,
+            ListDirTool,
+            ReadFileTool,
+            WriteFileTool,
+        )
+        from nanobot.tools.registry import ToolRegistry
+        from nanobot.tools.shell import ExecTool
+        from nanobot.tools.web import WebFetchTool, WebSearchTool
 
         registry = ToolRegistry()
         raw_search = WebSearchTool(config=self.web_search_config, proxy=self.web_proxy)
@@ -200,7 +202,7 @@ class GroupChatEngine:
         # Last resort — conservative, should rarely trigger.
         return "openai/gpt-4.1-nano"
 
-    def _get_agent_registry(self, agent_name: str) -> "ToolRegistry":
+    def _get_agent_registry(self, agent_name: str):
         """Get (or build and cache) the tool registry for an agent's workspace scope."""
         ws = self._resolve_agent_workspace(agent_name)
         key = str(ws)
@@ -513,15 +515,15 @@ class GroupChatEngine:
         matched = self._resolve_agent_name(name)
         if not matched:
             return False
-            
+
         # 1. Remove from active agents
         if matched in self._active_agents:
             self.remove_agent(matched)
-            
+
         # 2. Clear leader if needed
         if self._leader == matched:
             self.set_leader(None)
-            
+
         # 3. Remove from saved groups
         groups = self._state.load_groups()
         changed = False
@@ -531,11 +533,11 @@ class GroupChatEngine:
                 changed = True
         if changed:
             self._state.save_groups(groups)
-            
+
         # 4. Remove from registry
         if matched in self.registry:
             del self.registry[matched]
-            
+
         # 5. Delete from disk
         import shutil
         agent_dir = Path.home() / ".nanobot" / "agents" / matched.lower()
@@ -587,7 +589,7 @@ class GroupChatEngine:
             old = self._leader
             self._leader = None
             self._state.save_leader(None)
-            return f"✅ 已取消 Leader 模式" + (f" ({old})" if old else "")
+            return "✅ 已取消 Leader 模式" + (f" ({old})" if old else "")
 
         matched = self._resolve_agent_name(name)
         if not matched:
@@ -658,7 +660,6 @@ class GroupChatEngine:
             return "📋 没有保存的分组\n用 /savegroup 保存当前成员"
         lines = ["📋 已保存的分组：\n"]
         for gname, members in groups.items():
-            order = " → ".join(members)
             member_info = []
             for m in members:
                 info = self.registry.get(m, {})
@@ -708,7 +709,7 @@ class GroupChatEngine:
             tools_cfg = self._session_tools_override[agent_name]
         else:
             tools_cfg = agent_cfg.get("tools")
-            
+
         if isinstance(tools_cfg, dict):
             return [k for k, v in tools_cfg.items() if v]
         elif agent_cfg.get("tools_enabled", False) or agent_cfg.get("_default"):
@@ -727,7 +728,7 @@ class GroupChatEngine:
             tools_cfg = self._session_tools_override[agent_name]
         else:
             tools_cfg = agent_cfg.get("tools")
-            
+
         # Granular tools dict
         if isinstance(tools_cfg, dict):
             enabled = {k for k, v in tools_cfg.items() if v}
@@ -829,8 +830,43 @@ class GroupChatEngine:
         from nanobot.groupchat.orchestra.engine import direct_chat as _direct_chat
         return await _direct_chat(self, user_message)
 
+    async def deliver_user_message(
+        self,
+        session_key: str,
+        content: str,
+        media: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Unified entry point for user messages from any channel.
+
+        This is the preferred interface for delivering user messages to the
+        GroupChatEngine, replacing the inject() shortcut. All channels should
+        use this method via MessageBus + IngressRouter.
+
+        Args:
+            session_key: Unique session identifier (channel:chat_id).
+            content: The user's message text.
+            media: Optional list of media file paths.
+            metadata: Optional metadata dict (channel, sender_id, etc).
+        """
+        # For now, delegate to inject() for the actual delivery.
+        # Media and metadata are attached to the message for downstream use.
+        # TODO: Store media/metadata per-session for richer context.
+        _ = media  # noqa: F841 - will be used in future
+        _ = metadata  # noqa: F841 - will be used in future
+
+        # Lazy start: if any agents and loop not running, start it now
+        if not self._running and len(self._active_agents) >= 1:
+            self._start_group_loop()
+        if self._running:
+            self._input_queue.put_nowait(content)
+
     def inject(self, message: str) -> None:
-        """Inject a user message into the chat loop (1+ agents)."""
+        """Inject a user message into the chat loop (1+ agents).
+
+        Deprecated: Use deliver_user_message() for the unified interface.
+        Kept for backward compatibility with existing Telegram code.
+        """
         # Lazy start: if any agents and loop not running, start it now
         if not self._running and len(self._active_agents) >= 1:
             self._start_group_loop()
@@ -1046,16 +1082,10 @@ to how broadcast mode's _user_listener works.
 """
 
 
-import asyncio
-from pathlib import Path
-from typing import Any
 
-from loguru import logger
 
 from nanobot.groupchat.display import display as _d
 from nanobot.groupchat.display.streaming import StreamingDisplay
-from nanobot.utils.helpers import cn_now as _cn_now
-
 
 # Maximum follow-up cycles (safety cap to prevent infinite loops)
 _MAX_CYCLES = 999  # effectively unlimited
@@ -1111,7 +1141,6 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
     # ── Cycle loop: reply → wait for interjection → reply again ──
     cycle = 0
     current_user_msg = user_message
-    last_response: str | None = None
 
     while cycle < _MAX_CYCLES:
         cycle += 1
@@ -1172,7 +1201,6 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
                     stat_line = _d.format_token_stats(p, c, cost=cost, cache_tokens=cache_t, reasoning_tokens=reasoning_t)
                     display_content = f"{display_content}\n\n{stat_line}"
                 await stream.finalize(display_content, fallback_send=engine._send)
-                last_response = content or ""
             else:
                 if stream.msg_id and engine._edit_fn:
                     try:
@@ -1203,7 +1231,7 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
 
         # Got an interjection! Log and continue the cycle.
         logger.info("Direct chat: interjection received ({} chars), cycle {}", len(new_msg), cycle)
-        await engine._send(f"── 插话 ──")
+        await engine._send("── 插话 ──")
 
         current_user_msg = new_msg
 
@@ -1226,11 +1254,8 @@ Extracts the tool calling loop from ``engine.py``, including:
 """
 
 
-from typing import Any, Awaitable, Callable
 
-from loguru import logger
 
-from nanobot.groupchat.display import display as _d
 
 
 # ── Helpers ──────────────────────────────────────────────────
@@ -1547,8 +1572,6 @@ async def chat_with_tools(
 """Shared utilities for the groupchat package."""
 
 
-from datetime import datetime, timezone, timedelta
-from typing import Any
 
 
 

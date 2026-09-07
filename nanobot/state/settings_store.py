@@ -252,3 +252,114 @@ def delete_agent(name: str) -> bool:
 
     shutil.rmtree(d)
     return True
+
+
+# ── Class-based interface for dependency injection ────────────────────────────
+
+
+class SettingsStore:
+    """Unified settings management with class-based interface.
+
+    This provides an object-oriented wrapper around the module-level functions,
+    allowing for dependency injection and easier testing.
+
+    Usage:
+        store = SettingsStore()
+        store.get_provider("openrouter")
+        store.save_agent("Benjamin", {...})
+    """
+
+    def __init__(self, data_dir: Path | None = None):
+        """Initialize the settings store.
+
+        Args:
+            data_dir: Optional override for ~/.nanobot directory.
+        """
+        self._data_dir = data_dir or _NANOBOT_DIR
+
+    @property
+    def data_dir(self) -> Path:
+        """The root data directory."""
+        return self._data_dir
+
+    @property
+    def providers_file(self) -> Path:
+        """Path to providers_models.json."""
+        return self._data_dir / "providers_models.json"
+
+    @property
+    def agents_dir(self) -> Path:
+        """Path to agents directory."""
+        return self._data_dir / "agents"
+
+    # ── Provider/Model management ─────────────────────────────────────
+
+    def load_providers_models(self) -> dict[str, Any]:
+        """Load providers_models.json."""
+        return load_pm()
+
+    def save_providers_models(self, data: dict[str, Any]) -> None:
+        """Save providers_models.json."""
+        save_pm(data)
+
+    def get_provider(self, name: str) -> dict[str, Any] | None:
+        """Get a provider config by name."""
+        pm = load_pm()
+        return pm.get("providers", {}).get(name)
+
+    def set_provider(self, name: str, config: dict[str, Any]) -> None:
+        """Set or update a provider config."""
+        pm = load_pm()
+        pm.setdefault("providers", {})[name] = config
+        pm.setdefault("models", {}).setdefault(name, [])
+        save_pm(pm)
+
+    def list_providers(self) -> dict[str, dict[str, Any]]:
+        """List all providers."""
+        return load_pm()["providers"]
+
+    def list_models(self) -> dict[str, list[str]]:
+        """List all models by provider."""
+        return load_pm()["models"]
+
+    # ── Agent config management ──────────────────────────────────────
+
+    def load_agent(self, name: str) -> dict[str, Any]:
+        """Load an agent\'s config."""
+        return load_agent(name)
+
+    def save_agent(self, name: str, config: dict[str, Any]) -> None:
+        """Save an agent\'s config."""
+        save_agent(name, config)
+
+    def agent_config_path(self, name: str) -> Path:
+        """Get the config path for an agent."""
+        return self.agents_dir / name.lower() / "config.json"
+
+    def list_agent_names(self) -> list[str]:
+        """List all agent names (directory names under agents/)."""
+        agents_path = self.agents_dir
+        if not agents_path.exists():
+            return []
+        return [
+            d.name
+            for d in agents_path.iterdir()
+            if d.is_dir() and (d / "config.json").exists()
+        ]
+
+
+# ── Singleton accessor ───────────────────────────────────────────────────────
+
+_store: SettingsStore | None = None
+
+
+def get_settings_store() -> SettingsStore:
+    """Get the global SettingsStore singleton.
+
+    Creates the singleton on first access. Use this for convenience when
+    you don\'t need dependency injection.
+    """
+    global _store
+    if _store is None:
+        _store = SettingsStore()
+    return _store

@@ -302,6 +302,8 @@ def gateway(
                   "Refusing to start a duplicate to avoid Telegram bot Conflict.")
             raise typer.Exit(1)
     # ───────────────────────────────────────────────────────────────────
+    from loguru import logger
+
     from nanobot.bus.queue import MessageBus
     from nanobot.channels.manager import ChannelManager
     from nanobot.config.paths import get_cron_dir, get_logs_dir
@@ -309,7 +311,6 @@ def gateway(
     from nanobot.cron.types import CronJob
     from nanobot.heartbeat.service import HeartbeatService
     from nanobot.session.manager import SessionManager
-    from loguru import logger
 
     if verbose:
         import logging
@@ -343,7 +344,6 @@ def gateway(
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
-        from nanobot.tools.message import MessageTool
         from nanobot.utils.evaluator import evaluate_response
 
         reminder_note = (
@@ -402,7 +402,7 @@ def gateway(
 #     gc_engine.registry["Nanobot"] = nanobot_entry
 #     gc_engine._active_agents.append("Nanobot")
 #     logger.info("Registered base model '{}' as Nanobot agent (auto-active)", base_model)
-# 
+#
 #     # Inject agent config into AgentLoop for cron/heartbeat prompt building
 #     agent.set_agent_config("Nanobot", nanobot_entry)
 
@@ -412,6 +412,11 @@ def gateway(
         if isinstance(tg_channel, TelegramChannel):
             tg_channel.set_groupchat_engine(gc_engine)
             logger.info("Group chat engine wired to Telegram channel")
+
+    # Start the IngressRouter to consume MessageBus inbound queue
+    from nanobot.bus.router import IngressRouter
+    router = IngressRouter(gc_engine, bus)
+    # Router will be started in the run() async function
 
     def _pick_heartbeat_target() -> tuple[str, str]:
         """Pick a routable channel/chat target for heartbeat-triggered messages."""
@@ -474,6 +479,7 @@ def gateway(
         try:
             await cron.start()
             await heartbeat.start()
+            await router.start()  # Start IngressRouter to consume bus
             await asyncio.gather(
                 channels.start_all(),
                 asyncio.Event().wait(),  # Keep event loop running
@@ -485,6 +491,7 @@ def gateway(
             console.print("\n[red]Error: Gateway crashed unexpectedly[/red]")
             console.print(traceback.format_exc())
         finally:
+            await router.stop()
             mods_manager.stop_all()
             heartbeat.stop()
             cron.stop()

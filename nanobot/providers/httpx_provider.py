@@ -5,11 +5,7 @@ Talks to OpenAI-compatible ``/v1/chat/completions`` endpoints using
 ``~/.nanobot/providers_models.json``.
 """
 
-import hashlib
 import json as _json
-import os
-import secrets
-import string
 import time as _time
 from pathlib import Path
 from typing import Any
@@ -18,22 +14,19 @@ import httpx
 import json_repair
 from loguru import logger
 
+from nanobot.providers.base import (
+    ALLOWED_MSG_KEYS,
+    ANTHROPIC_EXTRA_KEYS,
+    LLMProvider,
+    LLMResponse,
+    ToolCallRequest,
+    normalize_tool_call_id,
+    short_tool_id,
+)
 from nanobot.providers.cache_probe import estimate_cache_ratio
-
-from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from nanobot.providers.registry import find_by_model, find_gateway
 
-# Standard chat-completion message keys.
-_ALLOWED_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name", "reasoning_content"})
-_ANTHROPIC_EXTRA_KEYS = frozenset({"thinking_blocks"})
-_ALNUM = string.ascii_letters + string.digits
-
 _NATIVE_PROVIDERS = {"openrouter", "anthropic", "openai", "google", "google_genai", "xai"}
-
-
-def _short_tool_id() -> str:
-    """Generate a 9-char alphanumeric ID compatible with all providers (incl. Mistral)."""
-    return "".join(secrets.choice(_ALNUM) for _ in range(9))
 
 
 class HttpxProvider(LLMProvider):
@@ -139,25 +132,17 @@ class HttpxProvider(LLMProvider):
 
     # ── Message processing ──
 
-    @staticmethod
-    def _normalize_tool_call_id(tool_call_id: Any) -> Any:
-        if not isinstance(tool_call_id, str):
-            return tool_call_id
-        if len(tool_call_id) == 9 and tool_call_id.isalnum():
-            return tool_call_id
-        return hashlib.sha1(tool_call_id.encode()).hexdigest()[:9]
-
     def _sanitize_messages(self, messages: list[dict[str, Any]], model: str = "") -> list[dict[str, Any]]:
         """Strip non-standard keys and normalize IDs."""
-        extra_keys = _ANTHROPIC_EXTRA_KEYS if "claude" in model.lower() else frozenset()
-        allowed = _ALLOWED_MSG_KEYS | extra_keys
+        extra_keys = ANTHROPIC_EXTRA_KEYS if "claude" in model.lower() else frozenset()
+        allowed = ALLOWED_MSG_KEYS | extra_keys
         sanitized = LLMProvider._sanitize_request_messages(messages, allowed)
 
         id_map: dict[str, str] = {}
         def map_id(value: Any) -> Any:
             if not isinstance(value, str):
                 return value
-            return id_map.setdefault(value, self._normalize_tool_call_id(value))
+            return id_map.setdefault(value, normalize_tool_call_id(value))
 
         for clean in sanitized:
             if isinstance(clean.get("tool_calls"), list):
@@ -181,13 +166,13 @@ class HttpxProvider(LLMProvider):
         models (Anthropic, DeepSeek) but not others.
         """
         if self._gateway is not None:
-            # If the gateway supports it, we allow it unless the native spec 
+            # If the gateway supports it, we allow it unless the native spec
             # explicitly forbids it (False). If native_spec is None, we trust the gateway.
             native_spec = find_by_model(model)
             if native_spec is not None and native_spec.supports_prompt_caching is False:
                 return False
             return self._gateway.supports_prompt_caching
-        
+
         spec = find_by_model(model)
         return spec is not None and spec.supports_prompt_caching
 

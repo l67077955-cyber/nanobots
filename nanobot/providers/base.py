@@ -1,13 +1,52 @@
 """Base LLM provider interface."""
 
 import asyncio
+import hashlib
 import json
 import re
+import secrets
+import string
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
 from loguru import logger
+
+# ── Shared constants for message sanitization ────────────────────────────────
+
+# Standard chat-completion message keys (OpenAI-compatible)
+ALLOWED_MSG_KEYS: frozenset[str] = frozenset({
+    "role", "content", "tool_calls", "tool_call_id", "name", "reasoning_content"
+})
+
+# Extra keys allowed for Anthropic-specific content
+ANTHROPIC_EXTRA_KEYS: frozenset[str] = frozenset({"thinking_blocks"})
+
+# Alphanumeric charset for tool call ID generation
+_ALNUM = string.ascii_letters + string.digits
+
+
+# ── Shared helper functions ─────────────────────────────────────────────────
+
+
+def short_tool_id() -> str:
+    """Generate a 9-char alphanumeric ID compatible with all providers (incl. Mistral)."""
+    return "".join(secrets.choice(_ALNUM) for _ in range(9))
+
+
+def normalize_tool_call_id(tool_call_id: Any) -> Any:
+    """Normalize tool call IDs to 9-char alphanumeric format.
+
+    Some providers (Mistral) reject IDs longer than 9 chars or with special chars.
+    Returns the original value if not a string.
+    """
+    if not isinstance(tool_call_id, str):
+        return tool_call_id
+    # Already normalized
+    if len(tool_call_id) == 9 and tool_call_id.isalnum():
+        return tool_call_id
+    # Hash and truncate to 9 chars
+    return hashlib.sha1(tool_call_id.encode()).hexdigest()[:9]
 
 
 @dataclass
@@ -50,7 +89,7 @@ class LLMResponse:
     cost: float | None = None  # response cost from provider
     cache_tokens: int = 0  # cached prompt tokens (from prompt_tokens_details)
     provider_meta: dict[str, Any] = field(default_factory=dict)  # provider-specific metadata
-    
+
     @property
     def has_tool_calls(self) -> bool:
         """Check if response contains tool calls."""
@@ -104,7 +143,7 @@ class LLMProvider(ABC):
         self.api_base = api_base
         self.generation: GenerationSettings = GenerationSettings()
         self._retry_delays = retry_delays or self._DEFAULT_RETRY_DELAYS
-        
+
         # Provider compatibility state
         self._compat_flatten: set[str] = set()
         self._compat_drop_params: dict[str, set[str]] = {}
@@ -241,10 +280,10 @@ class LLMProvider(ABC):
         """
         if not provider_key:
             return False, False
-            
+
         flatten_retry = False
         param_retry = False
-        
+
         # 502: Provider proxy rejects tool_calls payload
         if status_code == 502 and has_tool_msgs:
             if provider_key not in self._compat_flatten:
@@ -267,19 +306,19 @@ class LLMProvider(ABC):
                 "top_a": "top_a", "topA": "top_a",
             }
             _PENALTY_GROUP = {"presence_penalty", "frequency_penalty", "repetition_penalty"}
-            
+
             detected = set()
             for err_name, kwarg_key in _PARAM_MAP.items():
                 if err_name in error_text:
                     if not kwargs or kwarg_key in kwargs:
                         detected.add(kwarg_key)
-            
+
             if detected & _PENALTY_GROUP:
                 if kwargs:
                     detected = detected | {p for p in _PENALTY_GROUP if p in kwargs}
                 else:
                     detected = detected | _PENALTY_GROUP
-                
+
             if detected:
                 drops = self._compat_drop_params.setdefault(provider_key, set())
                 new_drops = detected - drops
@@ -290,7 +329,7 @@ class LLMProvider(ABC):
                         provider_key, new_drops,
                     )
                     param_retry = True
-                    
+
         return flatten_retry, param_retry
 
     @staticmethod

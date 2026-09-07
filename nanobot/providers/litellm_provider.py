@@ -1,9 +1,6 @@
 """LiteLLM provider implementation for multi-provider support."""
 
-import hashlib
 import os
-import secrets
-import string
 from pathlib import Path
 from typing import Any
 
@@ -12,18 +9,16 @@ import litellm
 from litellm import acompletion
 from loguru import logger
 
-from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from nanobot.providers.base import (
+    ALLOWED_MSG_KEYS,
+    ANTHROPIC_EXTRA_KEYS,
+    LLMProvider,
+    LLMResponse,
+    ToolCallRequest,
+    short_tool_id,
+)
 from nanobot.providers.cache_probe import estimate_cache_ratio
 from nanobot.providers.registry import find_by_model, find_gateway
-
-# Standard chat-completion message keys.
-_ALLOWED_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name", "reasoning_content"})
-_ANTHROPIC_EXTRA_KEYS = frozenset({"thinking_blocks"})
-_ALNUM = string.ascii_letters + string.digits
-
-def _short_tool_id() -> str:
-    """Generate a 9-char alphanumeric ID compatible with all providers (incl. Mistral)."""
-    return "".join(secrets.choice(_ALNUM) for _ in range(9))
 
 
 class LiteLLMProvider(LLMProvider):
@@ -500,7 +495,7 @@ class LiteLLMProvider(LLMProvider):
         """Return provider-specific extra keys to preserve in request messages."""
         spec = find_by_model(original_model) or find_by_model(resolved_model)
         if (spec and spec.name == "anthropic") or "claude" in original_model.lower() or resolved_model.startswith("anthropic/"):
-            return _ANTHROPIC_EXTRA_KEYS
+            return ANTHROPIC_EXTRA_KEYS
         return frozenset()
 
     @staticmethod
@@ -515,7 +510,7 @@ class LiteLLMProvider(LLMProvider):
     @staticmethod
     def _sanitize_messages(messages: list[dict[str, Any]], extra_keys: frozenset[str] = frozenset()) -> list[dict[str, Any]]:
         """Strip non-standard keys and ensure assistant messages have a content key."""
-        allowed = _ALLOWED_MSG_KEYS | extra_keys
+        allowed = ALLOWED_MSG_KEYS | extra_keys
         sanitized = LLMProvider._sanitize_request_messages(messages, allowed)
         id_map: dict[str, str] = {}
 
@@ -780,7 +775,7 @@ class LiteLLMProvider(LLMProvider):
 
             sc = getattr(e, "status_code", None)
             has_tool_msgs = any(m.get("role") == "tool" for m in messages)
-            
+
             resolved = self._resolve_pm_overrides(model or self.default_model)
             prov = resolved.get("provider_name")
             if not prov:
@@ -850,7 +845,7 @@ class LiteLLMProvider(LLMProvider):
                               cache_headers=getattr(self, "_last_cache_headers", None))
             sc = getattr(e, "status_code", None)
             has_tool_msgs = any(m.get("role") == "tool" for m in messages)
-            
+
             resolved = self._resolve_pm_overrides(model or self.default_model)
             prov = resolved.get("provider_name")
             if not prov:
@@ -998,7 +993,7 @@ class LiteLLMProvider(LLMProvider):
                 name = "_unknown_"
                 logger.warning("Tool call with empty name detected: args={}", tc["arguments"][:100])
             parsed_tool_calls.append(ToolCallRequest(
-                id=_short_tool_id(),
+                id=short_tool_id(),
                 name=name,
                 arguments=args,
             ))
@@ -1078,7 +1073,7 @@ class LiteLLMProvider(LLMProvider):
             )
 
             tool_calls.append(ToolCallRequest(
-                id=_short_tool_id(),
+                id=short_tool_id(),
                 name=tc.function.name,
                 arguments=args,
                 provider_specific_fields=provider_specific_fields,
