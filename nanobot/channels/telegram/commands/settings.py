@@ -294,7 +294,7 @@ class SettingsCommandsMixin:
 
         # Engine state
         lines.append("⚙️ 引擎状态:")
-        lines.append(f"  running: {engine._running}")
+        lines.append(f"  running: {engine.is_running}")
         lines.append(f"  task: {'✅ 活跃' if engine._task and not engine._task.done() else '❌ 无'}")
         lines.append(f"  send_fn: {'✅' if engine._send_fn else '❌ None'}")
         lines.append(f"  topic: {engine._topic[:50] or '(空)'}")

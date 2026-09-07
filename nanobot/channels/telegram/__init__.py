@@ -541,7 +541,7 @@ class TelegramChannel(
         # All commands handled by GroupChatEngine — no forwarding to AgentLoop bus
         if self._groupchat_engine:
             if cmd == "/stop":
-                was_running = self._groupchat_engine._running
+                was_running = self._groupchat_engine.is_running
                 self._groupchat_engine.stop()
                 msg = "✅ 群聊已停止。" if was_running else "ℹ️ 当前没有运行中的任务。"
                 from nanobot.bus.events import OutboundMessage
