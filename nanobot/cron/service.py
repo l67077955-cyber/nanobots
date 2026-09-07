@@ -78,12 +78,28 @@ class CronService:
         on_job: Callable[[CronJob], Coroutine[Any, Any, str | None]] | None = None,
     ):
         self.store_path = store_path
+        # Runtime state lives beside the definitions but is written separately,
+        # so jobs.json stops churning on every execution (and stays meaningful
+        # to version-control / rollback).
+        self.state_path = store_path.parent / "state.json"
         self.on_job = on_job
         self._store: CronStore | None = None
         self._last_mtime: float = 0.0
         self._timer_task: asyncio.Task | None = None
         self._poll_task: asyncio.Task | None = None
         self._running = False
+
+    def _load_state_file(self) -> dict[str, dict]:
+        """Read per-job runtime state keyed by job id. Missing file -> empty."""
+        if not self.state_path.exists():
+            return {}
+        try:
+            data = json.loads(self.state_path.read_text(encoding="utf-8"))
+            states = data.get("states", {})
+            return states if isinstance(states, dict) else {}
+        except Exception as e:
+            logger.warning("Failed to load cron state: {}", e)
+            return {}
 
     def _load_store(self) -> CronStore:
         """Load jobs from disk. Reloads automatically if file was modified externally."""
@@ -96,10 +112,19 @@ class CronService:
             return self._store
 
         if self.store_path.exists():
+            # Sync the watermark to the file we are about to read, not to the
+            # file we may later write: _save_store() skips rewriting jobs.json
+            # when definitions are unchanged, so bookkeeping cannot live there
+            # without re-introducing the poll-loop reload cycle (813a9d5d).
+            self._last_mtime = self.store_path.stat().st_mtime
             try:
                 data = json.loads(self.store_path.read_text(encoding="utf-8"))
+                file_states = self._load_state_file()
                 jobs = []
                 for j in data.get("jobs", []):
+                    # state.json wins; fall back to state inlined in jobs.json so
+                    # pre-split files (and jobs added by cron_cli.py) still load.
+                    st = file_states.get(j["id"]) or j.get("state", {})
                     jobs.append(CronJob(
                         id=j["id"],
                         name=j["name"],
@@ -119,10 +144,10 @@ class CronService:
                             to=j["payload"].get("to"),
                         ),
                         state=CronJobState(
-                            next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
-                            last_run_at_ms=j.get("state", {}).get("lastRunAtMs"),
-                            last_status=j.get("state", {}).get("lastStatus"),
-                            last_error=j.get("state", {}).get("lastError"),
+                            next_run_at_ms=st.get("nextRunAtMs"),
+                            last_run_at_ms=st.get("lastRunAtMs"),
+                            last_status=st.get("lastStatus"),
+                            last_error=st.get("lastError"),
                             run_history=[
                                 CronRunRecord(
                                     run_at_ms=r["runAtMs"],
@@ -130,11 +155,11 @@ class CronService:
                                     duration_ms=r.get("durationMs", 0),
                                     error=r.get("error"),
                                 )
-                                for r in j.get("state", {}).get("runHistory", [])
+                                for r in st.get("runHistory", [])
                             ],
                         ),
                         created_at_ms=j.get("createdAtMs", 0),
-                        updated_at_ms=j.get("updatedAtMs", 0),
+                        updated_at_ms=st.get("updatedAtMs", j.get("updatedAtMs", 0)),
                         delete_after_run=j.get("deleteAfterRun", False),
                     ))
                 self._store = CronStore(jobs=jobs)
@@ -146,14 +171,9 @@ class CronService:
 
         return self._store
 
-    def _save_store(self) -> None:
-        """Save jobs to disk."""
-        if not self._store:
-            return
-
-        self.store_path.parent.mkdir(parents=True, exist_ok=True)
-
-        data = {
+    def _definitions_payload(self) -> dict:
+        """The authored half of the store: what belongs under version control."""
+        return {
             "version": self._store.version,
             "jobs": [
                 {
@@ -174,31 +194,59 @@ class CronService:
                         "channel": j.payload.channel,
                         "to": j.payload.to,
                     },
-                    "state": {
-                        "nextRunAtMs": j.state.next_run_at_ms,
-                        "lastRunAtMs": j.state.last_run_at_ms,
-                        "lastStatus": j.state.last_status,
-                        "lastError": j.state.last_error,
-                        "runHistory": [
-                            {
-                                "runAtMs": r.run_at_ms,
-                                "status": r.status,
-                                "durationMs": r.duration_ms,
-                                "error": r.error,
-                            }
-                            for r in j.state.run_history
-                        ],
-                    },
                     "createdAtMs": j.created_at_ms,
-                    "updatedAtMs": j.updated_at_ms,
                     "deleteAfterRun": j.delete_after_run,
                 }
                 for j in self._store.jobs
             ]
         }
 
-        self.store_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        self._last_mtime = self.store_path.stat().st_mtime
+    def _state_payload(self) -> dict:
+        """The machine-written half: regenerated at runtime, never restored."""
+        return {
+            "version": self._store.version,
+            "states": {
+                j.id: {
+                    "nextRunAtMs": j.state.next_run_at_ms,
+                    "lastRunAtMs": j.state.last_run_at_ms,
+                    "lastStatus": j.state.last_status,
+                    "lastError": j.state.last_error,
+                    "updatedAtMs": j.updated_at_ms,
+                    "runHistory": [
+                        {
+                            "runAtMs": r.run_at_ms,
+                            "status": r.status,
+                            "durationMs": r.duration_ms,
+                            "error": r.error,
+                        }
+                        for r in j.state.run_history
+                    ],
+                }
+                for j in self._store.jobs
+            },
+        }
+
+    def _save_store(self) -> None:
+        """Persist the store, definitions and runtime state to separate files.
+
+        jobs.json is only rewritten when a definition actually changed, so a
+        plain execution leaves its mtime alone. That keeps the file quiet in
+        git and stops the poll loop from seeing a phantom external change.
+        """
+        if not self._store:
+            return
+
+        self.store_path.parent.mkdir(parents=True, exist_ok=True)
+
+        definitions = json.dumps(self._definitions_payload(), indent=2, ensure_ascii=False)
+        current = self.store_path.read_text(encoding="utf-8") if self.store_path.exists() else None
+        if current != definitions:
+            self.store_path.write_text(definitions, encoding="utf-8")
+            self._last_mtime = self.store_path.stat().st_mtime
+
+        self.state_path.write_text(
+            json.dumps(self._state_payload(), indent=2, ensure_ascii=False), encoding="utf-8"
+        )
 
     async def start(self) -> None:
         """Start the cron service."""
@@ -273,16 +321,13 @@ class CronService:
                         if mtime != self._last_mtime:
                             logger.info("Cron: file change detected, reloading")
                             self._store = None  # force reload
+                            # _load_store() syncs _last_mtime to what it read,
+                            # so the next poll sees no phantom change whether or
+                            # not the save below rewrites jobs.json.
                             self._load_store()
                             self._recompute_next_runs()
-                            # Sync _last_mtime to the file we just read so the
-                            # next poll does NOT detect a phantom change.
-                            # Only _save_store() if _recompute_next_runs actually
-                            # changed a next_run_at_ms value (i.e. jobs exist).
                             if self._store and self._store.jobs:
                                 self._save_store()
-                            elif self.store_path.exists():
-                                self._last_mtime = self.store_path.stat().st_mtime
                             self._arm_timer()
                 except Exception as e:
                     logger.warning("Cron poll error: {}", e)

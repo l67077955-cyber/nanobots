@@ -101,12 +101,16 @@ async def test_run_history_persisted_to_disk(tmp_path) -> None:
     )
     await service.run_job(job.id)
 
-    raw = json.loads(store_path.read_text())
-    history = raw["jobs"][0]["state"]["runHistory"]
+    raw = json.loads((store_path.parent / "state.json").read_text())
+    history = raw["states"][job.id]["runHistory"]
     assert len(history) == 1
     assert history[0]["status"] == "ok"
     assert "runAtMs" in history[0]
     assert "durationMs" in history[0]
+
+    # Definitions stay free of runtime state.
+    definitions = json.loads(store_path.read_text())
+    assert "state" not in definitions["jobs"][0]
 
     fresh = CronService(store_path)
     loaded = fresh.get_job(job.id)
@@ -141,3 +145,66 @@ async def test_running_service_honors_external_disable(tmp_path) -> None:
         assert called == []
     finally:
         service.stop()
+
+
+@pytest.mark.asyncio
+async def test_legacy_inline_state_is_migrated(tmp_path) -> None:
+    """A pre-split jobs.json keeps its runtime state on first load and save."""
+    store_path = tmp_path / "cron" / "jobs.json"
+    store_path.parent.mkdir(parents=True)
+    store_path.write_text(json.dumps({
+        "version": 1,
+        "jobs": [{
+            "id": "legacy01",
+            "name": "legacy",
+            "enabled": True,
+            "schedule": {"kind": "every", "everyMs": 60_000},
+            "payload": {"kind": "agent_turn", "message": "hi"},
+            "state": {
+                "nextRunAtMs": 1788872276526,
+                "lastRunAtMs": 1788732451579,
+                "lastStatus": "ok",
+                "lastError": None,
+                "runHistory": [{"runAtMs": 1788732451579, "status": "ok", "durationMs": 4}],
+            },
+            "createdAtMs": 1776602121430,
+            "updatedAtMs": 1788732451594,
+            "deleteAfterRun": False,
+        }],
+    }), encoding="utf-8")
+
+    service = CronService(store_path)
+    job = service.get_job("legacy01")
+    assert job.state.last_run_at_ms == 1788732451579
+    assert len(job.state.run_history) == 1
+
+    # Saving relocates state and strips it from the definitions file.
+    service._save_store()
+    definitions = json.loads(store_path.read_text())
+    assert "state" not in definitions["jobs"][0]
+    assert definitions["jobs"][0]["payload"]["message"] == "hi"
+    states = json.loads((store_path.parent / "state.json").read_text())["states"]
+    assert states["legacy01"]["lastRunAtMs"] == 1788732451579
+
+
+@pytest.mark.asyncio
+async def test_execution_does_not_touch_definitions_file(tmp_path) -> None:
+    """A plain run writes state only, leaving jobs.json byte- and mtime-stable."""
+    store_path = tmp_path / "cron" / "jobs.json"
+    service = CronService(store_path, on_job=lambda _: asyncio.sleep(0))
+    job = service.add_job(
+        name="quiet",
+        schedule=CronSchedule(kind="every", every_ms=60_000),
+        message="hello",
+    )
+
+    before_bytes = store_path.read_bytes()
+    before_mtime = store_path.stat().st_mtime
+    await asyncio.sleep(0.05)
+
+    await service.run_job(job.id)
+
+    assert store_path.read_bytes() == before_bytes
+    assert store_path.stat().st_mtime == before_mtime
+    # ...while the run was still recorded.
+    assert len(service.get_job(job.id).state.run_history) == 1
