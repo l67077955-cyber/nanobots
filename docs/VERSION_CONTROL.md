@@ -48,13 +48,23 @@ main                    唯一主线，所有工作的基线
 
 ### 待办：从 `archive/align-20260720` 前向移植
 
-这些只存在于归档分支，需要在 `main` 上作为独立提交重做：
+这些只存在于归档分支，需要在 `main` 上作为独立提交重做（2026-09-08 重新核实过范围）：
 
-1. `nanobot/channels/telegram/callbacks.py`（单体，170KB）→ `callbacks/` 包（11 模块）
+1. `nanobot/channels/telegram/callbacks.py` 拆分。**重核后的实际范围**：主体不是
+   "170KB 单体→11 模块"，而是 `_on_callback` 一个方法 70 个 `data.startswith`
+   分支（~2100 行）。main 上已有现成落点：`callback_handlers/` 的 7 个域 stub
+   （agents/providers/settings/groups/logs/prompts/hyperparams，`2dd0896df` 标好
+   边界但实现仍全在 callbacks.py）+ `callbacks_registry.py` 路由契约（ROUTES
+   迁移完成 8/70）。**前置条件（AGENTS.md #1）**：dispatcher 分派行为目前零
+   测试覆盖（只有 12 个 registry round-trip 契约测试 + edit flow 局部），
+   必须先写 `_on_callback` 路由钉住测试。量级是独立 plan.md 式分阶段工作。
 2. ~~`orchestra/` → `runtime/` 目录改名~~ ✅ 2026-09-08 完成（重做而非 cherry-pick：
    align 的 `runtime/` 是它自己血统的代码，直接套用会抹掉 ui-redesign 的 67 个提交；
    实际做法是 `git mv` 现有目录 + 全量改写引用，39 个 py 文件 + 活文档同步）
-3. 该分支多出的约 20 个测试
+3. align 独有测试实际是 **50 个文件**（非 ~20）。多数不可移植：相当一部分的
+   被测模块只在 align 血统存在（collab_bus、turn_stack、working_memory、
+   agent_runner、cycle_controller 等）——按 §0 的结论那些**行为**不前向移植，
+   测试随之作废；可移植子集 = 被测对象在 main 存在且 API 兼容，需逐个甄别。
 
 ---
 
