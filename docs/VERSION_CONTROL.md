@@ -70,8 +70,14 @@ main                    唯一主线，所有工作的基线
 历史上遗留的 `backup-before-rollback-*`、`v-stable-*`、`v-backup-*`、
 `ui-redesign-before-*`、`prompt-*`、`broadcast-*` 等命名族不再新增。
 
-`pyproject.toml` 的 `version` 必须与最近的 `v*` tag 一致。当前是脱节的
-（`0.1.4.post5` vs tag `v0.2.2`），发下一个版本时一并对齐。
+`pyproject.toml` 的 `version` 必须与**本仓库血统上**最近的 `v*` tag 一致。当前是脱节的
+（`0.1.4.post5` vs `v0.1.6`），发下一个版本时一并对齐。
+
+注意 `v0.2.0`–`v0.3.0` **不是本仓库的发布**：tagger 是 upstream 维护者
+（Xubin Ren）或无 tagger，且都不是 `main` 的祖先、不属于任何本地分支——
+是 `git fetch upstream` 默认把远端 tag 一并带进来的污染。版本比较只认
+tagger 为 `nanobot` 的 `v0.1.x` 族。已设 `remote.upstream.tagOpt=--no-tags`
+防止再次带入；已存在的这几个 tag 留在本地无害，不删。
 
 ---
 
@@ -84,7 +90,7 @@ main                    唯一主线，所有工作的基线
 ```
 /root/projects/nanobot-src   开发工作区，HEAD 跟着你走
 /root/nanobot-deploy         部署 worktree，detached，只指向 running-* tag
-/root/nanobot-src            symlink → 部署 worktree
+/root/nanobot-src            symlink → 开发工作区（历史兼容路径）
 ```
 
 v1 的回滚流程要求在开发工作区里 `git checkout <tag>`，那会把你的开发分支 detach 掉，
