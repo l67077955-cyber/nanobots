@@ -1,7 +1,7 @@
 # nanobot-src 群聊历史模型重构计划
 
 > 创建日期: 2026-09-07（覆盖上轮 Phase 1-4 记录）
-> 状态: **规划中**（待审批）
+> 状态: **Phase A–E 实现完成**（全量测试受 sandbox 只读文件系统阻断，见 DoD 备注）
 > 范围: **只管群聊历史模型**（不动 engine/broadcast/callbacks 的耦合）
 > 稳定性标准: **测试覆盖 + 接口契约 两者都要**——核心路径有回归测试守护，
 >   模块间靠明确接口通信，外部代码不直接访问 `HistoryContext` 内部列表
@@ -341,14 +341,16 @@ broadcast.py:513  engine._build_agent_prompt(history=self._history, relevant_age
 
 ## 验证（DoD）
 
-- [ ] `py_compile` 全过
-- [ ] `pytest tests/ -q` 全绿（含新增回归测试 + 更新的快照测试）
-- [ ] **接口契约验收**：`grep -rn "engine\._history\b\|\.history\.messages" nanobot/ | grep -v "context.py"` 
+- [x] `py_compile` 全过（本轮改动文件）
+- [ ] `pytest tests/ -q` 全绿（含新增回归测试 + 更新的快照测试）；当前首个失败为
+      `tests/test_commands.py::test_gateway_uses_workspace_from_config_by_default`，在 provider
+      创建前因 sandbox 对工作区外写入返回 `OSError: [Errno 30] Read-only file system`。
+- [x] **接口契约验收**：`grep -rn "engine\._history\b\|\.history\.messages" nanobot/ | grep -v "context.py"`
       归零——外部不再碰内部列表（"低耦合"硬指标）
-- [ ] 新增测试覆盖（"高稳定"硬指标）：可见性隔离（A→B C 看不到）、跨轮留存、
+- [x] 新增测试覆盖（"高稳定"硬指标）：可见性隔离（A→B C 看不到）、跨轮留存、
       per-agent 压缩隔离、压缩持久不重压、禁用摘要不丢中段、契约方法行为
       （last_sender/has_system_message/is_empty/all_messages 返回副本不可改）
-- [ ] commit message 每步写清 what + why + 证据
+- [x] commit message 每步写清 what + why + 证据
 - [ ] 涉及线上：确认 agent idle → 重启网关 → 观察 gateway.log 首轮
 
 ## 参考文件
@@ -366,3 +368,4 @@ broadcast.py:513  engine._build_agent_prompt(history=self._history, relevant_age
 | 日期 | 变更 |
 |------|------|
 | 2026-09-07 | 覆盖上轮 Phase 1-4 记录，重写为"单持久日志 + per-agent 视图"历史模型重构计划。基于遗忘/收不到两 bug 的根因调查（两套矛盾历史模型无不变量）+ 用户拍板的可见性语义（A→B C 看不到 + 跨轮留存 + per-agent 分别压缩）|
+| 2026-09-07 | Phase A–D 已由 `6f0b5a57`、`01e3ed42`、`4455ba39`、`5319ce6a` 完成；Phase E 由 `47367677`、`2f406173` 完成：退役 `_history` shim 与重复 ingress、落地 HistoryContext 契约、提高默认历史窗口至 200/20，并删除摘要不可用时误压缩原始日志的遗留块。|
