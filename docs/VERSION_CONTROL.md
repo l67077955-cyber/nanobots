@@ -1,183 +1,145 @@
 # Nanobot 版本控制规范
 
-> 生效日期：2026-09-01 | 状态：v1
+> v2 | 生效日期：2026-09-07 | 取代 v1 (2026-09-01)
 
 ---
 
-## 1. 分支现状图
+## 0. v1 发生了什么
 
-```
-传统主干: main (停滞 2 个月)
-  └─ 已删除 callbacks.py → 拆为 callbacks/ 包 (11 模块)
+v1 认定 `fix/groupchat-headless-stable-align` 为事实主线，要求所有新分支以它为基线。
 
-事实主线: fix/groupchat-headless-stable-align (176 commits ahead of ui-redesign)
-  └─ 继承 main 的 callbacks/ 包架构
+**这个计划从未被执行。** v1 写完之后，该分支再没有收到过一个 commit，而 `feat/ui-redesign`
+继续积累了 67 个提交（history 重构、mods 插件架构、skills 兼容、429 限流等）。到 09-07 时，
+两条线在 `callbacks` 和 `orchestra`/`runtime` 两处都发生了目录级分歧，试合并冲突 47 个文件。
 
-运行分支: feat/ui-redesign (HEAD: 8204a7c50)
-  └─ 依赖 callbacks.py (829 行单体文件)
-  └─ 对事实主线 ahead 39 / behind 176
-  └─ 架构分叉: merge/rebase 不可行 (85 文件冲突)
-  └─ 包含 429 限流、edit-flow 泄漏等高频痛点修复
+更严重的是分叉已经开始造成重复劳动：History 子系统在两条分支上被**各自独立重写了一遍**
+（align 的 `f0fed5f9`，ui-redesign 的 Phase A–D）。
 
-其他分支 (已全推远程):
-  agent/codex, agent/nanobot, fix/hotreload-20260517,
-  fix/openrouter-model-not-found, fix/restore-protections-and-config,
-  refactor/phase3-split-giants, stable-20260803-fixes, test/perf-baseline
-```
+v2 因此把结论反过来：**承认 `feat/ui-redesign` 为主线并扶正为 `main`**。
 
-### 根因
-
-`feat/ui-redesign` 分叉点 `f0a51db4a`（05-23）。此后主线删除了 `callbacks.py` 并重构为 `callbacks/` 包（11 模块），而 ui-redesign 持续在旧架构上开发。两条线在 `callbacks` 层的架构冲突导致 85 文件无法自动合并。
+理由是重做代价的不对称 —— align 的优势（`callbacks/` 拆包、`orchestra/`→`runtime/` 改名）
+都是机械重构，可以在新主线上重做；ui-redesign 的 67 个提交是行为变更，无法重做。
 
 ---
 
-## 2. 分支策略
+## 1. 分支模型
 
-### 2.1 主分支认定
+```
+main                    唯一主线，所有工作的基线
+  ├─ feat/*             新功能
+  ├─ fix/*              缺陷修复
+  ├─ refactor/*         重构
+  └─ experimental/*     架构级实验（预期可能被丢弃）
+```
 
-**承认 `fix/groupchat-headless-stable-align` 为事实主线（`main` 的继承者）。**
+**规则**
 
-理由：
-- 包含 `main` 全部提交 + 74 个额外提交
-- 采用 `callbacks/` 包架构（模块化，可维护）
-- 是唯一能承载后续开发的基线
+- 一切以 `main` 为基线开分支，合并回 `main` 后删除。
+- 分支存活超过 **两周**必须 rebase 或合并回主线。v1 的教训是分叉三个半月后已无法收敛。
+- 不再设"事实主线"这种概念。`main` 就是主线；如果实际工作不在 `main` 上，说明该扶正了，
+  而不是该写文档承认现状。
 
-### 2.2 分支命名规范
+### 归档
 
-| 前缀 | 用途 | 基线 |
+| Tag | 指向 | 说明 |
 |---|---|---|
-| `feat/*` | 新功能开发 | 事实主线 |
-| `fix/*` | 缺陷修复 | 事实主线 |
-| `refactor/*` | 重构 | 事实主线 |
-| `release/*` | 发布候选 | 事实主线 tag |
-| `stable/*` | 长期稳定分支 | 事实主线 tag |
-| `experimental/*` | 实验性架构变更（如 ui-redesign 类） | 事实主线 |
+| `archive/main-20260706` | `d2bf4cf9` | 扶正前的旧 `main`，停滞于 07-06 |
+| `archive/align-20260720` | `24e3f0b4` | v1 认定的"事实主线"，停滞于 07-20 |
 
-### 2.3 运行分支规则
+### 待办：从 `archive/align-20260720` 前向移植
 
-- 生产运行分支可以是任意分支（当前为 `feat/ui-redesign`）
-- 运行分支必须打 `running-YYYYMMDD-HHMM` tag
-- 运行分支与事实主线的架构差异必须文档化（见第 5 节）
+这两项只存在于归档分支，需要在 `main` 上作为独立提交重做：
+
+1. `nanobot/channels/telegram/callbacks.py`（单体，170KB）→ `callbacks/` 包（11 模块）
+2. `nanobot/groupchat/orchestra/` → `nanobot/groupchat/runtime/` 目录改名
+3. 该分支多出的约 20 个测试
 
 ---
 
-## 3. 修复流转规则
+## 2. Tag 规范
 
-### 3.1 卡死级修复（P0/P1）
+只保留四族，其余一律归入 `archive/`：
+
+| 模式 | 用途 | 可变性 |
+|---|---|---|
+| `v<major>.<minor>.<patch>` | 正式发布 | 不可移动 |
+| `stable-<YYYYMMDD>-<desc>` | 里程碑稳定版本 | 不可移动 |
+| `running-<YYYYMMDD>-<HHMM>` | 线上部署点 | 不可移动，累积保留 |
+| `archive/<desc>-<YYYYMMDD>` | 废弃分支/回滚前快照 | 不可移动 |
+
+历史上遗留的 `backup-before-rollback-*`、`v-stable-*`、`v-backup-*`、
+`ui-redesign-before-*`、`prompt-*`、`broadcast-*` 等命名族不再新增。
+
+`pyproject.toml` 的 `version` 必须与最近的 `v*` tag 一致。当前是脱节的
+（`0.1.4.post5` vs tag `v0.2.2`），发下一个版本时一并对齐。
+
+---
+
+## 3. 部署与回滚
+
+### 3.1 开发与部署分离
+
+**开发工作区和线上运行的代码不共用一个 checkout。**
 
 ```
-发现修复 → cherry-pick 到运行分支 → 验证 → cherry-pick 到事实主线
+/root/projects/nanobot-src   开发工作区，HEAD 跟着你走
+/root/nanobot-deploy         部署 worktree，detached，只指向 running-* tag
+/root/nanobot-src            symlink → 部署 worktree
 ```
 
-**流程**：
-
-1. 在事实主线提交修复（基线：`fix/groupchat-headless-stable-align`）
-2. `cherry-pick <commit> --onto feat/ui-redesign` 到运行分支
-3. 运行分支验证通过后，标记 `running-*` tag
-4. 同一 commit 再 cherry-pick 回事实主线（如已在主线则跳过）
-
-### 3.2 冲突处理原则
-
-**加法冲突（两边各自加功能）→ 保留两边，机械合并**
-
-判定标准：冲突块中两边代码无语义矛盾，各自解决不同问题。
-示例：`run_loop.py` 中 ui-redesign 的 `_summary_requested` 块与 main 的 `_running` 复活块 → 并存。
-
-**减法冲突（一边删一边改）→ 需人工确认语义**
-
-判定标准：一方删除了另一方修改的代码。需理解删除意图后再合并。
-
-### 3.3 架构分叉修复的长期方案
-
-`feat/ui-redesign` 独有的 `_send_panel` 方法（20 行）应移植到主线 `callbacks/helpers.py`，然后逐步替换主线的 106 处 `edit_message_text` 调用点。移植完成后，`feat/ui-redesign` 可废弃。
-
----
-
-## 4. Tag 规范
-
-### 4.1 Tag 类型
-
-| Tag 模式 | 触发时机 | 谁打 |
-|---|---|---|
-| `running-YYYYMMDD-HHMM` | 每次运行分支更新 | 执行 cherry-pick 者 |
-| `stable-YYYYMMDD-<desc>` | 里程碑稳定版本 | 团队协商 |
-| `v<major>.<minor>.<patch>` | 正式发布 | Leader |
-
-### 4.2 当前有效 Tag
-
-| Tag | HEAD | 说明 |
-|---|---|---|
-| `running-20260901-1333` | `8204a7c50` | 当前运行版本 |
-| `stable-20260901-ui-redesign` | `d796260ef` | ui-redesign 稳定基线 |
-
-### 4.3 Tag 规则
-
-- `running-*` tag 必须指向运行分支的当前 HEAD
-- 更新运行分支后，旧 `running-*` tag 保留（可追溯）
-- `stable-*` tag 不可移动（immutable）
-
----
-
-## 5. 重启与回滚
-
-### 5.1 关键认知
-
-**Python 已加载旧代码到内存，修改磁盘文件不影响当前运行进程。**
-重启 `nanobot-gateway.service` 后才生效。
-
-### 5.2 重启前验证
+v1 的回滚流程要求在开发工作区里 `git checkout <tag>`，那会把你的开发分支 detach 掉，
+而且线上跑的和你正在编辑的是同一份文件。现在回滚只动部署 worktree：
 
 ```bash
-# 1. 确认工作区干净
-cd /root/nanobot-src && git status --short
-
-# 2. 确认 HEAD 是预期 commit
-git log --oneline -1
-
-# 3. 语法检查（关键修改文件）
-python -m py_compile nanobot/groupchat/orchestra/broadcast.py
-python -m py_compile nanobot/groupchat/orchestra/tools/tool_loop.py
-# ... 其他修改的文件
-
-# 4. 运行测试（如可用）
-python -m pytest tests/ -x -q --timeout=60
-```
-
-### 5.3 重启命令
-
-```bash
-sudo systemctl restart nanobot-gateway.service
-sudo journalctl -u nanobot-gateway.service -n 50 --no-pager  # 检查启动日志
-```
-
-### 5.4 回滚流程
-
-```bash
-# 回滚到上一个 running tag
-cd /root/nanobot-src
-git checkout running-20260901-1333   # 或上一个 stable tag
+git -C /root/nanobot-deploy checkout --detach <running-tag>
 sudo systemctl restart nanobot-gateway.service
 ```
 
-### 5.5 回滚候选
+### 3.2 关键认知
 
-| 回滚目标 | Tag | 说明 |
-|---|---|---|
-| 当前稳定基线 | `stable-20260901-ui-redesign` | 含在途改动提交 |
-| 上一个运行版本 | `running-20260901-1333` | 当前运行版本自身 |
-| 出厂基线 | `f0a51db4a` | 分叉点（05-23，极不推荐） |
+**Python 已把旧代码加载进内存，改磁盘文件不影响当前进程。** 必须重启
+`nanobot-gateway.service` 才生效。反过来说，磁盘上的 HEAD 不等于线上正在跑的版本 ——
+以最后一次重启时的 `running-*` tag 为准。
+
+### 3.3 重启前检查
+
+```bash
+git -C /root/nanobot-deploy status --short     # 工作区必须干净
+git -C /root/nanobot-deploy log --oneline -1   # 确认是预期 commit
+python3 -m pytest tests/ -q                     # 全量测试
+sudo systemctl restart nanobot-gateway.service
+sudo journalctl -u nanobot-gateway.service -n 50 --no-pager
+```
 
 ---
 
-## 6. 附录：已执行操作记录
+## 4. CI
 
-| 操作 | 结果 |
-|---|---|
-| 11 分支全推远程 | ✅ 原远程仅 2 个 |
-| tag `running-20260901-1333` | ✅ |
-| tag `stable-20260901-ui-redesign` | ✅ |
-| 在途改动提交 `d796260ef` | ✅ |
-| cherry-pick `13ffb7eaa` (cron 死循环) | ✅ 零冲突 → `813a9d5d5` |
-| cherry-pick `d2bf4cf92` (无限 nudge) | ✅ 1 处加法冲突已解 → `8204a7c50` |
-| 待处理: `1e4307b75` (discussion-killing) | 5 处加法冲突待解 |
-| 待处理: `e4a171a9a` (synthesis 幽灵打断) | 2 处加法冲突待解 |
+`.github/workflows/ci.yml` 在**所有分支**上触发（`branches: ['**']`），Python 3.11/3.12/3.13。
+
+v1 时期 CI 只在 `main`/`nightly` 上跑，而所有工作都在 `feat/ui-redesign` —— CI 最后一次
+测到的代码停留在 7 月。触发范围必须覆盖实际开发的分支，否则等于没有。
+
+---
+
+## 5. 配置仓库 (`/root/.nanobot`)
+
+`pre-push` hook 会在配置仓库有未提交变更时拒绝推送代码。要让这个 hook 有意义，
+配置仓库里就**不能有自己会变的文件**。
+
+判断标准很简单：
+
+> **这个字段回滚之后，你希望它变回旧值吗？**
+> 是 → 版本化；否 → gitignore。
+
+运行时状态属于后者 —— 它必须反映现在，恢复旧值是有害的（例如 cron 的
+`lastRunAtMs` 回退会导致补跑，`nextRunAtMs` 会指向过去的时间点）。
+
+已按此拆分：
+
+| 文件 | 内容 | 版本化 |
+|---|---|---|
+| `cron/jobs.json` | 任务定义：`schedule`、`payload`、`enabled` | ✅ |
+| `cron/state.json` | 运行时状态：`nextRunAtMs`、`runHistory` 等 | ❌ gitignore |
+
+新增配置文件时按同样标准判断，不要把两类数据混在一个文件里。
