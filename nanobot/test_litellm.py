@@ -1,6 +1,8 @@
 import asyncio
-import litellm
 import os
+
+import litellm
+
 
 async def main():
     litellm.api_base = "https://openrouter.ai/api/v1"

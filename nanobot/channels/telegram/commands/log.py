@@ -2,16 +2,8 @@
 
 from __future__ import annotations
 
-import json
-import re
-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
-
-from loguru import logger
-
-from ..formatting import TELEGRAM_MAX_MESSAGE_LEN
-from nanobot.utils.helpers import split_message
 
 
 class LogCommandsMixin:
@@ -157,7 +149,7 @@ class LogCommandsMixin:
             cost = r.get("cost")
             cost_str = f" ${cost:.4f}" if cost else ""
             cache_t = r.get("cache_tokens")
-            cache_str = f" 🔵" if cache_t else ""
+            cache_str = " 🔵" if cache_t else ""
 
             lines.append(
                 f"{status} #{idx+1} {ts} {agent} [{model}] "

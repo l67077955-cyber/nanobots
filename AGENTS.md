@@ -48,6 +48,13 @@ python3 -m pytest tests/test_mods.py tests/test_events.py -q
 - 观察型（tier 1）随便写；过滤型（tier 2）只能往 payload 里的可变容器
   append，不许替换。
 
+### Skills vs Mods 边界
+
+- **Skills**：纯prompt文档，教导agent使用工具/工作流。禁止包含行为脚本。
+- **Mods**：Python代码，订阅事件扩展行为。所有新行为走这里。
+- CLI脚本可保留在 `skills/*/scripts/`，但必须标注为CLI工具，不注入prompt。
+- 详见 `docs/SKILL_VS_MOD.md`。
+
 ## 架构速览（改哪找哪）
 
 ```

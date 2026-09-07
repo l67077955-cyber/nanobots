@@ -3,44 +3,41 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import re
 import time
 from pathlib import Path
 
 from loguru import logger
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters, Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 from telegram.request import HTTPXRequest
 
+import nanobot.i18n_catalog  # noqa: F401  (registers UI strings)
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
-from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import TelegramConfig
-from nanobot.i18n import i18n
-import nanobot.i18n_catalog  # noqa: F401  (registers UI strings)
 from nanobot.groupchat.orchestra.engine import GroupChatEngine
-from nanobot.groupchat.display import display as _d
-from nanobot.groupchat.history.prompt_builder import (
-    PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
-    GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
-)
+from nanobot.i18n import i18n
 from nanobot.utils.helpers import split_message
 
-from .formatting import (
-    TELEGRAM_MAX_MESSAGE_LEN,
-    _strip_md,
-    _render_table_box,
-    _markdown_to_telegram_html,
-)
 from .callbacks import CallbacksMixin
-from .message_handler import MessageHandlerMixin
 from .commands.agents import AgentCommandsMixin
-from .commands.providers import ProviderCommandsMixin
-from .commands.settings import SettingsCommandsMixin
 from .commands.groups import GroupCommandsMixin
 from .commands.log import LogCommandsMixin
+from .commands.providers import ProviderCommandsMixin
+from .commands.settings import SettingsCommandsMixin
+from .formatting import (
+    TELEGRAM_MAX_MESSAGE_LEN,
+    _markdown_to_telegram_html,
+)
+from .message_handler import MessageHandlerMixin
 
 # Re-export for backward compatibility
 __all__ = ["TelegramChannel", "TELEGRAM_MAX_MESSAGE_LEN"]

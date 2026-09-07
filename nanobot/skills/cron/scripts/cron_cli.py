@@ -66,6 +66,7 @@ def _compute_next_run(schedule: dict, now_ms: int) -> int | None:
             return None
         try:
             from zoneinfo import ZoneInfo
+
             from croniter import croniter
             tz_str = schedule.get("tz")
             tz = ZoneInfo(tz_str) if tz_str else datetime.now().astimezone().tzinfo
@@ -179,7 +180,6 @@ def cmd_list(args, store_path: Path) -> None:
         return
     for j in sorted(jobs, key=lambda x: (x.get("state", {}).get("nextRunAtMs") or float("inf"))):
         timing = _format_timing(j["schedule"])
-        msg = j.get("payload", {}).get("message", j.get("name", "?"))
         line = f"- {j['name']} (id: {j['id']}, {timing})"
         state = j.get("state", {})
         if state.get("lastRunAtMs"):

@@ -337,6 +337,13 @@ def gateway(
     provider = _make_provider(config)
     session_manager = SessionManager(config.workspace_path)
 
+    # ── AppContext: unified application context replacing global singletons ──
+    # See docs/SKILL_VS_MOD.md and plan.md Phase 3.2. The context is created
+    # here and threaded to services that previously accessed globals directly.
+    from nanobot.state.app_context import AppContext, set_app_context
+    ctx = AppContext.create()
+    set_app_context(ctx)
+
     # Create cron service first (callback set after engine creation)
     cron_store_path = get_cron_dir() / "jobs.json"
     cron = CronService(cron_store_path)
@@ -472,9 +479,10 @@ def gateway(
         # ── Mods: attach to the orchestration event bus and start whatever
         # ~/.nanobot/mods.json enables. Per-mod fault isolation lives inside
         # the manager — a broken mod never blocks the gateway. ──
-        from nanobot.groupchat.orchestra.events import get_bus
+        # Use the AppContext's mod_manager and event_bus (Phase 3.2).
         from nanobot.mods.manager import ModManager
-        mods_manager = ModManager(get_bus(), send=gc_engine._send)
+        mods_manager = ModManager(ctx.event_bus, send=gc_engine._send)
+        ctx.mod_manager = mods_manager  # wire the manager into context
         mods_manager.start_all()
         try:
             await cron.start()
@@ -493,6 +501,7 @@ def gateway(
         finally:
             await router.stop()
             mods_manager.stop_all()
+            await ctx.shutdown()
             heartbeat.stop()
             cron.stop()
             await channels.stop_all()

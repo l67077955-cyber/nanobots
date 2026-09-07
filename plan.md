@@ -1,808 +1,368 @@
-# nanobot-src 架构重构计划
+# nanobot-src 群聊历史模型重构计划
 
-> 创建日期: 2026-09-07
-> 状态: **Phase 1-2 已完成**
+> 创建日期: 2026-09-07（覆盖上轮 Phase 1-4 记录）
+> 状态: **规划中**（待审批）
+> 范围: **只管群聊历史模型**（不动 engine/broadcast/callbacks 的耦合）
+> 稳定性标准: **测试覆盖 + 接口契约 两者都要**——核心路径有回归测试守护，
+>   模块间靠明确接口通信，外部代码不直接访问 `HistoryContext` 内部列表
+> 红线遵循: AGENTS.md #1 先写测试再改实现、#2 修根源不堆护栏、#4 删死代码、#5 编辑前重读、#6 每逻辑单元 checkpoint 提交
 
-## 问题概述
+## Context — 为什么要做这次修改
 
-经过深度架构分析，识别出以下核心问题：
+群聊系统存在两个用户报告的运行期 bug，调查后确认它们**不是四个孤立缺陷，而是同一个没定清楚的架构契约的两面**：
 
-| 排名 | 问题 | 严重性 | 状态 |
-|------|------|--------|------|
-| 1 | MessageBus入站队列是死代码，只有Telegram正确接线 | 🔴 CRITICAL | ✅ 已修复 |
-| 2 | Provider层代码重复（litellm/httpx大量重复） | 🔴 CRITICAL | ✅ 已修复 |
-| 3 | 设置持久化分散到4+处，无统一服务层 | 🔴 CRITICAL | ✅ 已修复 |
-| 4 | callbacks.py God-object (3299行) | 🟠 HIGH | 🔧 骨架就位 |
-| 5 | GroupChatEngine God-object (1680行) | 🟠 HIGH | 🔧 组件提取 |
-| 6 | Channel实现重复（去重/媒体下载/消息分片） | 🟠 HIGH | ✅ 已修复 |
-| 7 | Skills/Mods两个插件系统边界模糊 | 🟡 MEDIUM | ⏳ 待处理 |
-| 8 | 进程级全局单例 | 🟡 MEDIUM | ⏳ 待处理 |
-| 9 | gateway()组装函数无依赖注入 | 🟡 MEDIUM | ⏳ 待处理 |
-| 10 | Display层Telegram特定 | 🟡 MEDIUM | ⏳ 待处理 |
+- **上下文遗忘**：`HistoryContext` 只有一条共享列表 `messages`，`max_messages=50`、
+  `compression_keep_recent=6`、`compress_ratio=0.8`，40 条即触发压缩。`maybe_compress`
+  把中段压成 ≤500 字摘要；摘要未启用/无 provider 时**直接丢弃中段**
+  （`context.py:333-334` `self.messages = head + tail`）。每轮结束都跑
+  （`run_loop.py:167`），3-5 agent 的群聊几轮就丢。
+- **agent 间消息收不到**：轮内传递**只走 mailbox**（共享历史在轮开始时快照一次、
+  轮中不重读，`broadcast.py:513 → prompt_builder.py:723`）。而 `ChatroomSendTool`
+  **只调 `mailbox.send()`，从不写共享历史**（`chatroom_tools.py:761`）。一旦实时打断
+  失败——默认 `rank=pawn` 同级不能互相打断（`mailbox.py:486` `s_rank > t_rank`），
+  或 `end_discussion` 取消任务时 agent 还在 cycle、到不了 auto-wait——消息就永久丢，
+  且不在任何历史里。
+- **IngressRouter 半统一**（上轮 plan.md 1.1 标"已修复"是言过其实）：Telegram 主
+  通道在有活跃 agent 时仍直接调 `engine.inject()` 并 return（`message_handler.py:159`），
+  `IngressRouter` 在生产里收不到 Telegram 消息；`deliver_user_message()` 是 `inject()`
+  的逐行克隆，额外**丢弃 `media`/`metadata`**（`engine.py:864-865`），0 agent 时静默丢消息。
 
----
+**根因**：系统有两套互相矛盾的历史模型，没有不变量——持久的那套（`engine._history`）
+会忘会串台（A 的输出 C 也看得到）；范围对的那套（mailbox，A→B 只有 B 的队列有）
+不持久。用户要求的语义正是把两者合并成一套：
 
-## 执行进度
+> **A 发给 B 的消息，C 看不到，只有 AB 可见**（mailbox 的可见范围）
+> **+ 跨轮留存**（`engine._history` 的持久性）
+> **+ 压缩对每个 agent 各自的可见子集分别做**（不串台）
 
-### Phase 1: 修复核心缺陷 (CRITICAL) ✅ 已完成
-
-**提交**: `2dd0896d refactor: Phase 1 CRITICAL fixes + Phase 2 utilities`
-
-#### 1.1 MessageBus入站路由统一 ✅
-
-**改动文件**:
-- `nanobot/bus/router.py` (新建) - `IngressRouter` 类
-- `nanobot/bus/__init__.py` - 导出 `IngressRouter`
-- `nanobot/groupchat/orchestra/engine.py` - 添加 `deliver_user_message()` 方法
-- `nanobot/cli/commands.py` - gateway() 启动路由器
-- `nanobot/channels/telegram/message_handler.py` - 更新注释，添加 fallback
-
-**效果**: 所有channel可通过 `publish_inbound()` → `IngressRouter` → `deliver_user_message()` 统一接入。
-
-#### 1.2 Provider共享逻辑提取 ✅
-
-**改动文件**:
-- `nanobot/providers/base.py` - 导出 `ALLOWED_MSG_KEYS`, `ANTHROPIC_EXTRA_KEYS`, `short_tool_id()`, `normalize_tool_call_id()`
-- `nanobot/providers/litellm_provider.py` - 删除重复定义，使用 base 导出
-- `nanobot/providers/httpx_provider.py` - 删除重复定义，使用 base 导出
-
-#### 1.3 统一设置持久化服务 ✅
-
-**改动文件**:
-- `nanobot/state/settings_store.py` - 添加 `SettingsStore` 类 + `get_settings_store()` 单例
+### 用户已拍板的设计决策
+- 默认可见性：无 `targets` 的消息 = 全员可见（`["All"]`）
+- 用户消息：全员可见
+- 压缩触发粒度：**每个 agent 独立阈值**，各自到阈值各自压缩
 
 ---
 
-### Phase 2: 降低复杂度 (HIGH) ✅ 已完成
-
-**提交**: `df54cf14 feat(orchestra): add AgentRegistry and ToolRegistryManager`
-
-#### 2.1 拆分 callbacks.py 🔧 骨架就位
-
-**改动文件**:
-- `nanobot/channels/telegram/callback_handlers/__init__.py` (新建)
-- `nanobot/channels/telegram/callback_handlers/agents.py` (新建)
-- `nanobot/channels/telegram/callback_handlers/providers.py` (新建)
-- `nanobot/channels/telegram/callback_handlers/settings.py` (新建)
-- `nanobot/channels/telegram/callback_handlers/groups.py` (新建)
-- `nanobot/channels/telegram/callback_handlers/logs.py` (新建)
-- `nanobot/channels/telegram/callback_handlers/prompts.py` (新建)
-- `nanobot/channels/telegram/callback_handlers/hyperparams.py` (新建)
-
-**待完成**: 将 `callbacks.py` 中的实现迁移到各子模块（需逐步进行，风险较高）。
-
-#### 2.2 GroupChatEngine绞杀者模式 🔧 组件提取
-
-**改动文件**:
-- `nanobot/groupchat/orchestra/agent_registry.py` (新建) - `AgentRegistry` 类
-- `nanobot/groupchat/orchestra/tool_registry_manager.py` (新建) - `ToolRegistryManager` 类
-
-**待完成**: 修改 `engine.py` 使用新组件（需逐步替换，不影响现有功能）。
-
-#### 2.3 提取Channel共享组件 ✅ 已完成
-
-**改动文件**:
-- `nanobot/channels/utils/__init__.py` (新建)
-- `nanobot/channels/utils/dedup.py` (新建) - `MessageDeduper` 类
-- `nanobot/channels/utils/media.py` (新建) - `MediaDownloader` 类
-- `nanobot/channels/utils/message.py` (新建) - `MessageSplitter` 类
-
-**效果**: 各 channel 可复用去重、媒体下载、消息分片逻辑。
-
----
-
-### Phase 3-4: 待处理
-
-Phase 3 (MEDIUM) 和 Phase 4 (清理) 优先级较低，可在后续迭代中处理：
-
-- 3.1 Skills/Mods 边界明确化
-- 3.2 引入 `AppContext` 替代全局单例
-- 3.3 依赖注入容器
-- 3.4 Display 接口抽象
-- 4.1 解决循环依赖
-- 4.2 统一 Session 和 HistoryContext
-- 4.3 删除 `engine._running` 遗留 flag
-
----
-
----
-
-## Phase 1: 修复核心缺陷 (CRITICAL)
-
-### 1.1 MessageBus入站路由统一
-
-**问题**：`MessageBus.consume_inbound()` 从未在生产代码调用，只有Telegram通过`engine.inject()`绕过总线工作。
-
-**目标**：所有channel通过统一路径接入群聊引擎。
-
-**实施步骤**：
-
-1. 创建 `nanobot/bus/router.py`
-   ```python
-   class IngressRouter:
-       """消费MessageBus入站队列，路由到正确的处理器"""
-       
-       def __init__(self, engine: GroupChatEngine, bus: MessageBus):
-           self._engine = engine
-           self._bus = bus
-           self._command_handlers: dict[str, Callable] = {}
-       
-       async def start(self) -> None:
-           """启动消费循环"""
-           while True:
-               msg = await self._bus.consume_inbound()
-               await self._route(msg)
-       
-       async def _route(self, msg: InboundMessage) -> None:
-           content = msg.content.strip()
-           # 命令路由
-           if content.startswith('/'):
-               handler = self._command_handlers.get(msg.channel, self._default_command_handler)
-               await handler(msg)
-           # 群聊消息
-           else:
-               await self._engine.deliver_user_message(
-                   session_key=msg.session_key,
-                   content=content,
-                   media=msg.media,
-                   metadata=msg.metadata,
-               )
-   ```
-
-2. 修改 `GroupChatEngine` 添加公共接口
-   ```python
-   async def deliver_user_message(
-       self,
-       session_key: str,
-       content: str,
-       media: list[str] | None = None,
-       metadata: dict | None = None,
-   ) -> None:
-       """统一的用户消息入口点，替代inject()"""
-       # 迁移 UserIngress 逻辑到这里
-   ```
-
-3. 删除 Telegram 的 `inject()` 快捷方式
-   - 修改 `channels/telegram/message_handler.py`
-   - 删除 `self._groupchat_engine.inject()` 调用
-   - 改用 `self._handle_message()` → `bus.publish_inbound()`
-
-4. 在 `gateway()` 中启动路由器
-   ```python
-   router = IngressRouter(engine, bus)
-   asyncio.create_task(router.start())
-   ```
-
-5. 验证所有channel工作
-   - 为Discord/Feishu/Matrix等添加集成测试
-   - 确认群聊消息正确路由
-
-**文件变更**：
-- 新建: `nanobot/bus/router.py`
-- 修改: `nanobot/bus/__init__.py`
-- 修改: `nanobot/groupchat/orchestra/engine.py`
-- 修改: `nanobot/channels/telegram/message_handler.py`
-- 修改: `nanobot/cli/commands.py`
-- 新建: `tests/test_ingress_router.py`
-
----
-
-### 1.2 Provider共享逻辑提取
-
-**问题**：`litellm_provider.py` 和 `httpx_provider.py` 重复8+个函数。
-
-**目标**：共享逻辑集中在基类或mixin。
-
-**实施步骤**：
-
-1. 在 `providers/base.py` 添加共享helpers
-   ```python
-   class LLMProvider(ABC):
-       # 添加模块级常量（从litellm/httpx提取）
-       _ALLOWED_MSG_KEYS = frozenset({...})
-       _ANTHROPIC_EXTRA_KEYS = frozenset({...})
-       
-       @staticmethod
-       def _short_tool_id(call_id: str) -> str:
-           """规范化tool_call ID"""
-           # 从 litellm_provider.py:89 提取
-       
-       @staticmethod
-       def _normalize_tool_call_id(tool_calls: list) -> list:
-           """规范化tool_call ID格式"""
-           # 从 litellm_provider.py:177 提取
-       
-       @staticmethod
-       def _apply_model_overrides(messages: list, model: str) -> list:
-           """应用模型特定的消息覆盖"""
-           # 从 httpx_provider.py 提取
-   ```
-
-2. 创建 `providers/message_utils.py`（可选，如果base.py过大）
-   ```python
-   def sanitize_messages(messages: list, allowed_keys: frozenset) -> list:
-       """清理消息格式"""
-   
-   def flatten_tool_messages(messages: list) -> list:
-       """将tool协议消息转为纯文本（兼容模式）"""
-   
-   def parse_tool_calls(response_data: dict) -> list[ToolCallRequest]:
-       """解析tool_calls响应"""
-   ```
-
-3. 重构 `litellm_provider.py`
-   - 删除重复的helpers
-   - 导入并使用基类/工具函数
-   - 目标：从1167行降至~800行
-
-4. 重构 `httpx_provider.py`
-   - 删除重复的helpers
-   - 导入并使用基类/工具函数
-   - 目标：从843行降至~600行
-
-**文件变更**：
-- 修改: `nanobot/providers/base.py`
-- 修改: `nanobot/providers/litellm_provider.py`
-- 修改: `nanobot/providers/httpx_provider.py`
-- 新建（可选）: `nanobot/providers/message_utils.py`
-
----
-
-### 1.3 统一设置持久化服务
-
-**问题**：`providers_models.json` 有4处读写，`agents/<name>/config.json` 有25+处写点。
-
-**目标**：单一服务层管理所有持久化。
-
-**实施步骤**：
-
-1. 扩展 `state/settings_store.py`
-   ```python
-   class SettingsStore:
-       """统一的配置读写服务"""
-       
-       def __init__(self, data_dir: Path | None = None):
-           self._data_dir = data_dir or Path.home() / ".nanobot"
-       
-       # Provider/Model 管理
-       def load_providers_models(self) -> dict:
-           """加载 providers_models.json"""
-       
-       def save_providers_models(self, data: dict) -> None:
-           """保存 providers_models.json"""
-       
-       def get_provider(self, name: str) -> dict | None:
-           """获取单个provider配置"""
-       
-       def set_provider(self, name: str, config: dict) -> None:
-           """设置/更新provider"""
-       
-       # Agent 配置管理
-       def load_agent(self, name: str) -> dict:
-           """加载 agent 配置"""
-       
-       def save_agent(self, name: str, config: dict) -> None:
-           """保存 agent 配置"""
-       
-       def list_agents(self) -> list[str]:
-           """列出所有agent"""
-       
-       # 全局设置
-       def load_global_settings(self) -> dict:
-           """加载全局设置"""
-       
-       def save_global_settings(self, settings: dict) -> None:
-           """保存全局设置"""
-   ```
-
-2. 创建单例获取函数
-   ```python
-   _store: SettingsStore | None = None
-   
-   def get_settings_store() -> SettingsStore:
-       global _store
-       if _store is None:
-           _store = SettingsStore()
-       return _store
-   ```
-
-3. 迁移调用点（分批进行）
-   - **第一批**：`providers/litellm_provider.py`, `providers/httpx_provider.py`
-   - **第二批**：`channels/telegram/commands/providers.py`
-   - **第三批**：`channels/telegram/callbacks.py` 中的 `_save_pm` 调用
-   - **第四批**：`skills/settings/scripts/settings_cli.py`
-
-4. 添加测试
-   ```python
-   # tests/test_settings_store.py
-   def test_provider_crud(store: SettingsStore):
-       store.set_provider("test", {"api_key": "x"})
-       assert store.get_provider("test")["api_key"] == "x"
-       store.delete_provider("test")
-       assert store.get_provider("test") is None
-   ```
-
-**文件变更**：
-- 修改: `nanobot/state/settings_store.py`
-- 修改: `nanobot/providers/litellm_provider.py`
-- 修改: `nanobot/providers/httpx_provider.py`
-- 修改: `nanobot/channels/telegram/commands/providers.py`
-- 修改: `nanobot/channels/telegram/callbacks.py`
-- 修改: `nanobot/skills/settings/scripts/settings_cli.py`
-- 新建: `tests/test_settings_store.py`
-
----
-
-## Phase 2: 降低复杂度 (HIGH)
-
-### 2.1 拆分 callbacks.py
-
-**问题**：3299行单体，包含所有inline-keyboard事件处理。
-
-**目标**：按领域分解，每个<500行。
-
-**实施步骤**：
-
-1. 识别领域边界
-   - `AgentCallbacks`: agent相关 (em_* callbacks)
-   - `ProviderCallbacks`: provider/model相关 (pm_* callbacks)
-   - `SettingsCallbacks`: 设置相关
-   - `GroupCallbacks`: 群组相关
-   - `HistoryCallbacks`: 历史相关
-
-2. 创建 `channels/telegram/callbacks/` 目录
-   ```
-   callbacks/
-   ├── __init__.py          # CallbacksMixin 组合所有子mixin
-   ├── agents.py            # AgentCallbacks
-   ├── providers.py         # ProviderCallbacks  
-   ├── settings.py          # SettingsCallbacks
-   ├── groups.py            # GroupCallbacks
-   └── history.py           # HistoryCallbacks
-   ```
-
-3. 重构 `CallbacksMixin`
-   ```python
-   class CallbacksMixin(
-       AgentCallbacks,
-       ProviderCallbacks,
-       SettingsCallbacks,
-       GroupCallbacks,
-       HistoryCallbacks,
-   ):
-       """组合所有callback handlers"""
-       
-       async def _on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-           """路由callback到具体handler"""
-           data = update.callback_query.data
-           if data.startswith("em_"):
-               await self._handle_agent_callback(update, context)
-           elif data.startswith("pm_"):
-               await self._handle_provider_callback(update, context)
-           # ...
-   ```
-
-4. 使用 `SettingsStore` 替代直接的文件操作
-
-**文件变更**：
-- 新建: `nanobot/channels/telegram/callbacks/__init__.py`
-- 新建: `nanobot/channels/telegram/callbacks/agents.py`
-- 新建: `nanobot/channels/telegram/callbacks/providers.py`
-- 新建: `nanobot/channels/telegram/callbacks/settings.py`
-- 删除: `nanobot/channels/telegram/callbacks.py` (旧文件)
-
----
-
-### 2.2 继续 GroupChatEngine 的绞杀者模式
-
-**问题**：1680行，broadcast/tools直接访问75次私有属性。
-
-**目标**：继续提取，减少engine职责。
-
-**实施步骤**：
-
-1. 提取 `AgentRegistry`
-   ```python
-   class AgentRegistry:
-       """管理可用agents配置"""
-       
-       def __init__(self, agents_dir: Path):
-           self._agents: dict[str, AgentConfig] = {}
-       
-       def load(self) -> None:
-           """加载所有agent配置"""
-       
-       def get(self, name: str) -> AgentConfig | None:
-           """获取agent配置"""
-       
-       def list(self) -> list[str]:
-           """列出所有agent名"""
-       
-       def add(self, name: str, config: AgentConfig) -> None:
-           """添加agent"""
-       
-       def remove(self, name: str) -> None:
-           """移除agent"""
-   ```
-
-2. 提取 `ToolRegistryManager`
-   ```python
-   class ToolRegistryManager:
-       """管理per-agent tool registry"""
-       
-       def __init__(self, workspace: Path, provider: LLMProvider):
-           self._cache: dict[str, ToolRegistry] = {}
-       
-       def get_registry(self, agent_name: str, workspace_scope: str) -> ToolRegistry:
-           """获取或创建agent的tool registry"""
-       
-       def clear_cache(self, agent_name: str) -> None:
-           """清除agent的registry缓存"""
-   ```
-
-3. 完成 `RoundLifecycle` 迁移
-   - 删除 `engine._running` 的所有直接读写
-   - 全部通过 `RoundLifecycle` 查询
-   - 删除 `leader_end_event` 参数
-
-4. 接口化 `BroadcastContext`
-   ```python
-   @runtime_checkable
-   class BroadcastContext(Protocol):
-       """Broadcast所需的引擎接口"""
-       @property
-       def round(self) -> int: ...
-       @property  
-       def leader(self) -> str | None: ...
-       async def send(self, text: str) -> None: ...
-       async def add_message(self, sender: str, content: str) -> None: ...
-       # 只暴露必要的方法，不暴露私有属性
-   ```
-
-**文件变更**：
-- 新建: `nanobot/groupchat/orchestra/agent_registry.py`
-- 新建: `nanobot/groupchat/orchestra/tool_registry_manager.py`
-- 修改: `nanobot/groupchat/orchestra/engine.py`
-- 修改: `nanobot/groupchat/orchestra/broadcast.py`
-- 修改: `nanobot/groupchat/orchestra/round_lifecycle.py`
-
----
-
-### 2.3 提取Channel共享组件
-
-**问题**：去重/媒体下载/消息分片在6+处重复实现。
-
-**目标**：提取可复用的工具类。
-
-**实施步骤**：
-
-1. 创建 `channels/utils/dedup.py`
-   ```python
-   from collections import OrderedDict
-   from typing import Deque
-   from collections import deque
-   
-   class MessageDeduper:
-       """消息去重器，支持多种策略"""
-       
-       def __init__(self, capacity: int = 1000, strategy: str = "ordered"):
-           self._capacity = capacity
-           self._strategy = strategy
-           self._seen: OrderedDict[str, None] | set[str]
-           if strategy == "ordered":
-               self._seen = OrderedDict()
-           else:
-               self._seen = set()
-       
-       def is_duplicate(self, msg_id: str) -> bool:
-           """检查并记录消息ID"""
-           if msg_id in self._seen:
-               return True
-           if self._strategy == "ordered":
-               self._seen[msg_id] = None
-               if len(self._seen) > self._capacity:
-                   self._seen.popitem(last=False)
-           else:
-               self._seen.add(msg_id)
-               if len(self._seen) > self._capacity:
-                   # 随机淘汰一半
-                   ...
-           return False
-   ```
-
-2. 创建 `channels/utils/media.py`
-   ```python
-   class MediaDownloader:
-       """统一的媒体下载工具"""
-       
-       def __init__(self, channel_name: str, media_dir: Path | None = None):
-           self._media_dir = media_dir or get_media_dir(channel_name)
-       
-       async def download(self, url: str, filename: str | None = None) -> Path:
-           """下载媒体文件到本地"""
-       
-       async def download_from_attachment(
-           self, 
-           attachment: dict, 
-           http_client: httpx.AsyncClient
-       ) -> Path | None:
-           """从attachment dict下载"""
-   ```
-
-3. 创建 `channels/utils/message.py`
-   ```python
-   class MessageSplitter:
-       """平台感知的消息分割器"""
-       
-       PLATFORM_LIMITS = {
-           "telegram": 4096,
-           "discord": 2000,
-           "slack": 4000,
-           "matrix": 16384,
-           "feishu": 30000,
-       }
-       
-       def __init__(self, platform: str, limit: int | None = None):
-           self._limit = limit or self.PLATFORM_LIMITS.get(platform, 4096)
-       
-       def split(self, text: str) -> list[str]:
-           """智能分割长消息，保持markdown完整性"""
-   ```
-
-4. 迁移各channel使用共享组件
-   - Feishu: 使用 `MessageDeduper` 替代 OrderedDict
-   - Discord: 使用 `MediaDownloader`
-   - 所有channel: 使用 `MessageSplitter`
-
-**文件变更**：
-- 新建: `nanobot/channels/utils/__init__.py`
-- 新建: `nanobot/channels/utils/dedup.py`
-- 新建: `nanobot/channels/utils/media.py`
-- 新建: `nanobot/channels/utils/message.py`
-- 修改: `nanobot/channels/feishu.py`
-- 修改: `nanobot/channels/discord.py`
-- 修改: `nanobot/channels/matrix.py`
-- 修改: `nanobot/channels/dingtalk.py`
-- 修改: `nanobot/channels/wecom.py`
-- 修改: `nanobot/channels/qq.py`
-- 修改: `nanobot/channels/email.py`
-- 修改: `nanobot/channels/whatsapp.py`
-- 修改: `nanobot/channels/mochat.py`
-
----
-
-## Phase 3: 改进架构一致性 (MEDIUM)
-
-### 3.1 明确Skills和Mods边界
-
-**目标**：清晰的职责划分。
-
-**规则**：
-- **Skills** (`skills/*.md`): 仅作为prompt文档，教导agent如何使用工具
-- **Mods** (`mods/*/mod.py`): Python代码，订阅事件，扩展行为
-- **Skills with scripts**: 必须迁移到Mods，或者仅作为CLI工具（不注入prompt）
-
-**实施步骤**：
-
-1. 审计现有skills with scripts
-   - `skills/cron/scripts/cron_cli.py` → 保留（CLI工具）
-   - `skills/settings/scripts/settings_cli.py` → 迁移核心逻辑到 `SettingsStore`
-   - `skills/debug/scripts/send_cli.py` → 保留（CLI工具）
-
-2. 更新文档
-   - 在 `docs/SKILL_VS_MOD.md` 明确边界
-   - 更新 `AGENTS.md`
-
-3. 强制执行（可选）
-   - `SkillsLoader` 警告包含scripts的skill
-   - 提供迁移指南
-
----
-
-### 3.2 引入上下文对象替代全局单例
-
-**目标**：支持多会话、易测试。
-
-**实施步骤**：
-
-1. 创建 `AppContext`
-   ```python
-   @dataclass
-   class AppContext:
-       """应用级上下文，替代全局单例"""
-       event_bus: BroadcastEventDispatcher
-       settings_store: SettingsStore
-       mod_manager: ModManager
-       data_dir: Path
-       
-       @classmethod
-       def create(cls, data_dir: Path | None = None) -> "AppContext":
-           """创建应用上下文"""
-           data_dir = data_dir or Path.home() / ".nanobot"
-           event_bus = BroadcastEventDispatcher()
-           settings_store = SettingsStore(data_dir)
-           mod_manager = ModManager(settings_store)
-           return cls(
-               event_bus=event_bus,
-               settings_store=settings_store,
-               mod_manager=mod_manager,
-               data_dir=data_dir,
-           )
-   ```
-
-2. 修改 `gateway()` 使用上下文
-   ```python
-   def gateway():
-       ctx = AppContext.create()
-       engine = GroupChatEngine(..., context=ctx)
-       router = IngressRouter(engine, ctx)
-       # ...
-   ```
-
-3. 逐步替换 `get_bus()` 等全局函数
-   - 优先级低，可在Phase 4进行
-
----
-
-### 3.3 引入依赖注入容器（可选）
-
-**目标**：`gateway()` 可测试。
-
-**实施步骤**：
-
-1. 使用 `dependency-injector` 或简单DI
-   ```python
-   from dependency_injector import containers, providers
-   
-   class Container(containers.DeclarativeContainer):
-       config = providers.Singleton(load_config)
-       bus = providers.Singleton(MessageBus)
-       settings_store = providers.Singleton(SettingsStore)
-       provider = providers.Singleton(LiteLLMProvider, config=config.provided)
-       engine = providers.Singleton(GroupChatEngine, ...)
-   ```
-
-2. 重构 `gateway()` 使用容器
-   ```python
-   def gateway():
-       container = Container()
-       engine = container.engine()
-       router = container.router()
-       # ...
-   ```
-
----
-
-### 3.4 抽象Display接口
-
-**目标**：非Telegram channel也有状态面板能力。
-
-**实施步骤**：
-
-1. 定义 `StatusPanel` 协议
-   ```python
-   @runtime_checkable
-   class StatusPanel(Protocol):
-       async def create(self, agents: list[str]) -> None: ...
-       async def update(self, agent: str, state: str, detail: str = "") -> None: ...
-       async def close(self) -> None: ...
-   ```
-
-2. 实现 `TelegramStatusPanel`
-   ```python
-   class TelegramStatusPanel:
-       def __init__(self, edit_fn: Callable, send_fn: Callable):
-           self._edit_fn = edit_fn
-           self._send_fn = send_fn
-           self._msg_id: int | None = None
-       
-       async def create(self, agents: list[str]) -> None:
-           self._msg_id = await self._send_fn(self._render())
-       
-       async def update(self, agent: str, state: str, detail: str = "") -> None:
-           # throttled edit
-           await self._edit_fn(self._msg_id, self._render())
-   ```
-
-3. 其他channel实现（可占位）
-   - `DiscordStatusPanel`: 使用embed
-   - `MatrixStatusPanel`: 使用room state
-   - `NullStatusPanel`: 无操作
-
----
-
-## Phase 4: 清理遗留代码 (LOW)
-
-### 4.1 解决循环依赖
-
-- 审计 `lazy import` 注释
-- 重新组织 `tools/` 和 `groupchat/` 的导入关系
-- 可能需要引入中间层
-
-### 4.2 统一Session和HistoryContext
-
-- 决定保留哪个
-- 迁移或删除另一个
-- 更新所有调用点
-
-### 4.3 删除 `engine._running` 遗留flag
-
-- 确认所有调用点已迁移到 `RoundLifecycle`
-- 删除属性
-- 删除 `mark_winding_down(flip_running=True)` 参数
-
----
-
-## 执行顺序建议
+## 目标架构：单持久日志 + per-agent 持久视图
 
 ```
-Phase 1 (必须先完成)
-├── 1.1 MessageBus路由 (最高优先级，修复核心缺陷)
-├── 1.2 Provider共享逻辑
-└── 1.3 Settings持久化服务
-
-Phase 2 (Phase 1完成后)
-├── 2.1 拆分callbacks.py (依赖1.3)
-├── 2.2 Engine绞杀者模式 (可并行)
-└── 2.3 Channel共享组件 (可并行)
-
-Phase 3 (Phase 2完成后)
-├── 3.1 Skills/Mods边界 (可并行)
-├── 3.2 上下文对象 (依赖1.3)
-├── 3.3 依赖注入 (依赖3.2)
-└── 3.4 Display接口 (可并行)
-
-Phase 4 (清理)
-└── 所有遗留问题
+                    ┌─────────────────────────────────────┐
+  所有消息写入 ───► │  持久日志 (append-only, 带 targets)  │
+  _add_message()    │  [{sender, content, targets}, ...]   │
+  chatroom_send     └──────────────┬──────────────────────┘
+                                   │ 按 targets 可见性投影
+                    ┌──────────────┴──────────────┐
+                    ▼                              ▼
+          ┌────────────────┐              ┌────────────────┐
+          │ Agent A 视图    │              │ Agent B 视图    │  ... (N 个)
+          │ (持久压缩态)    │              │ (持久压缩态)    │
+          └────────┬───────┘              └────────┬───────┘
+                   │ 各自阈值各自压缩              │
+                   ▼                               ▼
+          build_agent_prompt(A)           build_agent_prompt(B)
+          (读 A 的视图，不重压)            (读 B 的视图，不重压)
 ```
+
+**不变量**（改动必须保持）：
+1. 一条消息进日志后，**只出现在其 `targets` 命中的 agent 视图里**；A→B(`targets=[B]`)
+   不进 C 的视图。
+2. `["All"]` 的消息进**所有** agent 视图（含用户/系统消息——默认全员可见）。
+3. 每个 agent 视图独立维护自己的压缩态；压缩只动该视图，不碰其他 agent 的视图，
+   **不破坏跨 agent 隐私**（A→B 段在 A 视图压一次、在 B 视图再压一次，算力翻倍
+   但换正确隐私——用户已确认接受）。
+4. mailbox 降级为**实时通知层**：消息已在持久日志里，打断失败不再丢——agent 下轮
+   建 prompt 时按可见性过滤就会看到。
+5. **接口契约**：外部代码（engine/broadcast/run_loop/chatroom_tools/tool_loop）
+   只通过 `HistoryContext` 的稳定 public 方法访问历史，**永远不直接读/写内部
+   `messages` 列表**。消灭当前三类"无契约"访问（见下）。
+
+### 接口契约 — `HistoryContext` 稳定 public 面
+
+> 这是"低耦合"的具体落地。当前外部代码直接戳 `engine._history`（34 处/8 文件），
+> 包括读列表元素、读私有属性、原地改写列表——这些都是无契约访问，改内部实现
+> 就静默崩调用方。重构后 `HistoryContext` 只暴露以下操作，外部全部走它：
+
+```python
+class HistoryContext:
+    # ── 写入 ──
+    def add_message(self, sender: str, content: str,
+                    targets: list[str] | None = None) -> None:
+        """追加一条消息。targets=None → 全员可见。唯一写入入口。"""
+
+    # ── 读取（per-agent 视图）──
+    def view_for(self, agent_name: str) -> list[dict]:
+        """返回该 agent 可见的消息子集（持久视图的副本，外部不可改）。"""
+
+    def view_for_raw(self, agent_name: str) -> list[dict]:
+        """同 view_for 但未经压缩——供调试/quote_message 等需原文的场景。"""
+
+    # ── 查询（替代直接读列表元素）──
+    def last_sender(self) -> str | None:
+        """最后一条消息的 sender（替代 engine._history[-1]['sender']）。"""
+
+    def has_system_message(self) -> bool:
+        """是否已有系统消息（替代 any(m['sender']=='系统' for m in engine._history)）。"""
+
+    def is_empty(self) -> bool:
+        """替代 `not engine._history`。"""
+
+    def all_messages(self) -> list[dict]:
+        """完整日志的副本——仅 generate_summary 等需全量场景用。"""
+
+    # ── 压缩 ──
+    async def compress_for(self, agent_name: str) -> None:
+        """压缩指定 agent 的视图（per-agent 独立阈值）。"""
+
+    async def compress_all(self) -> None:
+        """对所有 active agent 各压一次（替代 _maybe_compress_history）。"""
+
+    # ── 维护 ──
+    def clear(self) -> None:
+        """清空日志和所有视图。"""
+
+    def clear_agent_view(self, agent_name: str, keep_last: int = 0) -> int:
+        """清理某 agent 视图（替代 ClearContextTool 的 _history[:] = new_history）。
+        返回清理条数。"""
+
+    def format(self) -> str:
+        """格式化全量日志为可读字符串（调试用）。"""
+```
+
+**禁止的外部访问**（重构后必须消除，grep 验证归零）：
+- `engine._history[-1]["sender"]` → `engine.history.last_sender()`
+- `for m in engine._history` / `reversed(engine._history)` → `engine.history.all_messages()` 或 `view_for(name)`
+- `engine._history._provider` → 由 `HistoryContext` 内部持有，外部不碰
+- `engine._history[:] = new_history` → `engine.history.clear_agent_view(name)`
+- `self._history = self.history.messages` 同步仪式（5 处）→ 删除，shim 退役
 
 ---
 
-## 测试策略
+## 现有代码关键事实（已逐行核实）
 
-每个Phase需要：
+| 事实 | 位置 | 含义 |
+|------|------|------|
+| `HistoryContext.messages` 是单条共享列表 | `context.py:50` | per-agent 视图**不存在**，要新建 |
+| `engine._history` 是 `history.messages` 的别名 shim | `engine.py:287,427,434,983,1015` | 34 处引用、8 文件，要迁移 |
+| 消息只有 `sender`/`content`，无 `targets` | `context.py:104` | 要加字段 |
+| `history_to_messages` 按 `sender` 过滤（`allowed = {"用户","系统"} \| relevant_agents`） | `message_converter.py:84` | 要改成按 `targets` 可见性过滤 |
+| broadcast 建 prompt 传 `relevant_agents=None`（不过滤，全员看全部） | `broadcast.py:515` | 要换成传该 agent 的视图 |
+| `ChatroomSendTool` 只 `mailbox.send()`，不写历史 | `chatroom_tools.py:761` | 要加写日志 |
+| `MailboxHub.start_round()` 清空队列和历史 | `mailbox.py:411-432` | 持久化后可清空（消息已在日志） |
+| `maybe_compress` 对共享列表整体压 | `context.py:160-340` | 要改成 per-agent |
+| direct-chat 模式也用 `_add_message` + `_maybe_compress_history` | `engine.py:1195-1200` | 单 agent 时视图退化为"自己=全部"，要兼容 |
+| 测试范式：`_FakeEngine` 真对象+微小假件，`_add_message(sender, content)` | `tests/test_user_ingress.py:33` | 加 `targets` 参数时假件要跟着改 |
 
-1. **单元测试**
-   - 新建的类/函数必须有测试
-   - 覆盖率目标: 80%+
+**调用链插入点**（已确认）：
+```
+broadcast.py:513  engine._build_agent_prompt(history=self._history, relevant_agents=None)
+  → engine.py:1055  PromptBuilder.build_agent_prompt(history=self._history, ...)
+    → prompt_builder.py:723  history_to_messages(history, agent_name, relevant_agents=...)
+      → message_converter.py:84  按 sender 过滤
+```
+改造点：`engine.py:1055` 把 `history=self._history` 换成 `history=self.history.view_for(agent_name)`。
 
-2. **集成测试**
-   - Phase 1.1 完成后：所有channel的群聊端到端测试
-   - Phase 1.3 完成后：设置持久化一致性测试
+---
 
-3. **回归测试**
-   - 每次修改后运行 `pytest tests/ -q`
-   - 关键路径：Telegram群聊流程、设置保存/加载
+## 执行计划（分步提交，每步先写回归测试）
 
-4. **手动验证**
-   - Phase 1.1 完成后：重启gateway，测试多channel
-   - Phase 2.1 完成后：测试Telegram管理界面
+> 每步：① 写/改回归测试钉住行为 → ② 改实现 → ③ `py_compile` + `pytest tests/ -q` 全绿 → ④ checkpoint 提交
+> 提交 message 写清 what + why + 证据（引用测试/行号）
+
+### Phase A：数据结构加 `targets` 字段（无行为变更）
+
+**目标**：消息结构支持可见性，但默认全员可见 = 行为不变。
+
+1. **测试**（新建 `tests/test_history_targets.py`）：
+   - `add_message(sender, content)` 不传 targets → 默认 `targets == ["All"]`
+   - `add_message(sender, content, targets=["B"])` → `targets == ["B"]`
+   - 旧调用点（`_add_message("用户", msg)` 等）不改也通过（默认全员）
+
+2. **实现**：
+   - `HistoryContext.add_message(self, sender, content, targets=None)`：缺省
+     `targets = ["All"]`；`self.messages.append({"sender","content","targets"})`
+   - `engine._add_message(self, sender, content, targets=None)` 透传
+   - `_state.save_message` 多存一个 `targets` 字段（向后兼容：旧日志无 targets
+     读取时补 `["All"]`）
+
+3. **迁移现有调用点**（逐个改，不强制传 targets，默认即全员）：
+   - `run_loop.py:108` `_add_message("系统", ...)` → 默认 All
+   - `user_ingress.py:55,142` `_add_message("用户", ...)` → 默认 All
+   - `engine.py:1195,1198` direct-chat → 默认 All
+   - `broadcast.py:901,927,987,1018,1121` agent 最终输出 → 默认 All
+   - 这些**全部不改语义**（原来就全员可见），只是字段补全
+
+**验证**：`pytest tests/ -q` 全绿（含旧测试，因默认全员 = 原行为）。
+
+### Phase B：per-agent 视图结构（只读路径，不压缩）
+
+**目标**：每个 agent 能取到自己该看到的子集，但此时子集是**临时算的**（从日志
+按 targets 过滤），压缩仍走旧的共享 `maybe_compress`。本步只验证可见性正确。
+
+1. **测试**（`tests/test_history_view.py`）：
+   - A→B(`targets=["B"]`) → `view_for("A")` 含、`view_for("B")` 含、`view_for("C")` **不含**
+   - 广播(`targets=["All"]`) → 所有 agent 的视图都含
+   - 用户消息(默认 All) → 所有视图含
+   - 视图是**投影**（改视图不污染日志，反之日志新增后视图重算能拿到新消息）
+
+2. **实现**：
+   - `HistoryContext.view_for(agent_name) -> list[dict]`：返回 `[m for m in self.messages
+     if "All" in m["targets"] or agent_name in m["targets"] or m["sender"] == agent_name]`
+     （发送者总能看到自己发的）
+   - `engine._build_agent_prompt`（`engine.py:1055`）：`history=self.history.view_for(agent_name)`
+     替换 `history=self._history`
+   - `build_agent_prompt` 的 `relevant_agents` 参数**保留但置 None**（视图已过滤，
+     再按 sender 过滤是冗余兜底；置 None 避免双重过滤误删）
+   - `history_to_messages` 的 sender 过滤逻辑**不动**（兜底保留，向后兼容 direct-chat
+     等仍传共享列表的场景）
+
+3. **`_history` shim 处理**：本步**不删** shim。`engine._history` 仍指向 `history.messages`
+   （日志），34 处读引用继续工作；只是 prompt 路径改走 `view_for`。删 shim 留到 Phase E。
+
+**验证**：`pytest tests/ -q`；新增可见性测试全绿；旧测试因默认全员仍绿。
+
+### Phase C：`chatroom_send` 写入持久日志
+
+**目标**：agent 间讨论跨轮留存，不再只靠临时 mailbox。
+
+1. **测试**（`tests/test_chatroom_send_persists.py`）：
+   - agent A 调 `chatroom_send(to="B", msg)` → `engine._history` 出现一条
+     `targets=["B"]` 的记录；`view_for("C")` 不含
+   - 跨轮：`mailbox.start_round()` 清空队列后，`view_for("B")` 仍含该条（持久）
+   - `chatroom_send(to="All")` → `targets=["All"]`，所有视图含
+
+2. **实现**：
+   - `ChatroomSendTool.execute`（`chatroom_tools.py:761`）在 `mailbox.send()` 后，
+     调 `engine._add_message(self._agent_name, message, targets=actual_recipients)`
+     - `to="All"` → `targets=["All"]`
+     - `to=["B","C"]` → `targets=["B","C"]`
+     - `to="B"` → `targets=["B"]`
+   - `ChatroomSendTool` 需要 `engine` 引用（目前只有 `mailbox`）。在 `BroadcastOrchestrator
+     .setup_tools_and_pools`（`broadcast.py:260`）构造 `ChatroomSendTool` 时注入
+     `engine=self.engine`
+
+3. **mailbox 角色**：仍保留 `mailbox.send` 做实时通知 + 打断。但消息已在日志里，
+   打断失败不再"丢"——agent 下轮建 prompt 会从视图看到。
+
+**验证**：`pytest tests/ -q`；跨轮留存测试绿。
+
+### Phase D：压缩改为 per-agent（核心，风险最高）
+
+**目标**：每个 agent 视图各自到阈值各自压缩，结果**存回该视图**（持久，不重压）。
+**这是真正解决"遗忘"的一步**——压缩结果稳定可复用。
+
+1. **测试**（`tests/test_per_agent_compress.py`）：
+   - A 视图到阈值压缩 → A 视图变短、**B 视图不受影响**
+   - A→B 段：在 A 视图被压成摘要、在 B 视图也各自压（独立）
+   - 压缩摘要只在该 agent 视图内，不泄露给 C（A→B 的摘要**不进 C 视图**）
+   - 压缩结果持久：第二次 `view_for("A")` 不再调 LLM（用存好的）
+   - direct-chat 单 agent：视图=全部，压缩等价旧行为（兼容）
+
+2. **实现**（核心数据结构改造）：
+   - 新增 `HistoryContext._views: dict[str, list[dict]]` —— per-agent 持久视图
+   - `add_message(sender, content, targets)`：**先写日志**（`self.messages`），
+     再 append 到 `targets` 命中的每个 agent 的 `_views[name]`（`All` → 所有 active agent）
+   - `view_for(name)`：直接返回 `self._views.get(name, [])`（不再临时算）
+   - `maybe_compress_per_agent(name)`：对该 agent 的 `_views[name]` 跑压缩逻辑
+     （复用现有 `maybe_compress` 的 head/tail/摘要算法，但作用域是 `_views[name]`）
+   - `_maybe_compress_history`（`engine.py:1012`）：遍历 active agents 各自压一遍，
+     各自独立阈值
+   - 触发时机：`run_loop.py:167` 每轮结束、`engine.py:1200` direct-chat 每周期——
+     改成对每个 active agent 调一次
+
+3. **隐私保证**：压缩只读 `_views[name]`，摘要写回 `_views[name]`，**不跨视图**。
+   A→B 段在 `_views["A"]` 和 `_views["B"]` 各自独立存在、独立压缩，C 的
+   `_views["C"]` 从未含此段 → 摘要不泄露。
+
+4. **兜底分支修正**：旧 `context.py:333-334` 的"摘要未启用就丢中段"——per-agent
+   版本改成**像空摘要那样保留中段**（`return` 而非 `head+tail`），靠 `add_message`
+   的 max_messages 兜底。先写测试钉"禁用摘要时中段不丢"。
+
+**验证**：`pytest tests/ -q`；per-agent 隔离测试 + 持久测试绿；`test_compression_*_snapshot.py`
+旧快照测试需更新（压缩模型变了，更新快照并记录原因）。
+
+### Phase E：接口契约落地 + shim 退役 + IngressRouter 清理
+
+**目标**：把外部对 `engine._history` 的 34 处直接访问全部迁到 `HistoryContext`
+契约方法（上节"接口契约"），`_history` shim 退役，删死代码，阈值止血。
+**这是"低耦合"标准的具体验收步**——grep 验证外部不再碰内部列表。
+
+1. **外部访问点 → 契约方法**（逐个迁移，每改一处跑测试）：
+
+   | 当前访问 | 出现处 | 迁到 |
+   |----------|--------|------|
+   | `engine._history[-1]["sender"]` | `engine.py:1030,1036` | `engine.history.last_sender()` |
+   | `any(m["sender"]=="系统" for m in engine._history)` | `run_loop.py:107` | `engine.history.has_system_message()` |
+   | `not engine._history` / `if not engine._history` | `run_loop.py:32,52` | `engine.history.is_empty()` |
+   | `list(engine._history)` / `for m in engine._history` | `run_loop.py:35,107` `broadcast.py:446` | `engine.history.all_messages()`（摘要场景）或 `view_for(name)` |
+   | `engine._history._provider` | `run_loop.py:52` | `HistoryContext` 内部持有，外部通过 `compress_all()` 触发，不直接拿 provider |
+   | `self._engine._history[:] = new_history` | `chatroom_tools.py:1281`（ClearContextTool） | `engine.history.clear_agent_view(name, keep_last)` |
+   | `history=self._history`（建 prompt） | `engine.py:1055` | `history=self.history.view_for(agent_name)`（Phase B 已做） |
+   | `self._history = self.history.messages` 同步仪式 | `engine.py:287,427,434,983,1015` | **删除**——shim 退役 |
+
+2. **`_history` shim 退役**：所有引用迁完后，删 `engine._history` 属性及 5 处同步行。
+   留一个 `@property _history` 短期兼容层（raise 或 deprecation warning）可作
+   可选项，但目标是真的删掉。
+
+3. **IngressRouter 半统一**（二选一，**推荐删死代码**）：
+   - 删 `deliver_user_message()`（`engine.py:842-871`）和 `inject()` 的重复——
+     保留 `inject()` 作为唯一入口（Telegram 一直用它），`IngressRouter` 调 `inject()`
+     而非 `deliver_user_message()`
+   - 或：真统一 Telegram 走 bus（修 `deliver_user_message` 保 media/metadata + 0-agent
+     处理，`message_handler.py:159` 改 `publish_inbound`）——风险高，不推荐本轮做
+   - 修 `plan.md` 上轮 1.1 状态：从"已修复"改"未完成（本轮清理）"
+
+4. **阈值调整**（止血，可与 Phase D 同提交）：
+   - `history_settings.py:59-65`：`max_messages` 50→200、`compression_keep_recent`
+     6→20。先写"200 条仍存活"回归测试。
+
+**验证**：
+- `pytest tests/ -q` 全绿
+- `grep -rn "engine\._history\b\|\.history\.messages" nanobot/ | grep -v "context.py"` 
+  **归零**——外部不再碰内部列表（这是"接口契约"的硬验收）
+- `grep -rn "\._history\b" nanobot/groupchat/orchestra/engine.py` 仅剩兼容层或归零
 
 ---
 
 ## 风险与缓解
 
-| 风险 | 概率 | 影响 | 缓解措施 |
-|------|------|------|---------|
-| MessageBus路由引入新bug | 高 | 高 | 先写集成测试，小步验证 |
-| Settings迁移遗漏调用点 | 中 | 中 | 搜索所有 `_save_pm` / `config.json` 写点 |
-| callbacks拆分破坏现有流程 | 中 | 高 | 保持接口不变，内部重构 |
-| Engine重构影响性能 | 低 | 低 | 性能基准测试 |
+| 风险 | 概率 | 影响 | 缓解 |
+|------|------|------|------|
+| Phase D 视图一致性 bug（消息漏进/多进某视图） | 中 | 高 | Phase B 先用临时投影验证可见性逻辑，Phase D 再持久化；隔离测试钉死 |
+| 压缩 per-agent 算力翻 N 倍 | 高 | 中 | 用户已确认接受；可加"仅 active agent 才压缩"优化 |
+| `_history` shim 34 处迁移遗漏 | 中 | 中 | 每改一处跑全测试；Phase E 最后 grep 归零验证 |
+| direct-chat 模式回归 | 低 | 高 | Phase D 兼容测试（单 agent 视图=全部）；`test_session_manager_history.py` 守护 |
+| 压缩快照测试模型变了 | 高 | 低 | `test_compression_*_snapshot.py` 更新快照，commit message 记原因 |
+| 线上网关在跑 | — | 高 | AGENTS.md：agent idle 才重启；改动不涉及 channel 层，降低风险 |
 
----
+## 不做（本轮范围外）
 
-## 参考文档
+- Telegram 真统一到 bus（D1 的"高风险"分支）——本轮只删死代码 + 修虚标
+- mailbox 完全删除——降级为通知层，仍保留实时打断能力
+- 历史可重载快照（进程重启恢复）——`save_message` 仍只追加日志，本轮不做快照恢复
 
-- `docs/design-review-2026-08-07.md` - 项目自己的设计审查
-- `AGENTS.md` - 项目级约定
-- `nanobot/groupchat/orchestra/round_lifecycle.py` 注释 - 状态机迁移背景
+## 验证（DoD）
 
----
+- [ ] `py_compile` 全过
+- [ ] `pytest tests/ -q` 全绿（含新增回归测试 + 更新的快照测试）
+- [ ] **接口契约验收**：`grep -rn "engine\._history\b\|\.history\.messages" nanobot/ | grep -v "context.py"` 
+      归零——外部不再碰内部列表（"低耦合"硬指标）
+- [ ] 新增测试覆盖（"高稳定"硬指标）：可见性隔离（A→B C 看不到）、跨轮留存、
+      per-agent 压缩隔离、压缩持久不重压、禁用摘要不丢中段、契约方法行为
+      （last_sender/has_system_message/is_empty/all_messages 返回副本不可改）
+- [ ] commit message 每步写清 what + why + 证据
+- [ ] 涉及线上：确认 agent idle → 重启网关 → 观察 gateway.log 首轮
+
+## 参考文件
+
+- `AGENTS.md` — 红线（#1 先测试 #2 修根源 #4 删死代码 #5 重读 #6 checkpoint）
+- `nanobot/groupchat/history/context.py` — `HistoryContext`（核心改造对象）
+- `nanobot/groupchat/history/message_converter.py:history_to_messages` — 过滤逻辑
+- `nanobot/groupchat/orchestra/engine.py:_build_agent_prompt` — 插入点
+- `nanobot/groupchat/orchestra/tools/chatroom_tools.py:ChatroomSendTool` — 写日志
+- `tests/test_user_ingress.py` — 测试范式（真对象+微小假件）
+- `tests/test_compression_*_snapshot.py` — 快照测试（Phase D 要更新）
 
 ## 变更日志
 
 | 日期 | 变更 |
 |------|------|
-| 2026-09-07 | 初始版本，基于架构深度分析 |
-| 2026-09-07 | Phase 1 完成：MessageBus路由(1.1)、Provider共享逻辑(1.2)、Settings持久化服务(1.3) |
-| 2026-09-07 | Phase 2 部分完成：callbacks骨架(2.1)、Channel共享组件(2.3) |
+| 2026-09-07 | 覆盖上轮 Phase 1-4 记录，重写为"单持久日志 + per-agent 视图"历史模型重构计划。基于遗忘/收不到两 bug 的根因调查（两套矛盾历史模型无不变量）+ 用户拍板的可见性语义（A→B C 看不到 + 跨轮留存 + per-agent 分别压缩）|

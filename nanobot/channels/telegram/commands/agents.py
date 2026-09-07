@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+from loguru import logger
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from loguru import logger
-
 from nanobot.groupchat import display as _d
 from nanobot.utils.helpers import split_message
+
 from ..formatting import TELEGRAM_MAX_MESSAGE_LEN
 
 

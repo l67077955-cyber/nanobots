@@ -98,6 +98,64 @@ class HistoryContext:
     def clear(self) -> None:
         """Wipe the entire history."""
         self.messages.clear()
+        self._views.clear()
+
+    # ── Contract methods for external code (Phase E) ────────────────────────
+
+    def is_empty(self) -> bool:
+        """Return True if history has no messages."""
+        return not self.messages
+
+    def last_sender(self) -> str | None:
+        """Return the sender of the most recent message, or None if empty."""
+        if not self.messages:
+            return None
+        return self.messages[-1].get("sender")
+
+    def has_system_message(self) -> bool:
+        """Return True if any message has sender == '系统'."""
+        return any(m.get("sender") == "系统" for m in self.messages)
+
+    def all_messages(self) -> list[dict]:
+        """Return a copy of all messages (for safe iteration)."""
+        return [dict(m) for m in self.messages]
+
+    def char_count(self) -> int:
+        """Return total character count of all message contents."""
+        return sum(len(m.get("content", "")) for m in self.messages)
+
+    def provider(self) -> Any:
+        """Return the LLM provider (for summarization)."""
+        return self._provider
+
+    def clear_agent_view(self, agent_name: str, keep_last: int = 0) -> int:
+        """Clear messages from an agent's view (Leader 清理 agent 上下文).
+
+        Removes the agent's own messages from its stored view, optionally
+        keeping the last N.  Returns number removed.  Used by ClearContextTool
+        so Leader can reset an agent's context without affecting others.
+        """
+        if agent_name not in self._views:
+            return 0
+        view = self._views[agent_name]
+        agent_msgs = [m for m in view if m.get("sender") == agent_name]
+        total = len(agent_msgs)
+        remove_count = max(0, total - keep_last)
+        if remove_count == 0:
+            return 0
+        # Remove oldest remove_count messages from that agent
+        removed = 0
+        new_view = []
+        agent_seen = 0
+        for m in view:
+            if m.get("sender") == agent_name:
+                agent_seen += 1
+                if agent_seen <= remove_count:
+                    removed += 1
+                    continue
+            new_view.append(m)
+        self._views[agent_name] = new_view
+        return removed
 
     def format(self) -> str:
         """Format history as a single readable string."""

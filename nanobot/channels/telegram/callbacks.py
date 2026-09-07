@@ -4,35 +4,42 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import sys
-import time
 import re
 from pathlib import Path
 
+from loguru import logger
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import BadRequest
-
-from nanobot.i18n import i18n
-import nanobot.i18n_catalog  # noqa: F401 (registers UI strings)
 from telegram.ext import ContextTypes
 
-from loguru import logger
-
-from nanobot.groupchat import display as _d
+import nanobot.i18n_catalog  # noqa: F401 (registers UI strings)
 from nanobot.groupchat.history.prompt_builder import (
-    PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
-    GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
+    COMPONENT_LABELS as _COMPONENT_LABELS,
+)
+from nanobot.groupchat.history.prompt_builder import (
     COMPONENT_PHASES as _COMPONENT_PHASES,
 )
-from .formatting import TELEGRAM_MAX_MESSAGE_LEN
+from nanobot.groupchat.history.prompt_builder import (
+    PromptBuilder,
+)
+from nanobot.i18n import i18n
+
 from .callbacks_registry import (
-    AG_MDL_PROV, AG_MDL_PICK, AG_MDL_BY_NAME, AG_MDL_MANUAL,
-    AG_MDL_CREATE_PROV, AG_MDL_CREATE_PICK, AG_MDL_CREATE_MANUAL,
+    AG_MDL_BY_NAME,
+    AG_MDL_CREATE_MANUAL,
+    AG_MDL_CREATE_PICK,
+    AG_MDL_CREATE_PROV,
     AG_MDL_CREATE_SKIP,
-    ag_mdl_prov, ag_mdl_pick, ag_mdl_manual,
-    ag_mdl_create_prov, ag_mdl_create_pick, ag_mdl_create_manual,
+    AG_MDL_MANUAL,
+    AG_MDL_PICK,
+    AG_MDL_PROV,
+    ag_mdl_create_manual,
+    ag_mdl_create_pick,
+    ag_mdl_create_prov,
     ag_mdl_create_skip,
+    ag_mdl_manual,
+    ag_mdl_pick,
+    ag_mdl_prov,
     parse_args,
 )
 
@@ -368,12 +375,12 @@ class CallbacksMixin:
                 if not engine or name not in engine.registry:
                     await query.edit_message_text(f"❌ Agent '{name}' 不存在")
                     return
-            
+
                 deleted_dir = engine.delete_agent(name)
-            
+
                 msg = f"🗑️ Agent '{name}' 已删除"
                 if deleted_dir:
-                    msg += f"\n📁 配置目录已删除"
+                    msg += "\n📁 配置目录已删除"
                 await query.edit_message_text(msg)
 
             elif data.startswith("ef:"):
@@ -763,8 +770,8 @@ class CallbacksMixin:
                     await query.answer("⚠️ 记录不存在")
                     return
                 r = logs[idx]
-                import io as _io
                 import datetime as _dt
+                import io as _io
 
                 # ── Build live context snapshot for each active agent ──
                 context_snapshot: dict = {}
@@ -1965,9 +1972,10 @@ class CallbacksMixin:
                         await query.edit_message_text(f"⚠️ {prov} 缺少 URL 或 API Key")
                         return
                     # Fetch /v1/models
-                    import aiohttp
                     import json as _json
                     import re as _re
+
+                    import aiohttp
                     if "openrouter" in url.lower():
                         candidates = ["https://openrouter.ai/api/v1/models"]
                     elif _re.search(r"/v\d+$", url):
@@ -2413,8 +2421,9 @@ class CallbacksMixin:
 
     async def _handle_history_callback(self, query, data: str) -> None:
         """Handle /history interactive settings callbacks."""
-        from nanobot.groupchat.history import history_settings as hs
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        from nanobot.groupchat.history import history_settings as hs
 
         if data == "hs_reload":
             hs.reload()
@@ -2514,8 +2523,8 @@ class CallbacksMixin:
             settings = hs.get_all()
             hist = settings["history"]
             engine = self._groupchat_engine
-            current_msgs = len(engine._history) if engine else 0
-            current_chars = sum(len(m.get("content", "")) for m in (engine._history if engine else []))
+            current_msgs = len(engine.history) if engine else 0
+            current_chars = engine.history.char_count() if engine else 0
             d_msgs = self._PARAM_DOCS["history:max_messages"]
             d_chars = self._PARAM_DOCS["history:max_context_chars"]
             text = (
@@ -2742,7 +2751,7 @@ class CallbacksMixin:
             _float_keys = {"soft_ratio", "hard_ratio", "compress_ratio"}
             _string_keys = {"summarize_model"}
             if key in _string_keys:
-                value: Any = raw
+                value: str = raw
             elif key in _float_keys:
                 try:
                     value = float(raw)
@@ -2890,7 +2899,7 @@ class CallbacksMixin:
 
         # Handle custom hyperparam name input
         if field == "hp_add_custom":
-            
+
             key = content.strip().lower().replace(" ", "_")
             self._begin_edit(chat_id, {"field": "hp_value", "hp_key": key, "hp_is_new": True})
             await self._start_input(chat_id, f"➕ 添加 {key}\n\n请输入值 (数字):")
@@ -2948,7 +2957,7 @@ class CallbacksMixin:
 
         # Handle agent custom hyperparam name input
         if field == "ahp_add_custom":
-            
+
             a_name = state.get("agent", "")
             key = content.strip().lower().replace(" ", "_")
             self._begin_edit(chat_id, {"field": "ahp_value", "agent": a_name, "hp_key": key, "hp_is_new": True})
@@ -3019,7 +3028,7 @@ class CallbacksMixin:
                 del self._edit_state[chat_id]
                 # Linkage: confirm the added model will route to this provider.
                 try:
-                    from nanobot.providers.model_match import resolve_provider, describe_match
+                    from nanobot.providers.model_match import describe_match, resolve_provider
                     hit = resolve_provider(pm, model_id)
                     note = (describe_match(hit, model_id) if hit
                             else "❌ " + describe_match(None, model_id))
@@ -3184,7 +3193,7 @@ class CallbacksMixin:
             # explicit warning instead of silently accepting a model that will
             # fall through to a stale default at request time.
             try:
-                from nanobot.providers.model_match import resolve_provider, describe_match
+                from nanobot.providers.model_match import describe_match, resolve_provider
                 pm = self._load_pm()
                 hit = resolve_provider(pm, new_model)
                 route_note = describe_match(hit, new_model) if hit else "❌ " + (describe_match(None, new_model))

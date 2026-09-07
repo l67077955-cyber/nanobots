@@ -16,13 +16,20 @@ from nanobot.utils.helpers import ensure_dir, safe_filename
 @dataclass
 class Session:
     """
-    A conversation session.
+    A conversation session for **direct chat / single-agent** mode.
 
     Stores messages in JSONL format for easy reading and persistence.
 
     Important: Messages are append-only for LLM cache efficiency.
     Consolidation replaces old messages with summaries in-place to preserve
     cache-friendly prefix stability.
+
+    Note: This is distinct from ``HistoryContext`` (group-chat mode). Session
+    uses role-based messages (``role``/``content``/``tool_calls`` — OpenAI
+    format) and persists to per-session JSONL files; HistoryContext uses
+    sender-based messages (``sender``/``content``) and persists via
+    ``GroupChatState``. They serve different modes and are NOT duplicates —
+    see plan.md Phase 4.2 findings.
     """
 
     key: str  # channel:chat_id

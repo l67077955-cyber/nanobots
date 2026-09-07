@@ -7,6 +7,7 @@ synthesis; no separate summary generation stage exists.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from loguru import logger
 
@@ -22,14 +23,16 @@ async def generate_summary(engine: Any) -> None:
     compression (``tool_results.summarize_model``).
     """
     from nanobot.groupchat.history.history_settings import (
-        summarize_model as _get_summarize_model,
         history_summarize_enabled,
     )
+    from nanobot.groupchat.history.history_settings import (
+        summarize_model as _get_summarize_model,
+    )
 
-    if not engine._history or not history_summarize_enabled():
+    if engine.history.is_empty() or not history_summarize_enabled():
         return
 
-    messages = list(engine._history)
+    messages = engine.history.all_messages()
     if not messages:
         return
 
@@ -46,7 +49,7 @@ async def generate_summary(engine: Any) -> None:
     if len(input_text) > 15000:
         input_text = input_text[-15000:]
 
-    provider = engine._history._provider if engine._history else None
+    provider = engine.history.provider() if engine.history else None
     if provider is None:
         await engine._send(
             f"📋 讨论总结\n"
@@ -101,7 +104,7 @@ async def run_loop(engine: Any) -> None:
                     f"👤 {engine._active_agents[0]}"
                 )
 
-        if not any(m["sender"] == "系统" for m in engine._history):
+        if not engine.history.has_system_message():
             engine._add_message("系统", f"话题：{engine._topic}")
 
         rounds = 0

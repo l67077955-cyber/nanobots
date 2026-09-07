@@ -2,13 +2,8 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
-
-from loguru import logger
 
 
 class GroupCommandsMixin:

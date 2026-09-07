@@ -19,11 +19,10 @@ from typing import Any, Awaitable, Callable
 
 from loguru import logger
 
-from nanobot.tools.registry import ToolRegistry
 from nanobot.groupchat.history.result_processor import process_tool_result
 from nanobot.providers.base import LLMProvider, LLMResponse
+from nanobot.tools.registry import ToolRegistry
 from nanobot.utils.helpers import build_assistant_message
-
 
 # ── Result ────────────────────────────────────────────────────────────────
 
@@ -375,15 +374,15 @@ async def tool_loop(
                     reasoning_effort=reasoning_effort,
                     sampling_override=sampling_override,
                 )
-                
+
             if interrupt_event is not None:
                 # Race the LLM call against the cooperative interrupt
                 async def _wait_interrupt():
                     await interrupt_event.wait()
-                    
+
                 intr_task = asyncio.create_task(_wait_interrupt())
                 llm_task = asyncio.create_task(_coro)
-                
+
                 try:
                     done, pending = await asyncio.wait(
                         [intr_task, llm_task],
@@ -395,7 +394,7 @@ async def tool_loop(
                     intr_task.cancel()
                     llm_task.cancel()
                     raise
-                    
+
                 if intr_task in done:
                     # Interrupted during LLM call!
                     llm_task.cancel()
@@ -403,7 +402,7 @@ async def tool_loop(
                         await llm_task
                     except (asyncio.CancelledError, Exception):
                         pass
-                    
+
                     logger.info(
                         "tool_loop: ⚡ interrupt detected DURING LLM call (iter {})", iteration
                     )
@@ -424,7 +423,7 @@ async def tool_loop(
                     response = await asyncio.wait_for(_coro, timeout=call_timeout)
                 else:
                     response = await _coro
-                    
+
         except asyncio.TimeoutError:
             latency = _time.time() - t0
             result.latency += latency

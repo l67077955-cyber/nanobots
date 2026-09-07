@@ -3,12 +3,11 @@
 import json
 import re
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import tiktoken
-
 
 RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
 

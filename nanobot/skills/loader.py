@@ -1,10 +1,13 @@
 """Skills loader for agent capabilities."""
 
 import json
+import logging
 import os
 import re
 import shutil
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 try:
     import yaml  # type: ignore
@@ -229,11 +232,18 @@ class SkillsLoader:
                     continue
                 if skill_dir.is_dir():
                     skill_file = skill_dir / "SKILL.md"
+                    scripts_dir = skill_dir / "scripts"
                     if skill_file.exists():
                         skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "workspace"})
+                        # Warn if skill contains scripts (per SKILL_VS_MOD.md boundary)
+                        if scripts_dir.is_dir() and any(f.suffix in (".py", ".sh") for f in scripts_dir.iterdir() if not f.name.startswith("_")):
+                            logger.debug(
+                                f"Skill '{skill_dir.name}' contains scripts/ directory. "
+                                "If these are not CLI tools, migrate to Mods. "
+                                "See docs/SKILL_VS_MOD.md"
+                            )
                     else:
                         # Docless dir: yield if it contains scripts/ with .py/.sh
-                        scripts_dir = skill_dir / "scripts"
                         if scripts_dir.is_dir() and any(f.suffix in (".py", ".sh") for f in scripts_dir.iterdir()):
                             skills.append({"name": skill_dir.name, "path": str(scripts_dir), "source": "workspace", "docless": True})
 
@@ -437,7 +447,7 @@ class SkillsLoader:
             lines.append(
                 f"\n(还有 {len(skipped_budget)} 个技能因数量限制未展示: "
                 + ", ".join(skipped_budget[:8])
-                + (f" 等" if len(skipped_budget) > 8 else "")
+                + (" 等" if len(skipped_budget) > 8 else "")
                 + "。需要时请用 `read_file skills/<名称>/SKILL.md` 按需加载。)"
             )
 

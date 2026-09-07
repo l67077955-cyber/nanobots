@@ -1271,29 +1271,10 @@ class ClearContextTool(Tool):
 
     async def _clear_one(self, agent: str, keep_last: int, reason: str) -> str:
         """Clear messages for a single agent. Returns result string."""
-        history = self._engine._history
-        agent_msgs = [m for m in history if m.get("sender") == agent]
-        total = len(agent_msgs)
-
-        if total == 0:
-            return f"⚠️ {agent}: 无消息"
-
-        remove_count = max(0, total - keep_last)
-        if remove_count == 0:
-            return f"⚠️ {agent}: keep_last={keep_last} 已覆盖所有消息"
-
-        removed = 0
-        new_history = []
-        agent_seen = 0
-        for m in history:
-            if m.get("sender") == agent:
-                agent_seen += 1
-                if agent_seen <= remove_count:
-                    removed += 1
-                    continue
-            new_history.append(m)
-
-        self._engine._history[:] = new_history
+        # Use the contract method (Phase E migration)
+        removed = self._engine.history.clear_agent_view(agent, keep_last=keep_last)
+        if removed == 0:
+            return f"⚠️ {agent}: 无消息或已全部保留"
 
         # Notify the agent via mailbox
         reason_str = f"（原因: {reason}）" if reason else ""
@@ -1304,7 +1285,7 @@ class ClearContextTool(Tool):
         self._mailbox.send("系统", [agent], notify)
 
         keep_info = f"，保留最后 {keep_last} 条" if keep_last > 0 else ""
-        return f"✅ {agent}: 清理 {removed}/{total} 条{keep_info}"
+        return f"✅ {agent}: 清理 {removed} 条{keep_info}"
 
     async def execute(
         self,

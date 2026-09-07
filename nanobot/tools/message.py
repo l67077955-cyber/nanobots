@@ -2,8 +2,8 @@
 
 from typing import Any, Awaitable, Callable
 
-from nanobot.tools.base import Tool
 from nanobot.bus.events import OutboundMessage
+from nanobot.tools.base import Tool
 
 
 class MessageTool(Tool):

@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """Send a photo to Telegram from scripts."""
-import argparse, json, sys, urllib.request, urllib.error, mimetypes, uuid
+import argparse
+import json
+import mimetypes
+import sys
+import urllib.error
+import urllib.request
+import uuid
 from pathlib import Path
+
 
 def _get_token():
     cfg = json.loads(Path.home().joinpath(".nanobot", "config.json").read_text())

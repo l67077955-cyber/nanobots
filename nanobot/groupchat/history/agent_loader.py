@@ -179,7 +179,7 @@ def _scan_agents_dir(
                     }
                     if isinstance(_cfg.get("tools"), dict):
                         agent_data["tools"] = _cfg["tools"]
-                    
+
                     hyperparams = _cfg.get("hyperparams")
                     if _cfg.get("reasoning_effort"):
                         hyperparams = hyperparams or {}
@@ -234,7 +234,7 @@ def _scan_agents_dir(
 
         # Rank: pawn < knight < bishop (controls who-can-interrupt-whom)
         rank = acfg.get("rank", "pawn") if config_file.exists() else "pawn"
-        
+
         agent_data: dict[str, Any] = {"model": model, "prompt": prompt, "tools_enabled": tools_enabled, "rank": rank}
         if tools_cfg is not None:
             agent_data["tools"] = tools_cfg

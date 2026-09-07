@@ -121,7 +121,10 @@ class ExecTool(Tool):
     async def _run_background(self, command: str, working_dir: str | None = None) -> str:
         """Run a command in background, returning immediately with session info."""
         from nanobot.tools.process_registry import (
-            ProcessSession, add_session, create_session_id, start_background_readers,
+            ProcessSession,
+            add_session,
+            create_session_id,
+            start_background_readers,
         )
 
         cwd = working_dir or self.working_dir or os.getcwd()

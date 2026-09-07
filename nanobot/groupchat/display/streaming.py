@@ -7,7 +7,7 @@ the final message update. Eliminates duplication across direct_chat,"""
 from __future__ import annotations
 
 import time
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from loguru import logger
 

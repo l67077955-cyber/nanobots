@@ -8,15 +8,24 @@ import os
 import sys
 from pathlib import Path
 
+from loguru import logger
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from loguru import logger
-
 from nanobot.groupchat.history.prompt_builder import (
-    PromptBuilder, COMPONENT_LABELS as _COMPONENT_LABELS,
-    GLOBAL_EDITABLE as _GLOBAL_EDITABLE, AGENT_EDITABLE as _AGENT_EDITABLE,
+    AGENT_EDITABLE as _AGENT_EDITABLE,
+)
+from nanobot.groupchat.history.prompt_builder import (
+    COMPONENT_LABELS as _COMPONENT_LABELS,
+)
+from nanobot.groupchat.history.prompt_builder import (
     COMPONENT_PHASES as _COMPONENT_PHASES,
+)
+from nanobot.groupchat.history.prompt_builder import (
+    GLOBAL_EDITABLE as _GLOBAL_EDITABLE,
+)
+from nanobot.groupchat.history.prompt_builder import (
+    PromptBuilder,
 )
 
 
@@ -335,7 +344,7 @@ class SettingsCommandsMixin:
 
         # Stats
         lines.append("📊 统计:")
-        lines.append(f"  历史消息: {len(engine._history)} 条")
+        lines.append(f"  历史消息: {len(engine.history)} 条")
         lines.append(f"  请求日志: {len(engine._request_log)} 条")
         lines.append(f"  输入队列: {engine._input_queue.qsize()} 条待处理")
         lines.append("")
@@ -512,8 +521,8 @@ class SettingsCommandsMixin:
         cp = settings.get("context_pruning", {})
 
         engine = self._groupchat_engine
-        current_msgs = len(engine._history) if engine else 0
-        current_chars = sum(len(m.get("content", "")) for m in (engine._history if engine else []))
+        current_msgs = len(engine.history) if engine else 0
+        current_chars = engine.history.char_count() if engine else 0
         compress_trigger = int(hist["max_messages"] * hist.get("compress_ratio", 0.8))
         ctx_chars_limit = settings["context_window_tokens"] * 4  # rough chars estimate
 
@@ -523,7 +532,7 @@ class SettingsCommandsMixin:
         prune_hard_budget = int(ctx_chars_limit * cp.get("hard_ratio", 0.5))
 
         # ── Estimate compiled LLM context size per active agent ──
-        # engine._history only stores final turn messages (user + agent final replies).
+        # engine.history only stores final turn messages (user + agent final replies).
         # Tool calls live inside agent messages as appended text logs, not separate entries.
         # Actual LLM context = system prompts + history_to_messages(history).
         compiled_info = ""
@@ -533,7 +542,7 @@ class SettingsCommandsMixin:
             for a in engine._active_agents:
                 try:
                     compiled = PromptBuilder.history_to_messages(
-                        engine._history, current_agent=a
+                        engine.history.messages, current_agent=a
                     )
                     c_chars = sum(len(m.get("content") or "") for m in compiled)
                     parts.append(f"{a}~{c_chars:,}字")

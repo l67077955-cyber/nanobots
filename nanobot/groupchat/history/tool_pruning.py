@@ -195,10 +195,10 @@ def prune_messages(
         content = result[i].get("content", "")
         if not isinstance(content, str) or len(content) <= max_chars:
             continue
-            
+
         tcid = result[i].get("tool_call_id", "")
         tool_name, tool_args = tool_map.get(tcid, ("unknown_tool", ""))
-        
+
         summary = _summarize_tool_result(tool_name, tool_args, content)
         result[i] = {**result[i], "content": summary}
 

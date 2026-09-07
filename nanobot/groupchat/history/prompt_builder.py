@@ -10,19 +10,15 @@ Extracts all prompt-related logic from GroupChatEngine:
 from __future__ import annotations
 
 import json
+import platform
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
-import platform
-
-from nanobot.utils.helpers import cn_now as _cn_now
-
-from nanobot.groupchat.history.component_manager import get_system_warning
-from nanobot.groupchat.history.message_converter import history_to_messages
 from nanobot.groupchat.history.context_validator import validate_context
-
+from nanobot.groupchat.history.message_converter import history_to_messages
+from nanobot.utils.helpers import cn_now as _cn_now
 
 # ── Constants ─────────────────────────────────────────────────
 

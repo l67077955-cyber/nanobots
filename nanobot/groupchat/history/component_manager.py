@@ -2,7 +2,6 @@
 
 import re
 
-
 # ── System Warning Templates ──────────────────────────────────
 
 SYSTEM_WARNINGS: dict[str, str] = {
