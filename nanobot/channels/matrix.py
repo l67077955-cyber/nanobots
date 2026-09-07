@@ -11,7 +11,7 @@ from pydantic import Field
 
 try:
     import nh3
-    from mistune import create_markdown
+    from mistune import HTMLRenderer, create_markdown
     from nio import (
         AsyncClient,
         AsyncClientConfig,
@@ -60,6 +60,11 @@ MatrixMediaEvent: TypeAlias = RoomMessageMedia | RoomEncryptedMedia
 MATRIX_MARKDOWN = create_markdown(
     escape=True,
     plugins=["table", "strikethrough", "url", "superscript", "subscript"],
+    # mistune>=3.1 rewrites non-allowlisted URL schemes (mxc:// included) to
+    # "#harmful-link" before the nh3 cleaner can filter them. mxc:// is Matrix's
+    # own media scheme; pass it through here — nh3's attribute_filter remains
+    # the gate that decides which img src actually reaches the wire.
+    renderer=HTMLRenderer(allow_harmful_protocols=["mxc://"]),
 )
 
 MATRIX_ALLOWED_HTML_TAGS = {
