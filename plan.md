@@ -1,138 +1,58 @@
-# nanobot-src 群聊历史模型重构计划
+# nanobot-src 架构重构计划 — 状态所有权 / broadcast.py 拆分 / channels 收敛
 
-> 创建日期: 2026-09-07（覆盖上轮 Phase 1-4 记录）
-> 状态: **Phase A–E 实现完成**（全量测试受 sandbox 只读文件系统阻断，见 DoD 备注）
-> 范围: **只管群聊历史模型**（不动 engine/broadcast/callbacks 的耦合）
-> 稳定性标准: **测试覆盖 + 接口契约 两者都要**——核心路径有回归测试守护，
->   模块间靠明确接口通信，外部代码不直接访问 `HistoryContext` 内部列表
-> 红线遵循: AGENTS.md #1 先写测试再改实现、#2 修根源不堆护栏、#4 删死代码、#5 编辑前重读、#6 每逻辑单元 checkpoint 提交
+> 创建日期: 2026-09-07
+> 状态: **规划中，未开始实现**
+> 范围: 三个阶段，有严格依赖顺序（Phase 1 是 Phase 2 的前置条件）
+> 上一轮计划: 群聊历史模型重构（Phase A-E，已完成）见 `docs/archive/plan-2026-09-07-history-refactor.md`
+> 红线遵循: AGENTS.md #1 先写测试再改实现、#2 修根源不堆护栏、#4 删死代码、
+>   #5 编辑前重读、#6 每逻辑单元 checkpoint 提交、#7 修不动就停手汇报
 
-## Context — 为什么要做这次修改
+## Context — 为什么做这次重构
 
-群聊系统存在两个用户报告的运行期 bug，调查后确认它们**不是四个孤立缺陷，而是同一个没定清楚的架构契约的两面**：
+历史模型重构（Phase A-E）完成后做了一次独立架构审查（只读调查，未改代码），
+覆盖 `AGENTS.md`/`docs/phase4-findings.md`/上一版 `plan.md` 未讲透的部分。核心发现：
 
-- **上下文遗忘**：`HistoryContext` 只有一条共享列表 `messages`，`max_messages=50`、
-  `compression_keep_recent=6`、`compress_ratio=0.8`，40 条即触发压缩。`maybe_compress`
-  把中段压成 ≤500 字摘要；摘要未启用/无 provider 时**直接丢弃中段**
-  （`context.py:333-334` `self.messages = head + tail`）。每轮结束都跑
-  （`run_loop.py:167`），3-5 agent 的群聊几轮就丢。
-- **agent 间消息收不到**：轮内传递**只走 mailbox**（共享历史在轮开始时快照一次、
-  轮中不重读，`broadcast.py:513 → prompt_builder.py:723`）。而 `ChatroomSendTool`
-  **只调 `mailbox.send()`，从不写共享历史**（`chatroom_tools.py:761`）。一旦实时打断
-  失败——默认 `rank=pawn` 同级不能互相打断（`mailbox.py:486` `s_rank > t_rank`），
-  或 `end_discussion` 取消任务时 agent 还在 cycle、到不了 auto-wait——消息就永久丢，
-  且不在任何历史里。
-- **IngressRouter 半统一**（上轮 plan.md 1.1 标"已修复"是言过其实）：Telegram 主
-  通道在有活跃 agent 时仍直接调 `engine.inject()` 并 return（`message_handler.py:159`），
-  `IngressRouter` 在生产里收不到 Telegram 消息；`deliver_user_message()` 是 `inject()`
-  的逐行克隆，额外**丢弃 `media`/`metadata`**（`engine.py:864-865`），0 agent 时静默丢消息。
+**AGENTS.md 宣称的"RoundLifecycle 是轮次状态唯一归属"这条不变量，代码层面不成立。**
+`round_lifecycle.py` 的 docstring 自己承认它只是给"未迁移的读者"做的兼容翻译层
+（`round_lifecycle.py:4-11`）：`mark_winding_down(flip_running=True)` 直接赋值
+`self._engine._running = False`（:91），`reopen()` 直接赋值 `= True`（:113）。
+真正的状态位仍是 `engine.py:295` 的裸 `bool`，且读写已经**渗出 orchestra 包之外**——
+`channels/telegram/__init__.py:544`、`channels/telegram/commands/settings.py:297`
+也在直接戳 `engine._running`。全仓库 6 个文件、20+ 处直接读写。这正是
+AGENTS.md #2 点名的"状态无主"问题（补丁净增 3:1 的历史成因），且比
+`docs/phase4-findings.md` 描述的"迁移未完成"更严重——不是部分完成待收尾，
+而是这轮重构完全没触碰它。
 
-**根因**：系统有两套互相矛盾的历史模型，没有不变量——持久的那套（`engine._history`）
-会忘会串台（A 的输出 C 也看得到）；范围对的那套（mailbox，A→B 只有 B 的队列有）
-不持久。用户要求的语义正是把两者合并成一套：
+**`broadcast.py`（1875 行）里 `broadcast_round` 是一个 ~1500 行的巨函数**，
+内嵌 4 层闭包（`_run_one` → `_on_tool_start`/`_on_tool_result`/`_inject_retry`/
+`_on_iter_usage`/`_badge`，加上同级 `_user_listener`/`_join_listener`/
+`_watch_leader_end`/`_watch_no_leader_convergence`），闭包间靠共享外层局部变量
+通信，无法单独单元测试。它是唯一同时 import `engine`/`mailbox`/`round_lifecycle`/
+`chatroom_tools`/`user_ingress`/`display` 六个子系统的节点，是耦合度最高的单点。
 
-> **A 发给 B 的消息，C 看不到，只有 AB 可见**（mailbox 的可见范围）
-> **+ 跨轮留存**（`engine._history` 的持久性）
-> **+ 压缩对每个 agent 各自的可见子集分别做**（不串台）
+**`channels/`（38 文件/12701 行，全仓库最大模块）复用不足**：公共基础设施薄
+（`base.py` 139 行，`channels/utils/` 397 行），`feishu.py`(1247)/`mochat.py`(946)/
+`matrix.py`(738)/`dingtalk.py`(585) 各自手写轮询循环、去重、媒体处理的变体。
+`mochat.py` 946 行**零专属测试**，风险最高。
 
-### 用户已拍板的设计决策
-- 默认可见性：无 `targets` 的消息 = 全员可见（`["All"]`）
-- 用户消息：全员可见
-- 压缩触发粒度：**每个 agent 独立阈值**，各自到阈值各自压缩
+**根因**：三个问题都指向同一件事——之前的重构只解决了"历史数据模型"的契约化，
+没碰"控制流状态"的契约化。`engine._running` 的裸共享 bool 和 `broadcast_round`
+的巨函数闭包，本质上是同一类问题的两个表现：状态和控制流散落在没有边界的
+共享可变环境里，而不是被显式对象持有、显式传递。
 
 ---
 
-## 目标架构：单持久日志 + per-agent 持久视图
+## 依赖顺序（不可颠倒）
 
 ```
-                    ┌─────────────────────────────────────┐
-  所有消息写入 ───► │  持久日志 (append-only, 带 targets)  │
-  _add_message()    │  [{sender, content, targets}, ...]   │
-  chatroom_send     └──────────────┬──────────────────────┘
-                                   │ 按 targets 可见性投影
-                    ┌──────────────┴──────────────┐
-                    ▼                              ▼
-          ┌────────────────┐              ┌────────────────┐
-          │ Agent A 视图    │              │ Agent B 视图    │  ... (N 个)
-          │ (持久压缩态)    │              │ (持久压缩态)    │
-          └────────┬───────┘              └────────┬───────┘
-                   │ 各自阈值各自压缩              │
-                   ▼                               ▼
-          build_agent_prompt(A)           build_agent_prompt(B)
-          (读 A 的视图，不重压)            (读 B 的视图，不重压)
+Phase 1: 状态所有权收编 ──► Phase 2: broadcast_round 拆分
+                                        │
+Phase 3: channels/ 收敛（风险最低，可与 Phase 1/2 并行）
 ```
 
-**不变量**（改动必须保持）：
-1. 一条消息进日志后，**只出现在其 `targets` 命中的 agent 视图里**；A→B(`targets=[B]`)
-   不进 C 的视图。
-2. `["All"]` 的消息进**所有** agent 视图（含用户/系统消息——默认全员可见）。
-3. 每个 agent 视图独立维护自己的压缩态；压缩只动该视图，不碰其他 agent 的视图，
-   **不破坏跨 agent 隐私**（A→B 段在 A 视图压一次、在 B 视图再压一次，算力翻倍
-   但换正确隐私——用户已确认接受）。
-4. mailbox 降级为**实时通知层**：消息已在持久日志里，打断失败不再丢——agent 下轮
-   建 prompt 时按可见性过滤就会看到。
-5. **接口契约**：外部代码（engine/broadcast/run_loop/chatroom_tools/tool_loop）
-   只通过 `HistoryContext` 的稳定 public 方法访问历史，**永远不直接读/写内部
-   `messages` 列表**。消灭当前三类"无契约"访问（见下）。
-
-### 接口契约 — `HistoryContext` 稳定 public 面
-
-> 这是"低耦合"的具体落地。当前外部代码直接戳 `engine._history`（34 处/8 文件），
-> 包括读列表元素、读私有属性、原地改写列表——这些都是无契约访问，改内部实现
-> 就静默崩调用方。重构后 `HistoryContext` 只暴露以下操作，外部全部走它：
-
-```python
-class HistoryContext:
-    # ── 写入 ──
-    def add_message(self, sender: str, content: str,
-                    targets: list[str] | None = None) -> None:
-        """追加一条消息。targets=None → 全员可见。唯一写入入口。"""
-
-    # ── 读取（per-agent 视图）──
-    def view_for(self, agent_name: str) -> list[dict]:
-        """返回该 agent 可见的消息子集（持久视图的副本，外部不可改）。"""
-
-    def view_for_raw(self, agent_name: str) -> list[dict]:
-        """同 view_for 但未经压缩——供调试/quote_message 等需原文的场景。"""
-
-    # ── 查询（替代直接读列表元素）──
-    def last_sender(self) -> str | None:
-        """最后一条消息的 sender（替代 engine._history[-1]['sender']）。"""
-
-    def has_system_message(self) -> bool:
-        """是否已有系统消息（替代 any(m['sender']=='系统' for m in engine._history)）。"""
-
-    def is_empty(self) -> bool:
-        """替代 `not engine._history`。"""
-
-    def all_messages(self) -> list[dict]:
-        """完整日志的副本——仅 generate_summary 等需全量场景用。"""
-
-    # ── 压缩 ──
-    async def compress_for(self, agent_name: str) -> None:
-        """压缩指定 agent 的视图（per-agent 独立阈值）。"""
-
-    async def compress_all(self) -> None:
-        """对所有 active agent 各压一次（替代 _maybe_compress_history）。"""
-
-    # ── 维护 ──
-    def clear(self) -> None:
-        """清空日志和所有视图。"""
-
-    def clear_agent_view(self, agent_name: str, keep_last: int = 0) -> int:
-        """清理某 agent 视图（替代 ClearContextTool 的 _history[:] = new_history）。
-        返回清理条数。"""
-
-    def format(self) -> str:
-        """格式化全量日志为可读字符串（调试用）。"""
-```
-
-**禁止的外部访问**（重构后必须消除，grep 验证归零）：
-- `engine._history[-1]["sender"]` → `engine.history.last_sender()`
-- `for m in engine._history` / `reversed(engine._history)` → `engine.history.all_messages()` 或 `view_for(name)`
-- `engine._history._provider` → 由 `HistoryContext` 内部持有，外部不碰
-- `engine._history[:] = new_history` → `engine.history.clear_agent_view(name)`
-- `self._history = self.history.messages` 同步仪式（5 处）→ 删除，shim 退役
+**为什么 Phase 1 必须先做**：如果先拆 `broadcast_round`，"状态无主"的 bug 只会
+被拆分到更多文件里，反而更难追踪——拆分需要干净的状态边界才有意义。Phase 3
+不涉及 orchestra 核心状态机，风险独立，可以并行推进不阻塞主线。
 
 ---
 
@@ -140,185 +60,110 @@ class HistoryContext:
 
 | 事实 | 位置 | 含义 |
 |------|------|------|
-| `HistoryContext.messages` 是单条共享列表 | `context.py:50` | per-agent 视图**不存在**，要新建 |
-| `engine._history` 是 `history.messages` 的别名 shim | `engine.py:287,427,434,983,1015` | 34 处引用、8 文件，要迁移 |
-| 消息只有 `sender`/`content`，无 `targets` | `context.py:104` | 要加字段 |
-| `history_to_messages` 按 `sender` 过滤（`allowed = {"用户","系统"} \| relevant_agents`） | `message_converter.py:84` | 要改成按 `targets` 可见性过滤 |
-| broadcast 建 prompt 传 `relevant_agents=None`（不过滤，全员看全部） | `broadcast.py:515` | 要换成传该 agent 的视图 |
-| `ChatroomSendTool` 只 `mailbox.send()`，不写历史 | `chatroom_tools.py:761` | 要加写日志 |
-| `MailboxHub.start_round()` 清空队列和历史 | `mailbox.py:411-432` | 持久化后可清空（消息已在日志） |
-| `maybe_compress` 对共享列表整体压 | `context.py:160-340` | 要改成 per-agent |
-| direct-chat 模式也用 `_add_message` + `_maybe_compress_history` | `engine.py:1195-1200` | 单 agent 时视图退化为"自己=全部"，要兼容 |
-| 测试范式：`_FakeEngine` 真对象+微小假件，`_add_message(sender, content)` | `tests/test_user_ingress.py:33` | 加 `targets` 参数时假件要跟着改 |
-
-**调用链插入点**（已确认）：
-```
-broadcast.py:513  engine._build_agent_prompt(history=self._history, relevant_agents=None)
-  → engine.py:1055  PromptBuilder.build_agent_prompt(history=self._history, ...)
-    → prompt_builder.py:723  history_to_messages(history, agent_name, relevant_agents=...)
-      → message_converter.py:84  按 sender 过滤
-```
-改造点：`engine.py:1055` 把 `history=self._history` 换成 `history=self.history.view_for(agent_name)`。
+| `engine._running` 声明处，注释承认双重语义未解决 | `engine.py:287-295` | 会话级 + 轮次级共享一个 bool |
+| `round_lifecycle.py` 是翻译层非真正状态源 | `round_lifecycle.py:4-11,91,113` | `flip_running=True` 直接改写裸 bool |
+| `run_loop.py` 会话主循环条件直读 `_running` | `run_loop.py:111,116,123,159,164,183` | 会话级消费方，含"pending 消息复活"逻辑 |
+| `broadcast.py` 多处读写 `_running` | `broadcast.py:721,974,1553,1701,1810` | 轮次级消费方 + leader 崩溃/超时分支 |
+| `chatroom_tools.py` 直接赋值 | `chatroom_tools.py:1210,1214` | `ChatroomEndDiscussionTool` |
+| **渗出 orchestra 包外** | `channels/telegram/__init__.py:544` | 读 `_groupchat_engine._running` 判断是否运行中 |
+| **渗出 orchestra 包外** | `channels/telegram/commands/settings.py:297` | 调试命令打印 `engine._running` |
+| `broadcast_round` 函数跨度 | `broadcast.py:377` 起，至文件尾 ~1875 | 单函数吞掉文件 ~80% |
+| `BroadcastOrchestrator` 已存在但职责窄 | `broadcast.py:218-259` | 目前只管 `setup_tools_and_pools` |
+| `_run_one` 内嵌 4 层闭包 | `broadcast.py:491,647,653,712,802,1094` | 无法独立测试 |
+| 监听器闭包与主流程共享局部变量 | `broadcast.py:1517,1543,1641,1652` | `_user_listener`/`_join_listener`/`_watch_leader_end`/`_watch_no_leader_convergence` |
+| `channels/base.py` 抽象薄 | `channels/base.py`（139 行） | 多数 channel 不复用模板方法 |
+| `mochat.py` 零专属测试 | `nanobot/channels/mochat.py`（946 行） | `tests/` 无 `test_mochat*.py` |
+| `discord.py`/`wecom.py`/`whatsapp.py`/`manager.py`/`registry.py` 无专属测试 | `nanobot/channels/` | 只在 `test_channel_plugins.py`/`test_status_panel.py` 间接覆盖 |
 
 ---
 
-## 执行计划（分步提交，每步先写回归测试）
+## Phase 1：状态所有权收编
 
-> 每步：① 写/改回归测试钉住行为 → ② 改实现 → ③ `py_compile` + `pytest tests/ -q` 全绿 → ④ checkpoint 提交
-> 提交 message 写清 what + why + 证据（引用测试/行号）
+**目标**：把会话级和轮次级状态从共享裸 `bool` 拆成两个显式状态源，
+`engine._running` 退役（或降级为只读兼容属性），channels 层不再直接碰
+orchestra 内部状态。
 
-### Phase A：数据结构加 `targets` 字段（无行为变更）
+1. **先写回归测试钉住当前行为**（AGENTS.md #1，先测试再动实现）：
+   - `run_loop.py:159-164`："end_discussion 后 pending 消息复活"——这是当前
+     行为里最隐蔽的一处，依赖 `_running` 的会话级语义，必须先有测试再动。
+   - `broadcast.py:974,1701,1810` 的 `mark_winding_down(..., flip_running=True)`
+     三处调用（leader 崩溃 / 全局超时 / 全局超时兜底）——确认轮次结束后
+     会话级状态的正确转换。
+   - `channels/telegram/__init__.py:544` 的"群聊已停止"提示文案依赖的判断逻辑。
 
-**目标**：消息结构支持可见性，但默认全员可见 = 行为不变。
+2. **引入显式会话级状态源**（新对象，例如 `SessionState`，与 `RoundLifecycle`
+   同级但语义分离）：
+   - 会话级：是否仍在消费 `_input_queue`（当前 `run_loop.py` 的循环条件）。
+   - 轮次级：继续由 `RoundLifecycle` 持有（`ACTIVE`/`WINDING_DOWN`/`ENDED`），
+     但**不再通过写 `engine._running` 来对外广播**——改为暴露显式查询方法
+     （`accepts_interjection`/`agents_should_exit`/`wait_should_exit`/
+     `session_should_stop`，这些已存在，扩展即可，不用新造轮子）。
 
-1. **测试**（新建 `tests/test_history_targets.py`）：
-   - `add_message(sender, content)` 不传 targets → 默认 `targets == ["All"]`
-   - `add_message(sender, content, targets=["B"])` → `targets == ["B"]`
-   - 旧调用点（`_add_message("用户", msg)` 等）不改也通过（默认全员）
+3. **逐个迁移读写点**（每改一处跑相关测试子集，不要攒大 diff）：
 
-2. **实现**：
-   - `HistoryContext.add_message(self, sender, content, targets=None)`：缺省
-     `targets = ["All"]`；`self.messages.append({"sender","content","targets"})`
-   - `engine._add_message(self, sender, content, targets=None)` 透传
-   - `_state.save_message` 多存一个 `targets` 字段（向后兼容：旧日志无 targets
-     读取时补 `["All"]`）
+   | 当前访问 | 迁到 |
+   |----------|------|
+   | `run_loop.py` 循环条件 `while engine._running` | `session_state.is_active` |
+   | `broadcast.py:1553` `not engine._running`（join listener） | `lifecycle.session_should_stop()` 或等价查询 |
+   | `chatroom_tools.py:1214` 直接赋值 | 走 `lifecycle.mark_winding_down(..., end_session=True)`（新增语义参数替代 `flip_running`） |
+   | `channels/telegram/__init__.py:544` | `engine.is_running`（已存在的 public property，`engine.py:331`，channels 层本该只走这个，不该碰 `_running`） |
+   | `channels/telegram/commands/settings.py:297` | 同上，改用 `engine.is_running` |
 
-3. **迁移现有调用点**（逐个改，不强制传 targets，默认即全员）：
-   - `run_loop.py:108` `_add_message("系统", ...)` → 默认 All
-   - `user_ingress.py:55,142` `_add_message("用户", ...)` → 默认 All
-   - `engine.py:1195,1198` direct-chat → 默认 All
-   - `broadcast.py:901,927,987,1018,1121` agent 最终输出 → 默认 All
-   - 这些**全部不改语义**（原来就全员可见），只是字段补全
+4. **退役裸属性**：全部迁完后，`engine._running` 删除或降级为
+   `@property`（内部转发到新状态源，读=兼容、写=raise 或 deprecation warning）。
+   `round_lifecycle.py` 的 `flip_running` 参数一并删除。
 
-**验证**：`pytest tests/ -q` 全绿（含旧测试，因默认全员 = 原行为）。
+**验证**：
+- `pytest tests/ -q` 全绿，含新增的会话级状态回归测试
+- `grep -rn "\._running\b" nanobot/ | grep -v "engine.py:.*is_running\|@property"` 结果
+  仅剩 `engine.py` 内部实现细节，**channels/ 目录归零**（这是"channel 不碰
+  orchestra 内部状态"边界的硬验收）
 
-### Phase B：per-agent 视图结构（只读路径，不压缩）
+## Phase 2：`broadcast_round` 拆分
 
-**目标**：每个 agent 能取到自己该看到的子集，但此时子集是**临时算的**（从日志
-按 targets 过滤），压缩仍走旧的共享 `maybe_compress`。本步只验证可见性正确。
+**前提**：Phase 1 完成，状态源已统一，拆分时不会把同一状态问题分散到多文件。
 
-1. **测试**（`tests/test_history_view.py`）：
-   - A→B(`targets=["B"]`) → `view_for("A")` 含、`view_for("B")` 含、`view_for("C")` **不含**
-   - 广播(`targets=["All"]`) → 所有 agent 的视图都含
-   - 用户消息(默认 All) → 所有视图含
-   - 视图是**投影**（改视图不污染日志，反之日志新增后视图重算能拿到新消息）
+**目标**：把 `_run_one` 及其内嵌闭包提升为 `BroadcastOrchestrator` 的方法或
+独立协作对象，让工具循环回调、监听器、超时判断可以脱离整轮广播单独测试。
 
-2. **实现**：
-   - `HistoryContext.view_for(agent_name) -> list[dict]`：返回 `[m for m in self.messages
-     if "All" in m["targets"] or agent_name in m["targets"] or m["sender"] == agent_name]`
-     （发送者总能看到自己发的）
-   - `engine._build_agent_prompt`（`engine.py:1055`）：`history=self.history.view_for(agent_name)`
-     替换 `history=self._history`
-   - `build_agent_prompt` 的 `relevant_agents` 参数**保留但置 None**（视图已过滤，
-     再按 sender 过滤是冗余兜底；置 None 避免双重过滤误删）
-   - `history_to_messages` 的 sender 过滤逻辑**不动**（兜底保留，向后兼容 direct-chat
-     等仍传共享列表的场景）
-
-3. **`_history` shim 处理**：本步**不删** shim。`engine._history` 仍指向 `history.messages`
-   （日志），34 处读引用继续工作；只是 prompt 路径改走 `view_for`。删 shim 留到 Phase E。
-
-**验证**：`pytest tests/ -q`；新增可见性测试全绿；旧测试因默认全员仍绿。
-
-### Phase C：`chatroom_send` 写入持久日志
-
-**目标**：agent 间讨论跨轮留存，不再只靠临时 mailbox。
-
-1. **测试**（`tests/test_chatroom_send_persists.py`）：
-   - agent A 调 `chatroom_send(to="B", msg)` → `engine._history` 出现一条
-     `targets=["B"]` 的记录；`view_for("C")` 不含
-   - 跨轮：`mailbox.start_round()` 清空队列后，`view_for("B")` 仍含该条（持久）
-   - `chatroom_send(to="All")` → `targets=["All"]`，所有视图含
-
-2. **实现**：
-   - `ChatroomSendTool.execute`（`chatroom_tools.py:761`）在 `mailbox.send()` 后，
-     调 `engine._add_message(self._agent_name, message, targets=actual_recipients)`
-     - `to="All"` → `targets=["All"]`
-     - `to=["B","C"]` → `targets=["B","C"]`
-     - `to="B"` → `targets=["B"]`
-   - `ChatroomSendTool` 需要 `engine` 引用（目前只有 `mailbox`）。在 `BroadcastOrchestrator
-     .setup_tools_and_pools`（`broadcast.py:260`）构造 `ChatroomSendTool` 时注入
-     `engine=self.engine`
-
-3. **mailbox 角色**：仍保留 `mailbox.send` 做实时通知 + 打断。但消息已在日志里，
-   打断失败不再"丢"——agent 下轮建 prompt 会从视图看到。
-
-**验证**：`pytest tests/ -q`；跨轮留存测试绿。
-
-### Phase D：压缩改为 per-agent（核心，风险最高）
-
-**目标**：每个 agent 视图各自到阈值各自压缩，结果**存回该视图**（持久，不重压）。
-**这是真正解决"遗忘"的一步**——压缩结果稳定可复用。
-
-1. **测试**（`tests/test_per_agent_compress.py`）：
-   - A 视图到阈值压缩 → A 视图变短、**B 视图不受影响**
-   - A→B 段：在 A 视图被压成摘要、在 B 视图也各自压（独立）
-   - 压缩摘要只在该 agent 视图内，不泄露给 C（A→B 的摘要**不进 C 视图**）
-   - 压缩结果持久：第二次 `view_for("A")` 不再调 LLM（用存好的）
-   - direct-chat 单 agent：视图=全部，压缩等价旧行为（兼容）
-
-2. **实现**（核心数据结构改造）：
-   - 新增 `HistoryContext._views: dict[str, list[dict]]` —— per-agent 持久视图
-   - `add_message(sender, content, targets)`：**先写日志**（`self.messages`），
-     再 append 到 `targets` 命中的每个 agent 的 `_views[name]`（`All` → 所有 active agent）
-   - `view_for(name)`：直接返回 `self._views.get(name, [])`（不再临时算）
-   - `maybe_compress_per_agent(name)`：对该 agent 的 `_views[name]` 跑压缩逻辑
-     （复用现有 `maybe_compress` 的 head/tail/摘要算法，但作用域是 `_views[name]`）
-   - `_maybe_compress_history`（`engine.py:1012`）：遍历 active agents 各自压一遍，
-     各自独立阈值
-   - 触发时机：`run_loop.py:167` 每轮结束、`engine.py:1200` direct-chat 每周期——
-     改成对每个 active agent 调一次
-
-3. **隐私保证**：压缩只读 `_views[name]`，摘要写回 `_views[name]`，**不跨视图**。
-   A→B 段在 `_views["A"]` 和 `_views["B"]` 各自独立存在、独立压缩，C 的
-   `_views["C"]` 从未含此段 → 摘要不泄露。
-
-4. **兜底分支修正**：旧 `context.py:333-334` 的"摘要未启用就丢中段"——per-agent
-   版本改成**像空摘要那样保留中段**（`return` 而非 `head+tail`），靠 `add_message`
-   的 max_messages 兜底。先写测试钉"禁用摘要时中段不丢"。
-
-**验证**：`pytest tests/ -q`；per-agent 隔离测试 + 持久测试绿；`test_compression_*_snapshot.py`
-旧快照测试需更新（压缩模型变了，更新快照并记录原因）。
-
-### Phase E：接口契约落地 + shim 退役 + IngressRouter 清理
-
-**目标**：把外部对 `engine._history` 的 34 处直接访问全部迁到 `HistoryContext`
-契约方法（上节"接口契约"），`_history` shim 退役，删死代码，阈值止血。
-**这是"低耦合"标准的具体验收步**——grep 验证外部不再碰内部列表。
-
-1. **外部访问点 → 契约方法**（逐个迁移，每改一处跑测试）：
-
-   | 当前访问 | 出现处 | 迁到 |
-   |----------|--------|------|
-   | `engine._history[-1]["sender"]` | `engine.py:1030,1036` | `engine.history.last_sender()` |
-   | `any(m["sender"]=="系统" for m in engine._history)` | `run_loop.py:107` | `engine.history.has_system_message()` |
-   | `not engine._history` / `if not engine._history` | `run_loop.py:32,52` | `engine.history.is_empty()` |
-   | `list(engine._history)` / `for m in engine._history` | `run_loop.py:35,107` `broadcast.py:446` | `engine.history.all_messages()`（摘要场景）或 `view_for(name)` |
-   | `engine._history._provider` | `run_loop.py:52` | `HistoryContext` 内部持有，外部通过 `compress_all()` 触发，不直接拿 provider |
-   | `self._engine._history[:] = new_history` | `chatroom_tools.py:1281`（ClearContextTool） | `engine.history.clear_agent_view(name, keep_last)` |
-   | `history=self._history`（建 prompt） | `engine.py:1055` | `history=self.history.view_for(agent_name)`（Phase B 已做） |
-   | `self._history = self.history.messages` 同步仪式 | `engine.py:287,427,434,983,1015` | **删除**——shim 退役 |
-
-2. **`_history` shim 退役**：所有引用迁完后，删 `engine._history` 属性及 5 处同步行。
-   留一个 `@property _history` 短期兼容层（raise 或 deprecation warning）可作
-   可选项，但目标是真的删掉。
-
-3. **IngressRouter 半统一**（二选一，**推荐删死代码**）：
-   - 删 `deliver_user_message()`（`engine.py:842-871`）和 `inject()` 的重复——
-     保留 `inject()` 作为唯一入口（Telegram 一直用它），`IngressRouter` 调 `inject()`
-     而非 `deliver_user_message()`
-   - 或：真统一 Telegram 走 bus（修 `deliver_user_message` 保 media/metadata + 0-agent
-     处理，`message_handler.py:159` 改 `publish_inbound`）——风险高，不推荐本轮做
-   - 修 `plan.md` 上轮 1.1 状态：从"已修复"改"未完成（本轮清理）"
-
-4. **阈值调整**（止血，可与 Phase D 同提交）：
-   - `history_settings.py:59-65`：`max_messages` 50→200、`compression_keep_recent`
-     6→20。先写"200 条仍存活"回归测试。
+1. 现状盘点：`BroadcastOrchestrator`（`broadcast.py:218`）目前只管
+   `setup_tools_and_pools`（:259）。`_run_one`（:491）及其闭包
+   `_on_tool_start`/`_on_tool_result`/`_inject_retry`/`_on_iter_usage`/`_badge`
+   全部定义在 `broadcast_round` 函数体内，靠闭包捕获共享状态。
+2. 逐个闭包提升为方法，参数化原来靠闭包捕获的变量（先从最独立的
+   `_on_tool_start`/`_on_tool_result` 开始，风险最低；`_inject_retry` 和
+   `_on_iter_usage` 涉及重试/用量统计，其次；`_run_one` 本体最后动）。
+3. 监听器（`_user_listener`/`_join_listener`/`_watch_leader_end`/
+   `_watch_no_leader_convergence`，:1517-1652）同理提升，评估是否可以独立
+   成一个 `BroadcastListeners` 协作对象，减少 `broadcast_round` 函数体本身
+   的行数。
+4. 每提升一组方法，补对应单元测试（提升前只能靠集成测试覆盖，这是本阶段
+   要解决的核心问题——提升后要能不跑整轮广播就测到这些分支）。
 
 **验证**：
 - `pytest tests/ -q` 全绿
-- `grep -rn "engine\._history\b\|\.history\.messages" nanobot/ | grep -v "context.py"` 
-  **归零**——外部不再碰内部列表（这是"接口契约"的硬验收）
-- `grep -rn "\._history\b" nanobot/groupchat/orchestra/engine.py` 仅剩兼容层或归零
+- `broadcast_round` 函数体行数显著下降（记录提升前后对比，作为验收证据写进
+  commit message）
+- 新增的独立方法/对象有专属单元测试，不再只靠集成测试兜底
+
+## Phase 3：channels/ 收敛（可与 Phase 1/2 并行）
+
+**目标**：优先补测试盲区，再评估复用值不值得做——不要为了复用而重构没有
+测试保护的代码。
+
+1. **先补 `mochat.py`（946 行，零专属测试）的测试**，覆盖现有行为
+   （AGENTS.md #1：没有回归测试守护，不许动实现代码）。
+2. 视情况补 `discord.py`/`wecom.py`/`whatsapp.py`/`manager.py`/`registry.py`
+   的专属测试——不要求一次性做完，按触碰频率排优先级。
+3. 测试补齐后，评估把轮询循环 / 去重 / 媒体处理的公共部分提炼到 `base.py`
+   或 `channels/utils/` 是否值得——如果收益不明确（参考
+   `docs/phase4-findings.md` 4.2 对 Session/HistoryContext 的判断先例：
+   "服务不同场景，不合并"），允许结论是"不做"，把结论和理由记录下来即可，
+   不必强行合并。
+
+**验证**：
+- 新增测试全绿
+- 若做了提炼：`pytest tests/ -q` 全绿，且原有 channel 特有行为测试不受影响
 
 ---
 
@@ -326,45 +171,44 @@ broadcast.py:513  engine._build_agent_prompt(history=self._history, relevant_age
 
 | 风险 | 概率 | 影响 | 缓解 |
 |------|------|------|------|
-| Phase D 视图一致性 bug（消息漏进/多进某视图） | 中 | 高 | Phase B 先用临时投影验证可见性逻辑，Phase D 再持久化；隔离测试钉死 |
-| 压缩 per-agent 算力翻 N 倍 | 高 | 中 | 用户已确认接受；可加"仅 active agent 才压缩"优化 |
-| `_history` shim 34 处迁移遗漏 | 中 | 中 | 每改一处跑全测试；Phase E 最后 grep 归零验证 |
-| direct-chat 模式回归 | 低 | 高 | Phase D 兼容测试（单 agent 视图=全部）；`test_session_manager_history.py` 守护 |
-| 压缩快照测试模型变了 | 高 | 低 | `test_compression_*_snapshot.py` 更新快照，commit message 记原因 |
-| 线上网关在跑 | — | 高 | AGENTS.md：agent idle 才重启；改动不涉及 channel 层，降低风险 |
+| Phase 1 遗漏某个 `_running` 读写点，行为悄悄改变 | 中 | 高 | 迁移前 grep 全量列出（本计划已列出已知 20+ 处作为基线），每改一处跑测试，最后 grep 归零验收 |
+| Phase 1 触及生产网关正在跑的会话循环 | 中 | 高 | 遵循 AGENTS.md 网关重启规则：确认 agent idle 才重启验证；先在测试环境跑满全量测试 |
+| Phase 2 提升闭包时遗漏某个隐式共享状态 | 中 | 中 | 逐个提升、逐个测试，不要一次性搬完 `_run_one`；先做最独立的 `_on_tool_start`/`_on_tool_result` 积累经验 |
+| Phase 3 为了复用强行合并出现分歧的 channel 逻辑 | 低 | 中 | 参考 4.2 先例，允许"审计后判断不合并"作为合法结论 |
+| 三个 phase 战线拉长，中途被打断 | 中 | 低 | 每个 phase 内部按"逐个迁移/提升/补测试"切成可独立提交的最小单元，AGENTS.md #6 |
 
 ## 不做（本轮范围外）
 
-- Telegram 真统一到 bus（D1 的"高风险"分支）——本轮只删死代码 + 修虚标
-- mailbox 完全删除——降级为通知层，仍保留实时打断能力
-- 历史可重载快照（进程重启恢复）——`save_message` 仍只追加日志，本轮不做快照恢复
+- providers/（4184 行）：审查后判断结构清晰、抽象合理，不列入本轮
+- mods/skills 边界：代码层面确认无越界 import，`docs/SKILL_VS_MOD.md` 边界成立，不动
+- Telegram 真正统一走 bus（上轮计划已判断"高风险，不推荐"）：本轮不重新评估
+- channels/ 除 `mochat.py` 外的全量测试补齐：按需推进，不设一次性完成的硬指标
 
 ## 验证（DoD）
 
-- [x] `py_compile` 全过（本轮改动文件）
-- [x] `pytest tests/ -q` 全绿：`695 passed, 32 deselected`（受限沙箱内运行时，gateway
-      路径测试会因无法写入 `/root/.nanobot` 报只读；升级权限复验已通过）。
-- [x] **接口契约验收**：`grep -rn "engine\._history\b\|\.history\.messages" nanobot/ | grep -v "context.py"`
-      归零——外部不再碰内部列表（"低耦合"硬指标）
-- [x] 新增测试覆盖（"高稳定"硬指标）：可见性隔离（A→B C 看不到）、跨轮留存、
-      per-agent 压缩隔离、压缩持久不重压、禁用摘要不丢中段、契约方法行为
-      （last_sender/has_system_message/is_empty/all_messages 返回副本不可改）
-- [x] commit message 每步写清 what + why + 证据
+- [ ] Phase 1：`py_compile` 全过；`pytest tests/ -q` 全绿；
+      `grep -rn "\._running\b" nanobot/channels/` 归零；
+      `round_lifecycle.py` 的 `flip_running` 参数删除
+- [ ] Phase 2：`pytest tests/ -q` 全绿；`_run_one`/`broadcast_round` 行数下降有
+      commit 记录；提升出的方法有专属单元测试
+- [ ] Phase 3：`mochat.py` 测试新增且绿；复用是否值得做的结论有记录（做或不做）
+- [ ] 每个 phase 内每个逻辑单元单独 commit，message 写清 what + why + 证据
 - [ ] 涉及线上：确认 agent idle → 重启网关 → 观察 gateway.log 首轮
 
 ## 参考文件
 
-- `AGENTS.md` — 红线（#1 先测试 #2 修根源 #4 删死代码 #5 重读 #6 checkpoint）
-- `nanobot/groupchat/history/context.py` — `HistoryContext`（核心改造对象）
-- `nanobot/groupchat/history/message_converter.py:history_to_messages` — 过滤逻辑
-- `nanobot/groupchat/orchestra/engine.py:_build_agent_prompt` — 插入点
-- `nanobot/groupchat/orchestra/tools/chatroom_tools.py:ChatroomSendTool` — 写日志
-- `tests/test_user_ingress.py` — 测试范式（真对象+微小假件）
-- `tests/test_compression_*_snapshot.py` — 快照测试（Phase D 要更新）
+- `AGENTS.md` — 红线
+- `docs/archive/plan-2026-09-07-history-refactor.md` — 上一轮已完成的历史模型重构（背景参考）
+- `docs/phase4-findings.md` — 4.2 的"审计后判断不合并"先例，Phase 3 可参考
+- `nanobot/groupchat/orchestra/engine.py:287-333` — `_running`/`is_running` 现状
+- `nanobot/groupchat/orchestra/round_lifecycle.py` — 状态转换现状
+- `nanobot/groupchat/orchestra/run_loop.py:107-183` — 会话主循环，Phase 1 核心改动点
+- `nanobot/groupchat/orchestra/broadcast.py:377-1875` — `broadcast_round`，Phase 2 核心改动点
+- `nanobot/channels/base.py`、`nanobot/channels/utils/` — Phase 3 复用评估起点
+- `tests/test_round_lifecycle.py`/`tests/test_no_leader_convergence.py` — 现有轮次状态测试参考模式
 
 ## 变更日志
 
 | 日期 | 变更 |
 |------|------|
-| 2026-09-07 | 覆盖上轮 Phase 1-4 记录，重写为"单持久日志 + per-agent 视图"历史模型重构计划。基于遗忘/收不到两 bug 的根因调查（两套矛盾历史模型无不变量）+ 用户拍板的可见性语义（A→B C 看不到 + 跨轮留存 + per-agent 分别压缩）|
-| 2026-09-07 | Phase A–D 已由 `6f0b5a57`、`01e3ed42`、`4455ba39`、`5319ce6a` 完成；Phase E 由 `47367677`、`2f406173` 完成：退役 `_history` shim 与重复 ingress、落地 HistoryContext 契约、提高默认历史窗口至 200/20，并删除摘要不可用时误压缩原始日志的遗留块。|
+| 2026-09-07 | 创建本计划。基于历史模型重构（Phase A-E）完成后的独立架构审查：发现 `engine._running` 双语义比 `docs/phase4-findings.md` 描述的更严重（渗出到 channels 层）、`broadcast_round` 是 ~1500 行巨函数、channels/ 复用不足叠加测试盲区（`mochat.py` 零测试）。providers/ 和 mods/skills 边界审查后判断健康，不列入本轮。原历史模型重构 `plan.md` 归档至 `docs/archive/plan-2026-09-07-history-refactor.md`。 |
