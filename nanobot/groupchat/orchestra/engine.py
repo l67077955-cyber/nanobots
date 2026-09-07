@@ -1014,8 +1014,14 @@ class GroupChatEngine:
         })
 
     async def _maybe_compress_history(self) -> None:
-        """Compress history if needed — delegates to HistoryContext."""
-        await self.history.maybe_compress()
+        """Compress history if needed — delegates to HistoryContext.
+
+        Phase D: compression runs per-agent (compress_all) so each agent's view
+        compresses independently.  Active agents list is set on the context
+        so view_for / compress_for know which views to materialize and compress.
+        """
+        self.history._active_agents = list(self._active_agents)
+        await self.history.compress_all()
         self._history = self.history.messages  # keep shim in sync
 
     def _format_history(self) -> str:

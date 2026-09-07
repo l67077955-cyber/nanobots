@@ -48,6 +48,16 @@ class HistoryContext:
         self._state = state
         self._provider = provider
         self.messages: list[dict[str, str]] = []
+        # Phase D: per-agent persistent views.  Each agent's view is stored
+        # independently, so compression operates only on that view without
+        # affecting others.  Populated lazily as messages are added or as
+        # agents become active (set via _active_agents setter).  The log
+        # (self.messages) is the append-only source; views are projections
+        # that each agent compresses independently.
+        self._views: dict[str, list[dict]] = {}
+        # Active agents list (set by engine._maybe_compress_history).  Used
+        # by compress_all to know which views to iterate over.
+        self._active_agents: list[str] = []
 
     # ── Compatibility shim: allow engine._history to keep working ─────────
     # We expose the messages list directly as a public attribute so that
@@ -116,7 +126,22 @@ class HistoryContext:
         else:
             # Copy to avoid the caller's list aliasing into stored history.
             targets = list(targets)
-        self.messages.append({"sender": sender, "content": content, "targets": targets})
+        msg = {"sender": sender, "content": content, "targets": targets}
+        self.messages.append(msg)
+
+        # Phase D: append to per-agent persistent views.  A message is added to
+        # a view when: (1) "All" in targets, (2) agent_name in targets, or
+        # (3) the agent is the sender (agents see their own sends).  Active
+        # agents list is set by engine; we lazily create views for agents as
+        # they become active.
+        recipients = set(targets)
+        if "All" in recipients:
+            recipients = set(self._active_agents) | {sender}
+        for agent_name in self._active_agents:
+            if "All" in targets or agent_name in targets or agent_name == sender:
+                if agent_name not in self._views:
+                    self._views[agent_name] = []
+                self._views[agent_name].append(dict(msg))
 
         try:
             from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
@@ -186,17 +211,140 @@ class HistoryContext:
         projection over ``self.messages`` — re-calling after new messages are
         added returns a view that includes them.
 
-        Phase B: computed on demand from the log.  Phase D replaces this with
-        a stored per-agent persistent view.
+        Phase D: returns the stored persistent view (self._views[agent_name])
+        if it exists; falls back to computing a fresh projection (for agents
+        not yet active / pre-migration).  Callers get a copy, so mutating the
+        returned list does not corrupt the stored view.
         """
+        if agent_name in self._views:
+            return [dict(m) for m in self._views[agent_name]]
+        # Fallback: compute from the log (for non-active or pre-migration agents)
         visible: list[dict] = []
         for m in self.messages:
-            targets = m.get("targets") or ["All"]
-            if "All" in targets or agent_name in targets or m.get("sender") == agent_name:
+            tgts = m.get("targets") or ["All"]
+            if "All" in tgts or agent_name in tgts or m.get("sender") == agent_name:
                 visible.append(dict(m))
         return visible
 
-    async def maybe_compress(self) -> None:
+    async def compress_for(self, agent_name: str) -> None:
+        """Compress *agent_name*'s persistent view in place.
+
+        Runs the same head/tail/summarise algorithm as ``maybe_compress`` but
+        scoped to ``self._views[agent_name]``.  Compression of one view never
+        touches another view — the privacy invariant holds: an A→B segment
+        compressed in A's view stays invisible to C, because C's view never
+        contained the segment.  Idempotent: a second call on an already-
+        compressed view is a no-op (the summary is already in place).
+        """
+        if agent_name not in self._views:
+            # Lazily materialize the view from the log on first compress
+            self._views[agent_name] = self.view_for(agent_name)
+        await self._compress_view(self._views[agent_name])
+
+    async def compress_all(self) -> None:
+        """Compress every active agent's view independently (plan.md Phase D).
+
+        Replaces the old single ``maybe_compress`` over the shared list: each
+        agent reaches its own threshold and compresses its own view.  Active
+        agents are set by ``engine._maybe_compress_history``.
+        """
+        for name in list(self._active_agents):
+            await self.compress_for(name)
+
+    async def _compress_view(self, view: list[dict]) -> None:
+        """The head/tail/summarise algorithm, operating on an arbitrary list.
+
+        Extracted from ``maybe_compress`` so per-agent views and the shared
+        log can both use it.  Mutates *view* in place.  When summarisation is
+        disabled (or the provider is None), the middle region is KEPT (early
+        return) rather than dropped — the old ``self.messages = head + tail``
+        fallback at context.py:333-334 silently discarded history; per-agent
+        compression must not lose data.
+        """
+        from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
+            compress_max_summary_tokens,
+            compress_ratio,
+            compression_keep_recent,
+            history_summarize_enabled,
+            keep_user_messages,
+            max_messages,
+            summarize_model,
+        )
+
+        limit = max_messages()
+        ratio = compress_ratio()
+        if len(view) < int(limit * ratio):
+            return
+
+        total_len = len(view)
+
+        protected_head_indices = self._find_head_indices(view, keep_all_users=keep_user_messages())
+        keep_recent = compression_keep_recent()
+        protected_tail_indices = set(range(max(0, total_len - keep_recent), total_len))
+        all_protected = protected_head_indices | protected_tail_indices
+
+        head = [view[i] for i in sorted(protected_head_indices)]
+        tail = [view[i] for i in sorted(protected_tail_indices) if i not in protected_head_indices]
+        to_compress = [view[i] for i in range(total_len) if i not in all_protected]
+        if not to_compress:
+            return
+
+        # Age tool logs (build new dicts, never mutate originals)
+        aged = []
+        for msg in to_compress:
+            original = msg["content"]
+            if age_tool_log(original) != original:
+                aged.append({**msg, "content": age_tool_log(original)})
+            else:
+                aged.append(msg)
+        to_compress = aged
+
+        if history_summarize_enabled() and self._provider is not None:
+            history_text = "\n".join(f"[{m['sender']}]: {m['content']}" for m in to_compress)
+            prompt = (
+                f"以下是群聊的一段中期历史记录（共 {len(to_compress)} 条）。\n"
+                "请用简洁的中文摘要这些内容，重点保留核心发现、关键决策、重要事实以及已经完成的进度。\n"
+                "如果有具体的数值、文件路径或关键结论，请务必保留。\n"
+                f"摘要不超过 500 字。\n\n{history_text}"
+            )
+            summary = ""
+            for attempt in (1, 2):
+                try:
+                    response = await self._provider.chat_with_retry(
+                        messages=[{"role": "user", "content": prompt}],
+                        model=summarize_model(),
+                        max_tokens=compress_max_summary_tokens(),
+                    )
+                except Exception as e:
+                    logger.warning("HistoryContext: compress attempt {} failed: {}", attempt, e)
+                    continue
+                summary = (response.content or "").strip()
+                if summary:
+                    break
+            if not summary:
+                logger.warning("HistoryContext: keeping {} middle msgs uncompressed", len(to_compress))
+                return
+
+            summary_msg = {
+                "sender": "系统",
+                "content": f"[早期对话摘要（压缩了 {len(to_compress)} 条中间消息）]\n{summary}",
+                "targets": ["All"],
+            }
+            rebuilt = []
+            inserted = False
+            for i, m in enumerate(view):
+                if i in all_protected:
+                    rebuilt.append(m)
+                elif not inserted:
+                    rebuilt.append(summary_msg)
+                    inserted = True
+            view[:] = rebuilt
+            logger.info("HistoryContext: compressed {} → summary", len(to_compress))
+            return
+
+        # Summarisation disabled: KEEP the middle (do not discard)
+        logger.info("HistoryContext: summarisation disabled, keeping {} middle msgs", len(to_compress))
+
         """Compress the middle section of history when it approaches the limit.
 
         Head-tail protection always runs.  AI summarisation is gated by
