@@ -1,6 +1,7 @@
 """MCP client: connects to MCP servers and wraps their tools as native nanobot tools."""
 
 import asyncio
+from collections.abc import Sequence
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -172,13 +173,24 @@ class MCPToolWrapper(Tool):
 
 
 async def connect_mcp_servers(
-    mcp_servers: dict, registry: ToolRegistry, stack: AsyncExitStack
+    mcp_servers: dict,
+    registry: ToolRegistry | Sequence[ToolRegistry],
+    stack: AsyncExitStack,
 ) -> None:
-    """Connect to configured MCP servers and register their tools."""
+    """Connect to configured MCP servers and register their tools.
+
+    ``registry`` takes a single registry or several. Pass several to connect
+    each server **once** and fan the tool wrappers out across them: callers
+    used to loop and call this per registry, which reconnected every server
+    each time — for a stdio server that is one child process per registry.
+    The wrappers are stateless apart from the session, so sharing is safe.
+    """
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.sse import sse_client
     from mcp.client.stdio import stdio_client
     from mcp.client.streamable_http import streamable_http_client
+
+    registries = [registry] if isinstance(registry, ToolRegistry) else list(registry)
 
     for name, cfg in mcp_servers.items():
         try:
@@ -201,6 +213,17 @@ async def connect_mcp_servers(
                 )
                 read, write = await stack.enter_async_context(stdio_client(params))
             elif transport_type == "sse":
+                # The legacy HTTP+SSE transport is deprecated by the 2026-07-28 MCP
+                # spec, which gives it a >=12 month removal window. Keep it working,
+                # but say so once per server so endpoints get migrated in time.
+                logger.warning(
+                    "MCP server '{}': the HTTP+SSE transport is deprecated by the "
+                    "2026-07-28 MCP spec. Migrate to streamableHttp — set "
+                    "type: streamableHttp explicitly, or point url at an endpoint "
+                    "that does not end in /sse.",
+                    name,
+                )
+
                 def httpx_client_factory(
                     headers: dict[str, str] | None = None,
                     timeout: httpx.Timeout | None = None,
@@ -258,7 +281,8 @@ async def connect_mcp_servers(
                     )
                     continue
                 wrapper = MCPToolWrapper(session, name, tool_def, tool_timeout=cfg.tool_timeout)
-                registry.register(wrapper)
+                for reg in registries:
+                    reg.register(wrapper)
                 logger.debug("MCP: registered tool '{}' from server '{}'", wrapper.name, name)
                 registered_count += 1
                 if enabled_tools:
@@ -279,6 +303,11 @@ async def connect_mcp_servers(
                         ", ".join(available_wrapped_names) or "(none)",
                     )
 
-            logger.info("MCP server '{}': connected, {} tools registered", name, registered_count)
+            logger.info(
+                "MCP server '{}': connected, {} tools registered into {} registry/registries",
+                name,
+                registered_count,
+                len(registries),
+            )
         except Exception as e:
             logger.error("MCP server '{}': failed to connect: {}", name, e)

@@ -1,14 +1,17 @@
 """Behavioral tests for the MCP client — nanobot/tools/mcp.py.
 
 Written ahead of the 2026-07-28 MCP spec migration (see
-``docs/plan-2026-09-08-industry-followup.md`` batch A). Before this file the
-whole MCP client path had zero test coverage, so a SDK bump would have been a
-blind change.
+``docs/plan-2026-09-08-industry-followup.md`` batch A).
 
-What is pinned here is *nanobot's* behavior, not the SDK's: transport
-selection, tool registration and naming, ``enabledTools`` filtering, and
-failure isolation between servers. The transports themselves are faked, so
-these tests must keep passing across mcp SDK versions.
+Companion to ``tests/test_mcp_tool.py``, which already covers ``enabledTools``
+filtering and ``MCPToolWrapper.execute`` error handling (timeout, server-side
+cancellation, external cancellation, generic exceptions). Those are not
+repeated here. What this file adds is the part the migration will move:
+transport *selection*, the session handshake, tool registration and naming,
+failure isolation between servers, and schema normalization.
+
+What is pinned is *nanobot's* behavior, not the SDK's — the transports
+themselves are faked, so these tests must keep passing across SDK versions.
 
 The one place the SDK version leaks in is the arity of the tuple a transport
 yields — see ``_STREAMABLE_HTTP_YIELDS`` below.
@@ -16,7 +19,6 @@ yields — see ``_STREAMABLE_HTTP_YIELDS`` below.
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Any
@@ -225,35 +227,10 @@ async def test_multiple_servers_register_independently(
     assert sorted(registry.tool_names) == ["mcp_a_ping", "mcp_b_ping"]
 
 
-# ── enabledTools filtering ───────────────────────────────────────────────
-
-
-async def test_star_registers_every_tool(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_fakes(monkeypatch, [_FakeToolDef("a"), _FakeToolDef("b")])
-    registry = await _connect({"srv": MCPServerConfig(command="node", enabled_tools=["*"])})
-    assert len(registry) == 2
-
-
-async def test_raw_name_filter(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_fakes(monkeypatch, [_FakeToolDef("a"), _FakeToolDef("b")])
-    registry = await _connect({"srv": MCPServerConfig(command="node", enabled_tools=["a"])})
-    assert registry.tool_names == ["mcp_srv_a"]
-
-
-async def test_wrapped_name_filter(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_fakes(monkeypatch, [_FakeToolDef("a"), _FakeToolDef("b")])
-    registry = await _connect(
-        {"srv": MCPServerConfig(command="node", enabled_tools=["mcp_srv_b"])}
-    )
-    assert registry.tool_names == ["mcp_srv_b"]
-
-
-async def test_empty_enabled_tools_registers_nothing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _install_fakes(monkeypatch, [_FakeToolDef("a")])
-    registry = await _connect({"srv": MCPServerConfig(command="node", enabled_tools=[])})
-    assert len(registry) == 0
+# ── enabledTools filtering ──────────────────────────────────────────────
+#
+# Covered by tests/test_mcp_tool.py (raw names, wrapped names, "*" default,
+# empty list, and the warning on unmatched entries). Not duplicated here.
 
 
 # ── Failure isolation ────────────────────────────────────────────────────
@@ -284,39 +261,22 @@ def _wrapper(tool_def: _FakeToolDef, session: Any, timeout: int = 30) -> MCPTool
     return MCPToolWrapper(session, "srv", tool_def, tool_timeout=timeout)
 
 
-async def test_wrapper_joins_text_blocks() -> None:
+async def test_wrapper_passes_arguments_through_under_the_original_name() -> None:
+    """The wrapper is exposed as mcp_<server>_<tool> but must call the server
+    with the tool's original name and the caller's kwargs untouched."""
     from mcp import types
 
-    result = type("R", (), {"content": [types.TextContent(type="text", text="hello"),
-                                        types.TextContent(type="text", text="world")]})()
+    result = type("R", (), {"content": [types.TextContent(type="text", text="ok")]})()
     session = _FakeSession([], call_result=result)
-    out = await _wrapper(_FakeToolDef("t"), session).execute(x=1)
-    assert out == "hello\nworld"
-    assert session.calls == [("t", {"x": 1})]
+    out = await _wrapper(_FakeToolDef("read_file"), session).execute(path="/x", n=2)
+    assert out == "ok"
+    assert session.calls == [("read_file", {"path": "/x", "n": 2})]
 
 
 async def test_wrapper_empty_content_reports_no_output() -> None:
     result = type("R", (), {"content": []})()
     out = await _wrapper(_FakeToolDef("t"), _FakeSession([], call_result=result)).execute()
     assert out == "(no output)"
-
-
-async def test_wrapper_timeout_returns_message_not_raise() -> None:
-    class _SlowSession:
-        async def call_tool(self, name: str, arguments: dict | None = None) -> Any:
-            await asyncio.sleep(10)
-
-    out = await _wrapper(_FakeToolDef("t"), _SlowSession(), timeout=0).execute()
-    assert "timed out" in out
-
-
-async def test_wrapper_tool_error_is_swallowed_into_a_string() -> None:
-    class _BoomSession:
-        async def call_tool(self, name: str, arguments: dict | None = None) -> Any:
-            raise ValueError("boom")
-
-    out = await _wrapper(_FakeToolDef("t"), _BoomSession()).execute()
-    assert "failed" in out and "ValueError" in out
 
 
 def test_wrapper_name_and_description() -> None:
@@ -357,3 +317,81 @@ def test_schema_normalization_drops_unsupported_top_level_keys() -> None:
 
 def test_schema_normalization_handles_non_dict() -> None:
     assert _normalize_schema_for_openai("nonsense") == {"type": "object", "properties": {}}
+
+
+# ── Deprecated transport warning (2026-07-28 spec) ───────────────────────
+
+
+def _capture_warnings() -> tuple[list[str], int]:
+    from loguru import logger
+
+    messages: list[str] = []
+    sink_id = logger.add(lambda m: messages.append(str(m)), level="WARNING")
+    return messages, sink_id
+
+
+async def test_sse_transport_warns_that_it_is_deprecated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loguru import logger
+
+    messages, sink_id = _capture_warnings()
+    try:
+        _install_fakes(monkeypatch, [_FakeToolDef("ping")])
+        await _connect({"srv": MCPServerConfig(url="https://example.test/sse")})
+    finally:
+        logger.remove(sink_id)
+    assert any("deprecated" in m and "streamableHttp" in m for m in messages)
+
+
+async def test_streamable_http_does_not_warn(monkeypatch: pytest.MonkeyPatch) -> None:
+    from loguru import logger
+
+    messages, sink_id = _capture_warnings()
+    try:
+        _install_fakes(monkeypatch, [_FakeToolDef("ping")])
+        await _connect({"srv": MCPServerConfig(url="https://example.test/mcp")})
+    finally:
+        logger.remove(sink_id)
+    assert not any("deprecated" in m for m in messages)
+
+
+# ── One connection, many registries ──────────────────────────────────────
+
+
+async def test_many_registries_share_a_single_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression guard for the per-registry reconnect: the engine injects MCP
+    tools into default + direct + per-agent registries, and each extra registry
+    used to mean another connection (another child process, for stdio)."""
+    spy, _ = _install_fakes(monkeypatch, [_FakeToolDef("ping")])
+    registries = [ToolRegistry() for _ in range(3)]
+    async with AsyncExitStack() as stack:
+        await connect_mcp_servers(
+            {"srv": MCPServerConfig(command="node")}, registries, stack
+        )
+    assert len(spy.stdio) == 1, "server must be connected once, not once per registry"
+    for reg in registries:
+        assert reg.tool_names == ["mcp_srv_ping"]
+
+
+async def test_fanned_out_registries_share_the_same_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fakes(monkeypatch, [_FakeToolDef("ping")])
+    a, b = ToolRegistry(), ToolRegistry()
+    async with AsyncExitStack() as stack:
+        await connect_mcp_servers({"srv": MCPServerConfig(command="node")}, [a, b], stack)
+    assert a.get("mcp_srv_ping") is b.get("mcp_srv_ping")
+
+
+async def test_single_registry_argument_still_supported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Back-compat: the old single-registry call shape must keep working."""
+    _install_fakes(monkeypatch, [_FakeToolDef("ping")])
+    reg = ToolRegistry()
+    async with AsyncExitStack() as stack:
+        await connect_mcp_servers({"srv": MCPServerConfig(command="node")}, reg, stack)
+    assert reg.tool_names == ["mcp_srv_ping"]

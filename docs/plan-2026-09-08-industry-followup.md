@@ -68,7 +68,7 @@ nanobot 近 4 周 48 个 commit 全部是向内的（fix 11 / feat 11 / refactor
 | governance decay | 无任何测试钉住「压缩后系统约束是否还在上下文里」 | 🔴 无 |
 | Agent Skills 标准 | `skills/loader.py` 已 frontmatter 兼容 + compact 模式（L1/L2），L3 靠 `read_file` 手动 | 🟢 基本跟上 |
 | A2A / ACP | 自研 `mailbox.py`，进程内，零 A2A | ⚪ 观望 |
-| 轨迹级评估 | 74 个测试文件，全是确定性单测，无 agent 轨迹/召回评估 | 🟡 空白 |
+| 轨迹级评估 | 75 个测试文件，全是确定性单测，无 agent 轨迹/召回评估 | 🟡 空白 |
 
 ---
 
@@ -80,10 +80,11 @@ nanobot 近 4 周 48 个 commit 全部是向内的（fix 11 / feat 11 / refactor
 
 唯一必须动核心的一批（协议兼容属核心 bug 范畴，不是「加行为」，不走 mod）。
 
-1. **先补测试**（AGENTS.md #1）。当前 `tests/` 下**没有任何 MCP 客户端测试**。
-   新建 `tests/test_mcp_client.py`，钉住：stdio 与 streamableHttp 两条 transport 选择路径、
-   `list_tools` 到 `ToolRegistry` 的注册、`enabled_tools` 过滤（含 `*` 与 wrapped 名）、
-   未知 transport 跳过、单 server 失败不影响其他 server。
+1. **先补测试**（AGENTS.md #1）。已有 `tests/test_mcp_tool.py`（10 个用例）覆盖
+   `enabledTools` 过滤与 `MCPToolWrapper.execute` 的错误处理（超时、服务端取消、
+   外部取消重抛、通用异常），但**transport 选择、握手、注册命名、多 server 失败隔离、
+   schema 归一化全部无覆盖**——SDK 升级会是一次盲改。
+   新建 `tests/test_mcp_client.py` 补齐这些，不重复已有覆盖。
    风格参考 `tests/test_user_ingress.py`（真对象 + 微小假件，不 mock 内部）。
 2. **SDK 升级评估**：`pyproject.toml` 的 `mcp>=1.26.0,<2.0.0` → 2.x。**必须先在隔离
    venv 验证 API 差异**，不能直接升级系统包（生产网关在跑）。向后兼容是硬要求：

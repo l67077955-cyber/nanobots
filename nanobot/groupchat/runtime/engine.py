@@ -225,17 +225,18 @@ class GroupChatEngine:
         try:
             self._mcp_stack = AsyncExitStack()
             await self._mcp_stack.__aenter__()
-            # Inject into all known registries (default tools + direct_tools + cache)
-            all_registries = set()
-            all_registries.add(id(self.tools))
-            all_registries.add(id(self.direct_tools))
-            await connect_mcp_servers(self._mcp_servers, self.tools, self._mcp_stack)
-            await connect_mcp_servers(self._mcp_servers, self.direct_tools, self._mcp_stack)
-            # Also inject into any already-cached per-agent registries
-            for key, reg in self._tool_registry_cache.items():
-                if id(reg) not in all_registries:
-                    all_registries.add(id(reg))
-                    await connect_mcp_servers(self._mcp_servers, reg, self._mcp_stack)
+            # Inject into all known registries (default tools + direct_tools + cache).
+            # One connection per server, fanned out — connect_mcp_servers used to be
+            # called once per registry, which re-spawned every stdio server each time.
+            # Dedupe by identity: tools/direct_tools may alias, and so may cached
+            # per-agent registries that resolve to the same workspace.
+            all_registries = []
+            seen: set[int] = set()
+            for reg in (self.tools, self.direct_tools, *self._tool_registry_cache.values()):
+                if id(reg) not in seen:
+                    seen.add(id(reg))
+                    all_registries.append(reg)
+            await connect_mcp_servers(self._mcp_servers, all_registries, self._mcp_stack)
             self._mcp_connected = True
             logger.info("GroupChat MCP: connected {} server(s), tools injected into {} registries",
                         len(self._mcp_servers), len(all_registries))
