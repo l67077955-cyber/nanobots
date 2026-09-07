@@ -172,6 +172,30 @@ class HistoryContext:
 
         self._state.save_message(sender, content, self.messages, targets=targets)
 
+    def view_for(self, agent_name: str) -> list[dict]:
+        """Return the subset of history visible to *agent_name*.
+
+        Visibility rule (the privacy invariant from plan.md): a message is
+        visible to an agent when the agent is in the message's ``targets``,
+        the message targets ``All`` (全员可见 — the default for user / system /
+        broadcast messages), or the agent is the sender (an agent always sees
+        what it itself sent, so it remembers its own contributions).
+
+        Returns a fresh list of *copied* dicts so external callers cannot
+        mutate the log by editing the returned view.  This is a live
+        projection over ``self.messages`` — re-calling after new messages are
+        added returns a view that includes them.
+
+        Phase B: computed on demand from the log.  Phase D replaces this with
+        a stored per-agent persistent view.
+        """
+        visible: list[dict] = []
+        for m in self.messages:
+            targets = m.get("targets") or ["All"]
+            if "All" in targets or agent_name in targets or m.get("sender") == agent_name:
+                visible.append(dict(m))
+        return visible
+
     async def maybe_compress(self) -> None:
         """Compress the middle section of history when it approaches the limit.
 

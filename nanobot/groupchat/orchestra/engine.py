@@ -1051,12 +1051,18 @@ class GroupChatEngine:
         teammates: list[str] | None = None,
         user_question: str = "",
     ) -> list[dict[str, Any]]:
-        """Build prompt — delegates entirely to PromptBuilder."""
+        """Build prompt — delegates entirely to PromptBuilder.
+
+        Each agent is prompted from its own visibility view (history.view_for)
+        rather than the full shared log, so a private A→B message does not
+        leak into C's prompt.  ``relevant_agents`` is kept None — the view is
+        already filtered, so history_to_messages' sender-filter is a no-op.
+        """
         messages = self._prompt_builder.build_agent_prompt(
             agent_name,
             registry=self.registry,
             active_agents=self._active_agents,
-            history=self._history,
+            history=self.history.view_for(agent_name),
             leader=self._leader,
             round_num=self._round,
             relevant_agents=relevant_agents,
@@ -1145,7 +1151,7 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
         agent_name,
         registry=engine.registry,
         active_agents=[agent_name],
-        history=engine._history,
+        history=engine.history.view_for(agent_name),
         leader=None,
         round_num=0,
     )
