@@ -15,8 +15,8 @@ from typing import Any
 
 from loguru import logger
 
+from nanobot.groupchat.orchestra.mailbox import ConversationPool, MailboxHub, SpeakQueue
 from nanobot.tools.base import Tool
-from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool, SpeakQueue
 
 
 class SearchPool:
@@ -314,8 +314,9 @@ class SmartSearchTool(Tool):
         model = reader_cfg.get("model", self._reader_model)
         provider_name = reader_cfg.get("provider", "openrouter")
 
-        from nanobot.providers.litellm_provider import LiteLLMProvider
         import json as _json
+
+        from nanobot.providers.litellm_provider import LiteLLMProvider
 
         api_key, api_base = "", ""
         try:
@@ -511,8 +512,9 @@ class SmartFetchTool(Tool):
         model = reader_cfg.get("model", self._reader_model)
         provider_name = reader_cfg.get("provider", "openrouter")
 
-        from nanobot.providers.litellm_provider import LiteLLMProvider
         import json as _json
+
+        from nanobot.providers.litellm_provider import LiteLLMProvider
         # Read provider credentials from nanobot config
         api_key, api_base = "", ""
         try:
@@ -644,7 +646,8 @@ class ChatroomSendTool(Tool):
     def __init__(self, mailbox: MailboxHub, agent_name: str = "", pool: ConversationPool | None = None,
                  search_pool: "SearchPool | None" = None,
                  leader_gate: LeaderGate | None = None,
-                 leader_name: str | None = None) -> None:
+                 leader_name: str | None = None,
+                 engine: Any = None) -> None:
         self._mailbox = mailbox
         self._agent_name = agent_name  # Set per-round by the engine
         self._pool = pool
@@ -652,6 +655,12 @@ class ChatroomSendTool(Tool):
         self._last_received_from: str | None = None  # track who we last received from
         self._leader_gate = leader_gate
         self._leader_name = leader_name
+        # Engine ref (plan.md Phase C): so a successful send also appends a
+        # targets-tagged record to the persistent shared log, letting the
+        # message survive across rounds (mailbox queue is cleared on
+        # start_round) and respect per-agent visibility.  None = legacy
+        # construction site that only needs mailbox delivery (back-compat).
+        self._engine = engine
 
     def set_agent(self, name: str) -> None:
         """Set which agent is using this tool instance."""
@@ -767,6 +776,14 @@ class ChatroomSendTool(Tool):
         if delivered > 0 and self._search_pool:
             self._search_pool.on_output(self._agent_name)
 
+        # Persist to the shared log (plan.md Phase C): `targets` is the
+        # normalized visibility list (["All"] or recipient names), so the
+        # message survives across rounds and only reaches its intended
+        # viewers.  Without this the message lived only in the ephemeral
+        # mailbox and was lost on round reset / failed interrupt.
+        if delivered > 0 and self._engine is not None:
+            self._engine._add_message(self._agent_name, message, targets=targets)
+
         # Real-time interrupt of busy recipients — control flow that used to
         # live in the display layer; the tool itself is the correct home.
         if delivered > 0:
@@ -848,9 +865,8 @@ class WaitTool(Tool):
             return "Error: agent context not set"
 
         # Release unread slots before waiting ("not replying" to pending messages)
-        released = 0
         if self._pool:
-            released = self._pool.release_unread(self._agent_name)
+            self._pool.release_unread(self._agent_name)
 
         msg = await self._mailbox.wait(
             agent_name=self._agent_name,
@@ -1044,7 +1060,7 @@ class ManageAgentTool(Tool):
         elif action == "restart":
             # Re-spawn the agent's task so it actively participates again
             if self._spawn_fn is None:
-                return f"Error: restart 不可用（spawn_fn 未注入）"
+                return "Error: restart 不可用（spawn_fn 未注入）"
             # Mark as active first
             self._disabled.discard(agent)
             # Cancel any existing (zombie) task for this agent
@@ -1089,7 +1105,7 @@ class ManageAgentTool(Tool):
                 cfg = self._engine.registry.get(agent, {})
                 current = cfg.get("tools", {})
                 self._engine._session_tools_override[agent] = dict(current) if isinstance(current, dict) else {}
-            
+
             self._engine._session_tools_override[agent].update(tools)
             # Notify
             active = [a for a in self._exec_agents if a not in self._disabled]

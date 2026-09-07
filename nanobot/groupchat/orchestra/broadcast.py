@@ -7,7 +7,6 @@ Agents can communicate with each other via chatroom_send/wait tools.
 from __future__ import annotations
 
 import asyncio
-import copy
 import json as _json
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
@@ -15,20 +14,19 @@ from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 from loguru import logger
 
 from nanobot.groupchat.display import display as _d
-from nanobot.groupchat.orchestra.mailbox import MailboxHub, ConversationPool
-from nanobot.groupchat.orchestra.round_lifecycle import RoundLifecycle
-from nanobot.groupchat.orchestra.user_ingress import UserIngress
+from nanobot.groupchat.history.component_manager import (
+    _MIN_SYNTHESIS_LEN,
+    get_system_warning,
+    synthesis_quality_check,
+)
+from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
 from nanobot.groupchat.orchestra.events import get_bus as _get_bus
+from nanobot.groupchat.orchestra.mailbox import ConversationPool, MailboxHub
+from nanobot.groupchat.orchestra.round_lifecycle import RoundLifecycle
 from nanobot.groupchat.orchestra.tools.chatroom_tools import (
     trigger_realtime_interrupts as _trigger_realtime_interrupts,
 )
-from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
-from nanobot.groupchat.history.component_manager import (
-    get_system_warning,
-    synthesis_quality_check,
-    _MIN_SYNTHESIS_LEN,
-)
-
+from nanobot.groupchat.orchestra.user_ingress import UserIngress
 
 # ── Tool-name → status state mapping ─────────────────────────
 _TOOL_STATE_MAP: dict[str, str] = {
@@ -219,19 +217,19 @@ class BroadcastContext(Protocol):
 
 class BroadcastOrchestrator:
     """State manager for a single broadcast round."""
-    
+
     def __init__(self, agents: list[str], engine: BroadcastContext, mailbox: MailboxHub):
         self.engine = engine
         self.mailbox = mailbox
-        
+
         self.leader_name = engine._leader if hasattr(engine, '_leader') else None
         if self.leader_name and self.leader_name not in agents:
             self.leader_name = None
-            
+
         self.exec_agents = list(agents)
         self.non_leader_agents = [a for a in agents if a != self.leader_name] if self.leader_name else list(agents)
         self.total = len(self.exec_agents)
-        
+
         _gc_settings_path = Path.home() / ".nanobot" / "groupchat_settings.json"
         _gc_defaults = {"search_initial": 2, "search_earn_interval": 4, "allocate_timeout": 15, "call_timeout": 90, "conv_keep_turns": 3}
         self.gc_settings = dict(_gc_defaults)
@@ -240,14 +238,14 @@ class BroadcastOrchestrator:
                 self.gc_settings.update(_json.loads(_gc_settings_path.read_text()))
             except Exception:
                 pass
-                
+
         self.pool: Any = None
         self.tracker: AgentStatusTracker = None # type: ignore
         self.search_pool: Any = None
         self.leader_gate: Any = None
         self.agent_tool_registries: dict[str, Any] = {}
         self._search_cache: dict[str, tuple[str, str]] = {}
-        
+
         self.leader_end_event = asyncio.Event()
         # Single owner of round phase state; transitions also flip the legacy
         # signals (leader_end_event / engine._running) for un-migrated readers.
@@ -260,16 +258,24 @@ class BroadcastOrchestrator:
 
     async def setup_tools_and_pools(self, spawn_fn: Callable[[str, int], asyncio.Task]) -> None:
         """Initialize all shared resources for the round."""
-        from nanobot.tools.registry import ToolRegistry
-        from nanobot.groupchat.orchestra.tools.chatroom_tools import (
-            ChatroomSendTool, WaitTool, CachedSearchTool, SearchPool, LeaderGate,
-            ManageAgentTool, EndDiscussionTool, TransferCreditsTool, ClearContextTool,
-            QuoteMessageTool, ListMessagesTool,
-        )
-        from nanobot.tools.memory_palace import MemoryPalaceTool
         import os
 
-        n = len(self.exec_agents)
+        from nanobot.groupchat.orchestra.tools.chatroom_tools import (
+            CachedSearchTool,
+            ChatroomSendTool,
+            ClearContextTool,
+            EndDiscussionTool,
+            LeaderGate,
+            ListMessagesTool,
+            ManageAgentTool,
+            QuoteMessageTool,
+            SearchPool,
+            TransferCreditsTool,
+            WaitTool,
+        )
+        from nanobot.tools.memory_palace import MemoryPalaceTool
+        from nanobot.tools.registry import ToolRegistry
+
         # Build per-agent capacity from ranks
         rank_cap = {"pawn": 2, "knight": 3, "bishop": 4, "queen": 5}
         per_agent_cap: dict[str, int] = {}
@@ -292,7 +298,7 @@ class BroadcastOrchestrator:
         self.pool.ALLOCATE_TIMEOUT = float(self.gc_settings["allocate_timeout"])
         # Attach pool to mailbox so nudge can skip pool-full agents (deadloop fix).
         self.mailbox.set_pool(self.pool)
-        
+
         await self.engine._send(f"threads {self.pool.status()}")
 
         self.tracker = AgentStatusTracker(
@@ -304,7 +310,6 @@ class BroadcastOrchestrator:
         await self.tracker.create_panel()
 
         points_per_agent = self.gc_settings.get("context_points_per_agent", 0)
-        tool_initial = self.gc_settings.get("tool_initial", self.gc_settings.get("search_initial", 2))
         if points_per_agent > 0:
             # Settings override: uniform search credits
             search_initial = points_per_agent
@@ -337,7 +342,7 @@ class BroadcastOrchestrator:
             send_tool = ChatroomSendTool(
                 mailbox=self.mailbox, agent_name=name, pool=self.pool,
                 search_pool=self.search_pool, leader_gate=self.leader_gate,
-                leader_name=self.leader_name,
+                leader_name=self.leader_name, engine=self.engine,
             )
             wait_tool = WaitTool(mailbox=self.mailbox, agent_name=name, pool=self.pool)
             wait_tool._send_tool = send_tool
@@ -772,7 +777,7 @@ async def broadcast_round(
                     on = engine.get_agent_enabled_tool_names(a)
                     extra = " ← 你" if a == name else (" 👑Leader" if a == leader_name else "")
                     perm_lines.append(f"  {a}: {', '.join(on) if on else '(无工具)'}{extra}")
-                
+
                 status_summary = (
                     f"\n\n### [本轮状态汇总]\n"
                     f"**搜索额度**: {search_pool.status()}\n"
@@ -780,7 +785,7 @@ async def broadcast_round(
                     "注意：没有 web_search/web_fetch 权限时，也禁止用 exec 执行 curl/wget 等网络命令。\n"
                     "如需搜索，请通过 chatroom_send 请求有搜索权限的队友帮忙。"
                 )
-                
+
                 # Append to the volatile user message, addressed by object
                 # reference (see its definition above) - an index would go stale
                 # history compression or tool-result appends.
@@ -788,7 +793,7 @@ async def broadcast_round(
                 if "### [本轮状态汇总]" in orig_volatile:
                     # Strip previous summary if retrying/looping
                     orig_volatile = orig_volatile.split("### [本轮状态汇总]")[0].strip()
-                
+
                 volatile_msg["content"] = orig_volatile + status_summary
 
                 _cycle_t0 = _t.time()
@@ -1020,12 +1025,12 @@ async def broadcast_round(
                         # Implicitly broadcast text to wake up waiting teammates (like the Leader).
                         # Without this, if an agent forgets to use chatroom_send, its text is only
                         # added to history and teammates hang in wait() until a full timeout.
-                        
+
                         _implicit_targets = ["All"]
                         if leader_name and name != leader_name:
                             # 队友未用 chatroom_send 时，默认只汇报给 Leader，避免唤醒其他正在 wait 的队友导致死循环
                             _implicit_targets = [leader_name]
-                            
+
                         mailbox.send(name, _implicit_targets, content)
                         await _trigger_realtime_interrupts(
                             sender=name,
@@ -1151,7 +1156,7 @@ async def broadcast_round(
                         # Fallback: no message in queue (already consumed by auto-wait?)
                         messages.append({
                             "role": "system",
-                            "content": f"[打断通知] 你的执行被中断，请立即总结当前进展并响应队友的最新需求。",
+                            "content": "[打断通知] 你的执行被中断，请立即总结当前进展并响应队友的最新需求。",
                         })
 
                     await tracker.set_state(name, "thinking")
@@ -1239,7 +1244,7 @@ async def broadcast_round(
                         tools=list(result.tools_used or []),
                     )
                     # else: chatroom_send already displayed the message — no duplicate needed
-                
+
                 # If leader called end_discussion this cycle, validate synthesis length & quality.
                 if is_leader and _leader_ended_discussion:
                     stripped = content.strip() if content else ""
@@ -1365,8 +1370,12 @@ async def broadcast_round(
                 # _CONV_KEEP_TURNS conversation turns (3 msgs per turn).
                 # Dropped messages are AI-summarised before removal so the
                 # agent retains context of earlier discussion.
-                from nanobot.groupchat.history.tool_pruning import prune_conversation_tail_with_summary
-                from nanobot.groupchat.history.history_settings import summarize_model as _summarize_model
+                from nanobot.groupchat.history.history_settings import (
+                    summarize_model as _summarize_model,
+                )
+                from nanobot.groupchat.history.tool_pruning import (
+                    prune_conversation_tail_with_summary,
+                )
                 _conv_keep_turns = gc_settings.get("conv_keep_turns", 3)  # configurable via groupchat_settings.json
                 dropped = await prune_conversation_tail_with_summary(
                     messages, _sys_msg_count, _conv_keep_turns,
@@ -1545,11 +1554,14 @@ async def broadcast_round(
                     continue
                 # Build tool registry for the new agent
                 base_reg = engine._get_agent_registry(new_name)
-                from nanobot.tools.registry import ToolRegistry
                 from nanobot.groupchat.orchestra.tools.chatroom_tools import (
-                    ChatroomSendTool, WaitTool, CachedSearchTool,
-                    QuoteMessageTool, ListMessagesTool,
+                    CachedSearchTool,
+                    ChatroomSendTool,
+                    ListMessagesTool,
+                    QuoteMessageTool,
+                    WaitTool,
                 )
+                from nanobot.tools.registry import ToolRegistry
                 new_reg = ToolRegistry()
                 for tool_name in base_reg.tool_names:
                     tool = base_reg.get(tool_name)
@@ -1561,7 +1573,7 @@ async def broadcast_round(
                 send_tool = ChatroomSendTool(
                     mailbox=mailbox, agent_name=new_name, pool=pool,
                     search_pool=search_pool, leader_gate=leader_gate,
-                    leader_name=leader_name,
+                    leader_name=leader_name, engine=engine,
                 )
                 wait_tool = WaitTool(mailbox=mailbox, agent_name=new_name, pool=pool)
                 wait_tool._send_tool = send_tool

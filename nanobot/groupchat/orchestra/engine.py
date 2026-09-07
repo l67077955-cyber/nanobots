@@ -125,7 +125,7 @@ class GroupChatEngine:
 
         # Register chatroom tools on default registry
         from nanobot.groupchat.orchestra.tools.chatroom_tools import ChatroomSendTool, WaitTool
-        self._chatroom_send_tool = ChatroomSendTool(mailbox=self._mailbox)
+        self._chatroom_send_tool = ChatroomSendTool(mailbox=self._mailbox, engine=self)
         self._wait_tool = WaitTool(mailbox=self._mailbox)
         self.tools.register(self._chatroom_send_tool)
         self.tools.register(self._wait_tool)
@@ -210,7 +210,7 @@ class GroupChatEngine:
             reg = self._build_tool_registry(ws)
             # Add chatroom tools to custom registries too
             from nanobot.groupchat.orchestra.tools.chatroom_tools import ChatroomSendTool, WaitTool
-            reg.register(ChatroomSendTool(mailbox=self._mailbox))
+            reg.register(ChatroomSendTool(mailbox=self._mailbox, engine=self))
             reg.register(WaitTool(mailbox=self._mailbox))
             self._tool_registry_cache[key] = reg
             logger.info("Groupchat: built tool registry for {} → {}", agent_name, ws)
