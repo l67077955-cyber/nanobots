@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from nanobot.groupchat.orchestra.events import BroadcastEventDispatcher
+from nanobot.groupchat.runtime.events import BroadcastEventDispatcher
 from nanobot.mods.base import Mod
 from nanobot.mods.builtin.antirepeat import AntiRepeatMod
 from nanobot.mods.builtin.round_telemetry import RoundTelemetryMod

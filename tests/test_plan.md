@@ -2,7 +2,7 @@
 
 > 目标：覆盖 Agent CRUD、Provider CRUD、Model CRUD、持久化、并发边界、安全审计、边界用例七个维度。
 > 优先级：P0=必须修+测（阻断/泄露） | P1=应修+测（健壮性） | P2=可选（体验/性能）
-> 被测代码：`nanobot/groupchat/orchestra/engine.py`、`nanobot/groupchat/history/persistence.py`、`nanobot/skills/settings/scripts/settings_cli.py`
+> 被测代码：`nanobot/groupchat/runtime/engine.py`、`nanobot/groupchat/history/persistence.py`、`nanobot/skills/settings/scripts/settings_cli.py`
 
 ---
 

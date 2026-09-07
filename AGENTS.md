@@ -5,7 +5,7 @@
 
 ## 项目是什么
 
-nanobot 是一个多 agent 群聊系统：Telegram 通道 + 群聊编排（orchestra）+
+nanobot 是一个多 agent 群聊系统：Telegram 通道 + 群聊编排（runtime）+
 工具循环 + 历史压缩。**本仓库被多个 agent 并行实时编辑，且有正在运行的生产网关。**
 
 ## 环境与命令（改动后必须执行的验证）
@@ -43,7 +43,7 @@ python3 -m pytest tests/test_mods.py tests/test_events.py -q
 
 ## 事件与 mod（新行为的唯一入口）
 
-- 事件目录：`nanobot/groupchat/orchestra/events.py` 的 `EVENTS`。
+- 事件目录：`nanobot/groupchat/runtime/events.py` 的 `EVENTS`。
 - 订阅方式：继承 `nanobot.mods.base.Mod`，方法名 `on_<event 下划线化>`。
 - 观察型（tier 1）随便写；过滤型（tier 2）只能往 payload 里的可变容器
   append，不许替换。
@@ -58,7 +58,7 @@ python3 -m pytest tests/test_mods.py tests/test_events.py -q
 ## 架构速览（改哪找哪）
 
 ```
-nanobot/groupchat/orchestra/
+nanobot/groupchat/runtime/
   run_loop.py        # 会话主循环：消费用户消息 → 开轮次
   broadcast.py       # 每轮编排（大文件，改前先读 round_lifecycle）
   round_lifecycle.py # 轮次状态机（ACTIVE/WINDING_DOWN/ENDED）——唯一状态源

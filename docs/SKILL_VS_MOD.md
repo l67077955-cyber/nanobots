@@ -163,6 +163,6 @@ if (skill_dir / "scripts").exists():
 ## 参考
 
 - `docs/MOD_PLUGIN_GUIDE.md` - Mod开发指南
-- `nanobot/groupchat/orchestra/events.py` - 事件目录
+- `nanobot/groupchat/runtime/events.py` - 事件目录
 - `nanobot/state/settings_store.py` - 统一设置服务
 - `AGENTS.md` - 项目级约定

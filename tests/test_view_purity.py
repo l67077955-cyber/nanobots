@@ -9,8 +9,8 @@ wrapper logic, replicated here against a real SearchPool).
 
 from __future__ import annotations
 
-from nanobot.groupchat.orchestra.mailbox import MailboxHub
-from nanobot.groupchat.orchestra.tools.chatroom_tools import (
+from nanobot.groupchat.runtime.mailbox import MailboxHub
+from nanobot.groupchat.runtime.tools.chatroom_tools import (
     ChatroomSendTool,
     SearchPool,
     trigger_realtime_interrupts,
@@ -48,7 +48,7 @@ class TestRealtimeInterruptsInTool:
     async def test_blocked_send_does_not_interrupt(self):
         mb = _hub(["L", "A", "B"])
         mb.mark_busy("B")
-        from nanobot.groupchat.orchestra.mailbox import ConversationPool
+        from nanobot.groupchat.runtime.mailbox import ConversationPool
         # Sender pool exhausted → allocate fails → BLOCKED, no interrupt
         pool = ConversationPool(agents=["L", "A", "B"],
                                 per_agent_capacity={"L": 0, "A": 3, "B": 3})

@@ -11,7 +11,7 @@ import asyncio
 
 import pytest
 
-from nanobot.groupchat.orchestra.mailbox import MailboxHub
+from nanobot.groupchat.runtime.mailbox import MailboxHub
 
 
 def _hub(names):

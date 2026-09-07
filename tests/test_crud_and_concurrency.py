@@ -27,7 +27,7 @@ from nanobot.groupchat.history.persistence import GroupChatState
 
 
 def _make_engine(tmp_path):
-    from nanobot.groupchat.orchestra.engine import GroupChatEngine
+    from nanobot.groupchat.runtime.engine import GroupChatEngine
 
     engine = GroupChatEngine.__new__(GroupChatEngine)
     engine.registry = {

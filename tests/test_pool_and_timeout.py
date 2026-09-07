@@ -10,7 +10,7 @@ import asyncio
 
 import pytest
 
-from nanobot.groupchat.orchestra.mailbox import ConversationPool, MailboxHub
+from nanobot.groupchat.runtime.mailbox import ConversationPool, MailboxHub
 
 
 # ------------------------------------------------------------------

@@ -685,7 +685,7 @@ async def tool_loop(
                         "tool_call_id": tc.id,
                         "content": tool_content,
                     })
-                    from nanobot.groupchat.orchestra.events import get_bus
+                    from nanobot.groupchat.runtime.events import get_bus
                     get_bus().emit_nowait(
                         "tool:result",
                         tool=tc.name, ok=not isinstance(tool_result, BaseException),

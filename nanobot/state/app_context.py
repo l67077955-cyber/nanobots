@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from nanobot.groupchat.orchestra.events import BroadcastEventDispatcher
+    from nanobot.groupchat.runtime.events import BroadcastEventDispatcher
     from nanobot.mods.manager import ModManager
     from nanobot.state.settings_store import SettingsStore
 
@@ -61,7 +61,7 @@ class AppContext:
         Returns:
             Configured AppContext instance.
         """
-        from nanobot.groupchat.orchestra.events import BroadcastEventDispatcher
+        from nanobot.groupchat.runtime.events import BroadcastEventDispatcher
         from nanobot.mods.manager import ModManager
         from nanobot.state.settings_store import SettingsStore
 

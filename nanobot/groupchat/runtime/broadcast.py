@@ -19,14 +19,14 @@ from nanobot.groupchat.history.component_manager import (
     get_system_warning,
     synthesis_quality_check,
 )
-from nanobot.groupchat.orchestra.engine import build_tool_log, log_request
-from nanobot.groupchat.orchestra.events import get_bus as _get_bus
-from nanobot.groupchat.orchestra.mailbox import ConversationPool, MailboxHub
-from nanobot.groupchat.orchestra.round_lifecycle import RoundLifecycle
-from nanobot.groupchat.orchestra.tools.chatroom_tools import (
+from nanobot.groupchat.runtime.engine import build_tool_log, log_request
+from nanobot.groupchat.runtime.events import get_bus as _get_bus
+from nanobot.groupchat.runtime.mailbox import ConversationPool, MailboxHub
+from nanobot.groupchat.runtime.round_lifecycle import RoundLifecycle
+from nanobot.groupchat.runtime.tools.chatroom_tools import (
     trigger_realtime_interrupts as _trigger_realtime_interrupts,
 )
-from nanobot.groupchat.orchestra.user_ingress import UserIngress
+from nanobot.groupchat.runtime.user_ingress import UserIngress
 
 # ── Tool-name → status state mapping ─────────────────────────
 _TOOL_STATE_MAP: dict[str, str] = {
@@ -260,7 +260,7 @@ class BroadcastOrchestrator:
         """Initialize all shared resources for the round."""
         import os
 
-        from nanobot.groupchat.orchestra.tools.chatroom_tools import (
+        from nanobot.groupchat.runtime.tools.chatroom_tools import (
             CachedSearchTool,
             ChatroomSendTool,
             ClearContextTool,
@@ -665,7 +665,7 @@ async def broadcast_round(
         # After tool_loop finishes, agent automatically enters wait().
         # If a teammate message arrives, inject it and re-run tool_loop.
         # Only exits when cancelled by leader end_discussion, /stop, or on error.
-        from nanobot.groupchat.orchestra.tools.tool_loop import tool_loop
+        from nanobot.groupchat.runtime.tools.tool_loop import tool_loop
 
         # Load configurable result_max_chars for broadcast mode
         try:
@@ -1554,7 +1554,7 @@ async def broadcast_round(
                     continue
                 # Build tool registry for the new agent
                 base_reg = engine._get_agent_registry(new_name)
-                from nanobot.groupchat.orchestra.tools.chatroom_tools import (
+                from nanobot.groupchat.runtime.tools.chatroom_tools import (
                     CachedSearchTool,
                     ChatroomSendTool,
                     ListMessagesTool,

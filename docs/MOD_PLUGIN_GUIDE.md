@@ -15,7 +15,7 @@ orchestration core ──emit──▶ event bus ──▶ mods (isolated, confi
 ```
 
 - Core code emits typed events at a small set of chokepoints
-  (`nanobot/groupchat/orchestra/events.py` has the catalogue).
+  (`nanobot/groupchat/runtime/events.py` has the catalogue).
 - Mods subscribe, observe, and — for filter events — append to mutable
   payload containers the core applies afterwards.
 - A failing mod is logged and contained. It can never break a round.
@@ -54,7 +54,7 @@ Rules:
    your own files. Do not import engine/mailbox internals.
 3. **Tier 2 (filter)**: payloads may carry mutable containers (`inject` on
    `agent:reactivated` is the current example). Append; never replace.
-4. No monkey-patching, no imports of `nanobot.groupchat.orchestra.broadcast`
+4. No monkey-patching, no imports of `nanobot.groupchat.runtime.broadcast`
    — only `nanobot.mods.base` and, for extra subscriptions, the `ctx.bus`.
 
 ## Enabling
@@ -73,7 +73,7 @@ is read at startup. Builtin mods shadow same-named workspace/external mods.
 
 ## Event catalogue (stable surface)
 
-See `EVENTS` in `nanobot/groupchat/orchestra/events.py`. Highlights:
+See `EVENTS` in `nanobot/groupchat/runtime/events.py`. Highlights:
 
 | Event | Fires when | Payload notes |
 |---|---|---|

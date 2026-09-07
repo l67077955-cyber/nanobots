@@ -26,8 +26,8 @@ from typing import Any
 from loguru import logger
 
 from nanobot.groupchat.display.display import user_interjection_msg
-from nanobot.groupchat.orchestra.events import get_bus
-from nanobot.groupchat.orchestra.round_lifecycle import RoundLifecycle
+from nanobot.groupchat.runtime.events import get_bus
+from nanobot.groupchat.runtime.round_lifecycle import RoundLifecycle
 
 SUMMARY_SENTINEL = "__SUMMARY__"
 

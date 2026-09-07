@@ -15,7 +15,7 @@ from typing import Any
 
 from loguru import logger
 
-from nanobot.groupchat.orchestra.mailbox import ConversationPool, MailboxHub, SpeakQueue
+from nanobot.groupchat.runtime.mailbox import ConversationPool, MailboxHub, SpeakQueue
 from nanobot.tools.base import Tool
 
 

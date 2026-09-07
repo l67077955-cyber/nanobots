@@ -15,7 +15,7 @@ from unittest.mock import Mock
 import pytest
 
 from nanobot.groupchat.config import GroupChatConfig
-from nanobot.groupchat.orchestra.engine import GroupChatEngine
+from nanobot.groupchat.runtime.engine import GroupChatEngine
 
 
 def _make_agents_dir(workspace: Path):

@@ -18,7 +18,7 @@ from typing import Any, Awaitable, Callable
 
 from loguru import logger
 
-from nanobot.groupchat.orchestra.events import BroadcastEventDispatcher
+from nanobot.groupchat.runtime.events import BroadcastEventDispatcher
 from nanobot.mods.base import Mod, ModContext
 from nanobot.mods.registry import discover_all
 

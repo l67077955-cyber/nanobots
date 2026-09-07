@@ -48,10 +48,12 @@ main                    唯一主线，所有工作的基线
 
 ### 待办：从 `archive/align-20260720` 前向移植
 
-这两项只存在于归档分支，需要在 `main` 上作为独立提交重做：
+这些只存在于归档分支，需要在 `main` 上作为独立提交重做：
 
 1. `nanobot/channels/telegram/callbacks.py`（单体，170KB）→ `callbacks/` 包（11 模块）
-2. `nanobot/groupchat/orchestra/` → `nanobot/groupchat/runtime/` 目录改名
+2. ~~`orchestra/` → `runtime/` 目录改名~~ ✅ 2026-09-08 完成（重做而非 cherry-pick：
+   align 的 `runtime/` 是它自己血统的代码，直接套用会抹掉 ui-redesign 的 67 个提交；
+   实际做法是 `git mv` 现有目录 + 全量改写引用，39 个 py 文件 + 活文档同步）
 3. 该分支多出的约 20 个测试
 
 ---

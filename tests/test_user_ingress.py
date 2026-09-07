@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import asyncio
 
-from nanobot.groupchat.orchestra.mailbox import ConversationPool, MailboxHub
-from nanobot.groupchat.orchestra.round_lifecycle import RoundLifecycle
-from nanobot.groupchat.orchestra.user_ingress import (
+from nanobot.groupchat.runtime.mailbox import ConversationPool, MailboxHub
+from nanobot.groupchat.runtime.round_lifecycle import RoundLifecycle
+from nanobot.groupchat.runtime.user_ingress import (
     SUMMARY_SENTINEL,
     IngressAction,
     UserIngress,

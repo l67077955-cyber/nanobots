@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from nanobot.groupchat.orchestra.round_lifecycle import RoundPhase, RoundLifecycle
+from nanobot.groupchat.runtime.round_lifecycle import RoundPhase, RoundLifecycle
 
 
 def _lifecycle(**kwargs):

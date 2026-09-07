@@ -15,7 +15,7 @@ from nanobot.bus.events import InboundMessage
 
 if TYPE_CHECKING:
     from nanobot.bus.queue import MessageBus
-    from nanobot.groupchat.orchestra.engine import GroupChatEngine
+    from nanobot.groupchat.runtime.engine import GroupChatEngine
 
 
 class IngressRouter:

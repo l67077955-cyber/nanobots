@@ -18,7 +18,7 @@
 `round_lifecycle.py` 的 docstring 自己承认它只是给"未迁移的读者"做的兼容翻译层
 （`round_lifecycle.py:4-11`）：`mark_winding_down(flip_running=True)` 直接赋值
 `self._engine._running = False`（:91），`reopen()` 直接赋值 `= True`（:113）。
-真正的状态位仍是 `engine.py:295` 的裸 `bool`，且读写已经**渗出 orchestra 包之外**——
+真正的状态位仍是 `engine.py:295` 的裸 `bool`，且读写已经**渗出 runtime 包之外**——
 `channels/telegram/__init__.py:544`、`channels/telegram/commands/settings.py:297`
 也在直接戳 `engine._running`。全仓库 6 个文件、20+ 处直接读写。这正是
 AGENTS.md #2 点名的"状态无主"问题（补丁净增 3:1 的历史成因），且比
@@ -54,7 +54,7 @@ Phase 3: channels/ 收敛（风险最低，可与 Phase 1/2 并行）
 
 **为什么 Phase 1 必须先做**：如果先拆 `broadcast_round`，"状态无主"的 bug 只会
 被拆分到更多文件里，反而更难追踪——拆分需要干净的状态边界才有意义。Phase 3
-不涉及 orchestra 核心状态机，风险独立，可以并行推进不阻塞主线。
+不涉及 runtime 核心状态机，风险独立，可以并行推进不阻塞主线。
 
 ---
 
@@ -67,8 +67,8 @@ Phase 3: channels/ 收敛（风险最低，可与 Phase 1/2 并行）
 | `run_loop.py` 会话主循环条件直读 `_running` | `run_loop.py:111,116,123,159,164,183` | 会话级消费方，含"pending 消息复活"逻辑 |
 | `broadcast.py` 多处读写 `_running` | `broadcast.py:721,974,1553,1701,1810` | 轮次级消费方 + leader 崩溃/超时分支 |
 | `chatroom_tools.py` 直接赋值 | `chatroom_tools.py:1210,1214` | `ChatroomEndDiscussionTool` |
-| **渗出 orchestra 包外** | `channels/telegram/__init__.py:544` | 读 `_groupchat_engine._running` 判断是否运行中 |
-| **渗出 orchestra 包外** | `channels/telegram/commands/settings.py:297` | 调试命令打印 `engine._running` |
+| **渗出 runtime 包外** | `channels/telegram/__init__.py:544` | 读 `_groupchat_engine._running` 判断是否运行中 |
+| **渗出 runtime 包外** | `channels/telegram/commands/settings.py:297` | 调试命令打印 `engine._running` |
 | `broadcast_round` 函数跨度 | `broadcast.py:377` 起，至文件尾 ~1875 | 单函数吞掉文件 ~80% |
 | `BroadcastOrchestrator` 已存在但职责窄 | `broadcast.py:218-259` | 目前只管 `setup_tools_and_pools` |
 | `_run_one` 内嵌 4 层闭包 | `broadcast.py:491,647,653,712,802,1094` | 无法独立测试 |
@@ -83,7 +83,7 @@ Phase 3: channels/ 收敛（风险最低，可与 Phase 1/2 并行）
 
 **目标**：把会话级和轮次级状态从共享裸 `bool` 拆成两个显式状态源，
 `engine._running` 退役（或降级为只读兼容属性），channels 层不再直接碰
-orchestra 内部状态。
+runtime 内部状态。
 
 1. **先写回归测试钉住当前行为**（AGENTS.md #1，先测试再动实现）✅ **已完成**
    （commit `97e9b547`，`tests/test_run_loop_session_state.py` 新增）：
@@ -105,7 +105,7 @@ orchestra 内部状态。
      新返回值的测试一并覆盖，不单独为旧的副作用写法补集成测试（旧写法马上
      要删，补了也是短命的）。
 
-2. **零风险只读迁移**（channels/ 不该碰 orchestra 内部状态）✅ **已完成**
+2. **零风险只读迁移**（channels/ 不该碰 runtime 内部状态）✅ **已完成**
    （commit `d68ceee9`）：
    - `channels/telegram/__init__.py:544`、`channels/telegram/commands/settings.py:297`
      的 `engine._running` 直接读取，换成已存在的公开属性 `engine.is_running`
@@ -243,10 +243,10 @@ orchestra 内部状态。
 - `AGENTS.md` — 红线
 - `docs/archive/plan-2026-09-07-history-refactor.md` — 上一轮已完成的历史模型重构（背景参考）
 - `docs/phase4-findings.md` — 4.2 的"审计后判断不合并"先例，Phase 3 可参考
-- `nanobot/groupchat/orchestra/engine.py:287-333` — `_running`/`is_running` 现状
-- `nanobot/groupchat/orchestra/round_lifecycle.py` — 状态转换现状
-- `nanobot/groupchat/orchestra/run_loop.py:107-183` — 会话主循环，Phase 1 核心改动点
-- `nanobot/groupchat/orchestra/broadcast.py:377-1875` — `broadcast_round`，Phase 2 核心改动点
+- `nanobot/groupchat/runtime/engine.py:287-333` — `_running`/`is_running` 现状
+- `nanobot/groupchat/runtime/round_lifecycle.py` — 状态转换现状
+- `nanobot/groupchat/runtime/run_loop.py:107-183` — 会话主循环，Phase 1 核心改动点
+- `nanobot/groupchat/runtime/broadcast.py:377-1875` — `broadcast_round`，Phase 2 核心改动点
 - `nanobot/channels/base.py`、`nanobot/channels/utils/` — Phase 3 复用评估起点
 - `tests/test_round_lifecycle.py`/`tests/test_no_leader_convergence.py` — 现有轮次状态测试参考模式
 

@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from nanobot.bus.queue import MessageBus
     from nanobot.config.schema import Config
     from nanobot.cron.service import CronService
-    from nanobot.groupchat.orchestra.engine import GroupChatEngine
+    from nanobot.groupchat.runtime.engine import GroupChatEngine
     from nanobot.providers.base import LLMProvider
     from nanobot.session.manager import SessionManager
 
@@ -84,7 +84,7 @@ def build_gateway_container(
     )
 
     # GroupChatEngine — the big one.
-    from nanobot.groupchat.orchestra.engine import GroupChatEngine
+    from nanobot.groupchat.runtime.engine import GroupChatEngine
 
     def _make_engine(c: Container):
         bus = c.get(MessageBus)

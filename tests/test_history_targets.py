@@ -93,7 +93,7 @@ class TestExplicitTargets:
 
 class TestEngineAddMessagePassthrough:
     def test_engine_add_message_passes_targets(self, tmp_path):
-        from nanobot.groupchat.orchestra.engine import GroupChatEngine
+        from nanobot.groupchat.runtime.engine import GroupChatEngine
 
         ctx = _make_context(tmp_path)
         # Bind the real (unbound) _add_message onto a lightweight stub so we

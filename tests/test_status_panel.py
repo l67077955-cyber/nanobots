@@ -46,7 +46,7 @@ def test_matrix_status_panel_stub_runs():
 
 def test_agent_status_tracker_satisfies_protocol():
     """The existing AgentStatusTracker is structurally compatible with StatusPanel."""
-    from nanobot.groupchat.orchestra.broadcast import AgentStatusTracker
+    from nanobot.groupchat.runtime.broadcast import AgentStatusTracker
 
     tracker = AgentStatusTracker(["A"], "A", edit_fn=None, send_and_get_id_fn=None)
     # Structural check: the protocol methods exist.
@@ -72,7 +72,7 @@ def test_make_status_panel_returns_matrix_stub():
 
 def test_make_status_panel_returns_tracker_with_edit_fn():
     """When edit_fn and send_and_get_id_fn are provided, use the real tracker."""
-    from nanobot.groupchat.orchestra.broadcast import AgentStatusTracker
+    from nanobot.groupchat.runtime.broadcast import AgentStatusTracker
 
     async def fake_send(text: str) -> int | None:
         return 1

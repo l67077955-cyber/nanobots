@@ -11,7 +11,7 @@ import asyncio
 
 import pytest
 
-from nanobot.groupchat.orchestra.events import (
+from nanobot.groupchat.runtime.events import (
     BroadcastEventDispatcher,
     get_bus,
     set_bus,

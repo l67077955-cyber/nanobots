@@ -2,7 +2,7 @@
 
 Defines a ``StatusPanel`` protocol so non-Telegram channels can also render a
 live agent-status dashboard. The existing ``AgentStatusTracker`` (in
-``nanobot.groupchat.orchestra.broadcast``) already satisfies this protocol —
+``nanobot.groupchat.runtime.broadcast``) already satisfies this protocol —
 it IS the Telegram implementation. ``NullStatusPanel`` is the no-op fallback
 for channels without in-place message editing (CLI, headless).
 
@@ -194,7 +194,7 @@ def make_status_panel(
     """
     # Telegram (and any channel with edit capability): real tracker.
     if edit_fn is not None and send_and_get_id_fn is not None:
-        from nanobot.groupchat.orchestra.broadcast import AgentStatusTracker
+        from nanobot.groupchat.runtime.broadcast import AgentStatusTracker
 
         return AgentStatusTracker(agents, leader, edit_fn, send_and_get_id_fn)  # type: ignore[return-value]
 

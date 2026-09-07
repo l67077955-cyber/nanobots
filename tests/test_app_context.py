@@ -19,7 +19,7 @@ def test_app_context_create_with_defaults(tmp_path: Path):
 
 def test_app_context_create_with_custom_bus(tmp_path: Path):
     """AppContext.create() accepts a pre-configured event bus."""
-    from nanobot.groupchat.orchestra.events import BroadcastEventDispatcher
+    from nanobot.groupchat.runtime.events import BroadcastEventDispatcher
 
     custom_bus = BroadcastEventDispatcher()
     ctx = AppContext.create(data_dir=tmp_path, event_bus=custom_bus)
@@ -87,7 +87,7 @@ def test_app_context_shutdown_swallows_errors(tmp_path: Path):
 
 def test_app_context_event_helpers(tmp_path: Path):
     """emit_event / emit_event_async delegate to the bus."""
-    from nanobot.groupchat.orchestra.events import BroadcastEventDispatcher
+    from nanobot.groupchat.runtime.events import BroadcastEventDispatcher
 
     bus = BroadcastEventDispatcher()
     received = []

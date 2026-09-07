@@ -18,8 +18,8 @@ from __future__ import annotations
 
 from nanobot.groupchat.history.context import HistoryContext
 from nanobot.groupchat.history.persistence import GroupChatState
-from nanobot.groupchat.orchestra.mailbox import MailboxHub
-from nanobot.groupchat.orchestra.tools.chatroom_tools import ChatroomSendTool
+from nanobot.groupchat.runtime.mailbox import MailboxHub
+from nanobot.groupchat.runtime.tools.chatroom_tools import ChatroomSendTool
 
 
 def _make_engine(tmp_path):
@@ -29,7 +29,7 @@ def _make_engine(tmp_path):
     engine persistence path (history.add_message + shim sync) without building
     providers / MCP / config.
     """
-    from nanobot.groupchat.orchestra.engine import GroupChatEngine
+    from nanobot.groupchat.runtime.engine import GroupChatEngine
 
     state = GroupChatState({"A": {}, "B": {}, "C": {}}, state_dir=tmp_path)
     ctx = HistoryContext(state=state, provider=None)

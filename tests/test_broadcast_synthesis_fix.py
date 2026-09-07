@@ -16,7 +16,7 @@ import sys
 import unittest
 from pathlib import Path
 
-SRC = Path(__file__).resolve().parents[1] / "nanobot/groupchat/orchestra/broadcast.py"
+SRC = Path(__file__).resolve().parents[1] / "nanobot/groupchat/runtime/broadcast.py"
 HISTORY = Path(__file__).resolve().parents[1] / "nanobot/groupchat/history/component_manager.py"
 
 # ── Test 1: Syntax Integrity ──────────────────────────────
@@ -113,7 +113,7 @@ class TestBuildToolLog(unittest.TestCase):
 
     def test_build_tool_log_imports(self):
         """Verify build_tool_log can be imported and called"""
-        from nanobot.groupchat.orchestra.engine import build_tool_log
+        from nanobot.groupchat.runtime.engine import build_tool_log
         result = build_tool_log([
             {"name": "web_search", "args": {"query": "AI news"}, "content": "result: Google I/O 2026 confirmed"}
         ])
@@ -132,7 +132,7 @@ class TestSynthesisSimulation(unittest.TestCase):
 
     def test_build_tool_log_with_typical_content(self):
         """Simulate a leader that searched news and posted summary"""
-        from nanobot.groupchat.orchestra.engine import build_tool_log
+        from nanobot.groupchat.runtime.engine import build_tool_log
         
         calls = [
             {"name": "web_search", "args": {"query": "AI news today 2026"}, 
@@ -168,12 +168,12 @@ class TestEdgeCases(unittest.TestCase):
     """What happens when there's no tool data at all?"""
 
     def test_build_tool_log_empty(self):
-        from nanobot.groupchat.orchestra.engine import build_tool_log
+        from nanobot.groupchat.runtime.engine import build_tool_log
         result = build_tool_log([])
         self.assertEqual(result, "", "Empty calls → empty string")
         
     def test_build_tool_log_no_substantive(self):
-        from nanobot.groupchat.orchestra.engine import build_tool_log
+        from nanobot.groupchat.runtime.engine import build_tool_log
         result = build_tool_log([
             {"name": "chatroom_send", "args": {"to": "All"}, "content": "hello"},
             {"name": "wait", "args": {}, "content": ""},

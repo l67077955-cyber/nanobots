@@ -63,7 +63,7 @@ class ToolRegistryManager:
         Returns:
             Configured ToolRegistry instance.
         """
-        from nanobot.groupchat.orchestra.tools.chatroom_tools import (
+        from nanobot.groupchat.runtime.tools.chatroom_tools import (
             ChatroomSendTool,
             SmartFetchTool,
             SmartSearchTool,
@@ -129,7 +129,7 @@ class ToolRegistryManager:
         if key not in self._cache:
             registry = self._build_registry(workspace)
             # Add chatroom tools
-            from nanobot.groupchat.orchestra.tools.chatroom_tools import ChatroomSendTool, WaitTool
+            from nanobot.groupchat.runtime.tools.chatroom_tools import ChatroomSendTool, WaitTool
             # Note: MailboxHub must be injected separately
             self._cache[key] = registry
             logger.info("ToolRegistryManager: built registry for {} -> {}", agent_name, workspace)
@@ -170,7 +170,7 @@ class ToolRegistryManager:
             registry: ToolRegistry instance.
             mailbox: MailboxHub instance.
         """
-        from nanobot.groupchat.orchestra.tools.chatroom_tools import ChatroomSendTool, WaitTool
+        from nanobot.groupchat.runtime.tools.chatroom_tools import ChatroomSendTool, WaitTool
         registry.register(ChatroomSendTool(mailbox=mailbox))
         registry.register(WaitTool(mailbox=mailbox))
 

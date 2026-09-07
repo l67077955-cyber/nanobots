@@ -1,7 +1,7 @@
 """Mod contract — the unit of extension for nanobot orchestration.
 
 A mod is a small, isolated behavioural add-on that subscribes to orchestration
-events (see ``nanobot/groupchat/orchestra/events.py`` for the catalogue).
+events (see ``nanobot/groupchat/runtime/events.py`` for the catalogue).
 Mods never import engine internals or monkey-patch core code; they receive
 capabilities through :class:`ModContext` and event payloads.
 
@@ -110,7 +110,7 @@ class Mod:
 
 def _resolve_event_name(attr: str) -> str:
     """on_user_message_delivered → user:message_delivered (catalogue-driven)."""
-    from nanobot.groupchat.orchestra.events import EVENTS
+    from nanobot.groupchat.runtime.events import EVENTS
     stem = attr[3:]
     for event in EVENTS:
         if event.replace(":", "_").replace("-", "_") == stem:

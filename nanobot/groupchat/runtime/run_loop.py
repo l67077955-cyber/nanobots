@@ -11,8 +11,8 @@ from typing import Any
 
 from loguru import logger
 
-from nanobot.groupchat.orchestra.broadcast import broadcast_round
-from nanobot.groupchat.orchestra.user_ingress import open_round_with
+from nanobot.groupchat.runtime.broadcast import broadcast_round
+from nanobot.groupchat.runtime.user_ingress import open_round_with
 
 
 async def generate_summary(engine: Any) -> None:

@@ -395,7 +395,7 @@ class CallbacksMixin:
                     return
                 if field == "tools":
                     # Show per-tool toggle buttons
-                    from nanobot.groupchat.orchestra.engine import GroupChatEngine
+                    from nanobot.groupchat.runtime.engine import GroupChatEngine
                     agent = self._groupchat_engine.registry.get(name, {})
                     tools_cfg = agent.get("tools")
                     # Migrate legacy tools_enabled to granular dict
@@ -573,7 +573,7 @@ class CallbacksMixin:
                 if len(parts) < 3:
                     return
                 name, tool = parts[1], parts[2]
-                from nanobot.groupchat.orchestra.engine import GroupChatEngine
+                from nanobot.groupchat.runtime.engine import GroupChatEngine
                 agent = self._groupchat_engine.registry.get(name, {})
                 tools_cfg = agent.get("tools")
                 if not isinstance(tools_cfg, dict) or "web_search" not in tools_cfg:

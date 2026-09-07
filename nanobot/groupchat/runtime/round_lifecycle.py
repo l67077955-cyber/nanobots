@@ -21,7 +21,7 @@ import asyncio
 from enum import Enum
 from typing import Any
 
-from nanobot.groupchat.orchestra.events import get_bus
+from nanobot.groupchat.runtime.events import get_bus
 
 # Reasons after which the whole session loop should exit once the round
 # returns (parity with the legacy writers that set engine._running=False).

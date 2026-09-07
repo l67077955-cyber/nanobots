@@ -24,7 +24,7 @@ from nanobot.groupchat.history.context import HistoryContext
 from nanobot.groupchat.history.persistence import GroupChatState
 from nanobot.groupchat.history.prompt_builder import PromptBuilder
 from nanobot.groupchat.history.response_cleanup import clean_response as _clean_response_fn
-from nanobot.groupchat.orchestra.mailbox import MailboxHub
+from nanobot.groupchat.runtime.mailbox import MailboxHub
 from nanobot.providers.base import LLMProvider
 from nanobot.utils.helpers import cn_now as _cn_now
 
@@ -124,7 +124,7 @@ class GroupChatEngine:
         self.tools = self._build_tool_registry(ws)
 
         # Register chatroom tools on default registry
-        from nanobot.groupchat.orchestra.tools.chatroom_tools import ChatroomSendTool, WaitTool
+        from nanobot.groupchat.runtime.tools.chatroom_tools import ChatroomSendTool, WaitTool
         self._chatroom_send_tool = ChatroomSendTool(mailbox=self._mailbox, engine=self)
         self._wait_tool = WaitTool(mailbox=self._mailbox)
         self.tools.register(self._chatroom_send_tool)
@@ -145,7 +145,7 @@ class GroupChatEngine:
 
     def _build_tool_registry(self, ws: Path):
         """Build a ToolRegistry scoped to the given workspace path."""
-        from nanobot.groupchat.orchestra.tools.chatroom_tools import SmartFetchTool, SmartSearchTool
+        from nanobot.groupchat.runtime.tools.chatroom_tools import SmartFetchTool, SmartSearchTool
         from nanobot.tools.filesystem import (
             EditFileTool,
             ListDirTool,
@@ -209,7 +209,7 @@ class GroupChatEngine:
         if key not in self._tool_registry_cache:
             reg = self._build_tool_registry(ws)
             # Add chatroom tools to custom registries too
-            from nanobot.groupchat.orchestra.tools.chatroom_tools import ChatroomSendTool, WaitTool
+            from nanobot.groupchat.runtime.tools.chatroom_tools import ChatroomSendTool, WaitTool
             reg.register(ChatroomSendTool(mailbox=self._mailbox, engine=self))
             reg.register(WaitTool(mailbox=self._mailbox))
             self._tool_registry_cache[key] = reg
@@ -769,7 +769,7 @@ class GroupChatEngine:
         # Lazy-connect MCP servers (one-time, idempotent)
         await self._connect_mcp()
 
-        from nanobot.groupchat.orchestra.engine import chat_with_tools
+        from nanobot.groupchat.runtime.engine import chat_with_tools
 
         # Tool selection — use per-agent registry based on workspace_scope
         agent_cfg = self.registry.get(agent_name, {})
@@ -829,7 +829,7 @@ class GroupChatEngine:
 
     async def direct_chat(self, user_message: str) -> str | None:
         """Send message to single active agent — delegates to direct_chat module."""
-        from nanobot.groupchat.orchestra.engine import direct_chat as _direct_chat
+        from nanobot.groupchat.runtime.engine import direct_chat as _direct_chat
         return await _direct_chat(self, user_message)
 
     def inject(self, message: str) -> None:
@@ -1040,12 +1040,12 @@ class GroupChatEngine:
 
     async def _generate_summary(self) -> None:
         """Generate discussion summary — delegates to run_loop module."""
-        from nanobot.groupchat.orchestra.run_loop import generate_summary
+        from nanobot.groupchat.runtime.run_loop import generate_summary
         await generate_summary(self)
 
     async def _run_loop(self) -> None:
         """Main group chat loop — delegates to run_loop module."""
-        from nanobot.groupchat.orchestra.run_loop import run_loop
+        from nanobot.groupchat.runtime.run_loop import run_loop
         await run_loop(self)
 
 
@@ -1437,7 +1437,7 @@ async def chat_with_tools(
     Returns:
         (content, tools_used, stats)
     """
-    from nanobot.groupchat.orchestra.tools.tool_loop import tool_loop
+    from nanobot.groupchat.runtime.tools.tool_loop import tool_loop
 
     # Langfuse trace metadata
     trace_metadata = {
@@ -1677,7 +1677,7 @@ def log_request(
     """Append a structured entry to engine._request_log.
 
     Centralizes the common request logging pattern used by speaker,
-    direct_chat, broadcast, and orchestra modules.
+    direct_chat, broadcast, and runtime modules.
     """
     entry: dict[str, Any] = {
         "agent": agent,

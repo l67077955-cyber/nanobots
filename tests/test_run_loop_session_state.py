@@ -20,7 +20,7 @@ import asyncio
 
 import pytest
 
-from nanobot.groupchat.orchestra.run_loop import run_loop
+from nanobot.groupchat.runtime.run_loop import run_loop
 
 
 class _FakeHistory:
@@ -78,7 +78,7 @@ async def test_pending_message_after_teardown_revives_loop_instead_of_dropping(m
         return []
 
     monkeypatch.setattr(
-        "nanobot.groupchat.orchestra.run_loop.broadcast_round", fake_broadcast_round
+        "nanobot.groupchat.runtime.run_loop.broadcast_round", fake_broadcast_round
     )
 
     await run_loop(engine)
@@ -105,7 +105,7 @@ async def test_clean_exit_without_pending_message_does_not_revive(monkeypatch):
         return []
 
     monkeypatch.setattr(
-        "nanobot.groupchat.orchestra.run_loop.broadcast_round", fake_broadcast_round
+        "nanobot.groupchat.runtime.run_loop.broadcast_round", fake_broadcast_round
     )
 
     await run_loop(engine)
@@ -138,7 +138,7 @@ async def test_ongoing_session_continues_without_revival_when_still_running(monk
         return []
 
     monkeypatch.setattr(
-        "nanobot.groupchat.orchestra.run_loop.broadcast_round", fake_broadcast_round
+        "nanobot.groupchat.runtime.run_loop.broadcast_round", fake_broadcast_round
     )
 
     await run_loop(engine)
