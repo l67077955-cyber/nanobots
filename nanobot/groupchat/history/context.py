@@ -12,7 +12,6 @@ Engine and Broadcast delegate to this class instead of maintaining
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -24,7 +23,12 @@ if TYPE_CHECKING:
 
 
 class HistoryContext:
-    """Encapsulates the shared conversation history for a group chat session.
+    """Encapsulates the shared conversation history for a **group chat** session.
+
+    Distinct from ``Session`` (direct-chat mode): HistoryContext uses
+    sender-based messages (``sender``/``content``) and persists via
+    ``GroupChatState``; Session uses role-based OpenAI-format messages and
+    per-session JSONL files. They serve different modes — see plan.md 4.2.
 
     Parameters
     ----------
@@ -91,19 +95,34 @@ class HistoryContext:
             f"[{m['sender']}]: {m['content']}" for m in self.messages
         )
 
-    def add_message(self, sender: str, content: str) -> None:
+    def add_message(self, sender: str, content: str, targets: list[str] | None = None) -> None:
         """Append a message and enforce message-count / char-budget limits.
 
         Head-protection guarantees that the very first message and the first
         user message are never evicted during trimming.
+
+        Args:
+            sender: The message sender's name.
+            content: The message text.
+            targets: Recipient agents this message is visible to.  ``None``
+                means 全员可见 (everyone) and is stored as ``["All"]`` — the
+                default for user / system / broadcast messages.  This is the
+                visibility primitive per-agent views (Phase B) project on;
+                it is purely additive, so pre-existing call sites that omit
+                ``targets`` keep the old "everyone sees everything" behaviour.
         """
-        self.messages.append({"sender": sender, "content": content})
+        if targets is None:
+            targets = ["All"]
+        else:
+            # Copy to avoid the caller's list aliasing into stored history.
+            targets = list(targets)
+        self.messages.append({"sender": sender, "content": content, "targets": targets})
 
         try:
             from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
-                max_messages,
-                max_context_chars,
                 keep_user_messages,
+                max_context_chars,
+                max_messages,
             )
             limit = max_messages()
             char_budget = max_context_chars()
@@ -151,7 +170,7 @@ class HistoryContext:
                     seen.add(id(m))
             self.messages = rebuilt
 
-        self._state.save_message(sender, content, self.messages)
+        self._state.save_message(sender, content, self.messages, targets=targets)
 
     async def maybe_compress(self) -> None:
         """Compress the middle section of history when it approaches the limit.
@@ -161,13 +180,13 @@ class HistoryContext:
         fails), the middle region is dropped as the fallback.
         """
         from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
-            max_messages,
-            history_summarize_enabled,
-            summarize_model,
-            compress_ratio,
             compress_max_summary_tokens,
+            compress_ratio,
             compression_keep_recent,
+            history_summarize_enabled,
             keep_user_messages,
+            max_messages,
+            summarize_model,
         )
 
         limit = max_messages()
@@ -303,6 +322,7 @@ class HistoryContext:
                     f"[早期对话摘要（压缩了 {len(to_compress)} 条中间消息）]\n"
                     + summary
                 ),
+                "targets": ["All"],
             }
             # Rebuild preserving original chronological order
             # (head+tail would pull all user messages to the front)

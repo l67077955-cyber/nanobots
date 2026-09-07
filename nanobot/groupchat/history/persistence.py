@@ -17,7 +17,6 @@ from loguru import logger
 
 from nanobot.utils.helpers import cn_now as _cn_now
 
-
 _NANOBOT_DIR = Path.home() / ".nanobot"
 
 
@@ -174,9 +173,24 @@ class GroupChatState:
             "duration": round(duration, 2),
         })
 
-    def save_message(self, sender: str, content: str, history: list[dict[str, str]]) -> None:
-        """Log a message to session chat_log.txt and session.jsonl."""
+    def save_message(
+        self,
+        sender: str,
+        content: str,
+        history: list[dict[str, str]],
+        targets: list[str] | None = None,
+    ) -> None:
+        """Log a message to session chat_log.txt and session.jsonl.
+
+        ``targets`` (recipient visibility list, default ``["All"]``) is
+        recorded on the structured event so per-agent visibility survives in
+        the session log.  ``history`` is accepted for signature compatibility
+        but not persisted — only the single message is logged.
+        """
         if self._session_dir:
             with open(self._session_dir / "chat_log.txt", "a") as f:
                 f.write(f"[{sender}]: {content}\n---\n")
-        self.save_event("message", agent=sender, content=content)
+        extra: dict[str, Any] = {}
+        if targets is not None:
+            extra["targets"] = targets
+        self.save_event("message", agent=sender, content=content, extra=extra or None)

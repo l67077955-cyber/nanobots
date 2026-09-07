@@ -288,6 +288,15 @@ class GroupChatEngine:
 
         # Runtime state (ephemeral, not persisted)
         self._task: asyncio.Task | None = None
+        # ⚠️ Dual-role legacy flag (plan.md 4.3 — migration in progress):
+        #   1. SESSION level: run_loop's `while engine._running` keeps the
+        #      session alive; set True by start_group_chat(), False on exit.
+        #   2. ROUND level: RoundLifecycle.mark_winding_down(flip_running=True)
+        #      flips it False to signal round teardown; reopen() flips True.
+        # RoundLifecycle now owns the ROUND-level phase. Removing this flag
+        # requires migrating run_loop.py's session-loop condition off it —
+        # high risk, deferred. Do NOT add new readers; use RoundLifecycle
+        # queries (agents_should_exit / accepts_interjection / session_should_stop).
         self._running = False
         # Broadcast round: per-agent tasks registered by broadcast_round()
         # so remove_agent() can cancel an in-flight agent mid-round.
@@ -967,9 +976,13 @@ class GroupChatEngine:
     def _session_dir(self, value: Path | None) -> None:
         self._state.session_dir = value
 
-    def _add_message(self, sender: str, content: str) -> None:
-        """Append a message — delegates to HistoryContext."""
-        self.history.add_message(sender, content)
+    def _add_message(self, sender: str, content: str, targets: list[str] | None = None) -> None:
+        """Append a message — delegates to HistoryContext.
+
+        ``targets`` is forwarded so chatroom_send (Phase C) can record
+        per-agent visibility; omitting it keeps the default 全员可见 behaviour.
+        """
+        self.history.add_message(sender, content, targets)
         # Keep the shim alias in sync after HistoryContext may have rebuilt the list
         self._history = self.history.messages
 
