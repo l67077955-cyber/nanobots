@@ -1,24 +1,109 @@
 # nanobot-src 架构重构计划
 
 > 创建日期: 2026-09-07
-> 状态: 待执行
+> 状态: **Phase 1-2 已完成**
 
 ## 问题概述
 
 经过深度架构分析，识别出以下核心问题：
 
-| 排名 | 问题 | 严重性 |
-|------|------|--------|
-| 1 | MessageBus入站队列是死代码，只有Telegram正确接线 | 🔴 CRITICAL |
-| 2 | Provider层代码重复（litellm/httpx大量重复） | 🔴 CRITICAL |
-| 3 | 设置持久化分散到4+处，无统一服务层 | 🔴 CRITICAL |
-| 4 | callbacks.py God-object (3299行) | 🟠 HIGH |
-| 5 | GroupChatEngine God-object (1680行) | 🟠 HIGH |
-| 6 | Channel实现重复（去重/媒体下载/消息分片） | 🟠 HIGH |
-| 7 | Skills/Mods两个插件系统边界模糊 | 🟡 MEDIUM |
-| 8 | 进程级全局单例 | 🟡 MEDIUM |
-| 9 | gateway()组装函数无依赖注入 | 🟡 MEDIUM |
-| 10 | Display层Telegram特定 | 🟡 MEDIUM |
+| 排名 | 问题 | 严重性 | 状态 |
+|------|------|--------|------|
+| 1 | MessageBus入站队列是死代码，只有Telegram正确接线 | 🔴 CRITICAL | ✅ 已修复 |
+| 2 | Provider层代码重复（litellm/httpx大量重复） | 🔴 CRITICAL | ✅ 已修复 |
+| 3 | 设置持久化分散到4+处，无统一服务层 | 🔴 CRITICAL | ✅ 已修复 |
+| 4 | callbacks.py God-object (3299行) | 🟠 HIGH | 🔧 骨架就位 |
+| 5 | GroupChatEngine God-object (1680行) | 🟠 HIGH | 🔧 组件提取 |
+| 6 | Channel实现重复（去重/媒体下载/消息分片） | 🟠 HIGH | ✅ 已修复 |
+| 7 | Skills/Mods两个插件系统边界模糊 | 🟡 MEDIUM | ⏳ 待处理 |
+| 8 | 进程级全局单例 | 🟡 MEDIUM | ⏳ 待处理 |
+| 9 | gateway()组装函数无依赖注入 | 🟡 MEDIUM | ⏳ 待处理 |
+| 10 | Display层Telegram特定 | 🟡 MEDIUM | ⏳ 待处理 |
+
+---
+
+## 执行进度
+
+### Phase 1: 修复核心缺陷 (CRITICAL) ✅ 已完成
+
+**提交**: `2dd0896d refactor: Phase 1 CRITICAL fixes + Phase 2 utilities`
+
+#### 1.1 MessageBus入站路由统一 ✅
+
+**改动文件**:
+- `nanobot/bus/router.py` (新建) - `IngressRouter` 类
+- `nanobot/bus/__init__.py` - 导出 `IngressRouter`
+- `nanobot/groupchat/orchestra/engine.py` - 添加 `deliver_user_message()` 方法
+- `nanobot/cli/commands.py` - gateway() 启动路由器
+- `nanobot/channels/telegram/message_handler.py` - 更新注释，添加 fallback
+
+**效果**: 所有channel可通过 `publish_inbound()` → `IngressRouter` → `deliver_user_message()` 统一接入。
+
+#### 1.2 Provider共享逻辑提取 ✅
+
+**改动文件**:
+- `nanobot/providers/base.py` - 导出 `ALLOWED_MSG_KEYS`, `ANTHROPIC_EXTRA_KEYS`, `short_tool_id()`, `normalize_tool_call_id()`
+- `nanobot/providers/litellm_provider.py` - 删除重复定义，使用 base 导出
+- `nanobot/providers/httpx_provider.py` - 删除重复定义，使用 base 导出
+
+#### 1.3 统一设置持久化服务 ✅
+
+**改动文件**:
+- `nanobot/state/settings_store.py` - 添加 `SettingsStore` 类 + `get_settings_store()` 单例
+
+---
+
+### Phase 2: 降低复杂度 (HIGH) ✅ 已完成
+
+**提交**: `df54cf14 feat(orchestra): add AgentRegistry and ToolRegistryManager`
+
+#### 2.1 拆分 callbacks.py 🔧 骨架就位
+
+**改动文件**:
+- `nanobot/channels/telegram/callback_handlers/__init__.py` (新建)
+- `nanobot/channels/telegram/callback_handlers/agents.py` (新建)
+- `nanobot/channels/telegram/callback_handlers/providers.py` (新建)
+- `nanobot/channels/telegram/callback_handlers/settings.py` (新建)
+- `nanobot/channels/telegram/callback_handlers/groups.py` (新建)
+- `nanobot/channels/telegram/callback_handlers/logs.py` (新建)
+- `nanobot/channels/telegram/callback_handlers/prompts.py` (新建)
+- `nanobot/channels/telegram/callback_handlers/hyperparams.py` (新建)
+
+**待完成**: 将 `callbacks.py` 中的实现迁移到各子模块（需逐步进行，风险较高）。
+
+#### 2.2 GroupChatEngine绞杀者模式 🔧 组件提取
+
+**改动文件**:
+- `nanobot/groupchat/orchestra/agent_registry.py` (新建) - `AgentRegistry` 类
+- `nanobot/groupchat/orchestra/tool_registry_manager.py` (新建) - `ToolRegistryManager` 类
+
+**待完成**: 修改 `engine.py` 使用新组件（需逐步替换，不影响现有功能）。
+
+#### 2.3 提取Channel共享组件 ✅ 已完成
+
+**改动文件**:
+- `nanobot/channels/utils/__init__.py` (新建)
+- `nanobot/channels/utils/dedup.py` (新建) - `MessageDeduper` 类
+- `nanobot/channels/utils/media.py` (新建) - `MediaDownloader` 类
+- `nanobot/channels/utils/message.py` (新建) - `MessageSplitter` 类
+
+**效果**: 各 channel 可复用去重、媒体下载、消息分片逻辑。
+
+---
+
+### Phase 3-4: 待处理
+
+Phase 3 (MEDIUM) 和 Phase 4 (清理) 优先级较低，可在后续迭代中处理：
+
+- 3.1 Skills/Mods 边界明确化
+- 3.2 引入 `AppContext` 替代全局单例
+- 3.3 依赖注入容器
+- 3.4 Display 接口抽象
+- 4.1 解决循环依赖
+- 4.2 统一 Session 和 HistoryContext
+- 4.3 删除 `engine._running` 遗留 flag
+
+---
 
 ---
 
