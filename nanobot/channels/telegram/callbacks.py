@@ -497,11 +497,11 @@ class CallbacksMixin:
             elif data.startswith("log:"):
                 mode = data[4:]
                 engine = self._groupchat_engine
-                if not engine or (not engine.history.messages and not engine.request_log):
+                if not engine or (engine.history.is_empty() and not engine.request_log):
                     await query.edit_message_text("📭 无日志")
                     return
                 rlog = engine.request_log
-                history = engine.history.messages
+                history = engine.history.all_messages()
                 if mode == "brief":
                     # Brief: last 5 requests
                     entries = rlog[-5:] if rlog else []
@@ -778,7 +778,7 @@ class CallbacksMixin:
                 engine = self._groupchat_engine
                 if engine:
                     # PromptBuilder already imported at module top level
-                    raw_history = engine.history.messages
+                    raw_history = engine.history.all_messages()
                     active = engine.active_agents
                     registry = getattr(engine, "registry", {})
                     leader = engine.leader
@@ -800,7 +800,7 @@ class CallbacksMixin:
                             continue
                         try:
                             compiled = PromptBuilder.history_to_messages(
-                                raw_history,
+                                engine.history.view_for(agent_name),
                                 current_agent=agent_name,
                             )
                             validation = PromptBuilder._validate_context(
@@ -3296,4 +3296,3 @@ class CallbacksMixin:
         elif data == "think_back":
             # Return to the main think status panel — same renderer as think_set refresh
             await self._send_panel(query, self._render_think_panel)
-

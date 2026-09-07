@@ -197,14 +197,14 @@ class BroadcastContext(Protocol):
     _round: int
     _leader: str | None
     _debug_context: bool
-    _history: list[dict[str, str]]
     _request_log: list[dict[str, Any]]
     _session_dir: Any
+    history: Any
 
     # ── Methods ──
     def _send(self, text: str) -> Awaitable[None]: ...
     def _save_event(self, event_type: str, *, agent: str = "", content: str = "", extra: dict | None = None) -> None: ...
-    def _add_message(self, sender: str, content: str) -> None: ...
+    def _add_message(self, sender: str, content: str, targets: list[str] | None = None) -> None: ...
     def _save_round_summary(self, round_num: int, agents_responded: int, comm_count: int = 0, duration: float = 0.0) -> None: ...
     def _clean_response(self, content: str, agent_name: str) -> str: ...
     def _build_agent_prompt(self, agent_name: str) -> list[dict[str, Any]]: ...
@@ -443,7 +443,7 @@ async def broadcast_round(
 
     # ── Extract user question (for hint injection) ──
     user_question = ""
-    for msg in reversed(engine.history.messages):
+    for msg in reversed(engine.history.all_messages()):
         if msg.get("sender") in ("User", "user", "用户"):
             content = msg.get("content", "")
             if content.startswith("["):
@@ -1873,4 +1873,3 @@ async def broadcast_round(
         logger.info("Broadcast: cleared session tool overrides")
 
     return [(name, content) for name, content, _ in results]
-

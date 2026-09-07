@@ -104,18 +104,10 @@ class IngressRouter:
         Args:
             msg: The inbound message to deliver.
         """
-        # Use the unified delivery interface
-        await self._engine.deliver_user_message(
-            session_key=msg.session_key,
-            content=msg.content,
-            media=msg.media,
-            metadata={
-                "channel": msg.channel,
-                "sender_id": msg.sender_id,
-                "chat_id": msg.chat_id,
-                **msg.metadata,
-            },
-        )
+        # inject() is the single GroupChatEngine ingress decision point.
+        # Inbound media/metadata remain owned by the channel bus; group-chat
+        # history currently persists textual turns only.
+        self._engine.inject(msg.content)
 
     def register_command_handler(self, channel: str, handler: Callable) -> None:
         """Register a command handler for a specific channel.

@@ -542,7 +542,7 @@ class SettingsCommandsMixin:
             for a in engine._active_agents:
                 try:
                     compiled = PromptBuilder.history_to_messages(
-                        engine.history.messages, current_agent=a
+                        engine.history.view_for(a), current_agent=a
                     )
                     c_chars = sum(len(m.get("content") or "") for m in compiled)
                     parts.append(f"{a}~{c_chars:,}字")
@@ -695,4 +695,3 @@ class SettingsCommandsMixin:
             return "⚠️ 未配置群聊引擎", None
         text, buttons = self._build_think_status_panel(engine)
         return text, InlineKeyboardMarkup(buttons)
-

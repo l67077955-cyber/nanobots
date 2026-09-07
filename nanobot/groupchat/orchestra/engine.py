@@ -281,11 +281,6 @@ class GroupChatEngine:
             state=self._state,
             provider=self.provider,
         )
-        # Backwards-compat shim: code that still reads engine._history gets
-        # the live messages list.  Writes (append/replace) should go through
-        # self.history.add_message() or self.history.messages directly.
-        self._history = self.history.messages
-
         # Runtime state (ephemeral, not persisted)
         self._task: asyncio.Task | None = None
         # ⚠️ Dual-role legacy flag (plan.md 4.3 — migration in progress):
@@ -424,14 +419,12 @@ class GroupChatEngine:
     def clear_history(self) -> None:
         """Clear conversation history and request log, but keep active agents and loop running."""
         self.history.clear()
-        self._history = self.history.messages  # keep shim in sync
         self._request_log.clear()
 
     def reset(self) -> None:
         """Clear history, request log, active agents, and stop the loop."""
         self.stop()
         self.history.clear()
-        self._history = self.history.messages  # keep shim in sync
         self._request_log.clear()
         self._active_agents.clear()
 
@@ -839,43 +832,8 @@ class GroupChatEngine:
         from nanobot.groupchat.orchestra.engine import direct_chat as _direct_chat
         return await _direct_chat(self, user_message)
 
-    async def deliver_user_message(
-        self,
-        session_key: str,
-        content: str,
-        media: list[str] | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        """Unified entry point for user messages from any channel.
-
-        This is the preferred interface for delivering user messages to the
-        GroupChatEngine, replacing the inject() shortcut. All channels should
-        use this method via MessageBus + IngressRouter.
-
-        Args:
-            session_key: Unique session identifier (channel:chat_id).
-            content: The user's message text.
-            media: Optional list of media file paths.
-            metadata: Optional metadata dict (channel, sender_id, etc).
-        """
-        # For now, delegate to inject() for the actual delivery.
-        # Media and metadata are attached to the message for downstream use.
-        # TODO: Store media/metadata per-session for richer context.
-        _ = media  # noqa: F841 - will be used in future
-        _ = metadata  # noqa: F841 - will be used in future
-
-        # Lazy start: if any agents and loop not running, start it now
-        if not self._running and len(self._active_agents) >= 1:
-            self._start_group_loop()
-        if self._running:
-            self._input_queue.put_nowait(content)
-
     def inject(self, message: str) -> None:
-        """Inject a user message into the chat loop (1+ agents).
-
-        Deprecated: Use deliver_user_message() for the unified interface.
-        Kept for backward compatibility with existing Telegram code.
-        """
+        """Inject a user message into the chat loop (the sole ingress entry)."""
         # Lazy start: if any agents and loop not running, start it now
         if not self._running and len(self._active_agents) >= 1:
             self._start_group_loop()
@@ -983,8 +941,6 @@ class GroupChatEngine:
         per-agent visibility; omitting it keeps the default 全员可见 behaviour.
         """
         self.history.add_message(sender, content, targets)
-        # Keep the shim alias in sync after HistoryContext may have rebuilt the list
-        self._history = self.history.messages
 
     def _save_event(
         self,
@@ -1020,9 +976,8 @@ class GroupChatEngine:
         compresses independently.  Active agents list is set on the context
         so view_for / compress_for know which views to materialize and compress.
         """
-        self.history._active_agents = list(self._active_agents)
+        self.history.set_active_agents(self._active_agents)
         await self.history.compress_all()
-        self._history = self.history.messages  # keep shim in sync
 
     def _format_history(self) -> str:
         """Format history as string — delegates to HistoryContext."""
@@ -1036,14 +991,14 @@ class GroupChatEngine:
             if f"@{name}" in last_content or f"@{name.lower()}" in last_content:
                 return name
         # Implicit mentions
+        last_speaker = self.history.last_sender()
         mentioned = [n for n in names if n.lower() in last_content.lower()
-                     and (not self._history or self._history[-1]["sender"] != n)]
+                     and last_speaker != n]
         if mentioned:
             return random.choice(mentioned)
         # Avoid repeat
         candidates = list(names)
-        if self._history:
-            last_speaker = self._history[-1]["sender"]
+        if last_speaker:
             candidates = [n for n in candidates if n != last_speaker]
         return random.choice(candidates) if candidates else random.choice(names)
 
@@ -1736,5 +1691,4 @@ def log_request(
     # Cap to prevent unbounded memory growth
     if len(engine._request_log) > 1000:
         engine._request_log = engine._request_log[-500:]
-
 

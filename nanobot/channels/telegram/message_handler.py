@@ -151,9 +151,8 @@ class MessageHandlerMixin:
                 return
 
         # Route to GroupChatEngine (always active)
-        # Note: Telegram uses direct inject() for performance and to ensure
-        # send callbacks (_ensure_gc_send) are set before message delivery.
-        # Other channels use bus.publish_inbound() → IngressRouter → deliver_user_message().
+        # Telegram injects directly after installing its send callback; other
+        # channels arrive through MessageBus → IngressRouter → the same inject().
         if self._groupchat_engine and self._groupchat_engine.active_agents:
             self._ensure_gc_send(str_chat_id)
             self._groupchat_engine.inject(content)
@@ -263,4 +262,3 @@ class MessageHandlerMixin:
             return "".join(Path(filename).suffixes)
 
         return ""
-

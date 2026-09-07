@@ -59,11 +59,6 @@ class HistoryContext:
         # by compress_all to know which views to iterate over.
         self._active_agents: list[str] = []
 
-    # ── Compatibility shim: allow engine._history to keep working ─────────
-    # We expose the messages list directly as a public attribute so that
-    # code still referencing ``engine._history`` can be updated gradually.
-    # TODO: remove once all callers are migrated.
-
     # ── Internal helpers ──────────────────────────────────────────────────
 
     @staticmethod
@@ -127,6 +122,10 @@ class HistoryContext:
     def provider(self) -> Any:
         """Return the LLM provider (for summarization)."""
         return self._provider
+
+    def set_active_agents(self, agent_names: list[str]) -> None:
+        """Set agents whose persistent views participate in compression."""
+        self._active_agents = list(agent_names)
 
     def clear_agent_view(self, agent_name: str, keep_last: int = 0) -> int:
         """Clear messages from an agent's view (Leader 清理 agent 上下文).
@@ -276,7 +275,17 @@ class HistoryContext:
         """
         if agent_name in self._views:
             return [dict(m) for m in self._views[agent_name]]
-        # Fallback: compute from the log (for non-active or pre-migration agents)
+        return self.view_for_raw(agent_name)
+
+    def view_for_raw(self, agent_name: str) -> list[dict]:
+        """Return this agent's uncompressed, visibility-filtered log view.
+
+        Unlike :meth:`view_for`, this deliberately projects from the append-only
+        log rather than a persistent per-agent view.  It is for diagnostic and
+        quoting paths that need original text after a normal prompt view has
+        been compressed.  As with every HistoryContext read method, callers
+        receive copies and cannot mutate internal history.
+        """
         visible: list[dict] = []
         for m in self.messages:
             tgts = m.get("targets") or ["All"]
