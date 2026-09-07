@@ -1,7 +1,9 @@
 # nanobot-src 架构重构计划 — 状态所有权 / broadcast.py 拆分 / channels 收敛
 
 > 创建日期: 2026-09-07
-> 状态: **规划中，未开始实现**
+> 状态: **Phase 1 进行中**——回归测试已钉住、channels/ 零风险只读迁移已完成；
+>   核心的会话/轮次状态源解耦（run_loop 循环条件 + RoundLifecycle 副作用写入）
+>   尚未动手，是下一个 checkpoint。Phase 2/3 未开始。
 > 范围: 三个阶段，有严格依赖顺序（Phase 1 是 Phase 2 的前置条件）
 > 上一轮计划: 群聊历史模型重构（Phase A-E，已完成）见 `docs/archive/plan-2026-09-07-history-refactor.md`
 > 红线遵循: AGENTS.md #1 先写测试再改实现、#2 修根源不堆护栏、#4 删死代码、
@@ -83,41 +85,79 @@ Phase 3: channels/ 收敛（风险最低，可与 Phase 1/2 并行）
 `engine._running` 退役（或降级为只读兼容属性），channels 层不再直接碰
 orchestra 内部状态。
 
-1. **先写回归测试钉住当前行为**（AGENTS.md #1，先测试再动实现）：
-   - `run_loop.py:159-164`："end_discussion 后 pending 消息复活"——这是当前
-     行为里最隐蔽的一处，依赖 `_running` 的会话级语义，必须先有测试再动。
+1. **先写回归测试钉住当前行为**（AGENTS.md #1，先测试再动实现）✅ **已完成**
+   （commit `97e9b547`，`tests/test_run_loop_session_state.py` 新增）：
+   - `run_loop.py:154-164`："end_discussion 后 pending 消息复活"——3 个测试：
+     revival 正确触发不丢消息 / 无 pending 时不多轮 / 会话本就存活时不误触发
+     revival 分支。用真实 `run_loop()` + 微小假引擎（duck-typed，同
+     `test_user_ingress.py` 套路），monkeypatch 掉 `broadcast_round` 这个唯一
+     的重/无关依赖。
+   - `channels/telegram/__init__.py:544` 的"群聊已停止"提示文案——2 个测试
+     （commit `97e9b547`，`tests/test_telegram_channel.py`）：running=True/False
+     两种场景下文案分别正确。
    - `broadcast.py:974,1701,1810` 的 `mark_winding_down(..., flip_running=True)`
-     三处调用（leader 崩溃 / 全局超时 / 全局超时兜底）——确认轮次结束后
-     会话级状态的正确转换。
-   - `channels/telegram/__init__.py:544` 的"群聊已停止"提示文案依赖的判断逻辑。
+     三处调用（leader 崩溃 / 全局超时 / 全局超时兜底）——**未覆盖**，评估后
+     判断这三处的"reason → session_should_stop"语义已经被
+     `tests/test_round_lifecycle.py::TestSessionStopMapping` 在单元层面钉住
+     （`leader_crash`/`global_timeout` 都在 `_SESSION_STOP_REASONS`
+     里），真正没测到的是"`broadcast_round` 整体在这三种场景下会不会调用
+     `flip_running`"这个集成层面——留给下面第 3 步迁移时用 `broadcast_round`
+     新返回值的测试一并覆盖，不单独为旧的副作用写法补集成测试（旧写法马上
+     要删，补了也是短命的）。
 
-2. **引入显式会话级状态源**（新对象，例如 `SessionState`，与 `RoundLifecycle`
-   同级但语义分离）：
-   - 会话级：是否仍在消费 `_input_queue`（当前 `run_loop.py` 的循环条件）。
-   - 轮次级：继续由 `RoundLifecycle` 持有（`ACTIVE`/`WINDING_DOWN`/`ENDED`），
-     但**不再通过写 `engine._running` 来对外广播**——改为暴露显式查询方法
-     （`accepts_interjection`/`agents_should_exit`/`wait_should_exit`/
-     `session_should_stop`，这些已存在，扩展即可，不用新造轮子）。
+2. **零风险只读迁移**（channels/ 不该碰 orchestra 内部状态）✅ **已完成**
+   （commit `d68ceee9`）：
+   - `channels/telegram/__init__.py:544`、`channels/telegram/commands/settings.py:297`
+     的 `engine._running` 直接读取，换成已存在的公开属性 `engine.is_running`
+     （`engine.py:330-333`）。纯读取、零行为变化，被第 1 步的两个测试钉住。
+   - `grep -rn "\._running\b" nanobot/channels/ | grep groupchat` 归零，验证通过。
 
-3. **逐个迁移读写点**（每改一处跑相关测试子集，不要攒大 diff）：
+3. **核心：解耦会话级 vs 轮次级状态**（未开始，下一个 checkpoint）——
+   调查后修正了最初设想的方案，记录如下供继续时参考：
 
-   | 当前访问 | 迁到 |
-   |----------|------|
-   | `run_loop.py` 循环条件 `while engine._running` | `session_state.is_active` |
-   | `broadcast.py:1553` `not engine._running`（join listener） | `lifecycle.session_should_stop()` 或等价查询 |
-   | `chatroom_tools.py:1214` 直接赋值 | 走 `lifecycle.mark_winding_down(..., end_session=True)`（新增语义参数替代 `flip_running`） |
-   | `channels/telegram/__init__.py:544` | `engine.is_running`（已存在的 public property，`engine.py:331`，channels 层本该只走这个，不该碰 `_running`） |
-   | `channels/telegram/commands/settings.py:297` | 同上，改用 `engine.is_running` |
+   **不新造 `SessionState` 类**：`engine._running` 作为纯会话级标志本身没问题
+   （`_start_group_loop`/`_stop_group_loop`/`inject`/`request_summary`/`stop`
+   都只在会话边界读写它，语义一直是自洽的）。真正的问题是**轮次级代码通过
+   `flip_running=True` 这个副作用通道去写会话级标志**，而不是把"这一轮结束后
+   会话该不该停"这个判断结果**返回**给调用方。`RoundLifecycle.session_should_stop`
+   （`round_lifecycle.py:152-160`）已经是这个判断的正确产物——问题只是它被埋在
+   round 内部（`lifecycle` 对象是 `BroadcastOrchestrator.__init__` 里
+   `broadcast.py:252` 创建的局部对象），`run_loop.py` 拿不到。
 
-4. **退役裸属性**：全部迁完后，`engine._running` 删除或降级为
-   `@property`（内部转发到新状态源，读=兼容、写=raise 或 deprecation warning）。
-   `round_lifecycle.py` 的 `flip_running` 参数一并删除。
+   具体改法：
+   a. `broadcast_round`（`broadcast.py:377`）的返回值从
+      `list[tuple[str, str | None]]` 扩展为携带 `lifecycle.session_should_stop`
+      （例如包一层 dataclass，或加第二个返回值），让 `run_loop.py` 能直接读
+      这一轮的判断结果，而不是事后再摸 `engine._running`。
+   b. `round_lifecycle.py` 的 `mark_winding_down`/`reopen` **删除 `flip_running`
+      参数和对 `self._engine._running` 的写入**——`RoundLifecycle` 从此只管
+      轮次内状态，不再触达 engine。
+   c. `run_loop.py:111-164` 的循环条件和"pending 消息复活"逻辑，改为读
+      `broadcast_round` 返回的 `session_should_stop`，而不是 `engine._running`。
+      "复活"分支的语义不变（有 pending 消息就再开一轮），只是判断依据换了。
+   d. `broadcast.py:1553`（join listener 里 `not engine._running` 的轮次内读取）
+      要换成查 `lifecycle`（例如 `not lifecycle.accepts_interjection()` 或新增
+      等价查询）——这是轮次内部关心"这一轮是否还活跃"，本该问 `lifecycle`，
+      不该问会话级标志。
+   e. `chatroom_tools.py:1210-1214`（`ChatroomEndDiscussionTool`）删除
+      `flip_running=True` 参数和紧随其后的 `self._engine._running = False`
+      直接赋值，改为纯粹调用 `lifecycle.mark_winding_down(...)`（不再需要
+      额外一行手动同步）。
+   f. **`tests/test_round_lifecycle.py::TestLegacyFlagFlips`**（两个测试：
+      `test_mark_winding_down_sets_leader_end_event_and_running`、
+      `test_reopen_flips_running_back`）目前正是钉住"`flip_running=True` 会
+      改写 `engine._running`"这个即将删除的行为——上面 (b) 落地时这两个测试
+      要同步改写或删除，不能留着断言一个已经不存在的副作用。
+
+4. **退役裸属性**（(a)-(f) 全部完成后）：`engine._running` 保留作纯会话级标志
+   （不删除——它本身语义正确），但确认全仓库不再有轮次级代码写它；
+   `is_running` property 不变。
 
 **验证**：
 - `pytest tests/ -q` 全绿，含新增的会话级状态回归测试
-- `grep -rn "\._running\b" nanobot/ | grep -v "engine.py:.*is_running\|@property"` 结果
-  仅剩 `engine.py` 内部实现细节，**channels/ 目录归零**（这是"channel 不碰
-  orchestra 内部状态"边界的硬验收）
+- `grep -rn "flip_running" nanobot/` 归零（参数和所有调用点都删除）
+- `grep -rn "\._running\b" nanobot/ | grep -v "engine.py:.*is_running\|_start_group_loop\|_stop_group_loop\|def inject\|def request_summary\|def stop\b"` 结果
+  仅剩 `engine.py` 内部会话边界的读写，**channels/ 目录归零**（已在第 2 步验证）
 
 ## Phase 2：`broadcast_round` 拆分
 
@@ -186,9 +226,12 @@ orchestra 内部状态。
 
 ## 验证（DoD）
 
-- [ ] Phase 1：`py_compile` 全过；`pytest tests/ -q` 全绿；
-      `grep -rn "\._running\b" nanobot/channels/` 归零；
-      `round_lifecycle.py` 的 `flip_running` 参数删除
+- [x] Phase 1 / 回归测试钉住（commit `97e9b547`）
+- [x] Phase 1 / channels 零风险只读迁移（commit `d68ceee9`）：
+      `grep -rn "\._running\b" nanobot/channels/` 归零
+- [ ] Phase 1 / 核心状态解耦（上面第 3-4 步，未开始）：`py_compile` 全过；
+      `pytest tests/ -q` 全绿；`round_lifecycle.py` 的 `flip_running` 参数删除；
+      `tests/test_round_lifecycle.py::TestLegacyFlagFlips` 同步改写
 - [ ] Phase 2：`pytest tests/ -q` 全绿；`_run_one`/`broadcast_round` 行数下降有
       commit 记录；提升出的方法有专属单元测试
 - [ ] Phase 3：`mochat.py` 测试新增且绿；复用是否值得做的结论有记录（做或不做）
@@ -212,3 +255,4 @@ orchestra 内部状态。
 | 日期 | 变更 |
 |------|------|
 | 2026-09-07 | 创建本计划。基于历史模型重构（Phase A-E）完成后的独立架构审查：发现 `engine._running` 双语义比 `docs/phase4-findings.md` 描述的更严重（渗出到 channels 层）、`broadcast_round` 是 ~1500 行巨函数、channels/ 复用不足叠加测试盲区（`mochat.py` 零测试）。providers/ 和 mods/skills 边界审查后判断健康，不列入本轮。原历史模型重构 `plan.md` 归档至 `docs/archive/plan-2026-09-07-history-refactor.md`。 |
+| 2026-09-07 | Phase 1 启动：`97e9b547` 补齐 run_loop 会话状态 + telegram /stop 的回归测试（`pytest tests/ -q`：700 passed，32 deselected）；`d68ceee9` 把 channels/telegram 两处对 `engine._running` 的直接读取迁到公开属性 `engine.is_running`。调查后修正了核心方案：不新造 `SessionState` 类，改为让 `broadcast_round` 把 `lifecycle.session_should_stop` 显式返回给 `run_loop`，`RoundLifecycle` 不再通过 `flip_running` 副作用写 `engine._running`——方案细节见上方 Phase 1 第 3 步。核心解耦本身尚未动手，是下一个 checkpoint。 |
