@@ -657,6 +657,66 @@ async def test_forward_command_does_not_inject_reply_context() -> None:
     assert len(handled) == 1
     assert handled[0]["content"] == "/new"
 
+class _FakeGroupChatEngine:
+    """Minimal double exposing exactly what /stop reads today.
+
+    Phase 1 of plan.md will migrate this read from the raw ``_running``
+    attribute to the public ``is_running`` property (engine.py:330-333);
+    both are set here so the test keeps passing across that migration.
+    """
+
+    def __init__(self, running: bool) -> None:
+        self._running = running
+        self.stop_calls = 0
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+        self._running = False
+
+
+@pytest.mark.asyncio
+async def test_stop_command_reports_stopped_when_group_chat_was_running() -> None:
+    """REGRESSION (telegram/__init__.py:544): /stop must report "已停止"
+    when a group chat was actually running, distinguishing it from the
+    no-op case below."""
+    bus = MessageBus()
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"], group_policy="open"),
+        bus,
+    )
+    channel._groupchat_engine = _FakeGroupChatEngine(running=True)
+
+    update = _make_telegram_update(text="/stop")
+    await channel._forward_command(update, None)
+
+    assert channel._groupchat_engine.stop_calls == 1
+    out = bus.outbound.get_nowait()
+    assert out.content == "✅ 群聊已停止。"
+
+
+@pytest.mark.asyncio
+async def test_stop_command_reports_noop_when_nothing_was_running() -> None:
+    """REGRESSION (telegram/__init__.py:544): /stop on an already-idle
+    engine must report "没有运行中的任务", not the "已停止" success text."""
+    bus = MessageBus()
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"], group_policy="open"),
+        bus,
+    )
+    channel._groupchat_engine = _FakeGroupChatEngine(running=False)
+
+    update = _make_telegram_update(text="/stop")
+    await channel._forward_command(update, None)
+
+    assert channel._groupchat_engine.stop_calls == 1
+    out = bus.outbound.get_nowait()
+    assert out.content == "ℹ️ 当前没有运行中的任务。"
+
+
 @pytest.mark.asyncio
 async def test_on_help_includes_restart_command() -> None:
     channel = TelegramChannel(
