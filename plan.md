@@ -342,9 +342,8 @@ broadcast.py:513  engine._build_agent_prompt(history=self._history, relevant_age
 ## 验证（DoD）
 
 - [x] `py_compile` 全过（本轮改动文件）
-- [ ] `pytest tests/ -q` 全绿（含新增回归测试 + 更新的快照测试）；当前首个失败为
-      `tests/test_commands.py::test_gateway_uses_workspace_from_config_by_default`，在 provider
-      创建前因 sandbox 对工作区外写入返回 `OSError: [Errno 30] Read-only file system`。
+- [x] `pytest tests/ -q` 全绿：`695 passed, 32 deselected`（受限沙箱内运行时，gateway
+      路径测试会因无法写入 `/root/.nanobot` 报只读；升级权限复验已通过）。
 - [x] **接口契约验收**：`grep -rn "engine\._history\b\|\.history\.messages" nanobot/ | grep -v "context.py"`
       归零——外部不再碰内部列表（"低耦合"硬指标）
 - [x] 新增测试覆盖（"高稳定"硬指标）：可见性隔离（A→B C 看不到）、跨轮留存、
