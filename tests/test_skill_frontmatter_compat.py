@@ -15,11 +15,18 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from nanobot.skills.loader import SkillsLoader
 
 SUPERPOWERS_SRC = Path(
     "/root/archive/clones/agent-skills-import/superpowers/skills"
 )
+
+try:
+    _SUPERPOWERS_AVAILABLE = SUPERPOWERS_SRC.is_dir()
+except OSError:  # unreadable parent dirs on CI — not available there
+    _SUPERPOWERS_AVAILABLE = False
 
 
 def _ws_with_skill(name: str, frontmatter: str, body: str = "# Body\n") -> Path:
@@ -149,14 +156,19 @@ class TestEdgeCases:
 
 
 class TestRealEcosystemSample:
+    @pytest.mark.skipif(
+        not _SUPERPOWERS_AVAILABLE,
+        reason="superpowers sample archive only exists on the dev machine",
+    )
     def test_superpowers_skill_smoke(self):
-        if not SUPERPOWERS_SRC.exists():
-            return  # 归档不在时跳过（CI 环境无该样本）
-        src = SUPERPOWERS_SRC / "using-git-worktrees"
-        ws = Path(tempfile.mkdtemp())
-        shutil.copytree(src, ws / "skills" / src.name)
-        loader = SkillsLoader(ws, builtin_skills_dir=None)
-        meta = loader.get_skill_metadata(src.name)
+        try:
+            src = SUPERPOWERS_SRC / "using-git-worktrees"
+            ws = Path(tempfile.mkdtemp())
+            shutil.copytree(src, ws / "skills" / src.name)
+            loader = SkillsLoader(ws, builtin_skills_dir=None)
+            meta = loader.get_skill_metadata(src.name)
+        except PermissionError:
+            pytest.skip("superpowers sample archive not readable in this environment")
         assert meta is not None
         desc = meta["description"]
         assert desc and desc.strip()

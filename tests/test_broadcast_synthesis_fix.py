@@ -16,8 +16,8 @@ import sys
 import unittest
 from pathlib import Path
 
-SRC = Path("/root/nanobot-src/nanobot/groupchat/orchestra/broadcast.py")
-HISTORY = Path("/root/nanobot-src/nanobot/groupchat/history/component_manager.py")
+SRC = Path(__file__).resolve().parents[1] / "nanobot/groupchat/orchestra/broadcast.py"
+HISTORY = Path(__file__).resolve().parents[1] / "nanobot/groupchat/history/component_manager.py"
 
 # ── Test 1: Syntax Integrity ──────────────────────────────
 
