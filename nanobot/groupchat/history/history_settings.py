@@ -56,13 +56,13 @@ _DEFAULTS: dict[str, Any] = {
 
     # ── Stage 3: conversation history window ─────────────────────────
     "history": {
-        "max_messages": 50,
+        "max_messages": 200,
         "max_context_chars": 100_000,
         # History compression: triggered at compress_ratio * max_messages
         "compress_ratio": 0.8,
         "compress_max_summary_tokens": 600,
         # Number of recent messages to keep in tail during compression
-        "compression_keep_recent": 6,
+        "compression_keep_recent": 20,
         # Protect ALL user messages (not just the first) during compression
         "keep_user_messages": True,
         # AI summarization toggle for history compression (separate from tool_results)

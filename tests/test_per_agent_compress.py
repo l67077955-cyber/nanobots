@@ -19,7 +19,10 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from nanobot.groupchat.history.context import HistoryContext
+from nanobot.groupchat.history import history_settings
 from nanobot.groupchat.history.persistence import GroupChatState
 
 
@@ -36,6 +39,18 @@ class _FakeProvider:
 def _make_context(tmp_path, provider=None) -> HistoryContext:
     state = GroupChatState({"A": {}, "B": {}, "C": {}}, state_dir=tmp_path)
     return HistoryContext(state=state, provider=provider)
+
+
+@pytest.fixture(autouse=True)
+def _small_compression_window(monkeypatch):
+    """Keep algorithm tests small while production defaults retain 200 turns."""
+    monkeypatch.setattr(history_settings, "max_messages", lambda: 50)
+    monkeypatch.setattr(history_settings, "max_context_chars", lambda: 0)
+    monkeypatch.setattr(history_settings, "compress_ratio", lambda: 0.8)
+    monkeypatch.setattr(history_settings, "compression_keep_recent", lambda: 6)
+    monkeypatch.setattr(history_settings, "keep_user_messages", lambda: False)
+    monkeypatch.setattr(history_settings, "history_summarize_enabled", lambda: True)
+    monkeypatch.setattr(history_settings, "compress_max_summary_tokens", lambda: 600)
 
 
 class TestPerAgentCompress:
@@ -121,12 +136,14 @@ class TestPerAgentCompress:
             ctx.add_message("用户" if i % 2 == 0 else "系统", f"msg{i}")
 
         before = len(ctx.view_for("A"))
+        raw_before = ctx.all_messages()
         await ctx.compress_for("A")
         after = len(ctx.view_for("A"))
         # With provider=None, compress should early-return and not drop anything
         # (the threshold crossing only triggers the attempt; no provider means
         # no summary, so we must keep the middle, not head+tail discard).
         assert after == before, "disabled summarization must not drop messages"
+        assert ctx.all_messages() == raw_before, "per-agent compression must not mutate the raw log"
 
 
 class TestCompressAll:
@@ -135,7 +152,7 @@ class TestCompressAll:
         ctx = _make_context(tmp_path, provider=_FakeProvider())
         for i in range(70):
             ctx.add_message("用户" if i % 2 == 0 else "系统", f"msg{i}")
-        ctx._active_agents = ["A", "B", "C"]
+        ctx.set_active_agents(["A", "B", "C"])
 
         await ctx.compress_all()
 
@@ -159,7 +176,7 @@ class TestViewForCached:
         """add_message(sender, content, targets=[B]) writes to the log AND
         appends to B's stored view (not A's or C's)."""
         ctx = _make_context(tmp_path)
-        ctx._active_agents = ["A", "B", "C"]
+        ctx.set_active_agents(["A", "B", "C"])
         ctx.add_message("A", "private to B", targets=["B"])
 
         assert len(ctx.view_for("A")) == 1  # sender sees own
