@@ -135,6 +135,11 @@ nanobot 近 4 周 48 个 commit 全部是向内的（fix 11 / feat 11 / refactor
 
 ### 批次 D：压缩 vs 缓存的实证评估 🔴 只测不改
 
+> **2026-09-08 更新**: 本批次已吸收进 `docs/plan-2026-09-08-context-compression.md`
+> （成为其批次 C2，并新增了 C0 可观测性前置——审计发现 request_logs 不落
+> cost/cache_tokens、压缩调用无标记，原设想的离线成本分析缺数据，直接跑不了）。
+> 内容以该计划为准，本节保留作历史索引。
+
 本计划里最可能改变默认配置的一批，但**产出是数据，不是代码改动**。
 
 背景冲突（代码层已确认）：`litellm_provider.py` 花力气注入 cache_control 断点追求缓存命中，
