@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from nanobot.groupchat.config import GroupChatConfig
 from nanobot.groupchat.runtime.engine import GroupChatEngine
-from nanobot.groupchat.runtime.broadcast import broadcast_round
+from nanobot.groupchat.runtime.broadcast import RoundResult, broadcast_round
 from nanobot.groupchat.runtime.mailbox import MailboxHub
 from nanobot.providers.litellm_provider import LiteLLMProvider
 
@@ -321,10 +321,10 @@ async def run_broadcast_test(
             timeout=timeout_secs + 10,
         )
     except asyncio.TimeoutError:
-        results = []
+        results = RoundResult(messages=[], session_should_stop=True)
         print("   ⏰ 全局超时", flush=True)
     except Exception as e:
-        results = []
+        results = RoundResult(messages=[], session_should_stop=False)
         print(f"   ❌ 异常: {e}", flush=True)
 
     elapsed = time.time() - t0
@@ -347,7 +347,7 @@ async def run_broadcast_test(
     # Merge captured tool output into chat log for richer judge context
     tool_log = "\n---\n[系统输出/工具调用记录]:\n" + "\n".join(captured) if captured else ""
 
-    n_replies = sum(1 for _, c in results if c)
+    n_replies = sum(1 for _, c in results.messages if c)
     n_comms = len(mailbox_entries)
 
     print(f"   📊 完成: {n_replies}/{len(engine._active_agents)} agent回复, "
@@ -361,7 +361,8 @@ async def run_broadcast_test(
         "n_replies": n_replies,
         "n_comms": n_comms,
         "elapsed": elapsed,
-        "results": [(n, bool(c)) for n, c in results],
+        "results": [(n, bool(c)) for n, c in results.messages],
+        "session_should_stop": results.session_should_stop,
     }
 
 

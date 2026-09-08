@@ -94,7 +94,7 @@ class TestMidRoundInterjection:
 class TestWindingDownRequeue:
     async def test_requeues_and_parks(self):
         ingress, engine, _mb, lc, _pool = _ingress()
-        lc.mark_winding_down("leader_end_discussion", flip_running=True)
+        lc.mark_winding_down("leader_end_discussion")
         action = await ingress.handle_round_message("稍后的消息")
         assert action is IngressAction.REQUEUED
         # Message is back in the queue for the next round…

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json as _json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
@@ -247,8 +248,9 @@ class BroadcastOrchestrator:
         self._search_cache: dict[str, tuple[str, str]] = {}
 
         self.leader_end_event = asyncio.Event()
-        # Single owner of round phase state; transitions also flip the legacy
-        # signals (leader_end_event / engine._running) for un-migrated readers.
+        # Single owner of round phase state; transitions still set the legacy
+        # leader_end_event for un-migrated sentinel readers, but never write
+        # engine._running — the session verdict leaves via RoundResult.
         self.lifecycle = RoundLifecycle(
             leader_end_event=self.leader_end_event, engine=self.engine,
         )
@@ -374,12 +376,27 @@ class BroadcastOrchestrator:
             self.agent_tool_registries[self.leader_name].register(transfer_tool)
             self.agent_tool_registries[self.leader_name].register(clear_ctx_tool)
 
+@dataclass
+class RoundResult:
+    """Outcome of one broadcast round, returned to run_loop.
+
+    ``session_should_stop`` carries the RoundLifecycle verdict on the
+    SESSION (leader end_discussion / leader crash / global timeout → True;
+    leaderless convergence keeps it False). It replaces the legacy side
+    channel where round code flipped ``engine._running`` off mid-round —
+    run_loop reads this flag and owns the session-level state.
+    """
+
+    messages: list[tuple[str, str | None]] = field(default_factory=list)
+    session_should_stop: bool = False
+
+
 async def broadcast_round(
     agents: list[str],
     engine: BroadcastContext,
     mailbox: MailboxHub,
     global_timeout: float = 3600.0,
-) -> list[tuple[str, str | None]]:
+) -> RoundResult:
     """Run all agents concurrently with out-of-order completion display.
 
     Each agent:
@@ -394,10 +411,14 @@ async def broadcast_round(
         global_timeout: Hard limit for the entire round (seconds).
 
     Returns:
-        List of (agent_name, content) tuples in completion order.
+        RoundResult: ``messages`` holds (agent_name, content) tuples in
+        completion order; ``session_should_stop`` tells run_loop whether
+        the whole session should exit after this round (read from
+        lifecycle.session_should_stop AFTER teardown — the stop reason
+        survives mark_ended()).
     """
     if not agents:
-        return []
+        return RoundResult(messages=[])
 
     # Lazy-connect MCP servers before building tool registries
     if hasattr(engine, '_connect_mcp'):
@@ -718,7 +739,8 @@ async def broadcast_round(
                 logger.warning("Broadcast: leader {} synthesis retry exhausted ({} attempts), forcing exit", name, _synthesis_retries)
                 return False
             # Reopen the round so the leader's synthesis-retry cycles keep
-            # running (flips engine._running back True like the legacy code).
+            # running (returns to ACTIVE; engine._running is untouched —
+            # the session flag is run_loop's, not the round's).
             lifecycle.reopen()
             return True
 
@@ -970,8 +992,9 @@ async def broadcast_round(
                             if is_leader:
                                 _reason = f"Leader {name} 连续 {_consecutive_error_count} 次 LLM 错误"
                                 engine._leader_end_reason = _reason
-                                # WINDING_DOWN + legacy flips (event set, _running off)
-                                lifecycle.mark_winding_down("leader_crash", flip_running=True)
+                                # WINDING_DOWN (event set); the session verdict
+                                # leaves via RoundResult.session_should_stop.
+                                lifecycle.mark_winding_down("leader_crash")
                                 logger.warning(
                                     "Broadcast: leader %s force-exited, ending group chat: %s",
                                     name, _reason,
@@ -1549,8 +1572,9 @@ async def broadcast_round(
                     )
                 except asyncio.TimeoutError:
                     continue
-                # Skip if already running (duplicate notification) or engine stopped
-                if new_name in {tasks[t] for t in tasks} or not engine._running:
+                # Skip if already running (duplicate notification) or the round
+                # no longer accepts activity (winding down / ended).
+                if new_name in {tasks[t] for t in tasks} or not lifecycle.accepts_interjection():
                     continue
                 # Build tool registry for the new agent
                 base_reg = engine._get_agent_registry(new_name)
@@ -1696,9 +1720,9 @@ async def broadcast_round(
             )
 
             if not done_set:
-                # Global timeout reached — stop the engine so run_loop
-                # doesn't start another round.
-                lifecycle.mark_winding_down("global_timeout", flip_running=True)
+                # Global timeout reached — report the session verdict via
+                # the return value; run_loop decides not to start another round.
+                lifecycle.mark_winding_down("global_timeout")
                 break
 
             for t in done_set:
@@ -1806,8 +1830,8 @@ async def broadcast_round(
                     except BaseException:
                         pass
     except asyncio.TimeoutError:
-        # Stop the engine so run_loop doesn't start another round.
-        lifecycle.mark_winding_down("global_timeout", flip_running=True)
+        # Report the session verdict via the return value; run_loop decides.
+        lifecycle.mark_winding_down("global_timeout")
         for task, name in tasks.items():
             if not task.done():
                 task.cancel()
@@ -1872,4 +1896,7 @@ async def broadcast_round(
         engine._session_tools_override.clear()
         logger.info("Broadcast: cleared session tool overrides")
 
-    return [(name, content) for name, content, _ in results]
+    return RoundResult(
+        messages=[(name, content) for name, content, _ in results],
+        session_should_stop=lifecycle.session_should_stop,
+    )

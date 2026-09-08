@@ -108,7 +108,8 @@ async def run_loop(engine: Any) -> None:
             engine._add_message("系统", f"话题：{engine._topic}")
 
         rounds = 0
-        while engine._running:
+        stop_after_this_round = False
+        while engine._running and not stop_after_this_round:
             rounds += 1
 
             # Wait for user input (block until user sends something)
@@ -138,30 +139,34 @@ async def run_loop(engine: Any) -> None:
 
             # ── 关键修复：给 broadcast_round 加上全局超时保护 ──
             # 防止某一轮卡死导致整个群聊永久阻塞
-            await broadcast_round(
+            round_result = await broadcast_round(
                 speak_order,
                 engine,
                 engine._mailbox,
                 global_timeout=600.0,   # 10 分钟（可根据需要调整）
             )
 
+            # ── This round's session verdict (RoundResult.session_should_stop) ──
+            # leader end_discussion / leader crash / global timeout end the
+            # session; leaderless convergence keeps it alive. If user messages
+            # arrived during teardown (requeued by _user_listener), revive the
+            # loop so they start a fresh round instead of being dropped.
+            # Safe wrt /stop: stop cancels this task, so normal returns here
+            # only happen for end_discussion / natural completion.
+            if round_result.session_should_stop:
+                if engine._input_queue.empty():
+                    stop_after_this_round = True
+                else:
+                    logger.info(
+                        "run_loop: {} pending user message(s) after round end — reviving loop",
+                        engine._input_queue.qsize(),
+                    )
+
             # Handle summary request received during the round
             if getattr(engine, "_summary_requested", False):
                 engine._summary_requested = False
                 await generate_summary(engine)
                 continue
-
-            # end_discussion flips engine._running off mid-round.  If user
-            # messages arrived during teardown (requeued by _user_listener),
-            # revive the loop so they start a fresh round instead of being
-            # dropped.  Safe wrt /stop: stop cancels this task, so normal
-            # returns here only happen for end_discussion / natural completion.
-            if not engine._running and not engine._input_queue.empty():
-                logger.info(
-                    "run_loop: {} pending user message(s) after round end — reviving loop",
-                    engine._input_queue.qsize(),
-                )
-                engine._running = True
 
             # Compress history if approaching the message limit
             await engine._maybe_compress_history()

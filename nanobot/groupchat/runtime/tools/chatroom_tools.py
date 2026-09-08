@@ -1205,13 +1205,14 @@ class EndDiscussionTool(Tool):
         self._engine._leader_end_reason = reason
         if self._lifecycle is not None:
             # Single transition point: sets phase WINDING_DOWN (leader still
-            # composing synthesis), plus the legacy end_event / _running flips.
+            # composing synthesis) and the legacy end_event. The session
+            # verdict leaves via RoundResult.session_should_stop — the
+            # session-level engine._running flag is never written here.
             self._lifecycle.mark_winding_down(
-                "leader_end_discussion", leader_exempt=True, flip_running=True,
+                "leader_end_discussion", leader_exempt=True,
             )
         else:
             self._end_event.set()
-            self._engine._running = False
         return f"✅ 讨论已结束{reason_str}，即将进入总结阶段"
 
 

@@ -284,15 +284,13 @@ class GroupChatEngine:
         )
         # Runtime state (ephemeral, not persisted)
         self._task: asyncio.Task | None = None
-        # ⚠️ Dual-role legacy flag (plan.md 4.3 — migration in progress):
-        #   1. SESSION level: run_loop's `while engine._running` keeps the
-        #      session alive; set True by start_group_chat(), False on exit.
-        #   2. ROUND level: RoundLifecycle.mark_winding_down(flip_running=True)
-        #      flips it False to signal round teardown; reopen() flips True.
-        # RoundLifecycle now owns the ROUND-level phase. Removing this flag
-        # requires migrating run_loop.py's session-loop condition off it —
-        # high risk, deferred. Do NOT add new readers; use RoundLifecycle
-        # queries (agents_should_exit / accepts_interjection / session_should_stop).
+        # Session-level lifecycle flag (round-level writes retired — plan
+        # 2026-09-07 step 3): set True by start_group_chat(), False on exit
+        # (stop / task end). Round code no longer flips it; the round's
+        # verdict on the session travels via broadcast_round's
+        # RoundResult.session_should_stop, consumed by run_loop.
+        # Do NOT add round-level readers/writers; use RoundLifecycle queries
+        # (agents_should_exit / accepts_interjection / session_should_stop).
         self._running = False
         # Broadcast round: per-agent tasks registered by broadcast_round()
         # so remove_agent() can cancel an in-flight agent mid-round.

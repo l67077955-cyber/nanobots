@@ -2,13 +2,17 @@
 
 Pins down the transitions and queries that replace the scattered flag
 conjunctions (engine._running / leader_end_event / all-tasks-done), plus
-the strangler-fig legacy-flag flips.
+the decoupling from engine._running (Phase 1 step 3: the round verdict
+leaves via broadcast_round's RoundResult.session_should_stop, not by
+writing the session-level flag).
 """
 
 from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+
+import pytest
 
 from nanobot.groupchat.runtime.round_lifecycle import RoundPhase, RoundLifecycle
 
@@ -62,22 +66,33 @@ class TestTransitions:
         assert lc.phase is RoundPhase.ACTIVE
 
 
-class TestLegacyFlagFlips:
-    def test_mark_winding_down_sets_leader_end_event_and_running(self):
+class TestEngineFlagDecoupling:
+    """Round transitions must not write engine._running (Phase 1 step 3).
+
+    ``engine._running`` is a session-level flag owned by the engine's
+    start/stop paths; the round's verdict on the session travels out via
+    broadcast_round's RoundResult.session_should_stop instead.
+    """
+
+    def test_mark_winding_down_sets_end_event_but_not_engine_flag(self):
         evt = asyncio.Event()
         engine = SimpleNamespace(_running=True)
         lc = _lifecycle(leader_end_event=evt, engine=engine)
-        lc.mark_winding_down("leader_end_discussion", flip_running=True)
-        assert evt.is_set()
-        assert engine._running is False
+        lc.mark_winding_down("leader_end_discussion")
+        assert evt.is_set()  # legacy sentinel signal survives
+        assert engine._running is True  # session-level flag untouched
 
-    def test_reopen_flips_running_back(self):
-        engine = SimpleNamespace(_running=True)
+    def test_flip_running_side_channel_is_gone(self):
+        lc = _lifecycle()
+        with pytest.raises(TypeError):
+            lc.mark_winding_down("leader_crash", flip_running=True)
+
+    def test_reopen_does_not_touch_engine_running(self):
+        engine = SimpleNamespace(_running=False)
         lc = _lifecycle(engine=engine)
-        lc.mark_winding_down("leader_end_discussion", flip_running=True)
-        assert engine._running is False
+        lc.mark_winding_down("leader_end_discussion", leader_exempt=True)
         lc.reopen()
-        assert engine._running is True
+        assert engine._running is False  # reopen must not flip it back True
 
 
 class TestAgentExitQueries:
@@ -122,3 +137,12 @@ class TestSessionStopMapping:
     def test_active_round_never_stops_session(self):
         lc = _lifecycle()
         assert lc.session_should_stop is False
+
+    def test_reason_survives_ended_for_return_value(self):
+        """broadcast_round reads session_should_stop AFTER mark_ended()
+        (teardown completes before the return statement), so the stop
+        reason must survive the ENDED transition."""
+        lc = _lifecycle()
+        lc.mark_winding_down("global_timeout")
+        lc.mark_ended()
+        assert lc.session_should_stop is True
