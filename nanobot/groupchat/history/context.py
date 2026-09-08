@@ -424,9 +424,9 @@ class HistoryContext:
             compress_ratio,
             compression_keep_recent,
             history_summarize_enabled,
+            history_summarize_model,
             keep_user_messages,
             max_messages,
-            summarize_model,
         )
 
         limit = max_messages()
@@ -465,7 +465,10 @@ class HistoryContext:
                 "如果有具体的数值、文件路径或关键结论，请务必保留。\n"
                 f"摘要不超过 500 字。\n\n{history_text}"
             )
-            model = summarize_model()
+            # C1.3 (plan.md 批次 C1): history compression resolves its own
+            # model — history.summarize_model, falling back to
+            # tool_results.summarize_model when unset (pre-C1.3 behaviour).
+            model = history_summarize_model()
             max_summary_tokens = compress_max_summary_tokens()
 
             # C1.2: reuse the batch-shared summary when another view of this

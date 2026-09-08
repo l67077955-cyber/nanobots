@@ -67,6 +67,11 @@ _DEFAULTS: dict[str, Any] = {
         "keep_user_messages": True,
         # AI summarization toggle for history compression (separate from tool_results)
         "history_summarize_enabled": True,
+        # Dedicated model for history-compression summaries (C1.3/W9): one
+        # knob used to steer both tool-result summarisation and whole-view
+        # compression.  None → fall back to tool_results.summarize_model
+        # (pre-C1.3 behaviour; deployments without the key are unchanged).
+        "summarize_model": None,
     },
 
     # ── Stage 4: iterative context pruning (tool_loop iteration 2+) ──
@@ -199,6 +204,19 @@ def keep_user_messages() -> bool:
 
 def history_summarize_enabled() -> bool:
     return bool(_load()["history"]["history_summarize_enabled"])
+
+
+def history_summarize_model() -> str:
+    """Model for history-compression summaries (``history.summarize_model``).
+
+    Unset (``None`` / empty string, the default) falls back to
+    ``tool_results.summarize_model`` so pre-C1.3 deployments keep the exact
+    model they already ran with until they opt in locally.
+    """
+    value = _load()["history"].get("summarize_model")
+    if value is None or str(value).strip() == "":
+        return summarize_model()
+    return str(value)
 
 
 # ── context_pruning getters ──────────────────────────────────────────────
