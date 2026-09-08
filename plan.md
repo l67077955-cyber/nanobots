@@ -2,7 +2,7 @@
 
 > 创建日期: 2026-09-08
 > 类型: 子系统优化路线图（上下文管理 / 历史压缩）
-> 状态: **活跃主计划**——2026-09-08 起接任根 `plan.md`；**批次 C0 已完成**（`83b4b555a`／`4227673f7`／`0a5057920`／`3ec6d422f`，新字段自网关下次 idle 重启起写入 request_logs）；C1-C3 未启动，建议从 C1.1 起步
+> 状态: **活跃主计划**——2026-09-08 起接任根 `plan.md`；**批次 C0、C1 已完成**（C0：`83b4b555a` 等 4 commit 可观测性；C1：`5881a8a37`／`4d0d739d9`／`74224693d`／`63c837398`／`8f6835323`）；C2-C3 未启动；全部新行为自网关下次 idle 重启起生效
 > 与其他计划的关系:
 >   - `docs/plan-2026-09-07-arch-refactor.md`（状态所有权 / broadcast 拆分 / channels
 >     收敛）——**架构线，并行推进，本计划不碰**。其 Phase 1 step 3（`flip_running` 退役 +
@@ -135,7 +135,21 @@
      cost, triggered_by: round_end|direct_reply}`；`context.py:409` 处 emit。
    - `round_telemetry` mod 顺带加一个订阅 handler（可选，一个逻辑单元一个 commit）。
 
-### 批次 C1：无争议缺陷修复 🟡（每项：先测试 → 改实现 → checkpoint）
+### 批次 C1：无争议缺陷修复 ✅ 已完成（2026-09-08；原 🟡 每项：先测试 → 改实现 → checkpoint）
+
+> **完成记录**：5 commit——C1.1 视图上限 `5881a8a37`（`_trim_to_limits` 抽取，日志与
+> 每个已物化视图按**各自的** head 保护裁剪，未物化视图走日志投影天然有界；6 测试）；
+> C1.2 同轮去重 `4d0d739d9`（单次 `compress_all` 批内按 `(prompt, model, max_tokens)`
+> 分组——prompt 逐条渲染中段、是内容全等的代理；1 次调用/N 个事件；失败不缓存、
+> standalone `compress_for` 永不共享；隐私论证：键覆盖中段全内容，同组视图所见完全
+> 相同，共享摘要不可能跨进缺少源材料的视图；6 测试）；C1.3 `74224693d`
+> （`history.summarize_model` 缺省回退 `tool_results.summarize_model`，空串视同未设；
+> 6 测试）；C1.4 `63c837398`＋`8f6835323`（str-stub 删除、死参数测试改写为现行软剪枝
+> 语义、deselect 32→31、`/log` 读 `usage.cache_tokens`；4 测试）。全量终态
+> `774 passed, 31 deselected`（我独立复跑确认）。已知取舍：视图上限 = `limit + 窗口外
+> 保护 head 条数`（与日志裁剪现状一致，非绝对 `≤ max_messages`——首条恒保护下后者
+> 数学上不可达）；C1.2 有意改变了"每视图一次调用"的旧语义，`test_history_compress_
+> metadata.py` 随之适配（同组共享调用归因组首成员）。
 
 1. **视图上限**（W3）：`add_message` 的消息数/char 两步裁剪同样作用于每个
    `_views[name]`（裁剪语义：优先丢最旧的非保护消息，与 `_compress_view` 的
@@ -235,3 +249,4 @@
 | 2026-09-08 | 创建本计划。基于三路并行审计：①压缩链路逐行核实（W1-W11 弱点清单）；②三份既有计划完成度核实（history-refactor A-E 真完成；根 plan.md Phase 1 完成 2/4 步、step 3 未动；industry 批次 A 完成 1/3、A4 改道、B/C/D 零产出）；③本机数据可用性核实（request_logs 122 天但缺 cost/cache_tokens → 批次 D 原设想的离线分析不可直接跑，故新增 C0 前置）。吸收 industry-followup 批次 D 为本计划 C2。 |
 | 2026-09-08 | 接任根 `plan.md` 成为活跃主计划；原架构线计划（状态所有权 / broadcast / channels，Phase 1 进行中）移至 `docs/plan-2026-09-07-arch-refactor.md` 继续推进，未归档。 |
 | 2026-09-08 | 批次 C0 完成（两个子 agent 并行，4 commit，26 新测试，全量 751 passed / 32 deselected）：request_logs 落 `cost` + `usage.cache_tokens`；两条压缩路线摘要调用分别带 `history_compress`／`tail_summarize` 归因；EVENTS 注册并 emit `history:compressed`，round_telemetry 订阅。网关重启因 agent 活动暂缓，待 idle 执行。 |
+| 2026-09-08 | 批次 C1 完成（两个子 agent 并行，5 commit，23 个新/复活测试，全量 774 passed / 31 deselected，主会话独立复跑确认）：W3 视图随 `add_message` 有界；W2 同轮相同中段共享一次摘要调用（隐私不变量有测试钉住）；W9 `history.summarize_model` 独立旋钮带回退；W10 str-stub 删除 + deselect 收缩 + `/log` 死读键修正。执行注记：并行 agent 共享 git index 出现一次良性竞态（一方 staged 删除被另一方 pathspec commit 吸收，终态正确、证据在删除方 commit message）；后续并行提交一律 `git commit -- <paths>`。网关重启仍待 idle 与用户显式指令。 |
