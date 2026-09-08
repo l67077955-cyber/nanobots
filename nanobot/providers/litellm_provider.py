@@ -365,11 +365,19 @@ class LiteLLMProvider(LLMProvider):
                             for tc in msg.tool_calls
                         ]
                 if hasattr(response, "usage") and response.usage:
+                    # cache_tokens mirrors _parse_response/LLMResponse: 0 when
+                    # the provider reports no prompt_tokens_details (C0.1/W7).
+                    _ptd = getattr(response.usage, "prompt_tokens_details", None)
                     record["usage"] = {
                         "prompt": response.usage.prompt_tokens,
                         "completion": response.usage.completion_tokens,
                         "total": response.usage.total_tokens,
+                        "cache_tokens": getattr(_ptd, "cached_tokens", 0) or 0,
                     }
+                # Cost from litellm hidden params — the same source _parse_response
+                # reads for LLMResponse.cost; None when the provider reports none.
+                _hidden = getattr(response, "_hidden_params", None) or {}
+                record["cost"] = _hidden.get("response_cost")
                 # ── Extract OpenRouter / provider IDs from hidden params ──
                 try:
                     _hidden = getattr(response, "_hidden_params", None) or {}
@@ -404,6 +412,8 @@ class LiteLLMProvider(LLMProvider):
         usage: dict,
         latency: float,
         cache_headers: dict | None = None,
+        cost: float | None = None,
+        cache_tokens: int = 0,
     ) -> None:
         """Log a completed streaming request (no raw response object available)."""
         import json as _json
@@ -481,7 +491,11 @@ class LiteLLMProvider(LLMProvider):
                     for tc in tool_calls
                 ]
             if usage:
-                record["usage"] = usage
+                # Pure increment: keep the caller's key style (prompt_tokens/
+                # completion_tokens/total_tokens) as-is, add cache_tokens
+                # alongside (C0.1/W7). Readers already tolerate both styles.
+                record["usage"] = {**usage, "cache_tokens": cache_tokens or 0}
+            record["cost"] = cost
 
 
             with open(log_file, "a", encoding="utf-8") as f:
@@ -1014,7 +1028,9 @@ class LiteLLMProvider(LLMProvider):
         # Log the completed stream request
         self._log_stream_request(kwargs, full_content, parsed_tool_calls, finish_reason, usage,
                                  _time.time() - t0,
-                                 cache_headers=getattr(self, "_last_cache_headers", None))
+                                 cache_headers=getattr(self, "_last_cache_headers", None),
+                                 cost=_stream_cost,
+                                 cache_tokens=_stream_cache_tokens)
 
         # Build provider_meta list for logging
         _provider_meta = []

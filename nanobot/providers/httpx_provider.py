@@ -461,6 +461,8 @@ class HttpxProvider(LLMProvider):
         error: Exception | None = None,
         latency: float = 0.0,
         cache_headers: dict | None = None,
+        cost: float | None = None,
+        cache_tokens: int = 0,
     ) -> None:
         """Log every LLM request to ~/.nanobot/request_logs/YYYY-MM-DD.jsonl."""
         try:
@@ -532,13 +534,34 @@ class HttpxProvider(LLMProvider):
                             {"name": tc.get("function", {}).get("name"), "args_len": len(tc.get("function", {}).get("arguments", ""))}
                             for tc in msg_data["tool_calls"]
                         ]
-                usage = response_data.get("usage", {})
+                usage = response_data.get("usage", {}) or {}
+                # cache_tokens mirrors _parse_response: explicit streaming
+                # extraction wins, else Anthropic-native
+                # cache_read_input_tokens, else OpenAI-compat
+                # prompt_tokens_details.cached_tokens (C0.1/W7).
+                _cache = cache_tokens or int(usage.get("cache_read_input_tokens", 0) or 0)
+                if not _cache:
+                    _ptd = usage.get("prompt_tokens_details") or {}
+                    if isinstance(_ptd, dict):
+                        _cache = int(_ptd.get("cached_tokens", 0) or 0)
                 if usage:
                     record["usage"] = {
                         "prompt": usage.get("prompt_tokens", 0),
                         "completion": usage.get("completion_tokens", 0),
                         "total": usage.get("total_tokens", 0),
+                        "cache_tokens": _cache,
                     }
+                # Cost mirrors _parse_response: explicit streaming value wins,
+                # else top-level "cost" or usage.cost.
+                _cost = cost if cost is not None else response_data.get("cost")
+                if _cost is None:
+                    _cost = usage.get("cost")
+                if _cost is not None:
+                    try:
+                        _cost = float(_cost)
+                    except (TypeError, ValueError):
+                        _cost = None
+                record["cost"] = _cost
             else:
                 record["status"] = "unknown"
 
@@ -714,6 +737,7 @@ class HttpxProvider(LLMProvider):
             tool_calls_raw: list[dict] = []
             finish_reason = "stop"
             usage: dict[str, int] = {}
+            cache_tokens = 0
             has_tool_calls = False
 
             async for chunk in stream:
@@ -723,6 +747,12 @@ class HttpxProvider(LLMProvider):
                         "completion_tokens": chunk.usage.completion_tokens or 0,
                         "total_tokens": chunk.usage.total_tokens or 0,
                     }
+                    # Cached prompt tokens (C0.1/W7) — the usage chunk usually
+                    # arrives last (stream_options.include_usage).
+                    _ptd = getattr(chunk.usage, "prompt_tokens_details", None)
+                    _cached = getattr(_ptd, "cached_tokens", None)
+                    if _cached:
+                        cache_tokens = int(_cached)
 
                 if not chunk.choices:
                     continue
@@ -809,6 +839,7 @@ class HttpxProvider(LLMProvider):
                 "usage": usage,
             },
             latency=latency,
+            cache_tokens=cache_tokens,
         )
 
         # Extract cost from OpenRouter headers (available via httpx response)
@@ -820,6 +851,7 @@ class HttpxProvider(LLMProvider):
             tool_calls=parsed_tool_calls,
             finish_reason=finish_reason,
             usage=usage,
+            cache_tokens=cache_tokens,
         )
 
 class _APIError(Exception):
