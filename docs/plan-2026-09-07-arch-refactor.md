@@ -230,9 +230,14 @@ runtime 内部状态。
 - [x] Phase 1 / 回归测试钉住（commit `97e9b547`）
 - [x] Phase 1 / channels 零风险只读迁移（commit `d68ceee9`）：
       `grep -rn "\._running\b" nanobot/channels/` 归零
-- [ ] Phase 1 / 核心状态解耦（上面第 3-4 步，未开始）：`py_compile` 全过；
-      `pytest tests/ -q` 全绿；`round_lifecycle.py` 的 `flip_running` 参数删除；
-      `tests/test_round_lifecycle.py::TestLegacyFlagFlips` 同步改写
+- [x] Phase 1 / 核心状态解耦（上面第 3 步 (a)-(f) + 第 4 步验证，commits
+      `4c263b64c`/`abf36831b`/`67eb54d67`）：`py_compile` 全过；`pytest tests/ -q`
+      全绿（863 passed / 31 deselected，含 +9 新增回归）；`round_lifecycle.py`
+      的 `flip_running` 参数删除（`grep -rn "flip_running" nanobot/` 归零）；
+      `TestLegacyFlagFlips` 改写为 `TestEngineFlagDecoupling`（3 测试钉住
+      "不再写 `_running`"）。第 4 步验证：`engine._running` 在 engine.py 外仅剩
+      `run_loop.py:112/117/124`（会话循环条件）与 `:188`（任务退出会话边界）
+      ——均为会话级读写，无轮次级残留；channels/ 归零
 - [ ] Phase 2：`pytest tests/ -q` 全绿；`_run_one`/`broadcast_round` 行数下降有
       commit 记录；提升出的方法有专属单元测试
 - [ ] Phase 3：`mochat.py` 测试新增且绿；复用是否值得做的结论有记录（做或不做）
@@ -258,3 +263,4 @@ runtime 内部状态。
 | 2026-09-07 | 创建本计划。基于历史模型重构（Phase A-E）完成后的独立架构审查：发现 `engine._running` 双语义比 `docs/phase4-findings.md` 描述的更严重（渗出到 channels 层）、`broadcast_round` 是 ~1500 行巨函数、channels/ 复用不足叠加测试盲区（`mochat.py` 零测试）。providers/ 和 mods/skills 边界审查后判断健康，不列入本轮。原历史模型重构 `plan.md` 归档至 `docs/archive/plan-2026-09-07-history-refactor.md`。 |
 | 2026-09-07 | Phase 1 启动：`97e9b547` 补齐 run_loop 会话状态 + telegram /stop 的回归测试（`pytest tests/ -q`：700 passed，32 deselected）；`d68ceee9` 把 channels/telegram 两处对 `engine._running` 的直接读取迁到公开属性 `engine.is_running`。调查后修正了核心方案：不新造 `SessionState` 类，改为让 `broadcast_round` 把 `lifecycle.session_should_stop` 显式返回给 `run_loop`，`RoundLifecycle` 不再通过 `flip_running` 副作用写 `engine._running`——方案细节见上方 Phase 1 第 3 步。核心解耦本身尚未动手，是下一个 checkpoint。 |
 | 2026-09-08 | 第 3 步执行尝试**停手**（AGENTS.md #7，未改任何实现代码）。代码级复核结论：(b) 删除 `flip_running` 参数与 (e) `tools/chatroom_tools.py:1209-1214` 的调用点清理必须**同一 commit 原子落地**——参数一删，leader 的 `end_discussion` 立即 TypeError；而当次任务对 `tools/` 属禁区。全仓库 `flip_running` 调用点共 4 处：`broadcast.py:974/1701/1810` + `chatroom_tools.py:1210`。连带需同步适配的测试：`test_round_lifecycle.py::TestLegacyFlagFlips`（即计划 (f)）、`test_user_ingress.py:97`（kwarg 属 round_lifecycle 签名）、`test_run_loop_session_state.py`（fake 需返回新返回值形状）、`test_prompt_robustness.py:315`（`broadcast_round` 返回值的唯一既有消费点，当前 run_loop 不消费返回值）。基线复核 `pytest tests/ -q`：836 passed / 31 deselected。后续执行者拿到 `tools/chatroom_tools.py` 的改动权后按 (a)-(f) 一体落地即可。 |
+| 2026-09-08 | **第 3 步 (a)-(f) + 第 4 步验证完成**（获得 `chatroom_tools.py` :1209-1214 最小区域扩权后恢复执行）。`abf36831b` 原子落地 (a)-(f) 全部六项：(a) `broadcast_round` 返回新 dataclass `RoundResult`（`messages` + `session_should_stop`）；(b) `mark_winding_down`/`reopen` 删 `flip_running` 参数与所有 `engine._running` 写入；(c) `run_loop` 以 `stop_after_this_round` 循环条件标志消费 verdict，pending 消息复活语义不变（verdict 检查置于 summary `continue` 之前，避免复活路径丢消息）；(d) join listener 改查 `lifecycle.accepts_interjection()`；(e) `EndDiscussionTool` 纯调 `mark_winding_down`，与 (b) 同一 commit；(f) `TestLegacyFlagFlips` 改写为 `TestEngineFlagDecoupling`。`67eb54d67` 补真实路径回归：`broadcast_round` 全局超时返回 `session_should_stop=True` 且无旗标副作用（鸭子型 fake engine + 真 MailboxHub）+ EndDiscussionTool 两种构造路径。测试净值 +9（新文件 2+2、round_lifecycle 15→17、run_loop_session_state 3→4）；适配 `test_user_ingress`/`test_prompt_robustness`/`test_run_loop_session_state` 三处 fake。`pytest tests/ -q`：**863 passed / 31 deselected**（基线 836 + 本任务 +9 + 并行任务 +18）。验收 grep：`flip_running` 归零；`engine._running` 轮次级读写归零（engine.py 外仅剩 run_loop 会话边界）。停手记录见上一行 / commit `4c263b64c`。 |
