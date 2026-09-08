@@ -53,6 +53,15 @@ EVENTS: dict[str, str] = {
     # successful per-agent view compression; silent when compression did not
     # happen — disabled / no provider / below threshold / failed summary)
     "history:compressed":   "agent, dropped, view_before, view_after, model, prompt_tokens, completion_tokens, cost, triggered_by",
+    # LLM calls (emitted from providers/litellm_provider.py + httpx_provider.py
+    # around every chat / chat_stream exit path). Payload fields are the ones
+    # already parsed for LLMResponse / request_logs — no second parse.
+    # llm:request fires pre-call (token/cost/latency None); llm:response
+    # carries the parsed usage/cost/latency plus `error` on failed calls.
+    # `session` (from log metadata) exists so per-session budgeting mods have
+    # a key — providers see no engine object.
+    "llm:request":          "agent, session, model, input_tokens, output_tokens, cache_tokens, cost, latency, error",
+    "llm:response":         "agent, session, model, input_tokens, output_tokens, cache_tokens, cost, latency, error",
 }
 
 

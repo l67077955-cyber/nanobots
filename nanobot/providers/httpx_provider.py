@@ -29,6 +29,46 @@ from nanobot.providers.registry import find_by_model, find_gateway
 _NATIVE_PROVIDERS = {"openrouter", "anthropic", "openai", "google", "google_genai", "xai"}
 
 
+async def _emit_llm_event(
+    event: str,
+    *,
+    model: str | None,
+    metadata: dict[str, Any] | None,
+    parsed: LLMResponse | None = None,
+    latency: float | None = None,
+    error: str | None = None,
+) -> None:
+    """Emit ``llm:request`` / ``llm:response`` on the default event bus.
+
+    Twin of litellm_provider._emit_llm_event (kept local — providers share no
+    helper module by design). Lazy bus import: runtime imports providers, so
+    a top-level import would be circular. Token/cost fields reuse the values
+    already parsed for LLMResponse (mirrored into request_logs); nothing is
+    parsed twice. With zero listeners the emit is a dict lookup.
+    """
+    try:
+        from nanobot.groupchat.runtime.events import get_bus  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 — observability must never break a call
+        return
+    meta = metadata or {}
+    usage = (parsed.usage or {}) if parsed is not None else {}
+    try:
+        await get_bus().emit(
+            event,
+            agent=meta.get("log_agent"),
+            session=meta.get("log_session"),
+            model=model,
+            input_tokens=usage.get("prompt_tokens"),
+            output_tokens=usage.get("completion_tokens"),
+            cache_tokens=parsed.cache_tokens if parsed is not None else 0,
+            cost=parsed.cost if parsed is not None else None,
+            latency=latency,
+            error=error,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class HttpxProvider(LLMProvider):
     """LLM provider using httpx for direct API access.
 
@@ -608,6 +648,7 @@ class HttpxProvider(LLMProvider):
         }
 
         t0 = _time.time()
+        await _emit_llm_event("llm:request", model=raw_model, metadata=metadata)
         try:
             client = self._get_client()
             r = await client.post(url, json=body, headers=headers)
@@ -639,8 +680,17 @@ class HttpxProvider(LLMProvider):
                     if r2.status_code == 200:
                         data = r2.json()
                         self._log_request(model=raw_model, api_base=target_base, max_tokens=max_tokens, stream=False, params=self.sampling_params, tools_count=len(tools or []), messages=body["messages"], metadata=metadata, response_data=data, latency=_time.time() - t0)
-                        return self._parse_response(data)
+                        parsed = self._parse_response(data)
+                        await _emit_llm_event("llm:response", model=raw_model,
+                                              metadata=metadata, parsed=parsed,
+                                              latency=_time.time() - t0)
+                        return parsed
 
+                await _emit_llm_event(
+                    "llm:response", model=raw_model, metadata=metadata,
+                    error=f"HTTP {r.status_code} - {error_text}",
+                    latency=_time.time() - t0,
+                )
                 return LLMResponse(
                     content=f"Error calling LLM: HTTP {r.status_code} - {error_text}",
                     finish_reason="error",
@@ -654,7 +704,10 @@ class HttpxProvider(LLMProvider):
                 messages=body["messages"], metadata=metadata, response_data=data, latency=latency,
                 cache_headers=getattr(self, "_last_cache_headers", None),
             )
-            return self._parse_response(data)
+            parsed = self._parse_response(data)
+            await _emit_llm_event("llm:response", model=raw_model,
+                                  metadata=metadata, parsed=parsed, latency=latency)
+            return parsed
 
         except Exception as e:
             latency = _time.time() - t0
@@ -665,6 +718,8 @@ class HttpxProvider(LLMProvider):
                 error=e, latency=latency,
                 cache_headers=getattr(self, "_last_cache_headers", None),
             )
+            await _emit_llm_event("llm:response", model=raw_model,
+                                  metadata=metadata, error=str(e), latency=latency)
             return LLMResponse(
                 content=f"Error calling LLM: {e}",
                 finish_reason="error",
@@ -725,6 +780,7 @@ class HttpxProvider(LLMProvider):
         extra_body = {k: v for k, v in body.items() if k not in _SDK_PARAMS}
 
         t0 = _time.time()
+        await _emit_llm_event("llm:request", model=raw_model, metadata=metadata)
         try:
             oai_client = self._get_openai_client(target_base, target_key)
             stream = await oai_client.chat.completions.create(
@@ -789,6 +845,9 @@ class HttpxProvider(LLMProvider):
                 messages=body.get("messages", messages), metadata=metadata,
                 error=e, latency=_time.time() - t0,
             )
+            await _emit_llm_event("llm:response", model=raw_model,
+                                  metadata=metadata, error=str(e),
+                                  latency=_time.time() - t0)
             yield LLMResponse(content=f"Error during streaming: {e}", finish_reason="error")
             return
 
@@ -846,13 +905,16 @@ class HttpxProvider(LLMProvider):
         # The OpenAI SDK doesn't expose response headers in streaming,
         # so cost will be None for httpx_provider streaming.
         # Cost is available via litellm_provider which reads _hidden_params.
-        yield LLMResponse(
+        final = LLMResponse(
             content=full_content or None,
             tool_calls=parsed_tool_calls,
             finish_reason=finish_reason,
             usage=usage,
             cache_tokens=cache_tokens,
         )
+        await _emit_llm_event("llm:response", model=raw_model,
+                              metadata=metadata, parsed=final, latency=latency)
+        yield final
 
 class _APIError(Exception):
     """HTTP error from API call."""

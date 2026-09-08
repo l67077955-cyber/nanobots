@@ -21,6 +21,47 @@ from nanobot.providers.cache_probe import estimate_cache_ratio
 from nanobot.providers.registry import find_by_model, find_gateway
 
 
+async def _emit_llm_event(
+    event: str,
+    *,
+    model: str | None,
+    metadata: dict[str, Any] | None,
+    parsed: LLMResponse | None = None,
+    latency: float | None = None,
+    error: str | None = None,
+) -> None:
+    """Emit ``llm:request`` / ``llm:response`` on the default event bus.
+
+    Lazy bus import: runtime imports this module (engine → providers), so a
+    top-level import would be circular — same pattern as the
+    ``history:compressed`` emit in groupchat/history/context.py. Token/cost
+    fields reuse the values already parsed for LLMResponse (mirrored into
+    request_logs by ``_log_request``); nothing is parsed twice. With zero
+    listeners the emit is a dict lookup — no behaviour change.
+    """
+    try:
+        from nanobot.groupchat.runtime.events import get_bus  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 — observability must never break a call
+        return
+    meta = metadata or {}
+    usage = (parsed.usage or {}) if parsed is not None else {}
+    try:
+        await get_bus().emit(
+            event,
+            agent=meta.get("log_agent"),
+            session=meta.get("log_session"),
+            model=model,
+            input_tokens=usage.get("prompt_tokens"),
+            output_tokens=usage.get("completion_tokens"),
+            cache_tokens=parsed.cache_tokens if parsed is not None else 0,
+            cost=parsed.cost if parsed is not None else None,
+            latency=latency,
+            error=error,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class LiteLLMProvider(LLMProvider):
     """
     LLM provider using LiteLLM for multi-provider support.
@@ -778,14 +819,22 @@ class LiteLLMProvider(LLMProvider):
         if tool_choice and tools:
             kwargs["tool_choice"] = tool_choice
         t0 = _time.time()
+        await _emit_llm_event("llm:request", model=kwargs.get("model"), metadata=metadata)
         try:
             response = await acompletion(**kwargs)
             self._log_request(kwargs, response=response, latency=_time.time() - t0,
                               cache_headers=getattr(self, "_last_cache_headers", None))
-            return self._parse_response(response)
+            parsed = self._parse_response(response)
+            await _emit_llm_event("llm:response", model=kwargs.get("model"),
+                                  metadata=metadata, parsed=parsed,
+                                  latency=_time.time() - t0)
+            return parsed
         except Exception as e:
             self._log_request(kwargs, error=e, latency=_time.time() - t0,
                               cache_headers=getattr(self, "_last_cache_headers", None))
+            await _emit_llm_event("llm:response", model=kwargs.get("model"),
+                                  metadata=metadata, error=str(e),
+                                  latency=_time.time() - t0)
 
             sc = getattr(e, "status_code", None)
             has_tool_msgs = any(m.get("role") == "tool" for m in messages)
@@ -852,11 +901,15 @@ class LiteLLMProvider(LLMProvider):
         kwargs["stream_options"] = {"include_usage": True}
 
         t0 = _time.time()
+        await _emit_llm_event("llm:request", model=kwargs.get("model"), metadata=metadata)
         try:
             response = await acompletion(**kwargs)
         except Exception as e:
             self._log_request(kwargs, error=e, latency=_time.time() - t0,
                               cache_headers=getattr(self, "_last_cache_headers", None))
+            await _emit_llm_event("llm:response", model=kwargs.get("model"),
+                                  metadata=metadata, error=str(e),
+                                  latency=_time.time() - t0)
             sc = getattr(e, "status_code", None)
             has_tool_msgs = any(m.get("role") == "tool" for m in messages)
 
@@ -965,6 +1018,9 @@ class LiteLLMProvider(LLMProvider):
                         if _ah.get(hdr) and not _stream_meta.get(mk):
                             _stream_meta[mk] = _ah[hdr]
         except Exception as e:
+            await _emit_llm_event("llm:response", model=kwargs.get("model"),
+                                  metadata=metadata, error=str(e),
+                                  latency=_time.time() - t0)
             yield LLMResponse(content=f"Error during streaming: {str(e)}", finish_reason="error")
             return
 
@@ -1038,7 +1094,7 @@ class LiteLLMProvider(LLMProvider):
             _provider_meta.append(_stream_meta)
 
         # Yield the final complete LLMResponse
-        yield LLMResponse(
+        final = LLMResponse(
             content=full_content or None,
             tool_calls=parsed_tool_calls,
             finish_reason=finish_reason,
@@ -1047,6 +1103,10 @@ class LiteLLMProvider(LLMProvider):
             cache_tokens=_stream_cache_tokens,
             provider_meta=_provider_meta if _provider_meta else None,
         )
+        await _emit_llm_event("llm:response", model=kwargs.get("model"),
+                              metadata=metadata, parsed=final,
+                              latency=_time.time() - t0)
+        yield final
 
     def _parse_response(self, response: Any) -> LLMResponse:
         """Parse LiteLLM response into our standard format."""
