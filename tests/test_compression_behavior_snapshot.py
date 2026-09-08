@@ -71,7 +71,7 @@ class TestStage1_ToolTruncation:
 # ═══════════════════════════════════════════════════
 
 class TestStage3_ContextPrune:
-    """Snapshot: prune_messages behavior (soft + hard cap)."""
+    """Snapshot: prune_messages behavior (soft-ratio triggered, no hard cap)."""
 
     TOOL_RESULT_5K = "x" * 5000
     TOOL_RESULT_200 = "x" * 200
@@ -112,16 +112,45 @@ class TestStage3_ContextPrune:
         assert len(short_ones) > 0, "Old tool results should be summarized"
         assert len(long_ones) >= 3, "Last 3 protected by keep_recent"
 
-    def test_hard_cap_breaks_keep_recent(self):
-        """Hard cap forces pruning even within keep_recent when total > cap."""
+    def test_keep_recent_tail_survives_soft_prune(self):
+        """Rewrite of the former ``test_hard_cap_breaks_keep_recent``.
+
+        The old test passed ``hard_max_total_chars=40000`` — a parameter
+        that no longer exists (current ``prune_messages`` signature only
+        takes soft_ratio/keep_recent/max_chars, see tool_pruning.py) and
+        was TypeError-dead, masked by an intentional addopts deselect.
+
+        Current-API semantics of the same scenario, pinned here: there is
+        NO total-char hard cap. When the soft ratio trips, tool results
+        *before* the keep_recent cutoff collapse to one-line summaries;
+        the protected tail is never touched even though the total would
+        breach any cap; and pruning rewrites content, never drops
+        messages.
+        """
         from nanobot.groupchat.history.tool_pruning import prune_messages
         msgs = [{"role": "system", "content": "system"}]
         for i in range(8):
-            msgs.append({"role": "assistant", "content": f"step {i}"})
+            msgs.append({
+                "role": "assistant",
+                "content": f"step {i}",
+                "tool_calls": [{
+                    "id": f"call_{i}",
+                    "type": "function",
+                    "function": {"name": "exec", "arguments": json.dumps({"command": f"cmd-{i}"})},
+                }],
+            })
             msgs.append({"role": "tool", "tool_call_id": f"call_{i}", "content": "x" * 5000})
-        result = prune_messages(msgs, context_window_tokens=200_000, soft_ratio=0.3, keep_recent=3, hard_max_total_chars=40000)
-        total_chars = sum(len(m.get("content", "")) for m in result if isinstance(m.get("content"), str))
-        assert total_chars <= 40000, f"Hard cap breached: {total_chars} > 40000"
+        # 8 * 5000 = 40K chars in a 30K-token window (120K chars) → ratio ≈ 0.33 ≥ 0.3
+        result = prune_messages(
+            msgs, context_window_tokens=30_000, soft_ratio=0.3, keep_recent=3, max_chars=1_000,
+        )
+        assert len(result) == len(msgs), "pruning must never drop messages"
+        tool_contents = [m["content"] for m in result if m.get("role") == "tool"]
+        # Tool results before the keep_recent cutoff → one-line summaries
+        assert all(len(c) < 1_000 and c.startswith("[exec]") for c in tool_contents[:5])
+        # Protected tail (last keep_recent=3 turns) stays byte-identical,
+        # even though 3 * 5000 chars of it would breach any hard cap.
+        assert all(c == "x" * 5000 for c in tool_contents[5:])
 
     def test_summarize_tool_result_format(self):
         """_summarize_tool_result produces expected 1-line summaries per tool type."""
