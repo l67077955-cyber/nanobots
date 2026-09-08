@@ -101,6 +101,23 @@ nanobot 近 4 周 48 个 commit 全部是向内的（fix 11 / feat 11 / refactor
 
 ### 批次 B：OTel 导出 mod 🔴 空白最大
 
+> **2026-09-08 落地记录**: 已完成。
+> ① `events.py` 新增 `llm:request` / `llm:response`（commit e7752e89b），由
+> litellm/httpx 两个 provider 在所有 chat / chat_stream 出口路径 emit，
+> token/cost 复用 C0 已解析字段（零二次解析）；payload 在计划的 7 个字段外
+> 增加了 `session`（per-session 预算键，取自既有 `log_session` metadata）和
+> `error`（失败调用）——加字段属兼容变更。
+> ② `nanobot/mods/builtin/otel_export.py` 落地，默认关闭，opt-in 走 mods.json
+> （`endpoint` / `protocol` grpc|http / `service_name`）；`gen_ai.*` 属性名只存在于
+> 该文件的 `_GEN_AI` 映射（docstring 已声明 semconv pre-stable 约束）；
+> opentelemetry 全部惰性导入（discovery 无 SDK 也能 import，测试已钉死）。
+> ③ `pyproject.toml` 增加 `otel` optional-dependencies 组。
+> **验证口径（诚实声明）**：本机无 OTLP collector 且无权安装包，「起真 collector
+> 确认端到端投递」**未验证**。已验证的是：SDK InMemorySpanExporter 下的
+> workflow→agent→tool→model 完整 span 树与 parenting、属性映射、latency 回填、
+> error 状态、mod 关闭时零订阅零导入。真 collector 端到端留作运维侧手工步骤
+> （`pip install 'nanobot[otel]'` + mods.json 开启 + 指向 collector 即可）。
+
 走 mod，**零核心行为改动**（AGENTS.md #3）。`mods/builtin/round_telemetry.py` 是现成范式。
 
 1. **前置：给 `events.py` 补 LLM 级事件**。当前 `EVENTS` 最细只到 `tool:result`，
