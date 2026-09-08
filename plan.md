@@ -2,7 +2,7 @@
 
 > 创建日期: 2026-09-08
 > 类型: 子系统优化路线图（上下文管理 / 历史压缩）
-> 状态: **活跃主计划**——2026-09-08 起接任根 `plan.md`；**批次 C0、C1 已完成**（C0：`83b4b555a` 等 4 commit 可观测性；C1：`5881a8a37`／`4d0d739d9`／`74224693d`／`63c837398`／`8f6835323`）；C2-C3 未启动；全部新行为自网关下次 idle 重启起生效
+> 状态: **活跃主计划**——2026-09-08 起接任根 `plan.md`；**批次 C0、C1 已完成**（C0：`83b4b555a` 等 4 commit；C1：`5881a8a37` 等 5 commit）；**批次 C2 进行中**（C2.1-C2.3 已完成：`eb4c00d4d`／`375ca771b`／`adce2566a`+`00a48a96e`；C2.4+C2.5 结论文档在途）；C3 未启动；全部新行为自网关下次 idle 重启起生效
 > 与其他计划的关系:
 >   - `docs/plan-2026-09-07-arch-refactor.md`（状态所有权 / broadcast 拆分 / channels
 >     收敛）——**架构线，并行推进，本计划不碰**。其 Phase 1 step 3（`flip_running` 退役 +
@@ -170,7 +170,27 @@
    顺带修 `channels/telegram/commands/log.py:151`：读顶层 `cache_tokens`（零写入方的
    死读取，C0.1 起真实数据在 `usage.cache_tokens`）。
 
-### 批次 C2：实证评估 🔴 只测不改（吸收 industry-followup 批次 D）
+### 批次 C2：实证评估 🟡 进行中（2026-09-08；原 🔴 只测不改——吸收 industry-followup 批次 D）
+
+> **中间记录（C2.1-C2.3 已完成并经主会话独立复核；C2.4+C2.5 在途）**：
+> - **C2.1** `eb4c00d4d`：`scripts/analyze_compression_cache.py`（977 行）+ 29 测试（合成
+>   fixture）。本机 122 天/64,090 条目实跑：归因 431 次压缩摘要调用（全部 marker 启发式；
+>   C0 真实字段 0 条 cost/0 条命中/0 条 mode 标记）；12 个 settings regime 分段；净收益
+>   Σ(C×(M−S))=+36.1M token，但按"上下界同号才稳健"仅 4 小段稳健为正、S8 稳健为负、
+>   最大段 S2 与当前段 S12 方向不定——**本机数据尚不能判定压缩是否值得**；5 次 S>M
+>   膨胀事件中 4 次在当前 regime 段（30/0.7/20 阈值却配 2000 token 摘要上限的错配画像）。
+>   重启网关后重跑本脚本即自校准。
+> - **C2.2** `375ca771b`：`tests/compression_recall_metric.py`（可复用召回 kit，stdlib
+>   零依赖）+ 20 测试。确定性数字：60 条视图/10 事实（8 中段+2 尾部），摘要 keep=3→
+>   召回 0.5、keep=0→0.2、keep≥8→1.0；同区域确定性截断恒 0.2。即**摘要压缩质量
+>   完全取决于摘要保留了多少事实，最差时精确等于盲截断**。
+> - **C2.3** `adce2566a`+`00a48a96e`：先钉暴露面（中段系统约束压缩后不可原文检索；
+>   `view_for_raw` 仍持原文）+ persona/hard_rules 结构性安全（正控制+防回归）；缓解选
+>   **选项 A**（摘要提示词加"约束/规则/禁令逐字保留"指令，context.py +4 行）。选项 B
+>   （系统消息入 head 保护）被否的决定性证据：压缩摘要自身 sender=系统，入保护则摘要
+>   永久堆积、废掉压缩；且现有中段系统消息只有一个生产者（run_loop.py:108 话题公告），
+>   标记护不住未来措辞。诚实局限：防护强度依赖模型服从性，已钉进测试。
+> - 全量 `828 passed, 31 deselected`（主会话复跑单项套件确认）。
 
 1. **离线成本分析**：新建 `scripts/analyze_compression_cache.py`，输入
    `~/.nanobot/request_logs/*.jsonl`（122 天全量）+ `gateway.log` 压缩时间戳
@@ -250,3 +270,4 @@
 | 2026-09-08 | 接任根 `plan.md` 成为活跃主计划；原架构线计划（状态所有权 / broadcast / channels，Phase 1 进行中）移至 `docs/plan-2026-09-07-arch-refactor.md` 继续推进，未归档。 |
 | 2026-09-08 | 批次 C0 完成（两个子 agent 并行，4 commit，26 新测试，全量 751 passed / 32 deselected）：request_logs 落 `cost` + `usage.cache_tokens`；两条压缩路线摘要调用分别带 `history_compress`／`tail_summarize` 归因；EVENTS 注册并 emit `history:compressed`，round_telemetry 订阅。网关重启因 agent 活动暂缓，待 idle 执行。 |
 | 2026-09-08 | 批次 C1 完成（两个子 agent 并行，5 commit，23 个新/复活测试，全量 774 passed / 31 deselected，主会话独立复跑确认）：W3 视图随 `add_message` 有界；W2 同轮相同中段共享一次摘要调用（隐私不变量有测试钉住）；W9 `history.summarize_model` 独立旋钮带回退；W10 str-stub 删除 + deselect 收缩 + `/log` 死读键修正。执行注记：并行 agent 共享 git index 出现一次良性竞态（一方 staged 删除被另一方 pathspec commit 吸收，终态正确、证据在删除方 commit message）；后续并行提交一律 `git commit -- <paths>`。网关重启仍待 idle 与用户显式指令。 |
+| 2026-09-08 | 批次 C2 中间结果落盘（三个子 agent 并行，C2.1-C2.3 完成，54 新测试，全量 828 passed / 31 deselected）：成本分析器本机实跑（431 次归因调用、12 分段、净收益方向多数不定）；确定性召回度量（keep→召回纯函数，截断恒 0.2）；governance decay 选项 A 落地。C2.4+C2.5（对照+结论文档）在途。 |
