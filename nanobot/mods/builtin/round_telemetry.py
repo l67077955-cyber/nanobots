@@ -66,6 +66,9 @@ class RoundTelemetryMod(Mod):
     async def on_tool_result(self, **kw: Any) -> None:
         await self._record("tool:result", kw)
 
+    async def on_history_compressed(self, **kw: Any) -> None:
+        await self._record("history:compressed", kw)
+
     async def _record(self, event: str, payload: dict[str, Any]) -> None:
         if self._path is None:
             return

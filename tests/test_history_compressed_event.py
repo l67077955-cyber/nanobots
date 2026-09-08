@@ -10,6 +10,8 @@ summary failed).
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from nanobot.groupchat.history import history_settings
@@ -228,3 +230,30 @@ class TestEngineSeam:
         await GroupChatEngine._maybe_compress_history(_EngineStub())
 
         assert compressed_events[0]["triggered_by"] == "round_end"
+
+
+class TestRoundTelemetrySubscription:
+    async def test_telemetry_mod_records_history_compressed(self, tmp_path):
+        """round_telemetry subscribes to the new event (handler discovery via
+        the EVENTS catalogue) and writes one JSONL row with the payload."""
+        from nanobot.mods.builtin.round_telemetry import RoundTelemetryMod
+
+        mod = RoundTelemetryMod()
+        mod._path = tmp_path / "tel.jsonl"
+        assert "history:compressed" in mod.handlers()
+        for event, cb in mod.handlers().items():
+            get_bus().on(event, cb)
+
+        await get_bus().emit(
+            "history:compressed",
+            agent="A", dropped=12, view_before=50, view_after=14,
+            model="openai/test-summarizer", prompt_tokens=100,
+            completion_tokens=20, cost=0.004, triggered_by="round_end",
+        )
+
+        rows = [json.loads(l) for l in mod._path.read_text().splitlines()]
+        assert rows[0]["event"] == "history:compressed"
+        assert rows[0]["agent"] == "A"
+        assert rows[0]["dropped"] == 12
+        assert rows[0]["cost"] == 0.004
+        assert rows[0]["triggered_by"] == "round_end"
