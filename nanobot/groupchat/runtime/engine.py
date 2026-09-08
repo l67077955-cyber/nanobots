@@ -970,15 +970,18 @@ class GroupChatEngine:
             "targets": targets,
         })
 
-    async def _maybe_compress_history(self) -> None:
+    async def _maybe_compress_history(self, triggered_by: str = "round_end") -> None:
         """Compress history if needed — delegates to HistoryContext.
 
         Phase D: compression runs per-agent (compress_all) so each agent's view
         compresses independently.  Active agents list is set on the context
         so view_for / compress_for know which views to materialize and compress.
+        *triggered_by* labels the history:compressed event: the group-chat
+        round loop (run_loop) uses the "round_end" default, direct-chat passes
+        "direct_reply".
         """
         self.history.set_active_agents(self._active_agents)
-        await self.history.compress_all()
+        await self.history.compress_all(triggered_by=triggered_by)
 
     def _format_history(self) -> str:
         """Format history as string — delegates to HistoryContext."""
@@ -1169,7 +1172,7 @@ async def direct_chat(engine: Any, user_message: str) -> str | None:
                 history_content = (content or "") + build_tool_log(_tool_details)
                 engine._add_message(agent_name, history_content)
                 # Bug 7 fix: run history compression in single-agent mode too
-                await engine._maybe_compress_history()
+                await engine._maybe_compress_history(triggered_by="direct_reply")
                 # Append token usage to displayed reply
                 tok = stats.get("tokens", {})
                 total = tok.get("total", 0)

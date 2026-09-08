@@ -49,6 +49,10 @@ EVENTS: dict[str, str] = {
     "message:delivered":    "sender, targets, delivered, preview",
     # tool results (emitted from tool_loop)
     "tool:result":          "tool, ok, chars",
+    # history compression (emitted from HistoryContext._compress_view after a
+    # successful per-agent view compression; silent when compression did not
+    # happen — disabled / no provider / below threshold / failed summary)
+    "history:compressed":   "agent, dropped, view_before, view_after, model, prompt_tokens, completion_tokens, cost, triggered_by",
 }
 
 

@@ -293,7 +293,7 @@ class HistoryContext:
                 visible.append(dict(m))
         return visible
 
-    async def compress_for(self, agent_name: str) -> None:
+    async def compress_for(self, agent_name: str, *, triggered_by: str = "round_end") -> None:
         """Compress *agent_name*'s persistent view in place.
 
         Runs the same head/tail/summarise algorithm as ``maybe_compress`` but
@@ -302,13 +302,19 @@ class HistoryContext:
         compressed in A's view stays invisible to C, because C's view never
         contained the segment.  Idempotent: a second call on an already-
         compressed view is a no-op (the summary is already in place).
+
+        *triggered_by* labels the compression trigger for the
+        ``history:compressed`` event ("round_end" group-chat loop default,
+        "direct_reply" single-agent mode).
         """
         if agent_name not in self._views:
             # Lazily materialize the view from the log on first compress
             self._views[agent_name] = self.view_for(agent_name)
-        await self._compress_view(self._views[agent_name], agent_name=agent_name)
+        await self._compress_view(
+            self._views[agent_name], agent_name=agent_name, triggered_by=triggered_by
+        )
 
-    async def compress_all(self) -> None:
+    async def compress_all(self, *, triggered_by: str = "round_end") -> None:
         """Compress every active agent's view independently (plan.md Phase D).
 
         Replaces the old single ``maybe_compress`` over the shared list: each
@@ -316,9 +322,11 @@ class HistoryContext:
         agents are set by ``engine._maybe_compress_history``.
         """
         for name in list(self._active_agents):
-            await self.compress_for(name)
+            await self.compress_for(name, triggered_by=triggered_by)
 
-    async def _compress_view(self, view: list[dict], *, agent_name: str = "") -> None:
+    async def _compress_view(
+        self, view: list[dict], *, agent_name: str = "", triggered_by: str = "round_end"
+    ) -> None:
         """The head/tail/summarise algorithm, operating on an arbitrary list.
 
         Extracted from ``maybe_compress`` so per-agent views and the shared
@@ -421,6 +429,25 @@ class HistoryContext:
                     inserted = True
             view[:] = rebuilt
             logger.info("HistoryContext: compressed {} → summary", len(to_compress))
+            # Observability (plan.md C0.3): let the bus / mods see that this
+            # view was compressed. Lazy import — runtime imports this module,
+            # a top-level import would be circular. tokens/cost come off the
+            # summary response (LLMResponse.usage / .cost); absent on bare
+            # response objects → None.
+            from nanobot.groupchat.runtime.events import get_bus  # noqa: PLC0415
+            _usage = getattr(response, "usage", None) or {}
+            await get_bus().emit(
+                "history:compressed",
+                agent=agent_name,
+                dropped=len(to_compress),
+                view_before=total_len,
+                view_after=len(view),
+                model=summarize_model(),
+                prompt_tokens=_usage.get("prompt_tokens"),
+                completion_tokens=_usage.get("completion_tokens"),
+                cost=getattr(response, "cost", None),
+                triggered_by=triggered_by,
+            )
             return
 
         # Summarisation disabled: KEEP the middle (do not discard)
