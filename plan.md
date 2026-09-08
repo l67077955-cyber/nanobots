@@ -2,7 +2,7 @@
 
 > 创建日期: 2026-09-08
 > 类型: 子系统优化路线图（上下文管理 / 历史压缩）
-> 状态: **活跃主计划**——2026-09-08 起接任根 `plan.md`；批次 C0-C3 均未启动，建议从 C0.1 起步
+> 状态: **活跃主计划**——2026-09-08 起接任根 `plan.md`；**批次 C0 已完成**（`83b4b555a`／`4227673f7`／`0a5057920`／`3ec6d422f`，新字段自网关下次 idle 重启起写入 request_logs）；C1-C3 未启动，建议从 C1.1 起步
 > 与其他计划的关系:
 >   - `docs/plan-2026-09-07-arch-refactor.md`（状态所有权 / broadcast 拆分 / channels
 >     收敛）——**架构线，并行推进，本计划不碰**。其 Phase 1 step 3（`flip_running` 退役 +
@@ -103,7 +103,18 @@
 排序原则：**纯增量的可观测性先做（否则 C2 无数据）→ 无争议缺陷修复（不依赖实证结论）
 → 实证（只测不改）→ 数据驱动决策（可能不动）**。
 
-### 批次 C0：可观测性基建 🔴 前置（纯增量，不改任何现有行为）
+### 批次 C0：可观测性基建 ✅ 已完成（2026-09-08；原 🔴 前置——纯增量，不改任何现有行为）
+
+> **完成记录**：`83b4b555a`（C0.1）／`4227673f7`（C0.2）／`0a5057920` + `3ec6d422f`（C0.3 含
+> round_telemetry 订阅）。新增 26 个测试（`test_request_log_schema` 10、
+> `test_history_compress_metadata` 4、`test_history_compressed_event` 12），全量
+> `751 passed, 32 deselected`。实现要点：C0.2 沿用仓库既有 `log_agent`／`log_mode`
+> metadata 惯例（测试钉真实 `_log_request` 映射；压缩=`history_compress`、尾部摘要=
+> `tail_summarize`）；C0.3 经 `get_bus()` 单例 lazy import 发事件（避免 runtime↔history
+> 循环导入），`triggered_by` 走关键字参数默认值，run_loop 调用点零改动（显式传参会
+> 破坏 `test_run_loop_session_state.py` 钉住的无 kwargs 签名）。遗留一行清理：
+> `channels/telegram/commands/log.py:151` 读顶层 `cache_tokens`（历来无写入方的死读取），
+> 应改读 `usage.cache_tokens`——记入 C1.4。
 
 1. **request_logs 补 `cost` + `cache_tokens` 字段**（W7）
    - `litellm_provider.py` `_log_request`/`_log_stream_request`（:290-393, :419+）在
@@ -142,6 +153,8 @@
    `pyproject.toml:122-127` deselect 列表中锁着已删 API 的测试
    （`test_hard_cap_breaks_keep_recent` 传不存在的 `hard_max_total_chars`）——删除或
    改写为现有 `prune_messages` 签名，同步收缩 addopts。commit message 写明证据。
+   顺带修 `channels/telegram/commands/log.py:151`：读顶层 `cache_tokens`（零写入方的
+   死读取，C0.1 起真实数据在 `usage.cache_tokens`）。
 
 ### 批次 C2：实证评估 🔴 只测不改（吸收 industry-followup 批次 D）
 
@@ -221,3 +234,4 @@
 |------|------|
 | 2026-09-08 | 创建本计划。基于三路并行审计：①压缩链路逐行核实（W1-W11 弱点清单）；②三份既有计划完成度核实（history-refactor A-E 真完成；根 plan.md Phase 1 完成 2/4 步、step 3 未动；industry 批次 A 完成 1/3、A4 改道、B/C/D 零产出）；③本机数据可用性核实（request_logs 122 天但缺 cost/cache_tokens → 批次 D 原设想的离线分析不可直接跑，故新增 C0 前置）。吸收 industry-followup 批次 D 为本计划 C2。 |
 | 2026-09-08 | 接任根 `plan.md` 成为活跃主计划；原架构线计划（状态所有权 / broadcast / channels，Phase 1 进行中）移至 `docs/plan-2026-09-07-arch-refactor.md` 继续推进，未归档。 |
+| 2026-09-08 | 批次 C0 完成（两个子 agent 并行，4 commit，26 新测试，全量 751 passed / 32 deselected）：request_logs 落 `cost` + `usage.cache_tokens`；两条压缩路线摘要调用分别带 `history_compress`／`tail_summarize` 归因；EVENTS 注册并 emit `history:compressed`，round_telemetry 订阅。网关重启因 agent 活动暂缓，待 idle 执行。 |
