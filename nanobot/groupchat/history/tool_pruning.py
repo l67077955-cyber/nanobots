@@ -282,6 +282,13 @@ async def prune_conversation_tail_with_summary(
                 messages=[{"role": "user", "content": prompt}],
                 model=model,
                 max_tokens=600,
+                # Attribution: request_logs entry gets mode="tail_summarize"
+                # (vs "history_compress" for HistoryContext's per-view
+                # compression) + the agent whose conversation was pruned.
+                metadata={
+                    "log_agent": agent_name or None,
+                    "log_mode": "tail_summarize",
+                },
             )
             summary_text = (response.content or "").strip()
             if summary_text:

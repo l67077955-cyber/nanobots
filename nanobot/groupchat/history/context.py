@@ -306,7 +306,7 @@ class HistoryContext:
         if agent_name not in self._views:
             # Lazily materialize the view from the log on first compress
             self._views[agent_name] = self.view_for(agent_name)
-        await self._compress_view(self._views[agent_name])
+        await self._compress_view(self._views[agent_name], agent_name=agent_name)
 
     async def compress_all(self) -> None:
         """Compress every active agent's view independently (plan.md Phase D).
@@ -318,7 +318,7 @@ class HistoryContext:
         for name in list(self._active_agents):
             await self.compress_for(name)
 
-    async def _compress_view(self, view: list[dict]) -> None:
+    async def _compress_view(self, view: list[dict], *, agent_name: str = "") -> None:
         """The head/tail/summarise algorithm, operating on an arbitrary list.
 
         Extracted from ``maybe_compress`` so per-agent views and the shared
@@ -327,6 +327,11 @@ class HistoryContext:
         return) rather than dropped — the old ``self.messages = head + tail``
         fallback at context.py:333-334 silently discarded history; per-agent
         compression must not lose data.
+
+        *agent_name* names the view's owner so the summary LLM call can be
+        attributed in request_logs (metadata ``log_agent``/``log_mode`` —
+        the convention litellm_provider._log_request maps onto the entry's
+        ``agent``/``mode`` fields).
         """
         from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
             compress_max_summary_tokens,
@@ -375,12 +380,21 @@ class HistoryContext:
                 f"摘要不超过 500 字。\n\n{history_text}"
             )
             summary = ""
+            response = None
             for attempt in (1, 2):
                 try:
                     response = await self._provider.chat_with_retry(
                         messages=[{"role": "user", "content": prompt}],
                         model=summarize_model(),
                         max_tokens=compress_max_summary_tokens(),
+                        metadata={
+                            "trace_name": f"history_compress_{agent_name}",
+                            "trace_user_id": "groupchat",
+                            "tags": [t for t in (agent_name, "history_compress") if t],
+                            "generation_name": f"{agent_name}_history_compress" if agent_name else "history_compress",
+                            "log_agent": agent_name or None,
+                            "log_mode": "history_compress",
+                        },
                     )
                 except Exception as e:
                     logger.warning("HistoryContext: compress attempt {} failed: {}", attempt, e)
