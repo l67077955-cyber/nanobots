@@ -148,7 +148,9 @@ class LogCommandsMixin:
             stream_icon = "🔄" if r.get("stream") else ""
             cost = r.get("cost")
             cost_str = f" ${cost:.4f}" if cost else ""
-            cache_t = r.get("cache_tokens")
+            # Cached tokens live under usage (C0.1); top-level cache_tokens
+            # has never had a writer. Old/error entries lack the field → None.
+            cache_t = usage.get("cache_tokens")
             cache_str = " 🔵" if cache_t else ""
 
             lines.append(
