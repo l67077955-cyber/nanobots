@@ -328,7 +328,13 @@ class HistoryContext:
                 visible.append(dict(m))
         return visible
 
-    async def compress_for(self, agent_name: str, *, triggered_by: str = "round_end") -> None:
+    async def compress_for(
+        self,
+        agent_name: str,
+        *,
+        triggered_by: str = "round_end",
+        shared_summaries: dict | None = None,
+    ) -> None:
         """Compress *agent_name*'s persistent view in place.
 
         Runs the same head/tail/summarise algorithm as ``maybe_compress`` but
@@ -341,12 +347,19 @@ class HistoryContext:
         *triggered_by* labels the compression trigger for the
         ``history:compressed`` event ("round_end" group-chat loop default,
         "direct_reply" single-agent mode).
+
+        *shared_summaries* is the per-batch dedup cache threaded through by
+        :meth:`compress_all`; leave it ``None`` (the default) for standalone
+        calls, which then always perform their own LLM round-trip.
         """
         if agent_name not in self._views:
             # Lazily materialize the view from the log on first compress
             self._views[agent_name] = self.view_for(agent_name)
         await self._compress_view(
-            self._views[agent_name], agent_name=agent_name, triggered_by=triggered_by
+            self._views[agent_name],
+            agent_name=agent_name,
+            triggered_by=triggered_by,
+            shared_summaries=shared_summaries,
         )
 
     async def compress_all(self, *, triggered_by: str = "round_end") -> None:
@@ -355,12 +368,30 @@ class HistoryContext:
         Replaces the old single ``maybe_compress`` over the shared list: each
         agent reaches its own threshold and compresses its own view.  Active
         agents are set by ``engine._maybe_compress_history``.
+
+        C1.2 dedup (plan.md 批次 C1): most messages target ``All`` and land
+        synchronously in every view, so identical views used to fire N
+        content-identical summary LLM calls per round.  Within THIS batch,
+        views whose middle-to-compress content and summary params match share
+        one provider call and the resulting summary — see
+        :meth:`_compress_view` for the exact group key and the privacy
+        argument.  The cache is local to the call (no cross-round caching)
+        and failures are not shared, so a down provider still gives every
+        view its own retry budget.
         """
+        shared_summaries: dict[tuple, dict] = {}
         for name in list(self._active_agents):
-            await self.compress_for(name, triggered_by=triggered_by)
+            await self.compress_for(
+                name, triggered_by=triggered_by, shared_summaries=shared_summaries
+            )
 
     async def _compress_view(
-        self, view: list[dict], *, agent_name: str = "", triggered_by: str = "round_end"
+        self,
+        view: list[dict],
+        *,
+        agent_name: str = "",
+        triggered_by: str = "round_end",
+        shared_summaries: dict | None = None,
     ) -> None:
         """The head/tail/summarise algorithm, operating on an arbitrary list.
 
@@ -375,6 +406,18 @@ class HistoryContext:
         attributed in request_logs (metadata ``log_agent``/``log_mode`` —
         the convention litellm_provider._log_request maps onto the entry's
         ``agent``/``mode`` fields).
+
+        *shared_summaries* (C1.2, threaded in by ``compress_all`` only) dedups
+        the summary LLM call across views of ONE batch.  Group key =
+        ``(prompt, model, max_tokens)`` — the prompt renders the middle
+        region message-by-message (sender + content + count), so it is an
+        exact proxy for "逐条内容 + 摘要参数": one differing message, or any
+        parameter change, lands in a different group.  Sharing is safe for
+        privacy precisely because the key is over the full content: views in
+        a group saw exactly the same middle messages, so the shared summary
+        never crosses into a view that lacked its source material.  Each
+        view still emits its own ``history:compressed`` event (N events, 1
+        provider call), whose tokens/cost describe the one shared call.
         """
         from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
             compress_max_summary_tokens,
@@ -422,32 +465,48 @@ class HistoryContext:
                 "如果有具体的数值、文件路径或关键结论，请务必保留。\n"
                 f"摘要不超过 500 字。\n\n{history_text}"
             )
+            model = summarize_model()
+            max_summary_tokens = compress_max_summary_tokens()
+
+            # C1.2: reuse the batch-shared summary when another view of this
+            # compress_all batch already compressed the exact same middle
+            # region with the exact same params (no LLM round-trip).
+            cache_key = (prompt, model, max_summary_tokens) if shared_summaries is not None else None
+            cached = shared_summaries.get(cache_key) if cache_key is not None else None
+
             summary = ""
             response = None
-            for attempt in (1, 2):
-                try:
-                    response = await self._provider.chat_with_retry(
-                        messages=[{"role": "user", "content": prompt}],
-                        model=summarize_model(),
-                        max_tokens=compress_max_summary_tokens(),
-                        metadata={
-                            "trace_name": f"history_compress_{agent_name}",
-                            "trace_user_id": "groupchat",
-                            "tags": [t for t in (agent_name, "history_compress") if t],
-                            "generation_name": f"{agent_name}_history_compress" if agent_name else "history_compress",
-                            "log_agent": agent_name or None,
-                            "log_mode": "history_compress",
-                        },
-                    )
-                except Exception as e:
-                    logger.warning("HistoryContext: compress attempt {} failed: {}", attempt, e)
-                    continue
-                summary = (response.content or "").strip()
-                if summary:
-                    break
-            if not summary:
-                logger.warning("HistoryContext: keeping {} middle msgs uncompressed", len(to_compress))
-                return
+            if cached is not None:
+                summary, response = cached["summary"], cached["response"]
+            else:
+                for attempt in (1, 2):
+                    try:
+                        response = await self._provider.chat_with_retry(
+                            messages=[{"role": "user", "content": prompt}],
+                            model=model,
+                            max_tokens=max_summary_tokens,
+                            metadata={
+                                "trace_name": f"history_compress_{agent_name}",
+                                "trace_user_id": "groupchat",
+                                "tags": [t for t in (agent_name, "history_compress") if t],
+                                "generation_name": f"{agent_name}_history_compress" if agent_name else "history_compress",
+                                "log_agent": agent_name or None,
+                                "log_mode": "history_compress",
+                            },
+                        )
+                    except Exception as e:
+                        logger.warning("HistoryContext: compress attempt {} failed: {}", attempt, e)
+                        continue
+                    summary = (response.content or "").strip()
+                    if summary:
+                        break
+                if not summary:
+                    # Failures are not cached: a down provider must not mark
+                    # the group as "done" for the other views.
+                    logger.warning("HistoryContext: keeping {} middle msgs uncompressed", len(to_compress))
+                    return
+                if cache_key is not None:
+                    shared_summaries[cache_key] = {"summary": summary, "response": response}
 
             summary_msg = {
                 "sender": "系统",
@@ -477,7 +536,7 @@ class HistoryContext:
                 dropped=len(to_compress),
                 view_before=total_len,
                 view_after=len(view),
-                model=summarize_model(),
+                model=model,
                 prompt_tokens=_usage.get("prompt_tokens"),
                 completion_tokens=_usage.get("completion_tokens"),
                 cost=getattr(response, "cost", None),

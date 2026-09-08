@@ -94,7 +94,9 @@ class TestHistoryCompressMetadata:
         assert provider.calls[0]["max_tokens"] == 600
 
     async def test_compress_all_attributes_each_call_to_its_agent(self, tmp_path):
-        """compress_all → one attributed call per active agent's view."""
+        """compress_all → one attributed call per content GROUP (C1.2 dedup):
+        identical views share the first group member's call; views with
+        different middle content each get their own attributed call."""
         provider = _CapturingProvider()
         ctx = _make_context(tmp_path, provider=provider)
         _fill_history(ctx)
@@ -102,8 +104,25 @@ class TestHistoryCompressMetadata:
 
         await ctx.compress_all()
 
-        assert {c["metadata"]["log_agent"] for c in provider.calls} == {"A", "B"}
-        assert all(c["metadata"]["log_mode"] == "history_compress" for c in provider.calls)
+        # A and B saw identical messages → one shared call, attributed to the
+        # first view of the group (request_logs still says history_compress).
+        assert len(provider.calls) == 1
+        assert provider.calls[0]["metadata"]["log_agent"] == "A"
+        assert provider.calls[0]["metadata"]["log_mode"] == "history_compress"
+
+        # Differing middle content → separate attributed calls per view.
+        provider2 = _CapturingProvider()
+        ctx2 = _make_context(tmp_path / "b", provider=provider2)
+        _fill_history(ctx2)
+        ctx2.add_message("系统", "private for B", targets=["B"])
+        for i in range(10):
+            ctx2.add_message("系统", f"tail-{i}")
+        ctx2.set_active_agents(["A", "B"])
+
+        await ctx2.compress_all()
+
+        assert {c["metadata"]["log_agent"] for c in provider2.calls} == {"A", "B"}
+        assert all(c["metadata"]["log_mode"] == "history_compress" for c in provider2.calls)
 
 
 class TestTailSummarizeMetadata:
