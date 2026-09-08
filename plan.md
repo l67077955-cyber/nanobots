@@ -2,12 +2,12 @@
 
 > 创建日期: 2026-09-08
 > 类型: 子系统优化路线图（上下文管理 / 历史压缩）
-> 状态: **活跃主计划**——2026-09-08 起接任根 `plan.md`；**批次 C0、C1 已完成**（C0：`83b4b555a` 等 4 commit；C1：`5881a8a37` 等 5 commit）；**批次 C2 进行中**（C2.1-C2.3 已完成：`eb4c00d4d`／`375ca771b`／`adce2566a`+`00a48a96e`；C2.4+C2.5 结论文档在途）；C3 未启动；全部新行为自网关下次 idle 重启起生效
+> 状态: **活跃主计划**——2026-09-08 起接任根 `plan.md`；**批次 C0、C1、C2 全部完成**（C0：`83b4b555a` 等 4 commit；C1：`5881a8a37` 等 5 commit；C2：`eb4c00d4d`／`375ca771b`／`adce2566a`+`00a48a96e`／`69a60ee84`，终态 836 passed）；**C3 待真实数据积累后重评**（结论与触发条件见 `docs/compression-vs-cache-2026-09.md` §6）；新行为已随 2026-09-08 17:36 网关重启上线
 > 与其他计划的关系:
 >   - `docs/plan-2026-09-07-arch-refactor.md`（状态所有权 / broadcast 拆分 / channels
 >     收敛）——**架构线，并行推进，本计划不碰**。其 Phase 1 step 3（`flip_running` 退役 +
 >     `broadcast_round` 返回 `session_should_stop`）仍是那条线的下一个 checkpoint，
->     截至 2026-09-08 **未动手**。
+>     2026-09-08 起已派子 agent 开工（本计划仍不碰）。
 >   - `docs/plan-2026-09-08-industry-followup.md`——**批次 D（压缩 vs 缓存实证）被本计划
 >     吸收并扩充**；批次 A 剩 A2（SDK 2.x）、批次 B/C 不受影响，仍按原文执行。
 > 红线遵循: AGENTS.md #1 先写测试再改实现、#2 修根源不堆护栏、#3 加行为写 mod
@@ -170,9 +170,9 @@
    顺带修 `channels/telegram/commands/log.py:151`：读顶层 `cache_tokens`（零写入方的
    死读取，C0.1 起真实数据在 `usage.cache_tokens`）。
 
-### 批次 C2：实证评估 🟡 进行中（2026-09-08；原 🔴 只测不改——吸收 industry-followup 批次 D）
+### 批次 C2：实证评估 ✅ 已完成（2026-09-08；原 🔴 只测不改——吸收 industry-followup 批次 D）
 
-> **中间记录（C2.1-C2.3 已完成并经主会话独立复核；C2.4+C2.5 在途）**：
+> **完成记录（C2.1-C2.5 全部经主会话独立复核；结论以 `docs/compression-vs-cache-2026-09.md` 为准）**：
 > - **C2.1** `eb4c00d4d`：`scripts/analyze_compression_cache.py`（977 行）+ 29 测试（合成
 >   fixture）。本机 122 天/64,090 条目实跑：归因 431 次压缩摘要调用（全部 marker 启发式；
 >   C0 真实字段 0 条 cost/0 条命中/0 条 mode 标记）；12 个 settings regime 分段；净收益
@@ -190,7 +190,17 @@
 >   （系统消息入 head 保护）被否的决定性证据：压缩摘要自身 sender=系统，入保护则摘要
 >   永久堆积、废掉压缩；且现有中段系统消息只有一个生产者（run_loop.py:108 话题公告），
 >   标记护不住未来措辞。诚实局限：防护强度依赖模型服从性，已钉进测试。
-> - 全量 `828 passed, 31 deselected`（主会话复跑单项套件确认）。
+> - **C2.4+C2.5** `69a60ee84`：对照实验（8 测试，与 C2.2 同布局互钉锚点，防两文件漂移）
+>   + 结论文档。关键澄清：**缓存前缀发散点两路线相同**（都在第一个非保护位）——
+>   "换截断救缓存"不成立，缓存友好的唯一杠杆是重写点位置；截断召回恒为保护下限，
+>   摘要 k≥1 即严格占优（k=0 时两者等同）；对 C3 四选项的预判：换路线——数据不支持、
+>   仓库默认值——不动、缓存友好改造与持久化——暂缓等 C0、本机 regime 近 no-op——
+>   是数据事实但修正方向留用户。
+> - 终态全量 `836 passed, 31 deselected`（主会话独立复跑）。网关 2026-09-08 17:36 idle
+>   重启（用户经 AskUserQuestion 显式授权；启动序列干净，log tail 中的 ERROR/重复警告
+>   为并行测试进程经 loguru sink 的已知污染），C0+C1+C2.3 行为上线，request_logs 自此
+>   积累真实 cost/cache_tokens/mode；gateway.log 的 `compressed` 行不再作生产计数
+>   （结论文档附录 A-5）。
 
 1. **离线成本分析**：新建 `scripts/analyze_compression_cache.py`，输入
    `~/.nanobot/request_logs/*.jsonl`（122 天全量）+ `gateway.log` 压缩时间戳
@@ -271,3 +281,4 @@
 | 2026-09-08 | 批次 C0 完成（两个子 agent 并行，4 commit，26 新测试，全量 751 passed / 32 deselected）：request_logs 落 `cost` + `usage.cache_tokens`；两条压缩路线摘要调用分别带 `history_compress`／`tail_summarize` 归因；EVENTS 注册并 emit `history:compressed`，round_telemetry 订阅。网关重启因 agent 活动暂缓，待 idle 执行。 |
 | 2026-09-08 | 批次 C1 完成（两个子 agent 并行，5 commit，23 个新/复活测试，全量 774 passed / 31 deselected，主会话独立复跑确认）：W3 视图随 `add_message` 有界；W2 同轮相同中段共享一次摘要调用（隐私不变量有测试钉住）；W9 `history.summarize_model` 独立旋钮带回退；W10 str-stub 删除 + deselect 收缩 + `/log` 死读键修正。执行注记：并行 agent 共享 git index 出现一次良性竞态（一方 staged 删除被另一方 pathspec commit 吸收，终态正确、证据在删除方 commit message）；后续并行提交一律 `git commit -- <paths>`。网关重启仍待 idle 与用户显式指令。 |
 | 2026-09-08 | 批次 C2 中间结果落盘（三个子 agent 并行，C2.1-C2.3 完成，54 新测试，全量 828 passed / 31 deselected）：成本分析器本机实跑（431 次归因调用、12 分段、净收益方向多数不定）；确定性召回度量（keep→召回纯函数，截断恒 0.2）；governance decay 选项 A 落地。C2.4+C2.5（对照+结论文档）在途。 |
+| 2026-09-08 | 批次 C2 完成（C2.4+C2.5 `69a60ee84`，8 新测试，终态 836 passed / 31 deselected，主会话独立复跑确认）；网关 17:36 idle 重启上线 C0+C1+C2.3 行为——重启前验证：最后活动 17:28（>5 min idle）、tracked 运行代码零改动恰为 828 全绿 HEAD（仅两个未跟踪 docs/tests 文件，网关不 import，不构成部署风险）。C3 进入等数据状态，重评触发条件见结论文档 §6.5。 |
