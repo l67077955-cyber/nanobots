@@ -1,258 +1,223 @@
-# nanobot-src 架构重构计划 — 状态所有权 / broadcast.py 拆分 / channels 收敛
+# nanobot 上下文管理与压缩优化计划
 
-> 创建日期: 2026-09-07
-> 状态: **Phase 1 进行中**——回归测试已钉住、channels/ 零风险只读迁移已完成；
->   核心的会话/轮次状态源解耦（run_loop 循环条件 + RoundLifecycle 副作用写入）
->   尚未动手，是下一个 checkpoint。Phase 2/3 未开始。
-> 范围: 三个阶段，有严格依赖顺序（Phase 1 是 Phase 2 的前置条件）
-> 上一轮计划: 群聊历史模型重构（Phase A-E，已完成）见 `docs/archive/plan-2026-09-07-history-refactor.md`
-> 红线遵循: AGENTS.md #1 先写测试再改实现、#2 修根源不堆护栏、#4 删死代码、
->   #5 编辑前重读、#6 每逻辑单元 checkpoint 提交、#7 修不动就停手汇报
-
-## Context — 为什么做这次重构
-
-历史模型重构（Phase A-E）完成后做了一次独立架构审查（只读调查，未改代码），
-覆盖 `AGENTS.md`/`docs/phase4-findings.md`/上一版 `plan.md` 未讲透的部分。核心发现：
-
-**AGENTS.md 宣称的"RoundLifecycle 是轮次状态唯一归属"这条不变量，代码层面不成立。**
-`round_lifecycle.py` 的 docstring 自己承认它只是给"未迁移的读者"做的兼容翻译层
-（`round_lifecycle.py:4-11`）：`mark_winding_down(flip_running=True)` 直接赋值
-`self._engine._running = False`（:91），`reopen()` 直接赋值 `= True`（:113）。
-真正的状态位仍是 `engine.py:295` 的裸 `bool`，且读写已经**渗出 runtime 包之外**——
-`channels/telegram/__init__.py:544`、`channels/telegram/commands/settings.py:297`
-也在直接戳 `engine._running`。全仓库 6 个文件、20+ 处直接读写。这正是
-AGENTS.md #2 点名的"状态无主"问题（补丁净增 3:1 的历史成因），且比
-`docs/phase4-findings.md` 描述的"迁移未完成"更严重——不是部分完成待收尾，
-而是这轮重构完全没触碰它。
-
-**`broadcast.py`（1875 行）里 `broadcast_round` 是一个 ~1500 行的巨函数**，
-内嵌 4 层闭包（`_run_one` → `_on_tool_start`/`_on_tool_result`/`_inject_retry`/
-`_on_iter_usage`/`_badge`，加上同级 `_user_listener`/`_join_listener`/
-`_watch_leader_end`/`_watch_no_leader_convergence`），闭包间靠共享外层局部变量
-通信，无法单独单元测试。它是唯一同时 import `engine`/`mailbox`/`round_lifecycle`/
-`chatroom_tools`/`user_ingress`/`display` 六个子系统的节点，是耦合度最高的单点。
-
-**`channels/`（38 文件/12701 行，全仓库最大模块）复用不足**：公共基础设施薄
-（`base.py` 139 行，`channels/utils/` 397 行），`feishu.py`(1247)/`mochat.py`(946)/
-`matrix.py`(738)/`dingtalk.py`(585) 各自手写轮询循环、去重、媒体处理的变体。
-`mochat.py` 946 行**零专属测试**，风险最高。
-
-**根因**：三个问题都指向同一件事——之前的重构只解决了"历史数据模型"的契约化，
-没碰"控制流状态"的契约化。`engine._running` 的裸共享 bool 和 `broadcast_round`
-的巨函数闭包，本质上是同一类问题的两个表现：状态和控制流散落在没有边界的
-共享可变环境里，而不是被显式对象持有、显式传递。
+> 创建日期: 2026-09-08
+> 类型: 子系统优化路线图（上下文管理 / 历史压缩）
+> 状态: **活跃主计划**——2026-09-08 起接任根 `plan.md`；批次 C0-C3 均未启动，建议从 C0.1 起步
+> 与其他计划的关系:
+>   - `docs/plan-2026-09-07-arch-refactor.md`（状态所有权 / broadcast 拆分 / channels
+>     收敛）——**架构线，并行推进，本计划不碰**。其 Phase 1 step 3（`flip_running` 退役 +
+>     `broadcast_round` 返回 `session_should_stop`）仍是那条线的下一个 checkpoint，
+>     截至 2026-09-08 **未动手**。
+>   - `docs/plan-2026-09-08-industry-followup.md`——**批次 D（压缩 vs 缓存实证）被本计划
+>     吸收并扩充**；批次 A 剩 A2（SDK 2.x）、批次 B/C 不受影响，仍按原文执行。
+> 红线遵循: AGENTS.md #1 先写测试再改实现、#2 修根源不堆护栏、#3 加行为写 mod
+>   不改核心（事件注册属"加事件"，允许）、#4 删死代码、#6 每逻辑单元 checkpoint
 
 ---
 
-## 依赖顺序（不可颠倒）
+## Context — 为什么做这件事
+
+历史模型重构（归档于 `docs/archive/plan-2026-09-07-history-refactor.md`，Phase A-E
+**经代码核实全部完成**）落地了"单持久日志 + per-agent 视图 + 独立压缩"。但重构解决的是
+**数据模型契约**（可见性隔离、跨轮留存、不丢中段），没有回答两个后续问题：
+
+1. **压缩的经济性从未量化**。`litellm_provider.py` 花力气注入 cache_control 断点 +
+   `prompt_cache_key` 追求缓存命中，`_compress_view` 又逐 agent 重写视图中部
+   （`context.py:400-408`）——每次压缩后下一轮历史前缀全冷。业界数据称这可能是
+   负收益（缓存 token 便宜 ~50x；有生产系统实测记忆召回 92%→58% 而盲评分不变——
+   静默失效）。nanobot 没有自己的数字。
+2. **压缩子系统自身有几处无争议的缺陷**（见下"弱点清单"）：同轮 N 次近重复摘要调用、
+   视图无界增长、摘要配置耦合、零可观测性。这些不依赖实证结论就可以修。
+
+本计划分四批：**C0 先让数据存在（纯增量）→ C1 修无争议缺陷（先测试）→ C2 实证评估
+（只测不改）→ C3 拿数据做决策**。C2 吸收原 industry-followup 批次 D 全部内容。
+
+---
+
+## 现状（2026-09-08 逐行核实）
+
+### 链路
 
 ```
-Phase 1: 状态所有权收编 ──► Phase 2: broadcast_round 拆分
-                                        │
-Phase 3: channels/ 收敛（风险最低，可与 Phase 1/2 并行）
+写入: add_message(sender, content, targets)         context.py:165-255
+      ├─ 追加持久日志 self.messages（两步裁剪只作用于日志 :222-253）
+      ├─ 追加到 targets 命中的 active agent 的 _views   :194-201
+      └─ save_message 落盘（逐条，视图/压缩态不持久化）  persistence.py:176-196
+
+读取: view_for(name) → 持久视图副本，无则按 targets 投影   context.py:257-294
+建 prompt: 静态组件（persona/rules 每轮从 manifest 重建，不在历史、结构性免压缩）
+      → history_to_messages(view, 100k char 预算，尾部填充，
+        全部 user+system 消息+首条视为 critical)      message_converter.py:93-119
+      → 易变变量（datetime/round）放末尾（缓存友好布局）  prompt_builder.py:697-775
+
+压缩: compress_all → 逐 active agent compress_for        context.py:296-319
+      阈值 len(view) ≥ max_messages × compress_ratio     :341-344
+      保护: 首条 + 全部用户消息（head）+ 尾部 keep_recent  :348-355
+      中段: age_tool_log 老化 → LLM 摘要（≤600 token）     :359-390
+      重写: view[:] = head + 摘要 + tail                   :395-408
+      摘要不可用 → 保留中段（不丢）                         :412-414
+触发: 群聊每轮末 run_loop.py:167；direct-chat 每次回复后 engine.py:1171-1172
 ```
 
-**为什么 Phase 1 必须先做**：如果先拆 `broadcast_round`，"状态无主"的 bug 只会
-被拆分到更多文件里，反而更难追踪——拆分需要干净的状态边界才有意义。Phase 3
-不涉及 runtime 核心状态机，风险独立，可以并行推进不阻塞主线。
+轮内另有两条独立减载路线（与上述互不干扰）：tool_loop 确定性剪枝
+（`tool_pruning.py:135-205`，软阈值 0.3）与 broadcast 尾部摘要
+（`tool_pruning.py:208-320`，**刻意把摘要追加进最后一条 system 消息以保持条数
+稳定、护住 DeepSeek 自动前缀缓存** :298-316——这是仓库内已有的"缓存友好压缩"先例）。
+
+### 默认值 vs 本机实际
+
+| 参数 | 仓库默认（history_settings.py:57-81） | 本机 `~/.nanobot/history_settings.json` |
+|---|---|---|
+| max_messages | 200 | **30** |
+| compress_ratio | 0.8（160 条触发） | **0.7（21 条触发）** |
+| compression_keep_recent | 20 | 20（默认） |
+| compress_max_summary_tokens | 600 | **2000** |
+| history_summarize_enabled | true | true（缺省继承） |
+| context_window_tokens | 200_000 | **50_000** |
+| tool_results.summarize_enabled | true | **false** |
+
+⚠️ 本机 regime 下触发阈值 21 条、尾部保护 20 条 → 可压中段 ≈ 0-1 条，**当前生产
+网关的 HistoryContext 压缩近乎 no-op**。gateway.log 里的 726 条"compressed"行
+（192+534）来自历史时期不同配置。实证分析必须按时期的 settings regime 分段，不能混算。
+
+### 弱点清单（全部有代码证据）
+
+| # | 弱点 | 证据 | 性质 |
+|---|---|---|---|
+| W1 | 压缩重写视图中部 → 作废缓存前缀，从未量化 | context.py:400-408 vs litellm_provider.py:218-255, 707-739 | 未知风险 |
+| W2 | 同轮 N 个 agent 视图近乎同涨同触发 → N 次内容近同的摘要调用，无去重 | compress_all :311-319；多数消息 targets=["All"] 同步进入所有视图 | 纯浪费 |
+| W3 | `add_message` 两步裁剪只作用于日志，**视图无界**；摘要禁用时视图只增不减 | context.py:222-253 vs :412-414 | 缺陷 |
+| W4 | 视图与压缩态不持久化；且 `_active_agents` 只在首次压缩触发时才设置，首轮读全走临时投影 | persistence.py:176-196；engine.py:973-981 | 已知取舍，可重评 |
+| W5 | governance decay：历史中段的"系统"消息（话题公告/注入警告）可被压掉；摘要提示词不要求保留约束；零测试 | context.py:348（head 只保首条+用户消息）, :371-376（提示词）| 安全面 |
+| W6 | 压缩调用不带 metadata → request_logs 里 `agent=null, mode=null`，归因靠启发式猜 | context.py:380-384 | 可观测性 |
+| W7 | request_logs **不落 cost / cache_tokens**（只有 prompt/completion/total） | litellm_provider.py:290-393 写入侧 vs :1100-1156 解析侧（字段已解析、仅未持久化） | 可观测性 |
+| W8 | 事件总线无 `history:compressed` 事件，mod/telemetry 看不见压缩 | events.py:31-52 | 可观测性 |
+| W9 | history 压缩复用 `tool_results.summarize_model`，无独立配置 | context.py:338；history_settings.py:162-163 | 配置耦合 |
+| W10 | 零召回率测量；`test_compression_pipeline_snapshot.py` 是单行 `str` stub；`test_hard_cap_breaks_keep_recent` 传已删除的 `hard_max_total_chars` 参数（被 pyproject.toml:122-127 有意 deselect 掩盖） | tests/；tool_pruning.py:135-142 | 死代码+盲区 |
+| W11 | `context_validator.py` / `cache_probe.py` 零测试 | — | 盲区（低优） |
 
 ---
 
-## 现有代码关键事实（已逐行核实）
+## 批次计划
 
-| 事实 | 位置 | 含义 |
-|------|------|------|
-| `engine._running` 声明处，注释承认双重语义未解决 | `engine.py:287-295` | 会话级 + 轮次级共享一个 bool |
-| `round_lifecycle.py` 是翻译层非真正状态源 | `round_lifecycle.py:4-11,91,113` | `flip_running=True` 直接改写裸 bool |
-| `run_loop.py` 会话主循环条件直读 `_running` | `run_loop.py:111,116,123,159,164,183` | 会话级消费方，含"pending 消息复活"逻辑 |
-| `broadcast.py` 多处读写 `_running` | `broadcast.py:721,974,1553,1701,1810` | 轮次级消费方 + leader 崩溃/超时分支 |
-| `chatroom_tools.py` 直接赋值 | `chatroom_tools.py:1210,1214` | `ChatroomEndDiscussionTool` |
-| **渗出 runtime 包外** | `channels/telegram/__init__.py:544` | 读 `_groupchat_engine._running` 判断是否运行中 |
-| **渗出 runtime 包外** | `channels/telegram/commands/settings.py:297` | 调试命令打印 `engine._running` |
-| `broadcast_round` 函数跨度 | `broadcast.py:377` 起，至文件尾 ~1875 | 单函数吞掉文件 ~80% |
-| `BroadcastOrchestrator` 已存在但职责窄 | `broadcast.py:218-259` | 目前只管 `setup_tools_and_pools` |
-| `_run_one` 内嵌 4 层闭包 | `broadcast.py:491,647,653,712,802,1094` | 无法独立测试 |
-| 监听器闭包与主流程共享局部变量 | `broadcast.py:1517,1543,1641,1652` | `_user_listener`/`_join_listener`/`_watch_leader_end`/`_watch_no_leader_convergence` |
-| `channels/base.py` 抽象薄 | `channels/base.py`（139 行） | 多数 channel 不复用模板方法 |
-| `mochat.py` 零专属测试 | `nanobot/channels/mochat.py`（946 行） | `tests/` 无 `test_mochat*.py` |
-| `discord.py`/`wecom.py`/`whatsapp.py`/`manager.py`/`registry.py` 无专属测试 | `nanobot/channels/` | 只在 `test_channel_plugins.py`/`test_status_panel.py` 间接覆盖 |
+排序原则：**纯增量的可观测性先做（否则 C2 无数据）→ 无争议缺陷修复（不依赖实证结论）
+→ 实证（只测不改）→ 数据驱动决策（可能不动）**。
 
----
+### 批次 C0：可观测性基建 🔴 前置（纯增量，不改任何现有行为）
 
-## Phase 1：状态所有权收编
+1. **request_logs 补 `cost` + `cache_tokens` 字段**（W7）
+   - `litellm_provider.py` `_log_request`/`_log_stream_request`（:290-393, :419+）在
+     success 条目追加 `cost` 与 `usage.cache_tokens`——两个字段在 `_parse_response`
+     （:1100-1156）已解析进 `LLMResponse`/`provider_meta`，只差持久化。`httpx_provider.py:465+`
+     同步。旧条目读取按缺省 None 兼容。
+   - **先写测试**（新建 `tests/test_request_log_schema.py`，真对象+微小假件风格，
+     参考 `tests/test_user_ingress.py`）：钉住 success 条目含 `usage.prompt/completion/total`
+     + `cache_tokens` + `cost`，error 条目不含。
+2. **压缩调用携带 metadata**（W6）
+   - `context.py:380-384` 与 `tool_pruning.py:281-290` 的摘要调用加
+     `metadata={"log_mode": "history_compress", ...}`，让 request_logs 条目可归因
+     （顺带给压缩调用带来 `prompt_cache_key`——同一会话连续压缩可命中缓存）。
+   - 测试钉住：摘要请求的日志条目 `mode == "history_compress"`。
+3. **事件总线加 `history:compressed`**（W8，AGENTS #3 允许的"加事件"）
+   - `events.py` EVENTS 注册 `history:compressed`，payload:
+     `{agent, dropped, view_before, view_after, model, prompt_tokens, completion_tokens,
+     cost, triggered_by: round_end|direct_reply}`；`context.py:409` 处 emit。
+   - `round_telemetry` mod 顺带加一个订阅 handler（可选，一个逻辑单元一个 commit）。
 
-**目标**：把会话级和轮次级状态从共享裸 `bool` 拆成两个显式状态源，
-`engine._running` 退役（或降级为只读兼容属性），channels 层不再直接碰
-runtime 内部状态。
+### 批次 C1：无争议缺陷修复 🟡（每项：先测试 → 改实现 → checkpoint）
 
-1. **先写回归测试钉住当前行为**（AGENTS.md #1，先测试再动实现）✅ **已完成**
-   （commit `97e9b547`，`tests/test_run_loop_session_state.py` 新增）：
-   - `run_loop.py:154-164`："end_discussion 后 pending 消息复活"——3 个测试：
-     revival 正确触发不丢消息 / 无 pending 时不多轮 / 会话本就存活时不误触发
-     revival 分支。用真实 `run_loop()` + 微小假引擎（duck-typed，同
-     `test_user_ingress.py` 套路），monkeypatch 掉 `broadcast_round` 这个唯一
-     的重/无关依赖。
-   - `channels/telegram/__init__.py:544` 的"群聊已停止"提示文案——2 个测试
-     （commit `97e9b547`，`tests/test_telegram_channel.py`）：running=True/False
-     两种场景下文案分别正确。
-   - `broadcast.py:974,1701,1810` 的 `mark_winding_down(..., flip_running=True)`
-     三处调用（leader 崩溃 / 全局超时 / 全局超时兜底）——**未覆盖**，评估后
-     判断这三处的"reason → session_should_stop"语义已经被
-     `tests/test_round_lifecycle.py::TestSessionStopMapping` 在单元层面钉住
-     （`leader_crash`/`global_timeout` 都在 `_SESSION_STOP_REASONS`
-     里），真正没测到的是"`broadcast_round` 整体在这三种场景下会不会调用
-     `flip_running`"这个集成层面——留给下面第 3 步迁移时用 `broadcast_round`
-     新返回值的测试一并覆盖，不单独为旧的副作用写法补集成测试（旧写法马上
-     要删，补了也是短命的）。
+1. **视图上限**（W3）：`add_message` 的消息数/char 两步裁剪同样作用于每个
+   `_views[name]`（裁剪语义：优先丢最旧的非保护消息，与 `_compress_view` 的
+   head/tail 保护一致）。测试：摘要禁用 + 持续写入 → `len(view) ≤ max_messages`，
+   且用户消息与首条仍保留。
+2. **同轮重复摘要去重**（W2）：`compress_all` 内对 (中段内容 hash + 摘要参数)
+   分组，相同组只发一次 LLM 调用、共享 `summary_msg`；含私有段（targets 命中
+   不同）的视图天然 hash 不同、各自压——**隐私不变量不受影响**（补测试钉住：
+   两 agent 视图相同时 provider 只被调一次；含 A→B 私有段时仍两次、C 的视图
+   不含该摘要）。
+3. **history 独立摘要模型**（W9）：`history_settings` 新增 `history.summarize_model`，
+   缺省 `None` → 回退 `tool_results.summarize_model`（向后兼容，测试钉回退）。
+4. **死代码清理**（W10，AGENTS #4）：删除 `tests/test_compression_pipeline_snapshot.py`
+   （内容是字面量 `str` 的 stub，所防护的 pipeline/stages 重构从未发生）；审查
+   `pyproject.toml:122-127` deselect 列表中锁着已删 API 的测试
+   （`test_hard_cap_breaks_keep_recent` 传不存在的 `hard_max_total_chars`）——删除或
+   改写为现有 `prune_messages` 签名，同步收缩 addopts。commit message 写明证据。
 
-2. **零风险只读迁移**（channels/ 不该碰 runtime 内部状态）✅ **已完成**
-   （commit `d68ceee9`）：
-   - `channels/telegram/__init__.py:544`、`channels/telegram/commands/settings.py:297`
-     的 `engine._running` 直接读取，换成已存在的公开属性 `engine.is_running`
-     （`engine.py:330-333`）。纯读取、零行为变化，被第 1 步的两个测试钉住。
-   - `grep -rn "\._running\b" nanobot/channels/ | grep groupchat` 归零，验证通过。
+### 批次 C2：实证评估 🔴 只测不改（吸收 industry-followup 批次 D）
 
-3. **核心：解耦会话级 vs 轮次级状态**（未开始，下一个 checkpoint）——
-   调查后修正了最初设想的方案，记录如下供继续时参考：
+1. **离线成本分析**：新建 `scripts/analyze_compression_cache.py`，输入
+   `~/.nanobot/request_logs/*.jsonl`（122 天全量）+ `gateway.log` 压缩时间戳
+   （726 条），按 settings regime 分段（见上表警告），输出每次压缩事件前后的：
+   - cache 侧：`cache_probe` 估计命中率（历史条目）与 C0 后的真实
+     `cache_tokens` 占比变化；
+   - 成本侧：摘要调用自身的 token/cost（C0 后直接归因；历史条目按
+     `model+msg_count=1+"中期历史记录"` 启发式重建，并标注置信度）；
+   - 净收益判定：压缩节省的输入 token 费用 vs (摘要调用费用 + 缓存失效损失)。
+2. **召回率测量**：新建 `tests/test_compression_recall.py`——植入 N 个事实
+   （数字/路径/决策），跑压缩（假 provider 返回确定性摘要，可控地丢弃部分事实），
+   度量压缩前后 `view_for` 对事实的召回率。产出可复用的召回度量函数——
+   做 nanobot 自己的"92% vs 58%"。
+3. **governance decay 防护**（W5）：
+   - 测试先行：钉住现状——中段"系统"消息（话题公告/约束）压缩后在视图中不可
+     原文检索（暴露面文档化）；
+   - 然后二选一（按测试结果定）：摘要提示词（context.py:371-376）加"逐字保留
+     约束/规则类语句"指令 + 钉住摘要保留约束的测试；或将含约束标记的"系统"
+     消息纳入 head 保护（行为改动，需单独 checkpoint）。
+   - 注：persona/hard_rules 每轮从 manifest 重建、不在历史里，**结构性安全**——
+     测试同时钉住这一点（防回归）。
+4. **对照替代路线**：用 (2) 的召回度量 + (1) 的成本模型，并排比较
+   "摘要压缩（HistoryContext 路线）vs 确定性截断（tool_pruning 路线）"的
+   成本/召回曲线。
+5. **产出**：`docs/compression-vs-cache-2026-09.md`，给出结论与建议
+   （动不动默认值、要不要换路线）。**代码零改动**（除测试与脚本）。
 
-   **不新造 `SessionState` 类**：`engine._running` 作为纯会话级标志本身没问题
-   （`_start_group_loop`/`_stop_group_loop`/`inject`/`request_summary`/`stop`
-   都只在会话边界读写它，语义一直是自洽的）。真正的问题是**轮次级代码通过
-   `flip_running=True` 这个副作用通道去写会话级标志**，而不是把"这一轮结束后
-   会话该不该停"这个判断结果**返回**给调用方。`RoundLifecycle.session_should_stop`
-   （`round_lifecycle.py:152-160`）已经是这个判断的正确产物——问题只是它被埋在
-   round 内部（`lifecycle` 对象是 `BroadcastOrchestrator.__init__` 里
-   `broadcast.py:252` 创建的局部对象），`run_loop.py` 拿不到。
+### 批次 C3：数据驱动的决策 ⚪（C2 结论出来才排期，可能全部不做）
 
-   具体改法：
-   a. `broadcast_round`（`broadcast.py:377`）的返回值从
-      `list[tuple[str, str | None]]` 扩展为携带 `lifecycle.session_should_stop`
-      （例如包一层 dataclass，或加第二个返回值），让 `run_loop.py` 能直接读
-      这一轮的判断结果，而不是事后再摸 `engine._running`。
-   b. `round_lifecycle.py` 的 `mark_winding_down`/`reopen` **删除 `flip_running`
-      参数和对 `self._engine._running` 的写入**——`RoundLifecycle` 从此只管
-      轮次内状态，不再触达 engine。
-   c. `run_loop.py:111-164` 的循环条件和"pending 消息复活"逻辑，改为读
-      `broadcast_round` 返回的 `session_should_stop`，而不是 `engine._running`。
-      "复活"分支的语义不变（有 pending 消息就再开一轮），只是判断依据换了。
-   d. `broadcast.py:1553`（join listener 里 `not engine._running` 的轮次内读取）
-      要换成查 `lifecycle`（例如 `not lifecycle.accepts_interjection()` 或新增
-      等价查询）——这是轮次内部关心"这一轮是否还活跃"，本该问 `lifecycle`，
-      不该问会话级标志。
-   e. `chatroom_tools.py:1210-1214`（`ChatroomEndDiscussionTool`）删除
-      `flip_running=True` 参数和紧随其后的 `self._engine._running = False`
-      直接赋值，改为纯粹调用 `lifecycle.mark_winding_down(...)`（不再需要
-      额外一行手动同步）。
-   f. **`tests/test_round_lifecycle.py::TestLegacyFlagFlips`**（两个测试：
-      `test_mark_winding_down_sets_leader_end_event_and_running`、
-      `test_reopen_flips_running_back`）目前正是钉住"`flip_running=True` 会
-      改写 `engine._running`"这个即将删除的行为——上面 (b) 落地时这两个测试
-      要同步改写或删除，不能留着断言一个已经不存在的副作用。
+按 C2 数据从下列选项中挑（或全不挑）：
 
-4. **退役裸属性**（(a)-(f) 全部完成后）：`engine._running` 保留作纯会话级标志
-   （不删除——它本身语义正确），但确认全仓库不再有轮次级代码写它；
-   `is_running` property 不变。
-
-**验证**：
-- `pytest tests/ -q` 全绿，含新增的会话级状态回归测试
-- `grep -rn "flip_running" nanobot/` 归零（参数和所有调用点都删除）
-- `grep -rn "\._running\b" nanobot/ | grep -v "engine.py:.*is_running\|_start_group_loop\|_stop_group_loop\|def inject\|def request_summary\|def stop\b"` 结果
-  仅剩 `engine.py` 内部会话边界的读写，**channels/ 目录归零**（已在第 2 步验证）
-
-## Phase 2：`broadcast_round` 拆分
-
-**前提**：Phase 1 完成，状态源已统一，拆分时不会把同一状态问题分散到多文件。
-
-**目标**：把 `_run_one` 及其内嵌闭包提升为 `BroadcastOrchestrator` 的方法或
-独立协作对象，让工具循环回调、监听器、超时判断可以脱离整轮广播单独测试。
-
-1. 现状盘点：`BroadcastOrchestrator`（`broadcast.py:218`）目前只管
-   `setup_tools_and_pools`（:259）。`_run_one`（:491）及其闭包
-   `_on_tool_start`/`_on_tool_result`/`_inject_retry`/`_on_iter_usage`/`_badge`
-   全部定义在 `broadcast_round` 函数体内，靠闭包捕获共享状态。
-2. 逐个闭包提升为方法，参数化原来靠闭包捕获的变量（先从最独立的
-   `_on_tool_start`/`_on_tool_result` 开始，风险最低；`_inject_retry` 和
-   `_on_iter_usage` 涉及重试/用量统计，其次；`_run_one` 本体最后动）。
-3. 监听器（`_user_listener`/`_join_listener`/`_watch_leader_end`/
-   `_watch_no_leader_convergence`，:1517-1652）同理提升，评估是否可以独立
-   成一个 `BroadcastListeners` 协作对象，减少 `broadcast_round` 函数体本身
-   的行数。
-4. 每提升一组方法，补对应单元测试（提升前只能靠集成测试覆盖，这是本阶段
-   要解决的核心问题——提升后要能不跑整轮广播就测到这些分支）。
-
-**验证**：
-- `pytest tests/ -q` 全绿
-- `broadcast_round` 函数体行数显著下降（记录提升前后对比，作为验收证据写进
-  commit message）
-- 新增的独立方法/对象有专属单元测试，不再只靠集成测试兜底
-
-## Phase 3：channels/ 收敛（可与 Phase 1/2 并行）
-
-**目标**：优先补测试盲区，再评估复用值不值得做——不要为了复用而重构没有
-测试保护的代码。
-
-1. **先补 `mochat.py`（946 行，零专属测试）的测试**，覆盖现有行为
-   （AGENTS.md #1：没有回归测试守护，不许动实现代码）。
-2. 视情况补 `discord.py`/`wecom.py`/`whatsapp.py`/`manager.py`/`registry.py`
-   的专属测试——不要求一次性做完，按触碰频率排优先级。
-3. 测试补齐后，评估把轮询循环 / 去重 / 媒体处理的公共部分提炼到 `base.py`
-   或 `channels/utils/` 是否值得——如果收益不明确（参考
-   `docs/phase4-findings.md` 4.2 对 Session/HistoryContext 的判断先例：
-   "服务不同场景，不合并"），允许结论是"不做"，把结论和理由记录下来即可，
-   不必强行合并。
-
-**验证**：
-- 新增测试全绿
-- 若做了提炼：`pytest tests/ -q` 全绿，且原有 channel 特有行为测试不受影响
+- **缓存友好压缩改造**：把 `view[:] = rebuilt` 的中段重写改为"摘要追加进最后一条
+  受保护消息"（`tool_pruning.py:298-316` 已有先例），把缓存失效点后移/收窄。
+  仅当 C2 证明缓存损失 >> 压缩收益时做。
+- **阈值/路线调整**：上调触发阈值，或对自动前缀缓存 provider（DeepSeek 类）走
+  确定性截断而非 LLM 摘要。改 `history_settings.py` 默认值必须引用 C2 数据。
+- **视图/压缩态持久化**（W4）：重启不丢压缩态。上轮计划标"不做"，C2 若显示
+  重启后重压缩造成显著重复成本则重评。
+- **本机 regime 修正**：若 C2 确认"30/0.7/20 近乎 no-op"不是有意为之，
+  修 `~/.nanobot/history_settings.json`（运维动作，不是代码改动）。
 
 ---
+
+## 验证（DoD）
+
+| 批次 | 验收 |
+|---|---|
+| C0 | 新 schema/事件测试绿；关掉新字段写入时旧行为不变；`pytest tests/ -q` 全绿 |
+| C1 | 每项先有失败测试再有实现；W2 去重后同轮摘要调用数从 N → 内容分组数；W3 视图有界测试绿；stub 与陈旧测试删除、addopts 收缩后全绿 |
+| C2 | `scripts/analyze_compression_cache.py` 在本机 122 天数据上跑通并输出分段报告；`tests/test_compression_recall.py` 绿；`docs/compression-vs-cache-2026-09.md` 存在且结论有数据引用 |
+| C3 | 每个被选中的选项单独 checkpoint，引用 C2 数据为 why |
+| 全部 | 每逻辑单元一个 commit（what+why+证据）；动到线上行为时：agent idle → 重启网关 → 观察 gateway.log 首轮 |
 
 ## 风险与缓解
 
 | 风险 | 概率 | 影响 | 缓解 |
-|------|------|------|------|
-| Phase 1 遗漏某个 `_running` 读写点，行为悄悄改变 | 中 | 高 | 迁移前 grep 全量列出（本计划已列出已知 20+ 处作为基线），每改一处跑测试，最后 grep 归零验收 |
-| Phase 1 触及生产网关正在跑的会话循环 | 中 | 高 | 遵循 AGENTS.md 网关重启规则：确认 agent idle 才重启验证；先在测试环境跑满全量测试 |
-| Phase 2 提升闭包时遗漏某个隐式共享状态 | 中 | 中 | 逐个提升、逐个测试，不要一次性搬完 `_run_one`；先做最独立的 `_on_tool_start`/`_on_tool_result` 积累经验 |
-| Phase 3 为了复用强行合并出现分歧的 channel 逻辑 | 低 | 中 | 参考 4.2 先例，允许"审计后判断不合并"作为合法结论 |
-| 三个 phase 战线拉长，中途被打断 | 中 | 低 | 每个 phase 内部按"逐个迁移/提升/补测试"切成可独立提交的最小单元，AGENTS.md #6 |
+|---|---|---|---|
+| C0 改 `_log_request` 影响生产日志体积 | 低 | 低 | 字段仅在 success 且有值时写入；旧读取方按缺省兼容 |
+| C1.2 去重误判"相同"导致跨视图泄露 | 低 | 高 | 去重键=中段内容逐条 hash 全等；差一条即各自压；测试钉隐私不变量 |
+| C1.1 视图裁剪丢掉仍需要的消息 | 中 | 中 | 裁剪语义与压缩保护一致（首条+用户消息+尾部），测试钉保护集 |
+| C2 历史数据 regime 混杂导致结论失真 | 高 | 中 | 按 settings 变更时点分段；启发式归因的条目标注置信度 |
+| 与架构线（`docs/plan-2026-09-07-arch-refactor.md` Phase 1 step 3）并行冲突 | 中 | 中 | 两条线改动面不重叠（本计划不碰 runtime 状态机）；均需全量测试绿才提交 |
 
 ## 不做（本轮范围外）
 
-- providers/（4184 行）：审查后判断结构清晰、抽象合理，不列入本轮
-- mods/skills 边界：代码层面确认无越界 import，`docs/SKILL_VS_MOD.md` 边界成立，不动
-- Telegram 真正统一走 bus（上轮计划已判断"高风险，不推荐"）：本轮不重新评估
-- channels/ 除 `mochat.py` 外的全量测试补齐：按需推进，不设一次性完成的硬指标
-
-## 验证（DoD）
-
-- [x] Phase 1 / 回归测试钉住（commit `97e9b547`）
-- [x] Phase 1 / channels 零风险只读迁移（commit `d68ceee9`）：
-      `grep -rn "\._running\b" nanobot/channels/` 归零
-- [ ] Phase 1 / 核心状态解耦（上面第 3-4 步，未开始）：`py_compile` 全过；
-      `pytest tests/ -q` 全绿；`round_lifecycle.py` 的 `flip_running` 参数删除；
-      `tests/test_round_lifecycle.py::TestLegacyFlagFlips` 同步改写
-- [ ] Phase 2：`pytest tests/ -q` 全绿；`_run_one`/`broadcast_round` 行数下降有
-      commit 记录；提升出的方法有专属单元测试
-- [ ] Phase 3：`mochat.py` 测试新增且绿；复用是否值得做的结论有记录（做或不做）
-- [ ] 每个 phase 内每个逻辑单元单独 commit，message 写清 what + why + 证据
-- [ ] 涉及线上：确认 agent idle → 重启网关 → 观察 gateway.log 首轮
-
-## 参考文件
-
-- `AGENTS.md` — 红线
-- `docs/archive/plan-2026-09-07-history-refactor.md` — 上一轮已完成的历史模型重构（背景参考）
-- `docs/phase4-findings.md` — 4.2 的"审计后判断不合并"先例，Phase 3 可参考
-- `nanobot/groupchat/runtime/engine.py:287-333` — `_running`/`is_running` 现状
-- `nanobot/groupchat/runtime/round_lifecycle.py` — 状态转换现状
-- `nanobot/groupchat/runtime/run_loop.py:107-183` — 会话主循环，Phase 1 核心改动点
-- `nanobot/groupchat/runtime/broadcast.py:377-1875` — `broadcast_round`，Phase 2 核心改动点
-- `nanobot/channels/base.py`、`nanobot/channels/utils/` — Phase 3 复用评估起点
-- `tests/test_round_lifecycle.py`/`tests/test_no_leader_convergence.py` — 现有轮次状态测试参考模式
+- 架构线 `docs/plan-2026-09-07-arch-refactor.md` Phase 1/2/3 的任何条目（那条线自己推进）
+- industry-followup 批次 A2（mcp SDK 2.x）、B（OTel mod）、C（cost guard mod）
+  ——其中 B/C 与 C0 的 `llm:*` 事件/成本归因有协同，但各自按原文排期
+- mailbox/引擎状态机（上轮已收敛）
+- 跨组织协议（A2A/ACP）——industry 计划已判"观望"
 
 ## 变更日志
 
 | 日期 | 变更 |
 |------|------|
-| 2026-09-07 | 创建本计划。基于历史模型重构（Phase A-E）完成后的独立架构审查：发现 `engine._running` 双语义比 `docs/phase4-findings.md` 描述的更严重（渗出到 channels 层）、`broadcast_round` 是 ~1500 行巨函数、channels/ 复用不足叠加测试盲区（`mochat.py` 零测试）。providers/ 和 mods/skills 边界审查后判断健康，不列入本轮。原历史模型重构 `plan.md` 归档至 `docs/archive/plan-2026-09-07-history-refactor.md`。 |
-| 2026-09-07 | Phase 1 启动：`97e9b547` 补齐 run_loop 会话状态 + telegram /stop 的回归测试（`pytest tests/ -q`：700 passed，32 deselected）；`d68ceee9` 把 channels/telegram 两处对 `engine._running` 的直接读取迁到公开属性 `engine.is_running`。调查后修正了核心方案：不新造 `SessionState` 类，改为让 `broadcast_round` 把 `lifecycle.session_should_stop` 显式返回给 `run_loop`，`RoundLifecycle` 不再通过 `flip_running` 副作用写 `engine._running`——方案细节见上方 Phase 1 第 3 步。核心解耦本身尚未动手，是下一个 checkpoint。 |
+| 2026-09-08 | 创建本计划。基于三路并行审计：①压缩链路逐行核实（W1-W11 弱点清单）；②三份既有计划完成度核实（history-refactor A-E 真完成；根 plan.md Phase 1 完成 2/4 步、step 3 未动；industry 批次 A 完成 1/3、A4 改道、B/C/D 零产出）；③本机数据可用性核实（request_logs 122 天但缺 cost/cache_tokens → 批次 D 原设想的离线分析不可直接跑，故新增 C0 前置）。吸收 industry-followup 批次 D 为本计划 C2。 |
+| 2026-09-08 | 接任根 `plan.md` 成为活跃主计划；原架构线计划（状态所有权 / broadcast / channels，Phase 1 进行中）移至 `docs/plan-2026-09-07-arch-refactor.md` 继续推进，未归档。 |

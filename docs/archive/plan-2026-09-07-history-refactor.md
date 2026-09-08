@@ -1,6 +1,6 @@
 # nanobot-src 群聊历史模型重构计划（已归档）
 
-> 归档日期: 2026-09-07 — Phase A-E 已全部完成并验收，当前进行中的计划见仓库根目录 `plan.md`（状态所有权收编 / broadcast.py 拆分 / channels 收敛）。
+> 归档日期: 2026-09-07 — Phase A-E 已全部完成并验收。架构线（状态所有权收编 / broadcast.py 拆分 / channels 收敛）进行中，2026-09-08 起位于 `docs/plan-2026-09-07-arch-refactor.md`；根 `plan.md` 现为《上下文管理与压缩优化计划》。
 > 创建日期: 2026-09-07（覆盖上轮 Phase 1-4 记录）
 > 状态: **Phase A–E 实现完成**（全量测试受 sandbox 只读文件系统阻断，见 DoD 备注）
 > 范围: **只管群聊历史模型**（不动 engine/broadcast/callbacks 的耦合）
