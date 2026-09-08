@@ -463,6 +463,10 @@ class HistoryContext:
                 f"以下是群聊的一段中期历史记录（共 {len(to_compress)} 条）。\n"
                 "请用简洁的中文摘要这些内容，重点保留核心发现、关键决策、重要事实以及已经完成的进度。\n"
                 "如果有具体的数值、文件路径或关键结论，请务必保留。\n"
+                # C2.3/W5 (plan.md 批次 C2 第 3 条): mid-history 系统 messages
+                # (topic announcements / injected constraints) otherwise live
+                # only insofar as the summary keeps them — governance decay.
+                "如果记录中出现约束、规则或禁令类语句（例如系统消息宣布的话题要求或行为限制），请逐字保留这些语句，不得改写或省略。\n"
                 f"摘要不超过 500 字。\n\n{history_text}"
             )
             # C1.3 (plan.md 批次 C1): history compression resolves its own

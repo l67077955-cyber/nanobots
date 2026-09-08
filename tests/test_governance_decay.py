@@ -230,3 +230,62 @@ class TestStructuralSafety:
         # Non-vacuous: the history really accumulated the producer messages.
         assert "话题：竞品定价调研" in log_text
         assert "第2轮请求" in log_text
+
+
+class TestPromptInstructionMitigation:
+    """Option A mitigation (C2.3 step 2): the summary prompt instructs the
+    model to preserve constraint/rule statements verbatim.
+
+    HONEST LIMITATION: a prompt instruction is not enforceable — Test A above
+    keeps passing with an uncooperative provider on purpose, documenting that
+    the guard's strength depends on the model's compliance.  What these tests
+    DO pin deterministically:
+      * the instruction text is present in the prompt sent to the summariser;
+      * whatever the summariser returns is inserted into the view verbatim —
+        so a compliant model's preserved constraints provably survive.
+    """
+
+    async def test_summary_prompt_contains_verbatim_constraint_instruction(self, tmp_path):
+        provider = _FixedProvider("摘要内容。")
+        ctx = _make_context(tmp_path, provider=provider)
+        ctx.set_active_agents(["A"])
+        ctx.add_message("用户", "帮我调研竞品定价策略")
+        for i in range(1, 30):
+            ctx.add_message("A" if i % 2 else "B", f"调研进展记录 第{i}条")
+        ctx.add_message("系统", _CONSTRAINT)
+        for i in range(31, 50):
+            ctx.add_message("A" if i % 2 else "B", f"后续分析记录 第{i}条")
+
+        await ctx.compress_for("A")
+
+        assert len(provider.calls) == 1
+        prompt = provider.calls[0]["prompt"]
+        assert "约束" in prompt and "规则" in prompt and "禁令" in prompt
+        assert "逐字保留" in prompt, (
+            "the summariser must be told to keep constraint/rule statements verbatim"
+        )
+
+    async def test_compliant_summary_preserves_constraint_in_view(self, tmp_path):
+        """A summariser that follows the instruction (echoes the constraint
+        verbatim) keeps it retrievable from the compressed view — the summary
+        is inserted as-is, no post-processing drops it."""
+        compliant_summary = (
+            "成员讨论了竞品公开定价信息。\n" + _CONSTRAINT
+        )
+        provider = _FixedProvider(compliant_summary)
+        ctx = _make_context(tmp_path, provider=provider)
+        ctx.set_active_agents(["A"])
+        ctx.add_message("用户", "帮我调研竞品定价策略")
+        for i in range(1, 30):
+            ctx.add_message("A" if i % 2 else "B", f"调研进展记录 第{i}条")
+        ctx.add_message("系统", _CONSTRAINT)
+        for i in range(31, 50):
+            ctx.add_message("A" if i % 2 else "B", f"后续分析记录 第{i}条")
+
+        await ctx.compress_for("A")
+
+        view_text = _view_text(ctx.view_for("A"))
+        assert _summaries(ctx.view_for("A")), "compression ran and inserted the summary"
+        assert _CONSTRAINT in view_text, (
+            "a compliant summary's preserved constraint must survive verbatim in the view"
+        )
