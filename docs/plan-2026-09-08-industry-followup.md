@@ -141,6 +141,19 @@ nanobot 近 4 周 48 个 commit 全部是向内的（fix 11 / feat 11 / refactor
 
 ### 批次 C：成本护栏 mod 🔴 当前零防护
 
+> **2026-09-08 落地记录**: 已完成,tier-2 方案落地(上面的开放决策按 tier-2 收口:
+> 只走 `agent:reactivated` 的 `inject` 列表注入软性收敛建议,不开 tier-3)。
+> `nanobot/mods/builtin/cost_guard.py`:订阅 `llm:response`(B 批事件)按
+> agent / 会话 / 本地日历日累计 cost,超 `warn_ratio` 记录+日志告警,超上限则在
+> 该 agent 下次被重新激活时向 `inject` 追加一条收敛提示(带冷却时间,默认 300s,
+> 防刷屏)。**零 engine 触碰、零 RoundLifecycle 干预、不强推轮次结束**——测试用
+> engine 写入绊线 + 真 RoundLifecycle ACTIVE→WINDING_DOWN→ENDED 转换钉死。
+> 配置全走 mods.json(`per_agent_limit` / `per_session_limit` / `daily_limit` /
+> `warn_ratio` / `inject_cooldown_s`),默认关闭且所有上限默认 None(≤0 亦视为
+> 未设置)——误开也不可能掐掉生产网关。已知取舍(写进 docstring):agent→会话
+> 归因用最近一次 `llm:response` 的 session(重激活事件不含 session);账目仅在
+> 内存,重启清零,持久账本仍在 request_logs。
+
 依赖批次 B 的 `llm:response` 事件。
 
 - 新 mod `cost_guard`：按 agent / 会话 / 日累计 cost，超阈值告警，再超则让当前轮次收敛。
