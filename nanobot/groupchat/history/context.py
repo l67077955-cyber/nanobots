@@ -76,6 +76,62 @@ class HistoryContext:
                     break
         return protected
 
+    def _trim_to_limits(
+        self,
+        msgs: list[dict],
+        *,
+        limit: int,
+        char_budget: int,
+        keep_users: bool,
+    ) -> list[dict]:
+        """Two-step cap: message count, then char budget; head always kept.
+
+        Step 1 keeps the most recent *limit* messages plus any head-protected
+        message that fell outside that window; step 2 drops the oldest
+        non-protected messages until the non-head portion fits *char_budget*
+        (0 disables).  Head protection mirrors ``_compress_view``: index 0
+        plus the first (or, with *keep_users*, every) user message.  Returns
+        the trimmed list; does not mutate the input.
+        """
+        if not msgs:
+            return msgs
+
+        # Step 1: message-count limit — keep most-recent N, always keep head
+        if len(msgs) > limit:
+            head_msgs = [msgs[i] for i in sorted(self._find_head_indices(msgs, keep_all_users=keep_users))]
+            tail = msgs[-limit:]
+            tail_ids = {id(m) for m in tail}
+            extra_head = [m for m in head_msgs if id(m) not in tail_ids]
+            msgs = extra_head + tail
+
+        # Step 2: char-budget trimming — head is counted but always kept
+        if char_budget > 0:
+            head_msgs = [msgs[i] for i in sorted(self._find_head_indices(msgs, keep_all_users=keep_users))]
+            head_chars = sum(len(m.get("content", "")) for m in head_msgs)
+            available = max(0, char_budget - head_chars)
+
+            tail: list[dict] = []
+            head_id_set = {id(m) for m in head_msgs}
+            for m in reversed(msgs):
+                if id(m) in head_id_set:
+                    continue
+                c = len(m.get("content", ""))
+                if available - c < 0:
+                    break
+                tail.insert(0, m)
+                available -= c
+
+            # Rebuild: head first (preserving order), then tail
+            seen: set[int] = set()
+            rebuilt: list[dict] = []
+            for m in head_msgs + tail:
+                if id(m) not in seen:
+                    rebuilt.append(m)
+                    seen.add(id(m))
+            msgs = rebuilt
+
+        return msgs
+
     # ── Public API ────────────────────────────────────────────────────────
 
     def __len__(self) -> int:
@@ -214,43 +270,22 @@ class HistoryContext:
             char_budget = 0
             _keep_users = False
 
-        # ── Pre-identify protected head before any trimming ──
-        head_indices = self._find_head_indices(self.messages, keep_all_users=_keep_users)
-        head_msgs = [self.messages[i] for i in sorted(head_indices)]
-
-        # Step 1: message-count limit — keep most-recent N, always keep head
-        if len(self.messages) > limit:
-            tail = self.messages[-limit:]
-            tail_ids = {id(m) for m in tail}
-            extra_head = [m for m in head_msgs if id(m) not in tail_ids]
-            self.messages = extra_head + tail
-
-        # Step 2: char-budget trimming — head is counted but always kept
-        if char_budget > 0:
-            head_indices = self._find_head_indices(self.messages, keep_all_users=_keep_users)
-            head_msgs = [self.messages[i] for i in sorted(head_indices)]
-            head_chars = sum(len(m.get("content", "")) for m in head_msgs)
-            available = max(0, char_budget - head_chars)
-
-            tail: list[dict] = []
-            head_id_set = {id(m) for m in head_msgs}
-            for m in reversed(self.messages):
-                if id(m) in head_id_set:
-                    continue
-                c = len(m.get("content", ""))
-                if available - c < 0:
-                    break
-                tail.insert(0, m)
-                available -= c
-
-            # Rebuild: head first (preserving order), then tail
-            seen: set[int] = set()
-            rebuilt: list[dict] = []
-            for m in head_msgs + tail:
-                if id(m) not in seen:
-                    rebuilt.append(m)
-                    seen.add(id(m))
-            self.messages = rebuilt
+        # ── Enforce message-count / char-budget limits ──
+        # C1.1 (plan.md 批次 C1): the same two-step cap that bounds the log
+        # must bound every materialised per-agent view.  Without this, views
+        # grew without bound whenever compression did not shrink them (e.g.
+        # summarisation disabled → _compress_view keeps the middle).  Views
+        # not yet materialised need no handling: view_for projects them from
+        # the already-bounded log.  Trimming uses each list's OWN head (first
+        # message + user messages), so private-target views keep their own
+        # protected head rather than the log's.
+        self.messages = self._trim_to_limits(
+            self.messages, limit=limit, char_budget=char_budget, keep_users=_keep_users
+        )
+        for name in list(self._views):
+            self._views[name] = self._trim_to_limits(
+                self._views[name], limit=limit, char_budget=char_budget, keep_users=_keep_users
+            )
 
         self._state.save_message(sender, content, self.messages, targets=targets)
 
