@@ -2,14 +2,16 @@
 
 > 创建日期: 2026-09-08
 > 类型: 子系统优化路线图（上下文管理 / 历史压缩）
-> 状态: **活跃主计划**——2026-09-08 起接任根 `plan.md`；**批次 C0、C1、C2 全部完成**（C0：`83b4b555a` 等 4 commit；C1：`5881a8a37` 等 5 commit；C2：`eb4c00d4d`／`375ca771b`／`adce2566a`+`00a48a96e`／`69a60ee84`，终态 836 passed）；**C3 待真实数据积累后重评**（结论与触发条件见 `docs/compression-vs-cache-2026-09.md` §6）；新行为已随 2026-09-08 17:36 网关重启上线
+> 状态: **活跃主计划**——2026-09-08 起接任根 `plan.md`；**批次 C0、C1、C2 全部完成**（C0：`83b4b555a` 等 4 commit；C1：`5881a8a37` 等 5 commit；C2：`eb4c00d4d`／`375ca771b`／`adce2566a`+`00a48a96e`／`69a60ee84`，终态 836 passed）；**C3 待真实数据积累后重评**（结论与触发条件见 `docs/compression-vs-cache-2026-09.md` §6）；C0/C1/C2.3 新行为已随 2026-09-08 17:36 网关重启上线；同日晚间的架构 Phase 1 step 3 与 B1 LLM 事件/两 mod 待下一次 idle 重启部署（见变更日志末行）
 > 与其他计划的关系:
 >   - `docs/plan-2026-09-07-arch-refactor.md`（状态所有权 / broadcast 拆分 / channels
 >     收敛）——**架构线，并行推进，本计划不碰**。其 Phase 1 step 3（`flip_running` 退役 +
->     `broadcast_round` 返回 `session_should_stop`）仍是那条线的下一个 checkpoint，
->     2026-09-08 起已派子 agent 开工（本计划仍不碰）。
+>     `broadcast_round` 返回 `session_should_stop`）已于 2026-09-08 落地
+>     （`abf36831b`/`67eb54d67`/`5f0e51137`），Phase 1 完成；下一 checkpoint 是 Phase 2
+>     （`broadcast_round` 拆分），尚未开始（本计划仍不碰）。
 >   - `docs/plan-2026-09-08-industry-followup.md`——**批次 D（压缩 vs 缓存实证）被本计划
->     吸收并扩充**；批次 A 剩 A2（SDK 2.x）、批次 B/C 不受影响，仍按原文执行。
+>     吸收并扩充**；批次 B/C 已完成，批次 A 剩 A2（SDK 2.x，仍 pin `<2.0.0`）与依赖它的
+>     A4（`ttlMs`/`cacheScope` 缓存）。
 > 红线遵循: AGENTS.md #1 先写测试再改实现、#2 修根源不堆护栏、#3 加行为写 mod
 >   不改核心（事件注册属"加事件"，允许）、#4 删死代码、#6 每逻辑单元 checkpoint
 

@@ -2,9 +2,10 @@
 
 > 创建日期: 2026-09-07
 > 位置: 2026-09-08 起从根 `plan.md` 移至 `docs/plan-2026-09-07-arch-refactor.md`（根位由《上下文管理与压缩优化计划》接任）；本计划**仍在推进中，未归档**
-> 状态: **Phase 1 进行中**——回归测试已钉住、channels/ 零风险只读迁移已完成；
->   核心的会话/轮次状态源解耦（run_loop 循环条件 + RoundLifecycle 副作用写入）
->   尚未动手，是下一个 checkpoint。Phase 2/3 未开始。
+> 状态: **Phase 1 已完成**——回归测试已钉住、channels/ 零风险只读迁移已完成、
+>   核心的会话/轮次状态源解耦（run_loop 循环条件 + RoundLifecycle 副作用写入）已于
+>   2026-09-08 落地（`abf36831b`/`67eb54d67`，详见下方 DoD）。下一 checkpoint 是
+>   Phase 2（`broadcast_round` 拆分），尚未开始；Phase 3 未开始。
 > 范围: 三个阶段，有严格依赖顺序（Phase 1 是 Phase 2 的前置条件）
 > 上一轮计划: 群聊历史模型重构（Phase A-E，已完成）见 `docs/archive/plan-2026-09-07-history-refactor.md`
 > 红线遵循: AGENTS.md #1 先写测试再改实现、#2 修根源不堆护栏、#4 删死代码、

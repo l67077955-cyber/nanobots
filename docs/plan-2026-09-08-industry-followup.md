@@ -58,8 +58,8 @@ nanobot 近 4 周 48 个 commit 全部是向内的（fix 11 / feat 11 / refactor
 | 热点 | nanobot 现状（代码证据） | 差距 |
 |---|---|---|
 | MCP 无状态核心 | `tools/mcp.py:237-238` 走 `ClientSession` + `await session.initialize()`，有状态握手 | 🔴 需跟进 |
-| legacy HTTP+SSE 弃用 | `tools/mcp.py:218` 仍支持并自动选择 `sse_client`（URL 以 `/sse` 结尾即启用） | 🟡 弃用窗口内 |
-| `tools/list` 缓存 | 无。每次连接全量 `list_tools()`，且被调用 3 次 | 🟡 可优化 |
+| legacy HTTP+SSE 弃用 | `tools/mcp.py:218` 仍支持并自动选择 `sse_client`（URL 以 `/sse` 结尾即启用）；A3 已加弃用告警（见批次 A 落地记录） | 🟡 弃用窗口内 |
+| `tools/list` 缓存 | 无。每次连接全量 `list_tools()`；原先按 registry 重复连接（被调用 3 次），A4 已改为单连接扇出 | 🟡 可优化 |
 | OTel GenAI semconv | **零 OTel**。只有 loguru + 两套自定义 JSONL：`mods/builtin/round_telemetry.py`（轮次事件）与 `providers/litellm_provider.py:275`（LLM 请求），schema 各自为政，无 trace 关联 | 🔴 最大空白 |
 | 审计追踪 | request_logs 有全量 LLM 请求，但工具调用/轮次在另一文件，拼不出完整因果链 | 🟡 部分 |
 | 成本护栏 | `providers/base.py:89` 的 `cost` 只记录；`litellm_provider.py:1130-1155` 带出 cost。**全仓库零预算/零上限强制** | 🔴 无 |
@@ -80,6 +80,17 @@ nanobot 近 4 周 48 个 commit 全部是向内的（fix 11 / feat 11 / refactor
 ### 批次 A：MCP 客户端跟上 2026-07-28 规范 🔴 优先
 
 唯一必须动核心的一批（协议兼容属核心 bug 范畴，不是「加行为」，不走 mod）。
+
+> **2026-09-08 落地记录（部分完成）**: A1 已落地——新建 `tests/test_mcp_client.py`
+> （397 行）覆盖 transport 选择 / 握手 / 注册命名 / 多 server 失败隔离 / schema 归一化
+> （`938d2997d`；其中 6 个与 `test_mcp_tool.py` 重复的用例已在 `66898247e` 删除）。
+> A3 已落地——`tools/mcp.py:215-223` 选中 sse 时 `logger.warning` 一次并指明迁移到
+> streamableHttp（`66898247e`）。A4 的「单连接扇出」部分已落地——`engine._connect_mcp`
+> （`engine.py:229-239`）按 registry 身份去重、`connect_mcp_servers` 支持多 registry，
+> stdio server 不再按 registry 重复起子进程（`66898247e`）。**未完成**：A2
+> （`pyproject.toml:46` 仍 pin `mcp>=1.26.0,<2.0.0`，`tools/mcp.py:261` 仍是 stateful
+> `session.initialize()`）；A4 的 `ttlMs`/`cacheScope` 缓存（依赖 A2 的 2.x，理由见
+> `66898247e` commit message）。
 
 1. **先补测试**（AGENTS.md #1）。已有 `tests/test_mcp_tool.py`（10 个用例）覆盖
    `enabledTools` 过滤与 `MCPToolWrapper.execute` 的错误处理（超时、服务端取消、
