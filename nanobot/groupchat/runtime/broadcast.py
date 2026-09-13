@@ -1554,7 +1554,22 @@ async def broadcast_round(
                     msg = await asyncio.wait_for(engine._input_queue.get(), timeout=1.0)
                 except asyncio.TimeoutError:
                     continue
-                await ingress.handle_round_message(msg)
+                try:
+                    await ingress.handle_round_message(msg)
+                except asyncio.CancelledError:
+                    # Requeue so the message survives round teardown, then die.
+                    engine._input_queue.put_nowait(msg)
+                    raise
+                except Exception:
+                    # Never let one bad message kill the listener silently —
+                    # the 2026-09-13 14:42 incident lost a user message this
+                    # way (consumed, then no visible action, loop exited).
+                    logger.exception(
+                        "user_listener: handling message failed — requeuing: {}",
+                        msg[:60],
+                    )
+                    engine._input_queue.put_nowait(msg)
+                    await asyncio.sleep(1.0)
 
 
         user_task = asyncio.create_task(_user_listener())

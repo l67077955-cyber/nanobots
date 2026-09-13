@@ -192,4 +192,32 @@ async def run_loop(engine: Any) -> None:
                 await engine._on_round_done()
             except Exception:
                 pass
+        # Anti-drop guard: if user message(s) arrived while the loop was
+        # winding down (the 2026-09-13 14:42 incident — a message injected
+        # during teardown was consumed by an intermediate handler and the
+        # loop exited without reviving), restart the loop so they are
+        # processed instead of silently lost. Safe wrt /stop: stop cancels
+        # this task AND sets _running False, and inject() is the only path
+        # that queues user input, so a non-empty queue here means a user
+        # message is still owed a round.
+        try:
+            if (
+                engine._task is _my_task
+                and not engine._input_queue.empty()
+                and len(engine._active_agents) >= 1
+                and getattr(engine, "_loop_restart_guard", 0) < 3
+            ):
+                pending = engine._input_queue.qsize()
+                logger.warning(
+                    "run_loop: {} user message(s) still queued at loop exit — restarting loop",
+                    pending,
+                )
+                engine._loop_restart_guard = getattr(engine, "_loop_restart_guard", 0) + 1
+                engine._task = None  # detach self so _start_group_loop won't cancel us
+                engine._start_group_loop()
+                return
+        except Exception:
+            logger.exception("run_loop: restart-on-pending guard failed")
+        if engine._task is _my_task:
+            engine._loop_restart_guard = 0
         logger.info("Group chat loop ended")
