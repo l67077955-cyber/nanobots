@@ -294,6 +294,16 @@ async def tool_loop(
         else:
             llm_messages = messages
 
+        # ── Result store: archive oversized tool results ──
+        # Oversized outputs (default >6k chars, newest 3 kept verbatim) are
+        # replaced by index stubs; agents fetch originals via the
+        # get_tool_result tool. Read-only w.r.t. the caller's list.
+        try:
+            from nanobot.tools.result_store import compress_tool_results
+            llm_messages = compress_tool_results(llm_messages)
+        except Exception as _rs_err:  # noqa: BLE001
+            logger.debug("result_store compression skipped: {}", _rs_err)
+
         # Drop orphan tool messages (role=tool without tool_call_id) that would
         # cause provider API errors. These can appear from stale cache, history
         # reloads, or interrupted tool batches.

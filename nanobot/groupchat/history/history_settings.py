@@ -83,10 +83,19 @@ _DEFAULTS: dict[str, Any] = {
         "soft_head_chars": 1_500,
         "soft_tail_chars": 1_500,
     },
+
+    # ── Stage 5: result store — archive oversized tool results ──
+    # Oversized tool outputs become index stubs in context; originals live
+    # in ~/.nanobot/tool_results/ and come back via the get_tool_result tool.
+    "result_store": {
+        "enabled": True,
+        "inline_threshold_chars": 6_000,
+        "keep_recent": 3,
+    },
 }
 
 # Flat list of all known sections for merge logic
-_SECTIONS = ("tool_results", "history", "context_pruning")
+_SECTIONS = ("tool_results", "history", "context_pruning", "result_store")
 _TOP_LEVEL_KEYS = ("context_window_tokens", "tool_result_max_chars")
 
 # ── Singleton cache ───────────────────────────────────────────────────────
@@ -231,6 +240,20 @@ def pruning_keep_recent() -> int:
 
 def pruning_soft_max_chars() -> int:
     return int(_load()["context_pruning"]["soft_max_chars"])
+
+
+# ── result_store getters ─────────────────────────────────────────────────
+
+def result_store_enabled() -> bool:
+    return bool(_load().get("result_store", {}).get("enabled", True))
+
+
+def result_store_inline_threshold() -> int:
+    return int(_load().get("result_store", {}).get("inline_threshold_chars", 6_000))
+
+
+def result_store_keep_recent() -> int:
+    return int(_load().get("result_store", {}).get("keep_recent", 3))
 
 
 # ── Field update (Telegram UI) ──────────────────────────────────────────

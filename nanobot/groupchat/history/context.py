@@ -239,6 +239,30 @@ class HistoryContext:
         else:
             # Copy to avoid the caller's list aliasing into stored history.
             targets = list(targets)
+
+        # Result store (plan.md 2026-09-13 backlog #1): oversized contents
+        # (typically tool-log text with embedded fetch/exec output) are the
+        # main view-inflation driver (observed 216K-char views). Archive the
+        # original and store a one-line index stub instead — agents fetch it
+        # back on demand via the get_tool_result tool.
+        try:
+            from nanobot.groupchat.history.history_settings import (  # noqa: PLC0415
+                result_store_enabled,
+                result_store_inline_threshold,
+            )
+            if (
+                result_store_enabled()
+                and isinstance(content, str)
+                and len(content) > result_store_inline_threshold()
+                and "[已归档 tr-" not in content[:40]
+            ):
+                from nanobot.tools.result_store import get_result_store  # noqa: PLC0415
+                store = get_result_store()
+                index = store.put(content)
+                content = store.stub_for(index, len(content))
+        except Exception:  # noqa: BLE001
+            pass  # archive is best-effort; never block history append
+
         msg = {"sender": sender, "content": content, "targets": targets}
         self.messages.append(msg)
 

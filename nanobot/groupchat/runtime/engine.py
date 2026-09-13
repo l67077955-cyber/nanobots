@@ -212,6 +212,10 @@ class GroupChatEngine:
             from nanobot.groupchat.runtime.tools.chatroom_tools import ChatroomSendTool, WaitTool
             reg.register(ChatroomSendTool(mailbox=self._mailbox, engine=self))
             reg.register(WaitTool(mailbox=self._mailbox))
+            # Result store retrieval (2026-09-13): archived oversized tool
+            # results come back on demand via this tool.
+            from nanobot.tools.result_store import GetToolResultTool
+            reg.register(GetToolResultTool())
             self._tool_registry_cache[key] = reg
             logger.info("Groupchat: built tool registry for {} → {}", agent_name, ws)
         return self._tool_registry_cache[key]
