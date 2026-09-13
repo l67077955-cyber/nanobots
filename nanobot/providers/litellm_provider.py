@@ -936,7 +936,15 @@ class LiteLLMProvider(LLMProvider):
 
         # Hard timeout to prevent OpenRouter cold-start stalls (observed up to 135s).
         # Existing retry logic handles the resulting Timeout error gracefully.
-        kwargs["timeout"] = 20
+        # Direct native routes (zhipu/deepseek official): thinking models with
+        # 30k-char tool-loop contexts regularly need 30-60s server-side; a 20s
+        # per-attempt cap killed all three retries at ~61s total (2026-09-13
+        # broadcast timeouts) before the server ever got slow. Gateway routes
+        # keep the tight cap — the stall the 20s guarded against is theirs.
+        if pm_resolved and not (self._gateway is not None and pm_provider_name == self._gateway.name):
+            kwargs["timeout"] = 90
+        else:
+            kwargs["timeout"] = 20
 
         if pm_provider_name == "openrouter" or (not pm_provider_name and "openrouter" in (model or "")):
             import hashlib
