@@ -257,6 +257,21 @@ async def tool_loop(
 
     _build = build_message or build_assistant_message
     _can_stream = on_content_delta and hasattr(provider, "chat_stream")
+    # Pure-metrics streaming: groupchat_settings.json "stream_llm_calls": true
+    # streams every LLM call (even without a display callback) so request_logs
+    # get a real TTFT per call. Falls back to non-streaming on any stream
+    # failure via _stream_call's existing guards.
+    if not _can_stream and hasattr(provider, "chat_stream"):
+        try:
+            import json as _json
+            from pathlib import Path as _P
+            _gc = _P.home() / ".nanobot" / "groupchat_settings.json"
+            if _gc.exists() and _json.loads(_gc.read_text(encoding="utf-8")).get("stream_llm_calls", False):
+                async def on_content_delta(_delta: str) -> None:  # noqa: F811 — no-op sink
+                    return
+                _can_stream = True
+        except Exception:
+            pass
 
     result = ToolLoopResult(content=None, messages=messages)
     result.tools_available = tool_defs is not None

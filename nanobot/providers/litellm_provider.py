@@ -313,11 +313,14 @@ class LiteLLMProvider(LLMProvider):
         error: Exception | None = None,
         latency: float = 0.0,
         cache_headers: dict | None = None,
+        ttft: float | None = None,
     ) -> None:
         """Log every LLM request to ~/.nanobot/request_logs/YYYY-MM-DD.jsonl.
 
         Each line is a JSON object with request kwargs (full message content),
-        response summary, and error info if any.
+        response summary, and error info if any. ``ttft`` (time-to-first-token,
+        seconds) is only available on streaming calls; ``tok_s`` (completion
+        tokens / total latency) is derived for every successful call.
         """
         import json as _json
         import time as _time
@@ -416,6 +419,9 @@ class LiteLLMProvider(LLMProvider):
                         "total": response.usage.total_tokens,
                         "cache_tokens": getattr(_ptd, "cached_tokens", 0) or 0,
                     }
+                record["ttft"] = round(ttft, 2) if ttft is not None else None
+                _comp = (record.get("usage") or {}).get("completion") or 0
+                record["tok_s"] = round(_comp / latency, 1) if (_comp and latency > 0) else None
                 # Cost from litellm hidden params — the same source _parse_response
                 # reads for LLMResponse.cost; None when the provider reports none.
                 _hidden = getattr(response, "_hidden_params", None) or {}
@@ -456,6 +462,7 @@ class LiteLLMProvider(LLMProvider):
         cache_headers: dict | None = None,
         cost: float | None = None,
         cache_tokens: int = 0,
+        ttft: float | None = None,
     ) -> None:
         """Log a completed streaming request (no raw response object available)."""
         import json as _json
@@ -523,10 +530,13 @@ class LiteLLMProvider(LLMProvider):
 
             # Response
             record["status"] = "ok"
+            record["ttft"] = round(ttft, 2) if ttft is not None else None
             record["reply_len"] = len(content) if content else 0
             record["reply_preview"] = (content or "")[:500]
             record["finish_reason"] = finish_reason
             record["has_tool_calls"] = bool(tool_calls)
+            _s_comp = (usage or {}).get("completion_tokens") or 0
+            record["tok_s"] = round(_s_comp / latency, 1) if (_s_comp and latency > 0) else None
             if tool_calls:
                 record["reply_tool_calls"] = [
                     {"name": tc.name, "args_preview": str(tc.arguments)[:200]}
@@ -1139,11 +1149,20 @@ class LiteLLMProvider(LLMProvider):
         _stream_cache_tokens: int = 0
         _stream_meta: dict = {}
 
+        _stream_ttft: float | None = None
         try:
             async for chunk in response:
                 delta = chunk.choices[0].delta if chunk.choices else None
                 if not delta:
                     continue
+
+                # TTFT: first meaningful delta (content, reasoning or tool_calls)
+                if _stream_ttft is None and (
+                    delta.content
+                    or getattr(delta, "tool_calls", None)
+                    or getattr(delta, "reasoning_content", None)
+                ):
+                    _stream_ttft = _time.time() - t0
 
                 # Finish reason
                 fr = chunk.choices[0].finish_reason
@@ -1273,7 +1292,8 @@ class LiteLLMProvider(LLMProvider):
                                  _time.time() - t0,
                                  cache_headers=getattr(self, "_last_cache_headers", None),
                                  cost=_stream_cost,
-                                 cache_tokens=_stream_cache_tokens)
+                                 cache_tokens=_stream_cache_tokens,
+                                 ttft=_stream_ttft)
 
         # Build provider_meta list for logging
         _provider_meta = []
