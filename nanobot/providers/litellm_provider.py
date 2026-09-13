@@ -1,6 +1,7 @@
 """LiteLLM provider implementation for multi-provider support."""
 
 import os
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -630,6 +631,32 @@ class LiteLLMProvider(LLMProvider):
         }
 
 
+    @staticmethod
+    def _ensure_deepseek_reasoning_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Backfill reasoning_content="" on assistant tool_calls messages.
+
+        Copy-on-write: returns the original list when nothing needs changing,
+        otherwise a new list with replaced dicts — caller state is untouched.
+        """
+        if not any(
+            m.get("role") == "assistant"
+            and m.get("tool_calls")
+            and not m.get("reasoning_content")
+            for m in messages
+        ):
+            return messages
+        out: list[dict[str, Any]] = []
+        for m in messages:
+            if (
+                m.get("role") == "assistant"
+                and m.get("tool_calls")
+                and not m.get("reasoning_content")
+            ):
+                out.append({**m, "reasoning_content": ""})
+            else:
+                out.append(m)
+        return out
+
     def _build_kwargs(
         self,
         messages: list[dict[str, Any]],
@@ -659,6 +686,31 @@ class LiteLLMProvider(LLMProvider):
                     pm_resolved = True
                     original_model = resolved["model"]
                     logger.debug("PM override: {} → {} via {}", model, original_model, pm_api_base)
+                elif (
+                    resolved.get("provider_name")
+                    and resolved["api_base"]
+                    and resolved["api_key"]
+                    # Escape hatch is only for routing AWAY from the gateway:
+                    # a pm hit on the gateway itself keeps legacy prefixing.
+                    and not (
+                        self._gateway is not None
+                        and resolved.get("provider_name") == self._gateway.name
+                    )
+                ):
+                    # Native-provider pm hit for a bare model name: resolve_provider
+                    # returns model=None ("keep the requested name"), which used to
+                    # leave pm_resolved False — the name then fell through to
+                    # _resolve_model(), which stacks the gateway prefix (e.g.
+                    # "openrouter/") in gateway mode. LiteLLM routes by that prefix
+                    # to the gateway and IGNORES the pm api_base/api_key, silently
+                    # bypassing the configured native provider. Route via the
+                    # configured endpoint as an OpenAI-compatible call instead.
+                    pm_resolved = True
+                    original_model = f"openai/{original_model}"
+                    logger.debug(
+                        "PM override: {} → openai-compatible {} via {}",
+                        model, original_model, pm_api_base,
+                    )
             pm_provider_name = resolved.get("provider_name")
 
         if pm_resolved:
@@ -666,6 +718,19 @@ class LiteLLMProvider(LLMProvider):
         else:
             model = self._resolve_model(original_model)
         extra_msg_keys = self._extra_msg_keys(original_model, model)
+
+        # DeepSeek thinking models (official API) reject tool-loop replays whose
+        # assistant tool_calls messages lack reasoning_content:
+        #   400 "The reasoning_content in the thinking mode must be passed back
+        #   to the API." (verified 2026-09-12 by replaying a real failed request).
+        # Backfill "" on direct DeepSeek routes only — gateway routes (OpenRouter)
+        # strip reasoning server-side and other providers may reject the field.
+        _direct_deepseek = (
+            (pm_resolved and "deepseek" in (pm_api_base or ""))
+            or model.startswith("deepseek/")
+        )
+        if _direct_deepseek:
+            messages = self._ensure_deepseek_reasoning_content(messages)
 
         if self._supports_cache_control(original_model):
             messages, tools = self._apply_cache_control(messages, tools)
