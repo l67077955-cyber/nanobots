@@ -633,26 +633,36 @@ class LiteLLMProvider(LLMProvider):
 
     @staticmethod
     def _ensure_deepseek_reasoning_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Backfill reasoning_content="" on assistant tool_calls messages.
+        """Normalize assistant messages for the official DeepSeek API.
+
+        Two rules (verified 2026-09-13 by replaying real failed requests):
+        1. assistant content=None is rejected ("Invalid assistant message:
+           content or tool_calls must be set") — None → "" with tool_calls,
+           None → "(no text output)" without (empty string without
+           tool_calls is still rejected).
+        2. In thinking mode every replayed assistant message must carry
+           reasoning_content ("" suffices) — this covers tool_calls messages
+           AND plain-text history messages.
 
         Copy-on-write: returns the original list when nothing needs changing,
         otherwise a new list with replaced dicts — caller state is untouched.
         """
-        if not any(
-            m.get("role") == "assistant"
-            and m.get("tool_calls")
-            and not m.get("reasoning_content")
-            for m in messages
-        ):
+        def _needs_fix(m: dict[str, Any]) -> bool:
+            return m.get("role") == "assistant" and (
+                m.get("content") is None or not m.get("reasoning_content")
+            )
+
+        if not any(_needs_fix(m) for m in messages):
             return messages
         out: list[dict[str, Any]] = []
         for m in messages:
-            if (
-                m.get("role") == "assistant"
-                and m.get("tool_calls")
-                and not m.get("reasoning_content")
-            ):
-                out.append({**m, "reasoning_content": ""})
+            if _needs_fix(m):
+                fixed = dict(m)
+                if fixed.get("content") is None:
+                    fixed["content"] = "" if fixed.get("tool_calls") else "(no text output)"
+                if not fixed.get("reasoning_content"):
+                    fixed["reasoning_content"] = ""
+                out.append(fixed)
             else:
                 out.append(m)
         return out
@@ -719,18 +729,19 @@ class LiteLLMProvider(LLMProvider):
             model = self._resolve_model(original_model)
         extra_msg_keys = self._extra_msg_keys(original_model, model)
 
-        # DeepSeek thinking models (official API) reject tool-loop replays whose
-        # assistant tool_calls messages lack reasoning_content:
-        #   400 "The reasoning_content in the thinking mode must be passed back
-        #   to the API." (verified 2026-09-12 by replaying a real failed request).
-        # Backfill "" on direct DeepSeek routes only — gateway routes (OpenRouter)
-        # strip reasoning server-side and other providers may reject the field.
+        # DeepSeek official API rejects non-OpenAI-shaped assistant messages:
+        #   400 "Invalid assistant message: content or tool_calls must be set"
+        #   400 "The `reasoning_content` in the thinking mode must be passed back"
+        # (both replay-verified 2026-09-12/13 on real failed requests).
+        # Applied AFTER the generic sanitize pipeline below, because
+        # _sanitize_empty_content deliberately rewrites assistant+tool_calls
+        # content "" → None (OpenAI convention) — the opposite of what the
+        # official DeepSeek API requires. Direct DeepSeek routes only;
+        # gateway routes (OpenRouter) handle reasoning server-side.
         _direct_deepseek = (
             (pm_resolved and "deepseek" in (pm_api_base or ""))
             or model.startswith("deepseek/")
         )
-        if _direct_deepseek:
-            messages = self._ensure_deepseek_reasoning_content(messages)
 
         if self._supports_cache_control(original_model):
             messages, tools = self._apply_cache_control(messages, tools)
@@ -759,6 +770,12 @@ class LiteLLMProvider(LLMProvider):
             # one provider instance.
             **{**self.sampling_params, **(sampling_override or {})},
         }
+
+        # Must run AFTER sanitize (see comment at _direct_deepseek above):
+        # the generic pipeline rewrites "" → None for assistant+tool_calls,
+        # which the official DeepSeek API rejects.
+        if _direct_deepseek:
+            kwargs["messages"] = self._ensure_deepseek_reasoning_content(kwargs["messages"])
 
         self._apply_model_overrides(model, kwargs)
 
