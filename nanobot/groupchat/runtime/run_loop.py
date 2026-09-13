@@ -138,12 +138,24 @@ async def run_loop(engine: Any) -> None:
             speak_order = list(engine._active_agents)
 
             # ── 关键修复：给 broadcast_round 加上全局超时保护 ──
-            # 防止某一轮卡死导致整个群聊永久阻塞
+            # 防止某一轮卡死导致整个群聊永久阻塞。
+            # 可配置：groupchat_settings.json 的 "global_timeout"（秒），
+            # 默认 900 — 2026-09-13 复盘发现硬编码 600s 在"代码优化+QA"类
+            # 任务上到点强杀三 agent，Leader 来不及做最终交付。
+            _gt = 900.0
+            try:
+                import json as _json
+                from pathlib import Path as _P
+                _gc_cfg = _P.home() / ".nanobot" / "groupchat_settings.json"
+                if _gc_cfg.exists():
+                    _gt = float(_json.loads(_gc_cfg.read_text(encoding="utf-8")).get("global_timeout", 900))
+            except Exception:
+                pass
             round_result = await broadcast_round(
                 speak_order,
                 engine,
                 engine._mailbox,
-                global_timeout=600.0,   # 10 分钟（可根据需要调整）
+                global_timeout=_gt,
             )
 
             # ── This round's session verdict (RoundResult.session_should_stop) ──
