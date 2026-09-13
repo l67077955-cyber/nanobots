@@ -632,10 +632,10 @@ class LiteLLMProvider(LLMProvider):
 
 
     @staticmethod
-    def _ensure_deepseek_reasoning_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _normalize_deepseek_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Normalize assistant/tool messages for the official DeepSeek API.
 
-        Three rules (each replay-verified on real failed gateway requests):
+        Four rules (each replay-verified on real failed gateway requests):
         1. assistant content=None is rejected ("Invalid assistant message:
            content or tool_calls must be set") — None → "" with tool_calls,
            None → "(no text output)" without (empty string without
@@ -648,38 +648,94 @@ class LiteLLMProvider(LLMProvider):
            'tool_calls' must be followed by tool messages..."). Interrupted
            tool loops leave orphan tool_calls at the history tail; each
            missing id gets a synthetic "(tool call interrupted...)" result.
+        4. A tool message whose tool_call_id is not declared by a preceding
+           assistant(tool_calls) is rejected ("Messages with role 'tool'
+           must be a response to a preceding message with 'tool_calls'") —
+           interrupted turns also leave orphan RESULTS (assistant gone, tool
+           output kept). Those are dropped; the other three rules then run
+           on the cleaned sequence.
 
         Copy-on-write: returns the original list when nothing needs changing,
         otherwise a new list — caller state is untouched.
         """
+        # ── Rule 4 (pre-pass): drop orphan tool results ──
+        declared: set[str] = set()
+        has_orphan = False
+        for m in messages:
+            role = m.get("role")
+            if role == "assistant":
+                declared = {
+                    tc.get("id") for tc in (m.get("tool_calls") or [])
+                    if isinstance(tc, dict) and tc.get("id")
+                }
+            elif role == "tool":
+                if m.get("tool_call_id") in declared:
+                    declared.discard(m.get("tool_call_id"))
+                else:
+                    has_orphan = True
+            else:
+                declared = set()
+
         def _assistant_needs_fix(m: dict[str, Any]) -> bool:
             return m.get("role") == "assistant" and (
                 m.get("content") is None or not m.get("reasoning_content")
             )
 
-        def _has_orphan(m: dict[str, Any], idx: int) -> bool:
+        def _has_orphan_tool_calls(m: dict[str, Any], idx: int, seq: list[dict[str, Any]]) -> bool:
             if not (m.get("role") == "assistant" and m.get("tool_calls")):
                 return False
             j = idx + 1
             responded = set()
-            while j < len(messages) and messages[j].get("role") == "tool":
-                responded.add(messages[j].get("tool_call_id"))
+            while j < len(seq) and seq[j].get("role") == "tool":
+                responded.add(seq[j].get("tool_call_id"))
                 j += 1
             return any(
                 isinstance(tc, dict) and tc.get("id") and tc["id"] not in responded
                 for tc in m["tool_calls"]
             )
 
-        needs_any = any(
-            _assistant_needs_fix(m) or _has_orphan(m, i) for i, m in enumerate(messages)
-        )
-        if not needs_any:
+        def _clean_and_scan(seq: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+            """Apply rule 4 (drop orphan tools); report if rules 1-3 needed."""
+            out: list[dict[str, Any]] = []
+            declared: set[str] = set()
+            changed = False
+            for k, m in enumerate(seq):
+                role = m.get("role")
+                if role == "assistant":
+                    out.append(m)
+                    declared = {
+                        tc.get("id") for tc in (m.get("tool_calls") or [])
+                        if isinstance(tc, dict) and tc.get("id")
+                    }
+                    if _assistant_needs_fix(m) or _has_orphan_tool_calls(m, k, seq):
+                        changed = True
+                elif role == "tool":
+                    if m.get("tool_call_id") in declared:
+                        out.append(m)
+                        declared.discard(m.get("tool_call_id"))
+                    # else: orphan result → dropped (rule 4)
+                else:
+                    out.append(m)
+                    declared = set()
+            return out, changed
+
+        if not has_orphan and not any(
+            _assistant_needs_fix(m) or _has_orphan_tool_calls(m, i, messages)
+            for i, m in enumerate(messages)
+        ):
             return messages
 
+        cleaned, needs_more = _clean_and_scan(messages)
+        if not has_orphan:
+            cleaned = messages  # no drops needed; keep original refs
+        if not needs_more and cleaned is messages:
+            return messages
+
+        # ── Rules 1-3 on the cleaned sequence ──
         out: list[dict[str, Any]] = []
         i = 0
-        while i < len(messages):
-            m = messages[i]
+        while i < len(cleaned):
+            m = cleaned[i]
             if _assistant_needs_fix(m):
                 fixed = dict(m)
                 if fixed.get("content") is None:
@@ -692,9 +748,9 @@ class LiteLLMProvider(LLMProvider):
             if m.get("role") == "assistant" and m.get("tool_calls"):
                 j = i + 1
                 responded = set()
-                while j < len(messages) and messages[j].get("role") == "tool":
-                    responded.add(messages[j].get("tool_call_id"))
-                    out.append(messages[j])
+                while j < len(cleaned) and cleaned[j].get("role") == "tool":
+                    responded.add(cleaned[j].get("tool_call_id"))
+                    out.append(cleaned[j])
                     j += 1
                 for tc in m["tool_calls"]:
                     if isinstance(tc, dict) and tc.get("id") and tc["id"] not in responded:
@@ -816,7 +872,7 @@ class LiteLLMProvider(LLMProvider):
         # the generic pipeline rewrites "" → None for assistant+tool_calls,
         # which the official DeepSeek API rejects.
         if _direct_deepseek:
-            kwargs["messages"] = self._ensure_deepseek_reasoning_content(kwargs["messages"])
+            kwargs["messages"] = self._normalize_deepseek_messages(kwargs["messages"])
 
         self._apply_model_overrides(model, kwargs)
 

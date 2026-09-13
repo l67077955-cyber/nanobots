@@ -199,6 +199,32 @@ def test_deepseek_partial_orphan_backfills_only_missing(pm_file) -> None:
     assert "(tool call interrupted" in by_id[missing]["content"]
 
 
+def test_deepseek_orphan_tool_results_dropped(pm_file) -> None:
+    """Rule 4: a tool message whose id has no preceding assistant(tool_calls)
+    declaration (interrupt cut the assistant away, kept the result) is
+    rejected by DeepSeek — dropped on direct routes."""
+    p = _provider()
+    msgs = [
+        {"role": "user", "content": "查一下"},
+        # orphan result: its assistant(tool_calls) was lost to an interrupt
+        {"role": "tool", "tool_call_id": "orphan1", "content": "Successfully wrote 92 bytes"},
+        {"role": "assistant", "content": "", "reasoning_content": "",
+         "tool_calls": [{"id": "tcZ", "type": "function",
+                         "function": {"name": "read_file", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "tcZ", "content": "file content"},
+        {"role": "user", "content": "继续"},
+    ]
+    kwargs = p._build_kwargs(msgs, model="deepseek-v4-pro", max_tokens=16)
+    sent = kwargs["messages"]
+    tool_msgs = [m for m in sent if m.get("role") == "tool"]
+    ids = {m.get("tool_call_id") for m in tool_msgs}
+    orphan_real = next(m for m in sent if m.get("tool_calls"))["tool_calls"][0]["id"]
+    assert orphan_real in ids           # declared pair kept (normalized id)
+    assert len(tool_msgs) == 1          # orphan dropped
+    # caller list untouched
+    assert any(m.get("role") == "tool" and m.get("tool_call_id") == "orphan1" for m in msgs)
+
+
 def test_non_deepseek_route_not_backfilled(pm_file) -> None:
     p = _provider()
     kwargs = p._build_kwargs(_mixed_history_messages(), model="glm-5.1", max_tokens=16)
