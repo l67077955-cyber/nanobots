@@ -633,9 +633,9 @@ class LiteLLMProvider(LLMProvider):
 
     @staticmethod
     def _ensure_deepseek_reasoning_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Normalize assistant messages for the official DeepSeek API.
+        """Normalize assistant/tool messages for the official DeepSeek API.
 
-        Two rules (verified 2026-09-13 by replaying real failed requests):
+        Three rules (each replay-verified on real failed gateway requests):
         1. assistant content=None is rejected ("Invalid assistant message:
            content or tool_calls must be set") — None → "" with tool_calls,
            None → "(no text output)" without (empty string without
@@ -643,20 +643,44 @@ class LiteLLMProvider(LLMProvider):
         2. In thinking mode every replayed assistant message must carry
            reasoning_content ("" suffices) — this covers tool_calls messages
            AND plain-text history messages.
+        3. An assistant message with tool_calls must be followed by a tool
+           message for every tool_call_id ("An assistant message with
+           'tool_calls' must be followed by tool messages..."). Interrupted
+           tool loops leave orphan tool_calls at the history tail; each
+           missing id gets a synthetic "(tool call interrupted...)" result.
 
         Copy-on-write: returns the original list when nothing needs changing,
-        otherwise a new list with replaced dicts — caller state is untouched.
+        otherwise a new list — caller state is untouched.
         """
-        def _needs_fix(m: dict[str, Any]) -> bool:
+        def _assistant_needs_fix(m: dict[str, Any]) -> bool:
             return m.get("role") == "assistant" and (
                 m.get("content") is None or not m.get("reasoning_content")
             )
 
-        if not any(_needs_fix(m) for m in messages):
+        def _has_orphan(m: dict[str, Any], idx: int) -> bool:
+            if not (m.get("role") == "assistant" and m.get("tool_calls")):
+                return False
+            j = idx + 1
+            responded = set()
+            while j < len(messages) and messages[j].get("role") == "tool":
+                responded.add(messages[j].get("tool_call_id"))
+                j += 1
+            return any(
+                isinstance(tc, dict) and tc.get("id") and tc["id"] not in responded
+                for tc in m["tool_calls"]
+            )
+
+        needs_any = any(
+            _assistant_needs_fix(m) or _has_orphan(m, i) for i, m in enumerate(messages)
+        )
+        if not needs_any:
             return messages
+
         out: list[dict[str, Any]] = []
-        for m in messages:
-            if _needs_fix(m):
+        i = 0
+        while i < len(messages):
+            m = messages[i]
+            if _assistant_needs_fix(m):
                 fixed = dict(m)
                 if fixed.get("content") is None:
                     fixed["content"] = "" if fixed.get("tool_calls") else "(no text output)"
@@ -665,6 +689,23 @@ class LiteLLMProvider(LLMProvider):
                 out.append(fixed)
             else:
                 out.append(m)
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                j = i + 1
+                responded = set()
+                while j < len(messages) and messages[j].get("role") == "tool":
+                    responded.add(messages[j].get("tool_call_id"))
+                    out.append(messages[j])
+                    j += 1
+                for tc in m["tool_calls"]:
+                    if isinstance(tc, dict) and tc.get("id") and tc["id"] not in responded:
+                        out.append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": "(tool call interrupted before execution)",
+                        })
+                i = j
+            else:
+                i += 1
         return out
 
     def _build_kwargs(
