@@ -115,6 +115,9 @@ class GatewayConfig(Base):
     host: str = "0.0.0.0"
     port: int = 18790
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
+    # Post a billboard (time/status/active agents) to the most recent
+    # external chat shortly after gateway startup.
+    startup_notify: bool = True
 
 
 class WebSearchConfig(Base):

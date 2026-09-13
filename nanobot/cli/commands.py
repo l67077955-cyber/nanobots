@@ -475,6 +475,38 @@ def gateway(
 
     console.print(f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s")
 
+    async def _startup_billboard() -> None:
+        """Post a startup billboard (time / status / active agents) to the
+        most recent external chat once channels have settled."""
+        await asyncio.sleep(8)
+        try:
+            from nanobot import __version__
+            from nanobot.utils.helpers import cn_now
+
+            agents = gc_engine.active_agents
+            leader = getattr(gc_engine, "_leader", None)
+            lines = [
+                "🚀 nanobot gateway 已启动",
+                f"⏰ {cn_now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"✅ 状态: active · v{__version__} · cron {cron_status.get('jobs', 0)} jobs",
+            ]
+            if agents:
+                suffix = f"（👑 {leader}）" if leader else ""
+                lines.append(f"🤖 活跃 agents: {', '.join(agents)}{suffix}")
+            else:
+                lines.append("🤖 活跃 agents: 无（/addagent 添加）")
+            channel, chat_id = _pick_heartbeat_target()
+            if channel == "cli":
+                logger.info("Startup billboard: no external channel available, skipped")
+                return
+            from nanobot.bus.events import OutboundMessage
+            await bus.publish_outbound(OutboundMessage(
+                channel=channel, chat_id=chat_id, content="\n".join(lines),
+            ))
+            logger.info("Startup billboard sent to {}:{}", channel, chat_id)
+        except Exception:
+            logger.exception("Startup billboard failed")
+
     async def run():
         # ── Mods: attach to the orchestration event bus and start whatever
         # ~/.nanobot/mods.json enables. Per-mod fault isolation lives inside
@@ -488,6 +520,8 @@ def gateway(
             await cron.start()
             await heartbeat.start()
             await router.start()  # Start IngressRouter to consume bus
+            if config.gateway.startup_notify:
+                asyncio.create_task(_startup_billboard())
             await asyncio.gather(
                 channels.start_all(),
                 asyncio.Event().wait(),  # Keep event loop running
